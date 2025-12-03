@@ -55,8 +55,5 @@
     "inReview": "In Review",
     "noActiveTasks": "No active tasks",
     "error": "Failed to load dashboard summary"
-  },
-  "sections": {
-    "local": "Local Projects"
   }
 }
