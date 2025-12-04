@@ -340,6 +340,14 @@ impl CachedNodeProjectWithNode {
             format!(" WHERE {}", conditions.join(" AND "))
         };
 
+        // Debug: log the WHERE clause
+        tracing::debug!(
+            where_clause = %where_clause,
+            exclude_count = exclude_project_ids.len(),
+            exclude_node = ?exclude_node_id,
+            "find_remote_projects: building query"
+        );
+
         let query = format!(
             r#"
             SELECT
@@ -365,7 +373,25 @@ impl CachedNodeProjectWithNode {
             where_clause
         );
 
-        sqlx::query_as(&query).fetch_all(pool).await
+        let result = sqlx::query_as(&query).fetch_all(pool).await;
+
+        match &result {
+            Ok(rows) => {
+                tracing::debug!(
+                    row_count = rows.len(),
+                    "find_remote_projects: query completed"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    query = %query,
+                    "find_remote_projects: query failed"
+                );
+            }
+        }
+
+        result
     }
 
     /// List all cached projects with node info (across all organizations)
