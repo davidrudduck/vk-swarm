@@ -7,7 +7,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use db::models::{
+    cached_node_project::CachedNodeProjectWithNode, project::Project, task::Task,
+    task::TaskStatus,
+};
 use db::DBService;
+use remote::db::tasks::TaskStatus as RemoteTaskStatus;
+use sqlx::SqlitePool;
 use tokio::sync::{RwLock, mpsc};
 use uuid::Uuid;
 
@@ -16,6 +22,8 @@ use super::hive_client::{
     LinkedProjectInfo, NodeMessage, TaskExecutionStatus, TaskStatusMessage, UnlinkProjectMessage,
     detect_capabilities, get_machine_id,
 };
+use super::node_cache;
+use super::remote_client::{RemoteClient, RemoteClientError};
 
 /// Configuration for the node runner loaded from environment variables.
 #[derive(Debug, Clone)]
@@ -366,6 +374,10 @@ pub enum NodeRunnerError {
     ProjectNotLinked(Uuid),
     #[error("assignment not found: {0}")]
     AssignmentNotFound(Uuid),
+    #[error("remote client error: {0}")]
+    RemoteClient(#[from] RemoteClientError),
+    #[error("sync error: {0}")]
+    SyncError(String),
 }
 
 /// Spawn the node runner and return a handle.
@@ -406,6 +418,7 @@ use super::container::ContainerService;
 /// 1. Connects to the hive server
 /// 2. Processes incoming events (task assignments, cancellations, etc.)
 /// 3. Creates local tasks and attempts for incoming assignments
+/// 4. Syncs remote projects and tasks on connection (if remote_client provided)
 ///
 /// Returns a `NodeRunnerContext` that can be used to interact with the hive.
 ///
@@ -415,6 +428,7 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
     config: NodeRunnerConfig,
     db: DBService,
     container: Option<C>,
+    remote_client: Option<RemoteClient>,
 ) -> Option<NodeRunnerContext> {
     let mut handle = spawn_hive_connection(config);
     let state = handle.state.clone();
@@ -434,6 +448,24 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
 
         loop {
             match handle.process_event().await {
+                Some(HiveEvent::Connected {
+                    node_id,
+                    organization_id,
+                    ..
+                }) => {
+                    // Sync remote projects into unified schema on connect
+                    if let Some(ref client) = remote_client
+                        && let Err(e) = sync_remote_projects(
+                            &db.pool,
+                            client,
+                            organization_id,
+                            node_id,
+                        )
+                        .await
+                    {
+                        tracing::warn!(error = ?e, "Failed to sync remote projects on connect");
+                    }
+                }
                 Some(HiveEvent::TaskAssigned(assignment)) => {
                     tracing::info!(
                         assignment_id = %assignment.assignment_id,
@@ -483,4 +515,142 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
     });
 
     Some(context)
+}
+
+/// Sync remote projects and their tasks into the unified schema.
+///
+/// This function is called when the node connects to the hive to ensure
+/// the local database has an up-to-date view of projects from other nodes.
+async fn sync_remote_projects(
+    pool: &SqlitePool,
+    remote_client: &RemoteClient,
+    organization_id: Uuid,
+    current_node_id: Uuid,
+) -> Result<(), NodeRunnerError> {
+    // 1. Refresh node cache first to get latest remote projects
+    if let Err(e) = node_cache::sync_organization(pool, remote_client, organization_id).await {
+        tracing::warn!(error = ?e, "Failed to refresh node cache, using existing cache");
+    }
+
+    // 2. Get remote projects (excluding current node and already-linked local projects)
+    let local_remote_ids = Project::find_local_project_remote_ids(pool).await?;
+    let remote_projects = CachedNodeProjectWithNode::find_remote_projects(
+        pool,
+        &local_remote_ids,
+        Some(current_node_id),
+    )
+    .await?;
+
+    // 3. Upsert each remote project and its tasks into the unified schema
+    let mut active_remote_ids = Vec::new();
+    for rp in &remote_projects {
+        let project = Project::upsert_remote_project(
+            pool,
+            Uuid::new_v4(),
+            rp.project_id,
+            rp.project_name.clone(),
+            rp.git_repo_path.clone(),
+            rp.node_id,
+            rp.node_name.clone(),
+            rp.node_public_url.clone(),
+            Some(rp.node_status.to_string()),
+        )
+        .await?;
+
+        active_remote_ids.push(rp.project_id);
+
+        // Sync tasks for this remote project
+        if let Err(e) =
+            sync_remote_project_tasks(pool, remote_client, project.id, rp.project_id).await
+        {
+            tracing::warn!(
+                error = ?e,
+                project_id = %rp.project_id,
+                "Failed to sync tasks for remote project"
+            );
+        }
+    }
+
+    // 4. Clean up stale remote projects that no longer exist
+    if !active_remote_ids.is_empty() {
+        Project::delete_stale_remote_projects(pool, &active_remote_ids).await?;
+    }
+
+    tracing::info!(
+        project_count = remote_projects.len(),
+        "Synced remote projects to unified schema"
+    );
+
+    Ok(())
+}
+
+/// Sync tasks for a single remote project from the Hive.
+async fn sync_remote_project_tasks(
+    pool: &SqlitePool,
+    remote_client: &RemoteClient,
+    local_project_id: Uuid,
+    remote_project_id: Uuid,
+) -> Result<(), NodeRunnerError> {
+    // Fetch all tasks from Hive
+    let snapshot = remote_client
+        .fetch_bulk_snapshot(remote_project_id)
+        .await
+        .map_err(|e| NodeRunnerError::SyncError(e.to_string()))?;
+
+    // Upsert each task
+    let mut active_task_ids = Vec::new();
+    for task_payload in snapshot.tasks {
+        let task = &task_payload.task;
+        let user = &task_payload.user;
+
+        // Combine first_name and last_name into a display name
+        let user_display_name = user.as_ref().map(|u| {
+            match (&u.first_name, &u.last_name) {
+                (Some(first), Some(last)) => format!("{} {}", first, last),
+                (Some(first), None) => first.clone(),
+                (None, Some(last)) => last.clone(),
+                (None, None) => String::new(),
+            }
+        });
+
+        Task::upsert_remote_task(
+            pool,
+            Uuid::new_v4(),
+            local_project_id,
+            task.id,
+            task.title.clone(),
+            task.description.clone(),
+            convert_task_status(&task.status),
+            task.assignee_user_id,
+            user_display_name,
+            user.as_ref().and_then(|u| u.username.clone()),
+            task.version,
+        )
+        .await?;
+
+        active_task_ids.push(task.id);
+    }
+
+    // Handle deleted tasks
+    for deleted_id in snapshot.deleted_task_ids {
+        Task::delete_by_shared_task_id(pool, deleted_id).await?;
+    }
+
+    // Clean up stale remote tasks for this project
+    if !active_task_ids.is_empty() {
+        Task::delete_stale_remote_tasks(pool, local_project_id, &active_task_ids).await?;
+    }
+
+    Ok(())
+}
+
+/// Convert remote TaskStatus to local TaskStatus.
+fn convert_task_status(status: &RemoteTaskStatus) -> TaskStatus {
+    match status {
+        RemoteTaskStatus::Todo => TaskStatus::Todo,
+        RemoteTaskStatus::InProgress => TaskStatus::InProgress,
+        RemoteTaskStatus::InReview => TaskStatus::InReview,
+        RemoteTaskStatus::Done => TaskStatus::Done,
+        RemoteTaskStatus::Cancelled => TaskStatus::Cancelled,
+    }
 }

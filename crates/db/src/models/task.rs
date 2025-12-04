@@ -744,13 +744,26 @@ ORDER BY t.created_at DESC"#,
         let mut deleted = 0u64;
 
         for task in all_remote {
-            if let Some(shared_id) = task.shared_task_id {
-                if !active_shared_task_ids.contains(&shared_id) {
-                    deleted += Self::delete(pool, task.id).await?;
-                }
+            if let Some(shared_id) = task.shared_task_id
+                && !active_shared_task_ids.contains(&shared_id)
+            {
+                deleted += Self::delete(pool, task.id).await?;
             }
         }
 
         Ok(deleted)
+    }
+
+    /// Delete a task by its shared_task_id
+    ///
+    /// Used when syncing remote tasks and a task has been deleted on the Hive.
+    pub async fn delete_by_shared_task_id(
+        pool: &SqlitePool,
+        shared_task_id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!("DELETE FROM tasks WHERE shared_task_id = ?", shared_task_id)
+            .execute(pool)
+            .await?;
+        Ok(())
     }
 }

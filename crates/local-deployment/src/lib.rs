@@ -219,9 +219,15 @@ impl Deployment for LocalDeployment {
                     ConnectionTokenValidator::disabled()
                 };
 
-                // Pass the container to spawn_node_runner to enable task execution
+                // Pass the container and remote_client to spawn_node_runner to enable
+                // task execution and remote project sync
                 (
-                    spawn_node_runner(node_config, db.clone(), Some(container.clone())),
+                    spawn_node_runner(
+                        node_config,
+                        db.clone(),
+                        Some(container.clone()),
+                        remote_client.clone().ok(),
+                    ),
                     validator,
                 )
             } else {
