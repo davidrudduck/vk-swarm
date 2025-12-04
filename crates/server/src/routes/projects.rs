@@ -160,50 +160,6 @@ pub async fn get_unified_projects(
         None
     };
 
-    // Log which database we're using
-    let api_db_path = utils::assets::asset_dir().join("db.sqlite");
-    tracing::debug!(
-        local_count = local_projects.len(),
-        linked_remote_ids_count = linked_remote_ids.len(),
-        linked_remote_ids = ?linked_remote_ids,
-        current_node_id = ?current_node_id,
-        db_path = %api_db_path.display(),
-        "unified projects: fetching remote projects"
-    );
-
-    // Debug: show all cached projects before any exclusions
-    let all_cached = CachedNodeProjectWithNode::list_all(pool)
-        .await
-        .unwrap_or_default();
-
-    // Also check cached_nodes table directly
-    let cached_nodes_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM cached_nodes")
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
-    let cached_projects_count =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM cached_node_projects")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-
-    tracing::debug!(
-        all_cached_count = all_cached.len(),
-        cached_nodes_count = cached_nodes_count,
-        cached_projects_count = cached_projects_count,
-        "unified projects: total cached projects in database"
-    );
-
-    for p in &all_cached {
-        tracing::debug!(
-            node_id = %p.node_id,
-            node_name = %p.node_name,
-            project_id = %p.project_id,
-            project_name = %p.project_name,
-            "unified projects: cached project"
-        );
-    }
-
     // Get all remote projects from all organizations, excluding:
     // 1. Projects already linked locally
     // 2. Projects from the current node (they're shown as local projects)
@@ -211,11 +167,6 @@ pub async fn get_unified_projects(
         CachedNodeProjectWithNode::find_remote_projects(pool, &linked_remote_ids, current_node_id)
             .await
             .unwrap_or_default();
-
-    tracing::debug!(
-        remote_count = all_remote.len(),
-        "unified projects: found remote projects"
-    );
 
     // Group remote projects by node
     let mut by_node: HashMap<Uuid, RemoteNodeGroup> = HashMap::new();
@@ -234,11 +185,6 @@ pub async fn get_unified_projects(
     // Convert to sorted list of node groups
     let mut remote_by_node: Vec<RemoteNodeGroup> = by_node.into_values().collect();
     remote_by_node.sort_by(|a, b| a.node_name.cmp(&b.node_name));
-
-    tracing::debug!(
-        node_groups = remote_by_node.len(),
-        "unified projects: returning response"
-    );
 
     Ok(ResponseJson(ApiResponse::success(UnifiedProjectsResponse {
         local: local_projects,
