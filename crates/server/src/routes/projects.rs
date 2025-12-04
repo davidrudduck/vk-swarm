@@ -160,6 +160,13 @@ pub async fn get_unified_projects(
         None
     };
 
+    // Debug: log what we're excluding
+    tracing::debug!(
+        linked_remote_ids = ?linked_remote_ids,
+        current_node_id = ?current_node_id,
+        "unified projects: exclusion parameters"
+    );
+
     // Get all remote projects from all organizations, excluding:
     // 1. Projects already linked locally
     // 2. Projects from the current node (they're shown as local projects)
@@ -167,6 +174,11 @@ pub async fn get_unified_projects(
         CachedNodeProjectWithNode::find_remote_projects(pool, &linked_remote_ids, current_node_id)
             .await
             .unwrap_or_default();
+
+    tracing::debug!(
+        all_remote_count = all_remote.len(),
+        "unified projects: find_remote_projects result"
+    );
 
     // Group remote projects by node
     let mut by_node: HashMap<Uuid, RemoteNodeGroup> = HashMap::new();
