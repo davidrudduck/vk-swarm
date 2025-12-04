@@ -4,6 +4,7 @@ import { I18nextProvider } from 'react-i18next';
 import i18n from '@/i18n';
 import { Projects } from '@/pages/Projects';
 import { ProjectTasks } from '@/pages/ProjectTasks';
+import { RemoteProjectTasks } from '@/pages/RemoteProjectTasks';
 import { FullAttemptLogsPage } from '@/pages/FullAttemptLogs';
 import { Nodes } from '@/pages/Nodes';
 import { NormalLayout } from '@/components/layout/NormalLayout';
@@ -130,6 +131,10 @@ function AppContent() {
                 <Route path="/projects/:projectId" element={<Projects />} />
                 <Route path="/nodes" element={<Nodes />} />
                 <Route path="/nodes/:nodeId" element={<Nodes />} />
+                <Route
+                  path="/remote-projects/:projectId/tasks"
+                  element={<RemoteProjectTasks />}
+                />
                 <Route
                   path="/projects/:projectId/tasks"
                   element={<ProjectTasks />}

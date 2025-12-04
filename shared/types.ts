@@ -246,6 +246,14 @@ export type AssignSharedTaskRequest = { new_assignee_user_id: string | null, ver
 
 export type AssignSharedTaskResponse = { shared_task: SharedTask, };
 
+export type RemoteProjectInfo = { project_id: string, project_name: string, node_id: string, node_name: string, node_status: string, git_repo_path: string, default_branch: string, };
+
+export type CreateRemoteTaskRequest = { title: string, description: string | null, assignee_user_id: string | null, };
+
+export type UpdateRemoteTaskRequest = { title: string | null, description: string | null, status: string | null, version: bigint | null, };
+
+export type AssignRemoteTaskRequest = { new_assignee_user_id: string | null, version: bigint | null, };
+
 export type ShareTaskResponse = { shared_task_id: string, };
 
 export type CreateAndStartTaskRequest = { task: CreateTask, executor_profile_id: ExecutorProfileId, base_branch: string, };
