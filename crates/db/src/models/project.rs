@@ -614,13 +614,29 @@ impl Project {
         let mut deleted = 0u64;
 
         for project in all_remote {
-            if let Some(remote_id) = project.remote_project_id {
-                if !active_remote_project_ids.contains(&remote_id) {
-                    deleted += Self::delete(pool, project.id).await?;
-                }
+            if let Some(remote_id) = project.remote_project_id
+                && !active_remote_project_ids.contains(&remote_id)
+            {
+                deleted += Self::delete(pool, project.id).await?;
             }
         }
 
         Ok(deleted)
+    }
+
+    /// Get all remote_project_ids from local projects (for exclusion during remote sync)
+    ///
+    /// This returns the set of project IDs that are already linked to local projects,
+    /// so they should be excluded from the remote project list.
+    pub async fn find_local_project_remote_ids(pool: &SqlitePool) -> Result<Vec<Uuid>, sqlx::Error> {
+        let rows = sqlx::query_scalar!(
+            r#"SELECT remote_project_id as "remote_project_id: Uuid"
+               FROM projects
+               WHERE is_remote = 0 AND remote_project_id IS NOT NULL"#
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().flatten().collect())
     }
 }
