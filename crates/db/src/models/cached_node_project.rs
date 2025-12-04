@@ -197,7 +197,17 @@ impl CachedNodeProject {
             return Ok(result.rows_affected());
         }
 
-        let placeholders: Vec<String> = keep_ids.iter().map(|id| format!("'{}'", id)).collect();
+        // Build the IN clause for IDs to keep using X'...' hex BLOB literals
+        // SQLite stores UUIDs as BLOBs, so we need to format them as hex literals
+        let placeholders: Vec<String> = keep_ids
+            .iter()
+            .map(|id| {
+                // Convert UUID bytes to hex string for BLOB literal
+                let bytes = id.as_bytes();
+                let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+                format!("X'{}'", hex)
+            })
+            .collect();
         let in_clause = placeholders.join(", ");
 
         let query = format!(
