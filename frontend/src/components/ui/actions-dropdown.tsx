@@ -31,12 +31,14 @@ interface ActionsDropdownProps {
   task?: TaskWithAttemptStatus | null;
   attempt?: TaskAttempt | null;
   sharedTask?: SharedTaskRecord;
+  isOrgAdmin?: boolean;
 }
 
 export function ActionsDropdown({
   task,
   attempt,
   sharedTask,
+  isOrgAdmin = false,
 }: ActionsDropdownProps) {
   const { t } = useTranslation('tasks');
   const { projectId } = useProject();
@@ -158,12 +160,10 @@ export function ActionsDropdown({
     StopShareTaskDialog.show({ sharedTask });
   };
 
+  const isAssignee = sharedTask?.assignee_user_id === userId;
   const canReassign =
-    Boolean(task) &&
-    Boolean(sharedTask) &&
-    sharedTask?.assignee_user_id === userId;
-  const canStopShare =
-    Boolean(sharedTask) && sharedTask?.assignee_user_id === userId;
+    Boolean(task) && Boolean(sharedTask) && (isAssignee || isOrgAdmin);
+  const canStopShare = Boolean(sharedTask) && (isAssignee || isOrgAdmin);
 
   return (
     <>
