@@ -161,9 +161,12 @@ export function ActionsDropdown({
   };
 
   const isAssignee = sharedTask?.assignee_user_id === userId;
+  // For reassign: need both task and sharedTask, unless admin (admins can reassign shared-only tasks)
   const canReassign =
-    Boolean(task) && Boolean(sharedTask) && (isAssignee || isOrgAdmin);
+    Boolean(sharedTask) && (Boolean(task) || isOrgAdmin) && (isAssignee || isOrgAdmin);
   const canStopShare = Boolean(sharedTask) && (isAssignee || isOrgAdmin);
+  // Show shared task actions section when we only have a sharedTask (no local task)
+  const hasSharedOnlyActions = !hasTaskActions && Boolean(sharedTask) && isOrgAdmin;
 
   return (
     <>
@@ -284,6 +287,25 @@ export function ActionsDropdown({
                 className="text-destructive"
               >
                 {t('common:buttons.delete')}
+              </DropdownMenuItem>
+            </>
+          )}
+
+          {hasSharedOnlyActions && (
+            <>
+              <DropdownMenuLabel>{t('actionsMenu.sharedTask')}</DropdownMenuLabel>
+              <DropdownMenuItem
+                disabled={!canReassign}
+                onClick={handleReassign}
+              >
+                {t('actionsMenu.reassign')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!canStopShare}
+                onClick={handleStopShare}
+                className="text-destructive"
+              >
+                {t('actionsMenu.stopShare')}
               </DropdownMenuItem>
             </>
           )}

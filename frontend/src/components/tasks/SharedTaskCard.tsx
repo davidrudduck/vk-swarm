@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { KanbanCard } from '@/components/ui/shadcn-io/kanban';
 import type { SharedTaskRecord } from '@/hooks/useProjectTasks';
 import { TaskCardHeader } from './TaskCardHeader';
+import { ActionsDropdown } from '@/components/ui/actions-dropdown';
 
 interface SharedTaskCardProps {
   task: SharedTaskRecord;
@@ -9,6 +10,7 @@ interface SharedTaskCardProps {
   status: string;
   onViewDetails?: (task: SharedTaskRecord) => void;
   isSelected?: boolean;
+  isOrgAdmin?: boolean;
 }
 
 export function SharedTaskCard({
@@ -17,6 +19,7 @@ export function SharedTaskCard({
   status,
   onViewDetails,
   isSelected,
+  isOrgAdmin = false,
 }: SharedTaskCardProps) {
   const localRef = useRef<HTMLDivElement>(null);
 
@@ -56,6 +59,11 @@ export function SharedTaskCard({
             lastName: task.assignee_last_name ?? undefined,
             username: task.assignee_username ?? undefined,
           }}
+          right={
+            isOrgAdmin ? (
+              <ActionsDropdown sharedTask={task} isOrgAdmin={isOrgAdmin} />
+            ) : undefined
+          }
         />
         {task.description && (
           <p className="text-sm text-secondary-foreground break-words">

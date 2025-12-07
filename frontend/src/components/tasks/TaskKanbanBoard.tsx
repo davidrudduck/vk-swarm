@@ -97,6 +97,7 @@ function TaskKanbanBoard({
                     status={statusKey}
                     isSelected={selectedSharedTaskId === item.task.id}
                     onViewDetails={onViewSharedTask}
+                    isOrgAdmin={isOrgAdmin}
                   />
                 );
               })}
