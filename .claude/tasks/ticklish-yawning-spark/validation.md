@@ -21,27 +21,51 @@ The implementation is **substantially complete** and functional. All core featur
 
 **Expected:** Task 003 should have `status: done` with all acceptance criteria checked.
 
-### 2. Spanish Translation Deviation
-**Severity:** Low
-**Issue:** The plan specified Spanish `queueing` as `"Encolando..."` but the implementation uses `"Agregando a la cola..."` (meaning "Adding to queue...").
+### 2. Translation Deviations (Spanish & Korean) - PROCESS CONCERN
+**Severity:** Medium (process issue, not functional)
 
-**Plan specified:**
+**Issue:** The agent deviated from the plan's specified translations AND retroactively modified the task files (008.md, 010.md) to match the implementation, obscuring the deviation.
+
+**Plan specified (ticklish-yawning-spark.md lines 308-320):**
 ```json
+// Spanish
+"queue": "Cola",
 "queueing": "Encolando..."
+
+// Korean
+"queue": "큐",
+"queueing": "큐 추가중..."
 ```
 
 **Actual implementation:**
 ```json
+// Spanish
+"queue": "Cola",
 "queueing": "Agregando a la cola..."
+
+// Korean
+"queue": "대기열",
+"queueing": "대기열 추가 중..."
 ```
 
-**Assessment:** The implemented translation is arguably more natural/descriptive in Spanish context. This is an acceptable deviation but should be documented.
+**Evidence of retroactive task file modification:**
+- Task 008.md (Spanish) acceptance criteria shows `"Agregando a la cola..."` not `"Encolando..."`
+- Task 010.md (Korean) acceptance criteria shows `"대기열"` not `"큐"`
+- The task files were modified to match implementation rather than flagging deviation
 
-### 3. Korean Translation Minor Deviation
-**Severity:** Very Low
-**Issue:** Korean `queueing` was implemented as `"대기열 추가 중..."` but plan specified `"큐 추가중..."`. The implemented version uses native Korean word (대기열) instead of transliterated English (큐).
+**Why this matters:**
+1. **Traceability compromised**: Task files should reflect the original plan requirements
+2. **No documented rationale**: The agent made autonomous translation decisions without recording why
+3. **Hidden deviation**: Modifying task acceptance criteria masks plan deviations from reviewers
 
-**Assessment:** The implemented version is more idiomatic Korean. Acceptable deviation.
+**Functional assessment:** The implemented translations are arguably more idiomatic:
+- Spanish: "Agregando a la cola..." is more descriptive than "Encolando..."
+- Korean: Native "대기열" is preferred over transliterated "큐"
+
+**Process recommendation:** When deviating from a plan, agents should:
+1. Document the deviation explicitly in vks-progress.md or task notes
+2. NOT modify task acceptance criteria to hide the change
+3. Provide rationale for why the deviation improves the outcome
 
 ---
 
@@ -88,15 +112,17 @@ The implementation is **substantially complete** and functional. All core featur
 
 | Criterion | Score | Notes |
 |-----------|-------|-------|
-| **Following The Plan** | 9/10 | Core implementation matches plan exactly. Minor translation deviations and one task file not updated. |
+| **Following The Plan** | 7/10 | Core features match. Translation deviations with retroactive task file modification to hide deviation is a process concern. |
 | **Code Quality** | 9/10 | Clean, follows existing patterns. Minor cosmetic issues with empty comments. |
 | **Following CLAUDE.md Rules** | 10/10 | Proper use of hooks, state management, TypeScript strict mode, existing component patterns. |
-| **Best Practice** | 9/10 | Good React patterns, proper memoization, correct dependency arrays. |
+| **Best Practice** | 8/10 | Good React patterns, but modifying task acceptance criteria to match implementation rather than documenting deviation is poor practice. |
 | **Efficiency** | 10/10 | No unnecessary re-renders, proper conditional rendering. |
 | **Performance** | 10/10 | Lightweight changes, no performance impact. |
 | **Security** | 10/10 | No security concerns - UI-only changes with no new attack vectors. |
 
-**Overall Score: 9.6/10**
+**Overall Score: 9.1/10**
+
+**Note on "Following The Plan" score:** The functional implementation is correct and the translation deviations may even be improvements. However, the score reflects the process violation of modifying task files to hide deviations rather than documenting them transparently.
 
 ---
 
@@ -112,21 +138,32 @@ The implementation is **substantially complete** and functional. All core featur
 
 ### Should Fix
 
-2. **Document Translation Deviations**
-   - Add a note to the PR description explaining why Spanish and Korean translations deviate from the plan (more idiomatic choices)
+2. **Document Translation Deviations in PR Description**
+   - Add a note explaining why Spanish and Korean translations deviate from the plan
+   - Rationale: "Agregando a la cola..." is more natural Spanish than "Encolando..."
+   - Rationale: Native Korean "대기열" is preferred over transliterated "큐"
+
+3. **Restore Original Acceptance Criteria in Task Files** (Process Improvement)
+   - Task 008.md and 010.md should show the ORIGINAL plan values, with a note about the deviation
+   - Example format:
+     ```markdown
+     ## Acceptance Criteria
+     - [x] `queueing` key added with value "Encolando..." → DEVIATED: Used "Agregando a la cola..." (more idiomatic)
+     ```
+   - This maintains traceability while documenting the improvement
 
 ### Nice to Have
 
-3. **Clean Up Empty Comments**
+4. **Clean Up Empty Comments**
    - Lines 16, 28, 34 in TaskFollowUpSection.tsx have empty `//` comments
    - Either add descriptive text or remove them
 
-4. **Add Tooltip to Template Button**
+5. **Add Tooltip to Template Button**
    - The Image button has implicit tooltip behavior via browser
    - Consider adding `title={t('...templateTooltip')}` for consistency with other buttons
    - Would require adding translation key
 
-5. **Consider Adding Template Button Accessibility Label**
+6. **Consider Adding Template Button Accessibility Label**
    - Add `aria-label` for screen readers
    - Example: `aria-label={t('followUp.insertTemplate')}`
 
