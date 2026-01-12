@@ -681,7 +681,7 @@ After each batch, the orchestrator (Opus) should:
 
 **Recommended execution flow:**
 
-```
+```text
 Initializer (Opus)
     ↓
 Creates task files with model/phase/complexity
@@ -698,3 +698,307 @@ Spawns sub-agents per batch
 Validator (Opus)
     ↓
 Final review and merge
+```
+
+---
+
+## 11. Improved @plan Template
+
+The current @plan template creates "Sessions" which map to implementation phases. To support model selection and sub-agent execution, each Session should explicitly define its TDD breakdown and model assignments.
+
+### Recommended Changes to @plan Template
+
+#### Add Model Selection Section
+
+Add this section to the plan template after "## Development Principles":
+
+```markdown
+## Execution Model
+
+### Model Assignment Strategy
+Plans should specify model hints at the session level:
+
+| Session Type | Default Model | Notes |
+|--------------|---------------|-------|
+| Setup/Scaffolding | haiku | Mechanical file creation |
+| Test Writing (RED) | sonnet | Moderate reasoning needed |
+| Implementation (GREEN) | sonnet | Following spec is straightforward |
+| Integration (REFACTOR) | sonnet | Pattern matching |
+| Documentation | sonnet | Writing from implementation |
+| Validation | opus | Requires judgment |
+
+### Parallelization Hints
+Sessions can indicate whether their steps can run in parallel:
+
+```markdown
+#### Step 1. Create test file structure [haiku, setup]
+#### Step 2. Write test_foo [sonnet, red] ← parallel with Step 3
+#### Step 3. Write test_bar [sonnet, red] ← parallel with Step 2
+#### Step 4. Implement foo [sonnet, green] ← depends on 2,3
+```
+```bash
+
+#### Enhanced Session Format
+
+Replace the current session format with:
+
+```markdown
+### Session N - **[Phase Name]** [model_hint]
+
+#### TDD Phase: setup | red | green | refactor | verify
+#### Parallel: true | false (can steps run in parallel?)
+#### Estimated Complexity: XS | S | M
+
+#### Feature - [Feature Name]
+- [Bullet points describing what this session accomplishes]
+
+#### User Stories
+US1: [Story title]
+As a [user type], I want [goal] so that [benefit].
+
+#### Components
+[Existing components section unchanged]
+
+#### Files to Modify
+| File | Changes | Model Hint |
+|------|---------|------------|
+| `path/to/file.rs` | Description (~lines) | sonnet |
+
+#### Steps
+
+##### Step 1. [Step Name] [model: haiku|sonnet|opus] [phase: setup|red|green|refactor]
+**Depends on:** none | step numbers
+**Parallel with:** none | step numbers
+**Verification:** `command to verify step complete`
+
+[Step details...]
+
+##### Step 2. [Step Name] [model: sonnet] [phase: red]
+**Depends on:** Step 1
+**Parallel with:** Step 3
+**Verification:** `cargo test -p crate test_name --no-run`
+
+[Step details...]
+
+#### Tests
+1. `test_name_1` - Description [written in Step 2]
+2. `test_name_2` - Description [written in Step 3]
+
+#### Session Verification
+```bash
+# Commands to verify entire session is complete
+cargo test -p crate session_n_tests
+cargo clippy -p crate -- -D warnings
+```
+
+```text
+
+#### Add Execution Batches Section
+
+Add at the end of the plan:
+
+```markdown
+## Execution Plan
+
+### Task File Mapping
+| Session | Steps | Task Files | Models |
+|---------|-------|------------|--------|
+| 1 | 1-2 | 001, 002 | haiku, sonnet |
+| 2 | 1-3 | 003, 004, 005 | sonnet ×3 |
+| 3 | 1-2 | 006, 007 | sonnet ×2 |
+
+### Execution Batches
+```text
+Batch 1 (Sequential):
+  └── 001: Setup [haiku]
+
+Batch 2 (Parallel):
+  ├── 002: Test A [sonnet]
+  ├── 003: Test B [sonnet]
+  └── 004: Test C [sonnet]
+
+Batch 3 (Sequential):
+  └── 005: Implementation [sonnet]
+
+Batch 4 (Parallel):
+  ├── 006: Integration A [sonnet]
+  └── 007: Integration B [sonnet]
+
+Batch 5 (Sequential):
+  ├── 008: Linting [haiku]
+  └── 009: Documentation [sonnet]
+```
+
+### Validation Checkpoints
+After Batch 2: `cargo test --no-run` (tests should compile but fail)
+After Batch 3: `cargo test` (tests should pass)
+After Batch 5: `cargo clippy && cargo fmt --check`
+```sql
+
+---
+
+## 12. Improved @start Template (Initializer)
+
+The @start template should parse the plan's model hints and create task files with the appropriate metadata.
+
+### Key Changes
+
+1. **Parse model hints from plan steps:**
+```markdown
+# In plan:
+#### Step 1. Create test module [model: haiku] [phase: setup]
+
+# Generated task file:
+---
+name: Create test module
+model: haiku
+tdd_phase: setup
+complexity: XS
+---
+```
+
+2. **Generate execution batches file:**
+Create `.claude/tasks/{plan}/batches.md`:
+```markdown
+# Execution Batches
+
+## Batch 1 (Sequential)
+- [ ] 001.md [haiku]
+
+## Batch 2 (Parallel)
+- [ ] 002.md [sonnet]
+- [ ] 003.md [sonnet]
+- [ ] 004.md [sonnet]
+
+## Batch 3 (Sequential)
+- [ ] 005.md [sonnet]
+```
+
+3. **Set additional task variables:**
+```markdown
+| Variable | Value |
+|----------|-------|
+| EXECUTION_MODE | subagent |
+| BATCH_FILE | .claude/tasks/{plan}/batches.md |
+```
+
+---
+
+## 13. Improved @next Template (Executor)
+
+The @next template should support both sequential and sub-agent execution modes.
+
+### Sub-Agent Execution Mode
+
+When `EXECUTION_MODE=subagent`:
+
+```markdown
+## STEP 1: READ BATCH FILE
+
+Read `.claude/tasks/{plan}/batches.md` to determine:
+1. Which batch is current (first incomplete batch)
+2. Which tasks are in the batch
+3. Whether batch is parallel or sequential
+
+## STEP 2: EXECUTE BATCH
+
+### If Parallel Batch:
+Launch all tasks in batch simultaneously using Task tool:
+
+```javascript
+// Launch all tasks in parallel
+const results = await Promise.all([
+  Task({
+    subagent_type: "general-purpose",
+    model: task.model,  // from task frontmatter
+    prompt: buildTaskPrompt(task),
+    description: `Task ${task.number}: ${task.name}`
+  }),
+  // ... more tasks
+]);
+```
+
+### If Sequential Batch:
+Execute tasks one at a time, validating between each.
+
+## STEP 3: VALIDATE BATCH
+
+After all tasks in batch complete:
+1. Run batch validation commands
+2. Check for scope creep
+3. Mark batch complete in batches.md
+4. Proceed to next batch or end session
+
+## STEP 4: ERROR HANDLING
+
+If any task fails:
+1. Log failure details
+2. Attempt retry with same model
+3. If retry fails, escalate to opus
+4. If opus fails, stop and document blocker
+```bash
+
+---
+
+## 14. Summary: Complete Workflow with Model Selection
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│ @plan (Opus) - Design Implementation                            │
+│ - Create sessions with TDD phases                               │
+│ - Add model hints to steps                                      │
+│ - Define execution batches                                      │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ @start (Opus) - Initialize Task Files                           │
+│ - Parse plan sessions/steps                                     │
+│ - Create task files with model/phase/complexity                 │
+│ - Generate batches.md                                           │
+│ - Set EXECUTION_MODE=subagent                                   │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ @next (Orchestrator - Sonnet or Opus)                           │
+│ - Read batches.md                                               │
+│ - For each batch:                                               │
+│   - Spawn sub-agents with appropriate model                     │
+│   - Wait for completion                                         │
+│   - Validate batch                                              │
+│   - Commit changes                                              │
+└─────────────────────────────────────────────────────────────────┘
+          │              │              │              │
+          ↓              ↓              ↓              ↓
+     ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐
+     │ Task 1  │   │ Task 2  │   │ Task 3  │   │ Task N  │
+     │ haiku   │   │ sonnet  │   │ sonnet  │   │ sonnet  │
+     │ setup   │   │ red     │   │ red     │   │ green   │
+     └─────────┘   └─────────┘   └─────────┘   └─────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ @validate (Opus) - Independent Validation                       │
+│ - Review all changes                                            │
+│ - Check for deviations                                          │
+│ - Create remediation task if needed                             │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ @pr (Sonnet) - Create Pull Request                              │
+│ - Generate PR description                                       │
+│ - Push branch                                                   │
+│ - Create PR via gh                                              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Cost Optimization Summary
+
+| Phase | Model | Rationale |
+|-------|-------|-----------|
+| @plan | Opus | Requires judgment and architecture decisions |
+| @start | Opus | Complex parsing and task decomposition |
+| @next (orchestrator) | Sonnet | Following structured execution plan |
+| @next (sub-agents) | haiku/sonnet | Based on task complexity |
+| @validate | Opus | Requires critical analysis |
+| @pr | Sonnet | Mechanical PR creation |
+
+**Estimated savings:** 50-60% vs all-Opus execution
