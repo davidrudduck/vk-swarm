@@ -416,61 +416,75 @@ curl -s http://localhost:5173 && echo "✅ Frontend restarted"
 **Commit after completing task $TASK or 2-3 steps of the Task:**
 
 ```bash
-# No need to cd - already in project root
 git add .
-git commit -m "Task $TASK, Steps Y-Z: Brief description"
+git commit -m "type: clear, concise description"
 ```
 
 **Avoid:** Committing after every single step (too granular) or after 10+ steps (too large)
 
 ## COMMIT MESSAGE RULES (CRITICAL)
 
-**Format:** Always use conventional commit format: `type: description`
+**MANDATORY FORMAT:** `type: description`
 
-**Valid types:**
-- `feat:` - New feature
-- `fix:` - Bug fix
-- `test:` - Adding/updating tests
-- `docs:` - Documentation changes
-- `chore:` - Maintenance tasks (formatting, deps)
-- `refactor:` - Code restructuring without behavior change
+**Valid types ONLY:**
+- `feat` - New feature
+- `fix` - Bug fix
+- `test` - Adding/updating tests
+- `docs` - Documentation changes
+- `chore` - Maintenance tasks (formatting, deps, gitignore)
+- `refactor` - Code restructuring without behavior change
 
-**Examples:**
-- `feat: add reject_if_remote helper function`
-- `test: add test_reject_if_remote_rejects_remote_project (RED phase)`
-- `docs: update swarm-api-patterns with middleware bypass pattern`
-- `chore: apply rustfmt formatting`
+**Description rules:**
+1. **Imperative mood** - "add" not "added", "fix" not "fixed"
+2. **Lowercase start** - Unless proper noun (e.g., "update README")
+3. **No period at end** - `feat: add feature` not `feat: add feature.`
+4. **Maximum 72 characters** - Keep first line concise
+5. **Describes WHAT changed** - Not your thoughts or process
 
-**NEVER use as commit message:**
-- `---` or YAML frontmatter
-- Markdown headers (`#`, `##`)
-- Multi-paragraph summaries as the title
-- Empty or whitespace-only titles
-
-**Commit command pattern:**
+**✅ GOOD commit messages:**
 ```bash
-# CORRECT - Single line message
-git commit -m "test: add test for remote rejection (RED phase)"
-
-# CORRECT - Multi-line with proper title first
-git commit -m "feat: implement reject_if_remote helper" -m "Adds remote project check for message queue handlers"
-
-# WRONG - HEREDOC can cause malformed titles if first line is empty or frontmatter
-git commit -m "$(cat <<EOF
----
-# Summary
-...
-EOF
-)"
+git commit -m "feat: add custom template loading to TaskFollowUpSection"
+git commit -m "fix: prevent template API error from blocking system templates"
+git commit -m "test: add unit tests for template transformation"
+git commit -m "docs: update task-templates.mdx with follow-up section info"
+git commit -m "chore: remove accidentally committed log files"
+git commit -m "refactor: extract template mapping logic to helper function"
 ```
 
-**Verification (MANDATORY before moving on):**
+**❌ BAD commit messages (NEVER use these):**
+```bash
+git commit -m "Perfect! Now let me create the summary..."  # Internal thought
+git commit -m "Tasks 001-005 complete"  # No type, vague
+git commit -m "Added stuff"  # Past tense, vague
+git commit -m "WIP"  # Not descriptive
+git commit -m "---"  # YAML frontmatter leaked
+git commit -m "# Summary\n..."  # Markdown headers
+git commit -m "$(cat <<EOF\n---\nstatus: complete\nEOF)"  # HEREDOC with frontmatter
+```
+
+**MANDATORY VERIFICATION (Do this IMMEDIATELY after EVERY commit):**
 ```bash
 git log --oneline -1
-# Must show: abc1234 type: clear description
-# If title is "---" or malformed, amend immediately:
-git commit --amend -m "correct: commit message here"
 ```
+
+**Check the output:**
+- ✅ GOOD: `abc1234 feat: add template picker to follow-up section`
+- ❌ BAD: `abc1234 Perfect! Now let me create...`
+- ❌ BAD: `abc1234 ---` (frontmatter leaked)
+- ❌ BAD: `abc1234 Task 005: Implementation` (not conventional)
+
+**If commit message is malformed, FIX IMMEDIATELY:**
+```bash
+git commit --amend -m "type: corrected commit message"
+git log --online -1  # Verify fix
+```
+
+**Why conventional commits:**
+- Clear categorization (feat vs fix vs docs)
+- Changelog generation
+- Semantic versioning automation
+- Git history clarity
+- Professional standard
 ```bash
 
 ---
