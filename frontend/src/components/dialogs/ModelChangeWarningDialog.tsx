@@ -7,6 +7,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { useTranslation } from 'react-i18next';
 
 type Props = {
   open: boolean;
@@ -27,6 +28,13 @@ function ModelChangeWarningDialog({
   newModel,
   onConfirm,
 }: Props) {
+  const { t } = useTranslation('tasks');
+
+  const previousLabel = `${previousVariant}${
+    previousModel ? ` (${previousModel})` : ''
+  }`;
+  const newLabel = `${newVariant}${newModel ? ` (${newModel})` : ''}`;
+
   const handleCancel = () => {
     onOpenChange(false);
   };
@@ -40,31 +48,26 @@ function ModelChangeWarningDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Model Change Detected</AlertDialogTitle>
+          <AlertDialogTitle>
+            {t('modelChangeWarning.title')}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            You are switching from{' '}
-            <span className="font-semibold">
-              {previousVariant}
-              {previousModel && ` (${previousModel})`}
-            </span>{' '}
-            to{' '}
-            <span className="font-semibold">
-              {newVariant}
-              {newModel && ` (${newModel})`}
-            </span>
-            .
+            {t('modelChangeWarning.summary', {
+              previousLabel,
+              newLabel,
+            })}
             <br />
             <br />
-            Switching between variants with different models will start a fresh
-            session without prior context. The new executor will not have access
-            to previous conversation history.
+            {t('modelChangeWarning.contextLoss')}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <Button variant="outline" onClick={handleCancel}>
-            Cancel
+            {t('common:buttons.cancel')}
           </Button>
-          <Button onClick={handleConfirm}>Continue Anyway</Button>
+          <Button onClick={handleConfirm}>
+            {t('modelChangeWarning.continueAnyway')}
+          </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
