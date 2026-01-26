@@ -11,7 +11,7 @@ use axum::{
 use db::models::{
     image::TaskImage,
     project::Project,
-    task::{CreateTask, Task, TaskWithAttemptStatus, UpdateTask},
+    task::{CreateTask, Task, TaskStatus, TaskWithAttemptStatus, UpdateTask},
     task_attempt::{CreateTaskAttempt, TaskAttempt, TaskAttemptError},
 };
 use deployment::Deployment;
@@ -35,12 +35,92 @@ pub async fn get_tasks(
     State(deployment): State<DeploymentImpl>,
     Query(query): Query<TaskQuery>,
 ) -> Result<ResponseJson<ApiResponse<Vec<TaskWithAttemptStatus>>>, ApiError> {
-    let tasks = Task::find_by_project_id_with_attempt_status(
-        &deployment.db().pool,
-        query.project_id,
-        query.include_archived,
-    )
-    .await?;
+    let pool = &deployment.db().pool;
+    let project_id = query.project_id;
+
+    // Step 1: Try to find the project locally (by ID or by remote_project_id)
+    let project = match Project::find_by_id(pool, project_id).await? {
+        Some(p) => Some(p),
+        None => Project::find_by_remote_project_id(pool, project_id).await?,
+    };
+
+    // Step 2: If project exists locally, fetch tasks from local DB
+    if let Some(project) = project {
+        let tasks = Task::find_by_project_id_with_attempt_status(
+            pool,
+            project.id,
+            query.include_archived,
+        )
+        .await?;
+        return Ok(ResponseJson(ApiResponse::success(tasks)));
+    }
+
+    // Step 3: Project not found locally - try fetching from Hive as a swarm project
+    let remote_client = deployment.remote_client().map_err(|_| {
+        ApiError::NotFound(format!(
+            "Project {} not found and no hive connection available",
+            project_id
+        ))
+    })?;
+
+    let response = remote_client
+        .list_swarm_project_tasks(project_id)
+        .await
+        .map_err(|e| {
+            if e.is_not_found() {
+                ApiError::NotFound(format!("Project {} not found", project_id))
+            } else {
+                ApiError::RemoteClient(e)
+            }
+        })?;
+
+    // Convert SharedTask to TaskWithAttemptStatus for frontend compatibility
+    let tasks: Vec<TaskWithAttemptStatus> = response
+        .tasks
+        .into_iter()
+        .map(|shared_task| {
+            // Convert remote TaskStatus to local TaskStatus
+            let status = match shared_task.status {
+                remote::db::tasks::TaskStatus::Todo => TaskStatus::Todo,
+                remote::db::tasks::TaskStatus::InProgress => TaskStatus::InProgress,
+                remote::db::tasks::TaskStatus::InReview => TaskStatus::InReview,
+                remote::db::tasks::TaskStatus::Done => TaskStatus::Done,
+                remote::db::tasks::TaskStatus::Cancelled => TaskStatus::Cancelled,
+            };
+            let is_in_progress = status == TaskStatus::InProgress;
+
+            TaskWithAttemptStatus {
+                task: Task {
+                    // Use shared_task.id so downstream handlers can use it for Hive lookups
+                    id: shared_task.id,
+                    project_id: shared_task.swarm_project_id.unwrap_or(project_id),
+                    title: shared_task.title,
+                    description: shared_task.description,
+                    status,
+                    shared_task_id: Some(shared_task.id),
+                    remote_version: shared_task.version,
+                    parent_task_id: None,
+                    archived_at: shared_task.archived_at,
+                    created_at: shared_task.created_at,
+                    updated_at: shared_task.updated_at,
+                    // Set remote stream info based on owner/executing node
+                    remote_assignee_user_id: shared_task.assignee_user_id,
+                    remote_assignee_name: None,
+                    remote_assignee_username: None,
+                    remote_last_synced_at: shared_task.shared_at,
+                    remote_stream_node_id: shared_task.executing_node_id.or(shared_task.owner_node_id),
+                    remote_stream_url: None,
+                    activity_at: None,
+                },
+                has_in_progress_attempt: is_in_progress,
+                has_merged_attempt: false,
+                last_attempt_failed: false,
+                executor: String::new(),
+                latest_execution_started_at: None,
+                latest_execution_completed_at: None,
+            }
+        })
+        .collect();
 
     Ok(ResponseJson(ApiResponse::success(tasks)))
 }
