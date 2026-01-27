@@ -61,13 +61,18 @@ pub async fn get_task_attempts(
         if let Some(task) = &local_task
             && let Some(shared_task_id) = task.shared_task_id
         {
-            let client = match deployment.remote_client() {
-                Ok(c) => c,
-                Err(e) => {
+            // Prefer node_auth_client (API key auth) - works even without user login
+            // Fall back to remote_client (OAuth) for non-node deployments
+            let client = match deployment
+                .node_auth_client()
+                .cloned()
+                .or_else(|| deployment.remote_client().ok())
+            {
+                Some(c) => c,
+                None => {
                     tracing::warn!(
                         shared_task_id = %shared_task_id,
-                        error = %e,
-                        "Failed to init Hive client, falling back to local"
+                        "No remote client available, falling back to local"
                     );
                     // Fall through to local query by skipping this block
                     return Ok(ResponseJson(ApiResponse::success(
@@ -111,7 +116,15 @@ pub async fn get_task_attempts(
         // Step 3: If task not found locally, task_id might be a shared_task_id from swarm project
         // Propagate remote_client errors here since there's no local fallback
         if local_task.is_none() {
-            let client = deployment.remote_client()?;
+            // Prefer node_auth_client (API key auth) - works even without user login
+            // Fall back to remote_client (OAuth) for non-node deployments
+            let client = deployment
+                .node_auth_client()
+                .cloned()
+                .or_else(|| deployment.remote_client().ok())
+                .ok_or_else(|| {
+                    ApiError::BadGateway("No remote client available".into())
+                })?;
             // Try to query Hive using task_id as shared_task_id
             match client.list_swarm_task_attempts(task_id).await {
                 Ok(response) => {
@@ -171,8 +184,13 @@ pub async fn get_task_attempt(
 
     // If attempt not found locally, try Hive fallback using API key auth
     if let Some(Extension(remote)) = remote_needed {
-        // Propagate remote client errors instead of falling through to 404
-        let client = deployment.remote_client()?;
+        // Prefer node_auth_client (API key auth) - works even without user login
+        // Fall back to remote_client (OAuth) for non-node deployments
+        let client = deployment
+            .node_auth_client()
+            .cloned()
+            .or_else(|| deployment.remote_client().ok())
+            .ok_or_else(|| ApiError::BadGateway("No remote client available".into()))?;
         match client.get_swarm_attempt(remote.attempt_id).await {
             Ok(hive_response) => {
                 // Try to find local task by shared_task_id to map back to local task_id
