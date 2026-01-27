@@ -365,9 +365,23 @@ pub async fn load_task_middleware(
         return Ok(next.run(request).await);
     }
 
-    // Task not found locally - only allow Hive fallback for GET requests.
-    // Non-GET methods (PUT, DELETE, POST) require Extension<Task> and should 404.
-    if request.method() == Method::GET {
+    // Task not found locally - only allow Hive fallback for GET requests to the
+    // base task route (GET /api/tasks/{id}). Sub-routes like /children, /labels,
+    // /variables require a local task to operate on.
+    //
+    // This mirrors the project middleware behavior where Hive fallback is only
+    // allowed for the base project route.
+    let path = request
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|uri| uri.path())
+        .unwrap_or_else(|| request.uri().path())
+        .trim_end_matches('/');
+    let task_id_str = task_id.to_string();
+    let is_base_task_route =
+        path.ends_with(&format!("/tasks/{}", task_id_str)) || path.ends_with(&task_id_str);
+
+    if request.method() == Method::GET && is_base_task_route {
         tracing::debug!(
             task_id = %task_id,
             "Task not found locally, signaling for Hive fallback"
@@ -376,11 +390,12 @@ pub async fn load_task_middleware(
         return Ok(next.run(request).await);
     }
 
-    // Non-GET request with missing task - return 404
+    // Non-GET request or sub-route with missing task - return 404
     tracing::debug!(
         task_id = %task_id,
         method = %request.method(),
-        "Task not found locally, returning 404 for non-GET request"
+        path = %path,
+        "Task not found locally, returning 404"
     );
     Err(StatusCode::NOT_FOUND)
 }
