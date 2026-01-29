@@ -404,7 +404,15 @@ pub async fn load_task_middleware(
                     let project_id = if let Some(hive_project_id) = swarm_project_id {
                         match Project::find_by_remote_project_id(&deployment.db().pool, hive_project_id).await {
                             Ok(Some(local_project)) => local_project.id,
-                            _ => hive_project_id,
+                            Ok(None) => hive_project_id,
+                            Err(e) => {
+                                tracing::warn!(
+                                    hive_project_id = %hive_project_id,
+                                    error = %e,
+                                    "Failed to map Hive project ID; falling back to Hive ID"
+                                );
+                                hive_project_id
+                            }
                         }
                     } else {
                         // No project reference - use task_id as placeholder (shouldn't happen)
