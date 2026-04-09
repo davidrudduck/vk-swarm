@@ -452,7 +452,7 @@ impl JsonRpcCallbacks for AppServerClient {
 
         let has_finished = method
             .strip_prefix("codex/event/")
-            .is_some_and(|suffix| suffix == "task_complete");
+            .is_some_and(|suffix| suffix == "task_complete" || suffix == "turn_complete");
 
         Ok(has_finished)
     }

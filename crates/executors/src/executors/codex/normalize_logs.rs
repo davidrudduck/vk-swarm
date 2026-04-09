@@ -789,7 +789,10 @@ impl CodexNormalizer {
             | EventMsg::EnteredReviewMode(..)
             | EventMsg::ExitedReviewMode(..)
             | EventMsg::TurnComplete(..) => vec![],
-            _ => vec![],
+            other => {
+                tracing::debug!(event = ?other, "ignoring unhandled codex event");
+                vec![]
+            }
         }
     }
 }
