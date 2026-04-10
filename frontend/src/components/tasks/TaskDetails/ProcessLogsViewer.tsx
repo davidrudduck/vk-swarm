@@ -75,18 +75,20 @@ function ConnectionStatusBadge({
 
 const LARGE_BURST = 10;
 
-export function ProcessLogsViewerContent({
-  logs,
-  error,
-  connectionType,
-  sourceKey,
-}: {
+export type ProcessLogsViewerContentProps = {
   logs: LogEntry[];
   error: string | null;
   /** Connection type for remote streams (undefined for local) */
   connectionType?: ConnectionType;
   sourceKey: string;
-}) {
+};
+
+export function ProcessLogsViewerContent({
+  logs,
+  error,
+  connectionType,
+  sourceKey,
+}: ProcessLogsViewerContentProps) {
   const listRef = useRef<VListHandle>(null);
   const didInitScroll = useRef(false);
   const prevLenRef = useRef(0);
