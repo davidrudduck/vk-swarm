@@ -79,16 +79,24 @@ export function ProcessLogsViewerContent({
   logs,
   error,
   connectionType,
+  sourceKey,
 }: {
   logs: LogEntry[];
   error: string | null;
   /** Connection type for remote streams (undefined for local) */
   connectionType?: ConnectionType;
+  sourceKey: string;
 }) {
   const listRef = useRef<VListHandle>(null);
   const didInitScroll = useRef(false);
   const prevLenRef = useRef(0);
   const [atBottom, setAtBottom] = useState(true);
+
+  useEffect(() => {
+    didInitScroll.current = false;
+    prevLenRef.current = 0;
+    setAtBottom(true);
+  }, [sourceKey]);
 
   // Initial jump to bottom + auto-follow during streaming
   useEffect(() => {
@@ -184,6 +192,7 @@ export function NodeProcessLogsViewer({
         logs={convertedLogs}
         error={error}
         connectionType={connectionType}
+        sourceKey={assignmentId}
       />
       {connectionType === 'disconnected' && error && (
         <div className="p-2 border-t">
@@ -204,7 +213,7 @@ export function NodeProcessLogsViewer({
  */
 function LocalProcessLogsViewer({ processId }: { processId: string }) {
   const { logs, error } = useLogStream(processId);
-  return <ProcessLogsViewerContent logs={logs} error={error} />;
+  return <ProcessLogsViewerContent logs={logs} error={error} sourceKey={processId} />;
 }
 
 export default function ProcessLogsViewer({

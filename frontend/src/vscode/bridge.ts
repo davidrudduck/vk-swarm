@@ -422,25 +422,27 @@ export async function writeClipboardViaBridge(text: string): Promise<boolean> {
     }
   }
 
-  // VS Code iframe bridge (no-op in standalone browser)
-  parentClipboardWrite(text);
+  // VS Code iframe bridge — dispatch and return optimistically
+  if (window !== window.parent) {
+    parentClipboardWrite(text);
+    return true;
+  }
 
   // Legacy execCommand fallback for non-iframe contexts (e.g. HTTP non-localhost)
-  if (window === window.parent) {
-    try {
-      const el = document.createElement('textarea');
-      el.value = text;
-      el.style.cssText =
-        'position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none;';
-      document.body.appendChild(el);
-      el.focus();
-      el.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(el);
-      if (ok) return true;
-    } catch {
-      // fall through
-    }
+  const el = document.createElement('textarea');
+  try {
+    el.value = text;
+    el.style.cssText =
+      'position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none;';
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    const ok = document.execCommand('copy');
+    if (ok) return true;
+  } catch {
+    // fall through
+  } finally {
+    el.remove();
   }
 
   return false;

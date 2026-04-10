@@ -84,6 +84,8 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
     reset();
     didInitScroll.current = false;
     prevLenRef.current = 0;
+    setAtTop(true);
+    setAtBottom(true);
   }, [attempt.id, reset]);
 
   const onEntriesUpdated = (
