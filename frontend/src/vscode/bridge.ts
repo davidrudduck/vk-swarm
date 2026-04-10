@@ -412,13 +412,38 @@ export function installVSCodeIframeKeyboardBridge() {
 
 /** Copy helper that prefers navigator.clipboard and falls back to the bridge. */
 export async function writeClipboardViaBridge(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    parentClipboardWrite(text);
-    return false;
+  // Modern Clipboard API (requires secure context or localhost + user gesture)
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fall through to alternatives
+    }
   }
+
+  // VS Code iframe bridge (no-op in standalone browser)
+  parentClipboardWrite(text);
+
+  // Legacy execCommand fallback for non-iframe contexts (e.g. HTTP non-localhost)
+  if (window === window.parent) {
+    try {
+      const el = document.createElement('textarea');
+      el.value = text;
+      el.style.cssText =
+        'position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none;';
+      document.body.appendChild(el);
+      el.focus();
+      el.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(el);
+      if (ok) return true;
+    } catch {
+      // fall through
+    }
+  }
+
+  return false;
 }
 
 /** Paste helper that prefers navigator.clipboard and falls back to the bridge. */

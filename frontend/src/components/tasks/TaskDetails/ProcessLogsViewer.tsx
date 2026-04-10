@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
+import { VList, VListHandle } from 'virtua';
 import { AlertCircle, Radio, Wifi, WifiOff } from 'lucide-react';
 import { useLogStream } from '@/hooks/useLogStream';
 import {
@@ -73,6 +73,8 @@ function ConnectionStatusBadge({
   );
 }
 
+const LARGE_BURST = 10;
+
 export function ProcessLogsViewerContent({
   logs,
   error,
@@ -83,53 +85,37 @@ export function ProcessLogsViewerContent({
   /** Connection type for remote streams (undefined for local) */
   connectionType?: ConnectionType;
 }) {
-  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const listRef = useRef<VListHandle>(null);
   const didInitScroll = useRef(false);
   const prevLenRef = useRef(0);
   const [atBottom, setAtBottom] = useState(true);
 
-  // 1) Initial jump to bottom once data appears.
-  useEffect(() => {
-    if (!didInitScroll.current && logs.length > 0) {
-      didInitScroll.current = true;
-      requestAnimationFrame(() => {
-        virtuosoRef.current?.scrollToIndex({
-          index: logs.length - 1,
-          align: 'end',
-        });
-      });
-    }
-  }, [logs.length]);
-
-  // 2) If there's a large append and we're at bottom, force-stick to the last item.
+  // Initial jump to bottom + auto-follow during streaming
   useEffect(() => {
     const prev = prevLenRef.current;
     const grewBy = logs.length - prev;
     prevLenRef.current = logs.length;
 
-    // tweak threshold as you like; this handles "big bursts"
-    const LARGE_BURST = 10;
-    if (grewBy >= LARGE_BURST && atBottom && logs.length > 0) {
-      // defer so Virtuoso can re-measure before jumping
+    if (logs.length === 0) return;
+
+    if (!didInitScroll.current) {
+      didInitScroll.current = true;
       requestAnimationFrame(() => {
-        virtuosoRef.current?.scrollToIndex({
-          index: logs.length - 1,
+        listRef.current?.scrollToIndex(logs.length - 1, { align: 'end' });
+      });
+      return;
+    }
+
+    if (grewBy > 0 && atBottom) {
+      const smooth = grewBy < LARGE_BURST;
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToIndex(logs.length - 1, {
           align: 'end',
+          smooth,
         });
       });
     }
-  }, [logs.length, atBottom, logs]);
-
-  const formatLogLine = (entry: LogEntry, index: number) => {
-    return (
-      <RawLogText
-        key={index}
-        content={entry.content}
-        channel={entry.type === 'STDERR' ? 'stderr' : 'stdout'}
-        className="text-sm px-4 py-1"
-      />
-    );
-  };
+  }, [logs.length, atBottom]);
 
   return (
     <div className="h-full flex flex-col">
@@ -149,19 +135,26 @@ export function ProcessLogsViewerContent({
             {error}
           </div>
         ) : (
-          <Virtuoso<LogEntry>
-            ref={virtuosoRef}
+          <VList
+            ref={listRef}
             className="flex-1 rounded-lg"
             data={logs}
-            itemContent={(index, entry) =>
-              formatLogLine(entry as LogEntry, index)
-            }
-            // Keep pinned while user is at bottom; release when they scroll up
-            atBottomStateChange={setAtBottom}
-            followOutput={atBottom ? 'smooth' : false}
-            // Optional: a bit more overscan helps during bursts
-            increaseViewportBy={{ top: 0, bottom: 600 }}
-          />
+            bufferSize={600}
+            onScroll={(offset) => {
+              const h = listRef.current;
+              if (!h) return;
+              setAtBottom(offset + h.viewportSize >= h.scrollSize - 2);
+            }}
+          >
+            {(entry, i) => (
+              <RawLogText
+                key={i}
+                content={(entry as LogEntry).content}
+                channel={(entry as LogEntry).type === 'STDERR' ? 'stderr' : 'stdout'}
+                className="text-sm px-4 py-1"
+              />
+            )}
+          </VList>
         )}
       </div>
     </div>
