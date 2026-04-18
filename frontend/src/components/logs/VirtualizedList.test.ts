@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { getTailRenderSignature, mergeAppendOnlyItems } from './VirtualizedList';
+import {
+  getTailRenderSignature,
+  isRunningSnapshotReplay,
+  mergeAppendOnlyItems,
+  mergeRunningAppendOnlyItems,
+} from './VirtualizedList';
 import type { PatchTypeWithKey } from '@/hooks/useConversationHistory';
+import type { CommandExitStatus } from 'shared/types';
 
 const stdoutItem = (
   patchKey: string,
@@ -12,6 +18,40 @@ const stdoutItem = (
   content,
   patchKey,
   executionProcessId,
+});
+
+const commandRunItem = ({
+  patchKey,
+  output,
+  exitStatus = null,
+  status = 'created',
+}: {
+  patchKey: string;
+  output: string;
+  exitStatus?: CommandExitStatus | null;
+  status?: 'created' | 'success' | 'failed';
+}): PatchTypeWithKey => ({
+  type: 'NORMALIZED_ENTRY',
+  content: {
+    entry_type: {
+      type: 'tool_use',
+      tool_name: 'Bash',
+      action_type: {
+        action: 'command_run',
+        command: 'echo hello',
+        result: {
+          output,
+          exit_status: exitStatus,
+        },
+      },
+      status: { status },
+    },
+    content: 'Bash',
+    timestamp: null,
+    metadata: null,
+  },
+  patchKey,
+  executionProcessId: 'process-1',
 });
 
 describe('mergeAppendOnlyItems', () => {
@@ -130,5 +170,133 @@ describe('getTailRenderSignature', () => {
     } as PatchTypeWithKey;
 
     expect(() => getTailRenderSignature([bigintTailItem])).not.toThrow();
+  });
+});
+
+describe('mergeRunningAppendOnlyItems', () => {
+  it('appends a new rendered row when a streamed entry updates an existing logical key', () => {
+    const previousItems = [stdoutItem('process-1:0', 'hello')];
+    const nextItems = [stdoutItem('process-1:0', 'hello world')];
+    let revision = 0;
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        revision += 1;
+        return revision;
+      })
+    ).toEqual([
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:0::append:1', 'hello world'),
+    ]);
+  });
+
+  it('does not duplicate a streamed entry when the rendered content is unchanged', () => {
+    const previousItems = [stdoutItem('process-1:0', 'hello')];
+    const nextItems = [stdoutItem('process-1:0', 'hello')];
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        throw new Error('revision should not advance');
+      })
+    ).toEqual(previousItems);
+  });
+
+  it('preserves append-only revisions across multiple streamed updates to the same logical key', () => {
+    const previousItems = [
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:0::append:1', 'hello world'),
+    ];
+    const nextItems = [stdoutItem('process-1:0', 'hello world!')];
+    let revision = 1;
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        revision += 1;
+        return revision;
+      })
+    ).toEqual([
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:0::append:1', 'hello world'),
+      stdoutItem('process-1:0::append:2', 'hello world!'),
+    ]);
+  });
+});
+
+describe('isRunningSnapshotReplay', () => {
+  it('treats a shorter running snapshot as replay traffic', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [stdoutItem('process-1:0', 'hello'), stdoutItem('process-1:1', 'world')],
+        [stdoutItem('process-1:0', 'hello')]
+      )
+    ).toBe(true);
+  });
+
+  it('treats an older single-entry snapshot as replay traffic', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [stdoutItem('process-1:0', 'hello world')],
+        [stdoutItem('process-1:0', 'hello')]
+      )
+    ).toBe(true);
+  });
+
+  it('treats a transient-only running snapshot as replay traffic', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [stdoutItem('process-1:0', 'hello')],
+        [stdoutItem('loading', 'loading')]
+      )
+    ).toBe(true);
+  });
+
+  it('allows tail growth for the active streamed entry', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [stdoutItem('process-1:0', 'hello')],
+        [stdoutItem('process-1:0', 'hello world')]
+      )
+    ).toBe(false);
+  });
+
+  it('allows command-run normalized entries to grow append-only at the tail', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [commandRunItem({ patchKey: 'process-1:0', output: 'hello' })],
+        [
+          commandRunItem({
+            patchKey: 'process-1:0',
+            output: 'hello\nworld',
+            exitStatus: { type: 'exit_code', code: 0 },
+            status: 'success',
+          }),
+        ]
+      )
+    ).toBe(false);
+  });
+
+  it('treats non-tail changes in a running snapshot as replay traffic', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [stdoutItem('process-1:0', 'hello'), stdoutItem('process-1:1', 'world')],
+        [stdoutItem('process-1:0', 'HELLO'), stdoutItem('process-1:1', 'world')]
+      )
+    ).toBe(true);
+  });
+
+  it('treats replayed command-run output regression as replay traffic', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [
+          commandRunItem({
+            patchKey: 'process-1:0',
+            output: 'hello\nworld',
+            exitStatus: { type: 'exit_code', code: 0 },
+            status: 'success',
+          }),
+        ],
+        [commandRunItem({ patchKey: 'process-1:0', output: 'hello' })]
+      )
+    ).toBe(true);
   });
 });
