@@ -77,7 +77,9 @@ describe('mergeAppendOnlyItems', () => {
       stdoutItem('next_action', 'next'),
     ]);
   });
+});
 
+describe('getTailRenderSignature', () => {
   it('treats a replaced placeholder tail as new tail content for auto-follow', () => {
     expect(
       getTailRenderSignature([

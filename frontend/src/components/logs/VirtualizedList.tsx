@@ -329,7 +329,7 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
       {loading && (
         <div className="float-left top-0 left-0 w-full h-full bg-primary flex flex-col gap-2 justify-center items-center">
           <Loader2 className="h-8 w-8 animate-spin" />
-          <p>Loading History</p>
+          <p>{t('conversation.loadingHistory')}</p>
         </div>
       )}
     </ApprovalFormProvider>
