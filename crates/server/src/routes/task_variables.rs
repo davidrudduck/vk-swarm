@@ -5,6 +5,7 @@ use axum::{
     response::Json as ResponseJson,
     routing::{get, post},
 };
+use db::models::project::Project;
 use db::models::task::Task;
 use db::models::task_variable::{
     CreateTaskVariable, ResolvedVariable, TaskVariable, UpdateTaskVariable,
@@ -17,7 +18,11 @@ use ts_rs::TS;
 use utils::response::ApiResponse;
 use uuid::Uuid;
 
-use crate::{DeploymentImpl, error::ApiError, middleware::load_task_middleware};
+use crate::{
+    DeploymentImpl,
+    error::ApiError,
+    middleware::{RemoteTaskContext, load_task_middleware},
+};
 
 /// Validates that a variable name matches the pattern [A-Z][A-Z0-9_]*
 fn validate_var_name(name: &str) -> Result<(), ApiError> {
@@ -53,15 +58,105 @@ fn validate_var_name(name: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn empty_variables_response<T>() -> ResponseJson<ApiResponse<Vec<T>>> {
+    ResponseJson(ApiResponse::success(vec![]))
+}
+
+fn reject_remote_variable_mutation(remote_ctx: Option<&RemoteTaskContext>) -> Result<(), ApiError> {
+    if remote_ctx.is_some() {
+        return Err(ApiError::BadRequest(
+            "Cannot modify variables for remote tasks".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn remote_system_variables(
+    task: &Task,
+    source_task_id: Uuid,
+    project_title: Option<&str>,
+) -> HashMap<String, (String, Option<Uuid>)> {
+    [
+        ("TASK_ID".to_string(), task.id.to_string()),
+        (
+            "PARENT_TASK_ID".to_string(),
+            task.parent_task_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+        ),
+        ("TASK_TITLE".to_string(), task.title.clone()),
+        (
+            "TASK_DESCRIPTION".to_string(),
+            task.description.clone().unwrap_or_default(),
+        ),
+        ("TASK_LABEL".to_string(), String::new()),
+        ("PROJECT_ID".to_string(), task.project_id.to_string()),
+        (
+            "PROJECT_TITLE".to_string(),
+            project_title.unwrap_or_default().to_string(),
+        ),
+        (
+            "IS_SUBTASK".to_string(),
+            if task.parent_task_id.is_some() {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name, (value, Some(source_task_id))))
+    .collect()
+}
+
+fn build_preview_expansion_response(
+    text: &str,
+    variables: &HashMap<String, (String, Option<Uuid>)>,
+) -> PreviewExpansionResponse {
+    let result = variable_expander::expand_variables(text, variables);
+
+    PreviewExpansionResponse {
+        expanded_text: result.text,
+        undefined_variables: result.undefined_vars,
+        expanded_variables: result
+            .expanded_vars
+            .into_iter()
+            .map(|(name, source_id)| ExpandedVariableInfo {
+                name,
+                source_task_id: source_id.map(|id| id.to_string()),
+            })
+            .collect(),
+    }
+}
+
+async fn find_remote_project_title(
+    pool: &sqlx::SqlitePool,
+    task: &Task,
+) -> Result<Option<String>, sqlx::Error> {
+    if let Some(project) = Project::find_by_id(pool, task.project_id).await? {
+        return Ok(Some(project.name));
+    }
+
+    if task.shared_task_id == Some(task.id) {
+        return Ok(Project::find_by_remote_project_id(pool, task.project_id)
+            .await?
+            .map(|project| project.name));
+    }
+
+    Ok(None)
+}
+
 /// Get all variables defined directly on a task (not inherited)
 pub async fn get_task_variables(
     Extension(task): Extension<Task>,
-    remote_ctx: Option<Extension<crate::middleware::RemoteTaskContext>>,
+    remote_ctx: Option<Extension<RemoteTaskContext>>,
     State(deployment): State<DeploymentImpl>,
 ) -> Result<ResponseJson<ApiResponse<Vec<TaskVariable>>>, ApiError> {
     // Remote tasks don't have local variables - return empty
     if remote_ctx.is_some() {
-        return Ok(ResponseJson(ApiResponse::success(vec![])));
+        return Ok(empty_variables_response());
     }
 
     let variables = TaskVariable::find_by_task_id(&deployment.db().pool, task.id).await?;
@@ -71,12 +166,12 @@ pub async fn get_task_variables(
 /// Get all resolved variables for a task including inherited ones from parent chain
 pub async fn get_resolved_variables(
     Extension(task): Extension<Task>,
-    remote_ctx: Option<Extension<crate::middleware::RemoteTaskContext>>,
+    remote_ctx: Option<Extension<RemoteTaskContext>>,
     State(deployment): State<DeploymentImpl>,
 ) -> Result<ResponseJson<ApiResponse<Vec<ResolvedVariable>>>, ApiError> {
     // Remote tasks don't have local variables - return empty
     if remote_ctx.is_some() {
-        return Ok(ResponseJson(ApiResponse::success(vec![])));
+        return Ok(empty_variables_response());
     }
 
     let variables =
@@ -87,9 +182,12 @@ pub async fn get_resolved_variables(
 /// Create a new variable on a task
 pub async fn create_task_variable(
     Extension(task): Extension<Task>,
+    remote_ctx: Option<Extension<RemoteTaskContext>>,
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<CreateTaskVariable>,
 ) -> Result<ResponseJson<ApiResponse<TaskVariable>>, ApiError> {
+    reject_remote_variable_mutation(remote_ctx.as_deref())?;
+
     // Validate variable name format
     validate_var_name(&payload.name)?;
 
@@ -116,7 +214,13 @@ pub async fn update_task_variable(
         validate_var_name(name)?;
     }
 
-    let variable = TaskVariable::update(&deployment.db().pool, params.var_id, &payload).await?;
+    let variable = TaskVariable::update_for_task(
+        &deployment.db().pool,
+        params.task_id,
+        params.var_id,
+        &payload,
+    )
+    .await?;
     Ok(ResponseJson(ApiResponse::success(variable)))
 }
 
@@ -125,7 +229,8 @@ pub async fn delete_task_variable(
     State(deployment): State<DeploymentImpl>,
     Path(params): Path<VariablePathParams>,
 ) -> Result<ResponseJson<ApiResponse<()>>, ApiError> {
-    let rows_affected = TaskVariable::delete(&deployment.db().pool, params.var_id).await?;
+    let rows_affected =
+        TaskVariable::delete_for_task(&deployment.db().pool, params.task_id, params.var_id).await?;
     if rows_affected == 0 {
         Err(ApiError::Database(sqlx::Error::RowNotFound))
     } else {
@@ -163,34 +268,23 @@ pub struct ExpandedVariableInfo {
 /// Preview variable expansion on arbitrary text using the task's resolved variables
 pub async fn preview_expansion(
     Extension(task): Extension<Task>,
+    remote_ctx: Option<Extension<RemoteTaskContext>>,
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<PreviewExpansionRequest>,
 ) -> Result<ResponseJson<ApiResponse<PreviewExpansionResponse>>, ApiError> {
-    // Get all resolved variables for the task
-    let resolved = TaskVariable::find_inherited_with_system(&deployment.db().pool, task.id).await?;
-
-    // Convert to the format expected by variable_expander
-    let variables: HashMap<String, (String, Option<Uuid>)> = resolved
-        .into_iter()
-        .map(|rv| (rv.name, (rv.value, Some(rv.source_task_id))))
-        .collect();
-
-    // Expand variables in the text
-    let result = variable_expander::expand_variables(&payload.text, &variables);
+    let variables = if let Some(remote_ctx) = remote_ctx {
+        let project_title = find_remote_project_title(&deployment.db().pool, &task).await?;
+        remote_system_variables(&task, remote_ctx.0.shared_task_id, project_title.as_deref())
+    } else {
+        TaskVariable::find_inherited_with_system(&deployment.db().pool, task.id)
+            .await?
+            .into_iter()
+            .map(|rv| (rv.name, (rv.value, Some(rv.source_task_id))))
+            .collect()
+    };
 
     Ok(ResponseJson(ApiResponse::success(
-        PreviewExpansionResponse {
-            expanded_text: result.text,
-            undefined_variables: result.undefined_vars,
-            expanded_variables: result
-                .expanded_vars
-                .into_iter()
-                .map(|(name, source_id)| ExpandedVariableInfo {
-                    name,
-                    source_task_id: source_id.map(|id| id.to_string()),
-                })
-                .collect(),
-        },
+        build_preview_expansion_response(&payload.text, &variables),
     )))
 }
 
@@ -212,4 +306,390 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
     Router::new()
         .nest("/tasks/{task_id}/variables", task_var_router)
         .merge(var_specific_router)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use db::{
+        models::{
+            project::{CreateProject, Project},
+            task::{CreateTask, Task},
+            task_variable::CreateTaskVariable,
+        },
+        test_utils::create_test_pool,
+    };
+
+    async fn create_task_for_variables_test(
+        pool: &sqlx::SqlitePool,
+        name: &str,
+    ) -> Result<Task, Box<dyn std::error::Error>> {
+        let project = Project::create(
+            pool,
+            &CreateProject {
+                name: format!("{name}-project"),
+                git_repo_path: format!("/tmp/{name}-project"),
+                use_existing_repo: true,
+                clone_url: None,
+                setup_script: None,
+                dev_script: None,
+                cleanup_script: None,
+                copy_files: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await?;
+
+        let task = Task::create(
+            pool,
+            &CreateTask {
+                project_id: project.id,
+                title: format!("{name}-task"),
+                description: None,
+                status: None,
+                parent_task_id: None,
+                image_ids: None,
+                shared_task_id: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await?;
+
+        Ok(task)
+    }
+
+    #[test]
+    fn remote_system_variables_preserve_runtime_task_context() {
+        let shared_task_id = Uuid::new_v4();
+        let task = Task {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            title: "Remote title".to_string(),
+            description: Some("Remote description".to_string()),
+            status: db::models::task::TaskStatus::Todo,
+            parent_task_id: Some(Uuid::new_v4()),
+            shared_task_id: Some(shared_task_id),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            remote_assignee_user_id: None,
+            remote_assignee_name: None,
+            remote_assignee_username: None,
+            remote_version: 0,
+            remote_last_synced_at: None,
+            remote_stream_node_id: None,
+            remote_stream_url: None,
+            archived_at: None,
+            activity_at: None,
+        };
+
+        let response = build_preview_expansion_response(
+            "Task $TASK_TITLE in $PROJECT_TITLE [$IS_SUBTASK]",
+            &remote_system_variables(&task, shared_task_id, Some("Remote project")),
+        );
+
+        assert_eq!(
+            response.expanded_text,
+            "Task Remote title in Remote project [true]"
+        );
+        assert!(response.undefined_variables.is_empty());
+        assert_eq!(response.expanded_variables.len(), 3);
+        assert!(response.expanded_variables.iter().all(
+            |variable| variable.source_task_id.as_deref() == Some(&shared_task_id.to_string())
+        ));
+    }
+
+    #[test]
+    fn remote_system_variables_match_system_variable_names() {
+        let shared_task_id = Uuid::new_v4();
+        let task = Task {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            title: "Remote title".to_string(),
+            description: Some("Remote description".to_string()),
+            status: db::models::task::TaskStatus::Todo,
+            parent_task_id: None,
+            shared_task_id: Some(shared_task_id),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            remote_assignee_user_id: None,
+            remote_assignee_name: None,
+            remote_assignee_username: None,
+            remote_version: 0,
+            remote_last_synced_at: None,
+            remote_stream_node_id: None,
+            remote_stream_url: None,
+            archived_at: None,
+            activity_at: None,
+        };
+
+        let keys: std::collections::BTreeSet<_> =
+            remote_system_variables(&task, shared_task_id, None)
+                .into_keys()
+                .collect();
+        let expected: std::collections::BTreeSet<_> =
+            db::models::task_variable::SYSTEM_VARIABLE_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect();
+
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn remote_system_variables_preserve_value_shapes() {
+        let shared_task_id = Uuid::new_v4();
+        let task = Task {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            title: "Remote title".to_string(),
+            description: Some("Remote description".to_string()),
+            status: db::models::task::TaskStatus::Todo,
+            parent_task_id: Some(Uuid::new_v4()),
+            shared_task_id: Some(shared_task_id),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            remote_assignee_user_id: None,
+            remote_assignee_name: None,
+            remote_assignee_username: None,
+            remote_version: 0,
+            remote_last_synced_at: None,
+            remote_stream_node_id: None,
+            remote_stream_url: None,
+            archived_at: None,
+            activity_at: None,
+        };
+
+        let variables = remote_system_variables(&task, shared_task_id, Some("Remote project"));
+
+        assert_eq!(
+            variables.get("TASK_ID"),
+            Some(&(task.id.to_string(), Some(shared_task_id)))
+        );
+        assert_eq!(
+            variables.get("PROJECT_ID"),
+            Some(&(task.project_id.to_string(), Some(shared_task_id)))
+        );
+        assert_eq!(
+            variables.get("PROJECT_TITLE"),
+            Some(&("Remote project".to_string(), Some(shared_task_id)))
+        );
+        assert_eq!(
+            variables.get("TASK_DESCRIPTION"),
+            Some(&("Remote description".to_string(), Some(shared_task_id)))
+        );
+        assert_eq!(
+            variables.get("IS_SUBTASK"),
+            Some(&("true".to_string(), Some(shared_task_id)))
+        );
+    }
+
+    #[test]
+    fn reject_remote_variable_mutation_blocks_remote_tasks() {
+        let ctx = RemoteTaskContext {
+            shared_task_id: Uuid::new_v4(),
+            origin_node_id: None,
+        };
+
+        let result = reject_remote_variable_mutation(Some(&ctx));
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[tokio::test]
+    async fn update_for_task_rejects_variable_from_different_task() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let task_a = create_task_for_variables_test(&pool, "alpha")
+            .await
+            .expect("create task A");
+        let task_b = create_task_for_variables_test(&pool, "beta")
+            .await
+            .expect("create task B");
+
+        let variable = TaskVariable::create(
+            &pool,
+            task_b.id,
+            &CreateTaskVariable {
+                name: "FOO".to_string(),
+                value: "bar".to_string(),
+            },
+        )
+        .await
+        .expect("create variable");
+
+        let result = TaskVariable::update_for_task(
+            &pool,
+            task_a.id,
+            variable.id,
+            &UpdateTaskVariable {
+                name: Some("BAR".to_string()),
+                value: None,
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(sqlx::Error::RowNotFound)));
+    }
+
+    #[tokio::test]
+    async fn update_for_task_accepts_variable_for_matching_task() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let task = create_task_for_variables_test(&pool, "gamma")
+            .await
+            .expect("create task");
+
+        let variable = TaskVariable::create(
+            &pool,
+            task.id,
+            &CreateTaskVariable {
+                name: "FOO".to_string(),
+                value: "bar".to_string(),
+            },
+        )
+        .await
+        .expect("create variable");
+
+        let updated = TaskVariable::update_for_task(
+            &pool,
+            task.id,
+            variable.id,
+            &UpdateTaskVariable {
+                name: None,
+                value: Some("baz".to_string()),
+            },
+        )
+        .await
+        .expect("update variable");
+
+        assert_eq!(updated.id, variable.id);
+        assert_eq!(updated.task_id, task.id);
+        assert_eq!(updated.value, "baz");
+    }
+
+    #[tokio::test]
+    async fn delete_for_task_only_deletes_matching_task_variable() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let task_a = create_task_for_variables_test(&pool, "delta")
+            .await
+            .expect("create task A");
+        let task_b = create_task_for_variables_test(&pool, "epsilon")
+            .await
+            .expect("create task B");
+
+        let variable = TaskVariable::create(
+            &pool,
+            task_b.id,
+            &CreateTaskVariable {
+                name: "FOO".to_string(),
+                value: "bar".to_string(),
+            },
+        )
+        .await
+        .expect("create variable");
+
+        let wrong_task_rows = TaskVariable::delete_for_task(&pool, task_a.id, variable.id)
+            .await
+            .expect("delete with wrong task");
+        assert_eq!(wrong_task_rows, 0);
+
+        let matching_rows = TaskVariable::delete_for_task(&pool, task_b.id, variable.id)
+            .await
+            .expect("delete with matching task");
+        assert_eq!(matching_rows, 1);
+    }
+
+    #[tokio::test]
+    async fn find_remote_project_title_uses_remote_project_id_for_hive_only_task() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let remote_project_id = Uuid::new_v4();
+        let local_project = Project::create(
+            &pool,
+            &CreateProject {
+                name: "linked-project".to_string(),
+                git_repo_path: "/tmp/linked-project".to_string(),
+                use_existing_repo: true,
+                clone_url: None,
+                setup_script: None,
+                dev_script: None,
+                cleanup_script: None,
+                copy_files: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await
+        .expect("create project");
+        sqlx::query("UPDATE projects SET remote_project_id = $1 WHERE id = $2")
+            .bind(remote_project_id)
+            .bind(local_project.id)
+            .execute(&pool)
+            .await
+            .expect("set remote project id");
+
+        let shared_task_id = Uuid::new_v4();
+        let hive_task = Task {
+            id: shared_task_id,
+            project_id: remote_project_id,
+            title: "Remote title".to_string(),
+            description: None,
+            status: db::models::task::TaskStatus::Todo,
+            parent_task_id: None,
+            shared_task_id: Some(shared_task_id),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            remote_assignee_user_id: None,
+            remote_assignee_name: None,
+            remote_assignee_username: None,
+            remote_version: 0,
+            remote_last_synced_at: None,
+            remote_stream_node_id: None,
+            remote_stream_url: None,
+            archived_at: None,
+            activity_at: None,
+        };
+
+        let title = find_remote_project_title(&pool, &hive_task)
+            .await
+            .expect("resolve project title");
+        assert_eq!(title.as_deref(), Some("linked-project"));
+    }
+
+    #[tokio::test]
+    async fn find_remote_project_title_uses_direct_project_match_when_available() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let task = create_task_for_variables_test(&pool, "zeta")
+            .await
+            .expect("create task");
+
+        let title = find_remote_project_title(&pool, &task)
+            .await
+            .expect("resolve project title");
+        assert_eq!(title.as_deref(), Some("zeta-project"));
+    }
+
+    #[tokio::test]
+    async fn find_remote_project_title_returns_none_when_no_project_match_exists() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let task = Task {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            title: "Orphan task".to_string(),
+            description: None,
+            status: db::models::task::TaskStatus::Todo,
+            parent_task_id: None,
+            shared_task_id: Some(Uuid::new_v4()),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            remote_assignee_user_id: None,
+            remote_assignee_name: None,
+            remote_assignee_username: None,
+            remote_version: 0,
+            remote_last_synced_at: None,
+            remote_stream_node_id: None,
+            remote_stream_url: None,
+            archived_at: None,
+            activity_at: None,
+        };
+
+        let title = find_remote_project_title(&pool, &task)
+            .await
+            .expect("resolve project title");
+        assert_eq!(title, None);
+    }
 }

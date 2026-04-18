@@ -252,11 +252,60 @@ impl TaskVariable {
         .await
     }
 
+    /// Update an existing variable, scoped to the owning task.
+    pub async fn update_for_task(
+        pool: &SqlitePool,
+        task_id: Uuid,
+        id: Uuid,
+        data: &UpdateTaskVariable,
+    ) -> Result<Self, sqlx::Error> {
+        let name = data.name.as_deref();
+        let value = data.value.as_deref();
+
+        sqlx::query_as!(
+            TaskVariable,
+            r#"UPDATE task_variables
+               SET name = COALESCE($3, name),
+                   value = COALESCE($4, value),
+                   updated_at = datetime('now', 'subsec')
+               WHERE id = $1 AND task_id = $2
+               RETURNING
+                id as "id!: Uuid",
+                task_id as "task_id!: Uuid",
+                name,
+                value,
+                created_at as "created_at!: DateTime<Utc>",
+                updated_at as "updated_at!: DateTime<Utc>""#,
+            id,
+            task_id,
+            name,
+            value
+        )
+        .fetch_one(pool)
+        .await
+    }
+
     /// Delete a variable
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<u64, sqlx::Error> {
         let result = sqlx::query!("DELETE FROM task_variables WHERE id = $1", id)
             .execute(pool)
             .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Delete a variable, scoped to the owning task.
+    pub async fn delete_for_task(
+        pool: &SqlitePool,
+        task_id: Uuid,
+        id: Uuid,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query!(
+            "DELETE FROM task_variables WHERE id = $1 AND task_id = $2",
+            id,
+            task_id
+        )
+        .execute(pool)
+        .await?;
         Ok(result.rows_affected())
     }
 
