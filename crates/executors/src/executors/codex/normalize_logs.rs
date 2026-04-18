@@ -78,6 +78,7 @@ pub enum CodexEvent {
     Error(Error),
     /// An approval response (denied or timed out only generates entries)
     Approval(Approval),
+    Notice(Notice),
     DynamicToolLifecycle(DynamicToolLifecycle),
     /// Session ID extracted from various sources (without model params)
     SessionStart(String),
@@ -168,6 +169,9 @@ impl LogNormalizer for CodexNormalizer {
         // Try to parse as Approval
         if let Ok(approval) = serde_json::from_str::<Approval>(line) {
             return Some(CodexEvent::Approval(approval));
+        }
+        if let Ok(notice) = serde_json::from_str::<Notice>(line) {
+            return Some(CodexEvent::Notice(notice));
         }
         if let Ok(dynamic_tool) = serde_json::from_str::<DynamicToolLifecycle>(line) {
             return Some(CodexEvent::DynamicToolLifecycle(dynamic_tool));
@@ -329,6 +333,11 @@ impl LogNormalizer for CodexNormalizer {
                 } else {
                     vec![]
                 }
+            }
+            CodexEvent::Notice(notice) => {
+                let entry = notice.to_normalized_entry();
+                let idx = entry_index.next();
+                vec![ConversationPatch::add_normalized_entry(idx, entry)]
             }
             CodexEvent::DynamicToolLifecycle(lifecycle) => {
                 lifecycle.process(&mut self.state, entry_index)
@@ -2530,6 +2539,34 @@ impl ToNormalizedEntry for Error {
                     error_type: NormalizedEntryError::SetupRequired,
                 },
                 content: error.clone(),
+                metadata: None,
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum Notice {
+    CollaborationModeFallback { message: String },
+}
+
+impl Notice {
+    pub fn collaboration_mode_fallback(message: String) -> Self {
+        Self::CollaborationModeFallback { message }
+    }
+
+    pub fn raw(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+impl ToNormalizedEntry for Notice {
+    fn to_normalized_entry(&self) -> NormalizedEntry {
+        match self {
+            Notice::CollaborationModeFallback { message } => NormalizedEntry {
+                timestamp: None,
+                entry_type: NormalizedEntryType::SystemMessage,
+                content: message.clone(),
                 metadata: None,
             },
         }

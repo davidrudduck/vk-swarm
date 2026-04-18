@@ -51,6 +51,22 @@ export function ExecutorConfigForm({
     RJSFValidationError[]
   >([]);
 
+  const allowedCodexCollaborationModes = useMemo(() => {
+    if (executor !== BaseCodingAgent.CODEX) {
+      return null;
+    }
+
+    if (!runtimeCapabilities) {
+      return null;
+    }
+
+    return new Set(
+      runtimeCapabilities.collaboration_modes.flatMap((mode) =>
+        mode.value ? [mode.value] : []
+      )
+    );
+  }, [executor, runtimeCapabilities]);
+
   const schema = useMemo(() => {
     const baseSchema = schemas[executor];
     if (!baseSchema || executor !== BaseCodingAgent.CODEX) {
@@ -62,17 +78,15 @@ export function ExecutorConfigForm({
       unknown
     >;
     const properties = (nextSchema.properties ?? {}) as Record<string, unknown>;
+    delete properties.collaboration_mode;
 
     if (runtimeCapabilities?.models?.length) {
       const defaultModel =
-        runtimeCapabilities.models.find((model) => model.is_default)?.display_name ??
-        'Runtime default';
+        runtimeCapabilities.models.find((model) => model.is_default)
+          ?.display_name ?? 'Runtime default';
       properties.model = {
         ...(properties.model as Record<string, unknown>),
-        enum: [
-          ...runtimeCapabilities.models.map((model) => model.model),
-          null,
-        ],
+        enum: [...runtimeCapabilities.models.map((model) => model.model), null],
         enumNames: [
           ...runtimeCapabilities.models.map(
             (model) => `${model.display_name} (${model.model})`
@@ -82,37 +96,74 @@ export function ExecutorConfigForm({
       };
     }
 
-    if (runtimeCapabilities?.collaboration_modes?.length) {
-      const discoveredModes = runtimeCapabilities.collaboration_modes.filter(
-        (mode): mode is typeof mode & { value: string } => !!mode.value
-      );
-      if (discoveredModes.length) {
-        properties.collaboration_mode = {
-          ...(properties.collaboration_mode as Record<string, unknown>),
-          enum: [...discoveredModes.map((mode) => mode.value), null],
-          enumNames: [
-            ...discoveredModes.map((mode) => {
-              const details = [mode.model, mode.reasoning_effort]
-                .filter(Boolean)
-                .join(' • ');
-              return details ? `${mode.label} (${details})` : mode.label;
-            }),
-            'No native collaboration mode',
-          ],
-        };
-      }
+    const discoveredModes = runtimeCapabilities?.collaboration_modes?.filter(
+      (mode): mode is typeof mode & { value: string } => !!mode.value
+    );
+    if (discoveredModes?.length) {
+      properties.collaboration_mode = {
+        type: ['string', 'null'],
+        title: 'Native Collaboration Mode',
+        enum: [...discoveredModes.map((mode) => mode.value), null],
+        enumNames: [
+          ...discoveredModes.map((mode) => {
+            const details = [mode.model, mode.reasoning_effort]
+              .filter(Boolean)
+              .join(' • ');
+            return details ? `${mode.label} (${details})` : mode.label;
+          }),
+          'No native collaboration mode',
+        ],
+      };
     }
 
     return nextSchema;
   }, [executor, runtimeCapabilities]);
 
   useEffect(() => {
-    setFormData(value || {});
+    const nextFormData =
+      executor === BaseCodingAgent.CODEX &&
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+        ? (() => {
+            const nextValue = { ...(value as Record<string, unknown>) };
+            const selectedMode = nextValue.collaboration_mode;
+            if (
+              typeof selectedMode === 'string' &&
+              allowedCodexCollaborationModes &&
+              !allowedCodexCollaborationModes.has(selectedMode)
+            ) {
+              delete nextValue.collaboration_mode;
+            }
+            return nextValue;
+          })()
+        : value || {};
+
+    setFormData(nextFormData);
     setValidationErrors([]);
-  }, [value, executor]);
+  }, [value, executor, allowedCodexCollaborationModes]);
 
   const handleChange = (event: IChangeEvent<unknown>) => {
-    const newFormData = event.formData;
+    const newFormData =
+      executor === BaseCodingAgent.CODEX &&
+      event.formData &&
+      typeof event.formData === 'object' &&
+      !Array.isArray(event.formData)
+        ? (() => {
+            const nextValue = {
+              ...(event.formData as Record<string, unknown>),
+            };
+            const selectedMode = nextValue.collaboration_mode;
+            if (
+              typeof selectedMode === 'string' &&
+              allowedCodexCollaborationModes &&
+              !allowedCodexCollaborationModes.has(selectedMode)
+            ) {
+              delete nextValue.collaboration_mode;
+            }
+            return nextValue;
+          })()
+        : event.formData;
     setFormData(newFormData);
     if (onChange) {
       onChange(newFormData);

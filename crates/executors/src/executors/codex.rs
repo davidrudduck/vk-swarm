@@ -35,7 +35,7 @@ use workspace_utils::msg_store::MsgStore;
 use self::{
     client::{AppServerClient, LogWriter},
     jsonrpc::JsonRpcPeer,
-    normalize_logs::normalize_logs,
+    normalize_logs::{Notice, normalize_logs},
 };
 use crate::{
     actions::{SpawnContext, coding_agent_review::CodingAgentReviewRequest},
@@ -76,6 +76,16 @@ pub struct CodexRuntimeCapabilities {
     pub supports_interrupt: bool,
     pub supports_review: bool,
     pub supports_live_follow_up_messages: bool,
+}
+
+fn collaboration_mode_value(mode: &CodexCollaborationMode) -> &'static str {
+    match mode {
+        CodexCollaborationMode::Plan => "plan",
+        CodexCollaborationMode::Code => "code",
+        CodexCollaborationMode::PairProgramming => "pair-programming",
+        CodexCollaborationMode::Execute => "execute",
+        CodexCollaborationMode::Custom => "custom",
+    }
 }
 
 /// Sandbox policy modes for Codex
@@ -551,6 +561,19 @@ impl Codex {
                 "Codex authentication required".to_string(),
             ));
         }
+        let available_collaboration_modes = match client.list_collaboration_modes().await {
+            Ok(response) => Some(
+                response
+                    .data
+                    .into_iter()
+                    .map(map_runtime_collaboration_mode)
+                    .collect::<Vec<_>>(),
+            ),
+            Err(err) => {
+                tracing::warn!("failed to discover Codex collaboration modes: {err}");
+                None
+            }
+        };
         match resume_session {
             None => {
                 let response = client.start_thread(thread_params).await?;
@@ -561,18 +584,18 @@ impl Codex {
                         )))
                     })?;
                 client.register_session(&conversation_id).await?;
+                let collaboration_mode = resolve_turn_collaboration_mode(
+                    client.as_ref(),
+                    collaboration_mode.as_ref(),
+                    available_collaboration_modes.as_deref(),
+                    model.clone().unwrap_or(response.model.clone()),
+                    model_reasoning_effort
+                        .or_else(|| response.reasoning_effort.map(local_reasoning_effort)),
+                    developer_instructions.clone(),
+                )
+                .await;
                 client
-                    .start_turn(
-                        conversation_id,
-                        combined_prompt,
-                        build_turn_collaboration_mode(
-                            collaboration_mode.as_ref(),
-                            model.clone().unwrap_or(response.model.clone()),
-                            model_reasoning_effort
-                                .or_else(|| response.reasoning_effort.map(local_reasoning_effort)),
-                            developer_instructions.clone(),
-                        ),
-                    )
+                    .start_turn(conversation_id, combined_prompt, collaboration_mode)
                     .await?;
             }
             Some(session_id) => {
@@ -598,18 +621,18 @@ impl Codex {
                         )))
                     })?;
                 client.register_session(&conversation_id).await?;
+                let collaboration_mode = resolve_turn_collaboration_mode(
+                    client.as_ref(),
+                    collaboration_mode.as_ref(),
+                    available_collaboration_modes.as_deref(),
+                    model.clone().unwrap_or(response.model.clone()),
+                    model_reasoning_effort
+                        .or_else(|| response.reasoning_effort.map(local_reasoning_effort)),
+                    developer_instructions.clone(),
+                )
+                .await;
                 client
-                    .start_turn(
-                        conversation_id,
-                        combined_prompt,
-                        build_turn_collaboration_mode(
-                            collaboration_mode.as_ref(),
-                            model.clone().unwrap_or(response.model.clone()),
-                            model_reasoning_effort
-                                .or_else(|| response.reasoning_effort.map(local_reasoning_effort)),
-                            developer_instructions.clone(),
-                        ),
-                    )
+                    .start_turn(conversation_id, combined_prompt, collaboration_mode)
                     .await?;
             }
         }
@@ -859,6 +882,7 @@ impl Codex {
 
 fn build_turn_collaboration_mode(
     mode: Option<&CodexCollaborationMode>,
+    available_modes: Option<&[CodexRuntimeCollaborationMode]>,
     model: String,
     reasoning_effort: Option<ReasoningEffort>,
     developer_instructions: Option<String>,
@@ -867,6 +891,16 @@ fn build_turn_collaboration_mode(
         Some(mode) => mode,
         None => return None,
     };
+
+    if let Some(available_modes) = available_modes {
+        if !available_modes
+            .iter()
+            .filter_map(|available_mode| available_mode.value.as_deref())
+            .any(|available_mode| available_mode == collaboration_mode_value(mode))
+        {
+            return None;
+        }
+    }
 
     Some(ProtocolCollaborationMode {
         mode: match mode {
@@ -882,6 +916,50 @@ fn build_turn_collaboration_mode(
             developer_instructions,
         },
     })
+}
+
+async fn resolve_turn_collaboration_mode(
+    client: &AppServerClient,
+    requested_mode: Option<&CodexCollaborationMode>,
+    available_modes: Option<&[CodexRuntimeCollaborationMode]>,
+    model: String,
+    reasoning_effort: Option<ReasoningEffort>,
+    developer_instructions: Option<String>,
+) -> Option<ProtocolCollaborationMode> {
+    let turn_collaboration_mode = build_turn_collaboration_mode(
+        requested_mode,
+        available_modes,
+        model,
+        reasoning_effort,
+        developer_instructions,
+    );
+
+    if requested_mode.is_some() && turn_collaboration_mode.is_none() {
+        let requested_value = requested_mode
+            .map(collaboration_mode_value)
+            .unwrap_or("custom");
+        let available_values = available_modes
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|mode| mode.value.as_deref())
+            .collect::<Vec<_>>();
+        let message = if available_values.is_empty() {
+            format!(
+                "Codex collaboration mode `{requested_value}` is unavailable in this runtime. Continuing in standard mode."
+            )
+        } else {
+            format!(
+                "Codex collaboration mode `{requested_value}` is unavailable in this runtime. Available modes: {}. Continuing in standard mode.",
+                available_values.join(", ")
+            )
+        };
+        let _ = client
+            .log_writer()
+            .log_raw(&Notice::collaboration_mode_fallback(message).raw())
+            .await;
+    }
+
+    turn_collaboration_mode
 }
 
 fn protocol_reasoning_effort(effort: ReasoningEffort) -> ProtocolReasoningEffort {
@@ -907,11 +985,17 @@ fn local_reasoning_effort(effort: ProtocolReasoningEffort) -> ReasoningEffort {
 fn map_runtime_collaboration_mode(mask: CollaborationModeMask) -> CodexRuntimeCollaborationMode {
     CodexRuntimeCollaborationMode {
         value: mask.mode.map(|mode| match mode {
-            ModeKind::Plan => "plan".to_string(),
-            ModeKind::Code => "code".to_string(),
-            ModeKind::PairProgramming => "pair-programming".to_string(),
-            ModeKind::Execute => "execute".to_string(),
-            ModeKind::Custom => "custom".to_string(),
+            ModeKind::Plan => collaboration_mode_value(&CodexCollaborationMode::Plan).to_string(),
+            ModeKind::Code => collaboration_mode_value(&CodexCollaborationMode::Code).to_string(),
+            ModeKind::PairProgramming => {
+                collaboration_mode_value(&CodexCollaborationMode::PairProgramming).to_string()
+            }
+            ModeKind::Execute => {
+                collaboration_mode_value(&CodexCollaborationMode::Execute).to_string()
+            }
+            ModeKind::Custom => {
+                collaboration_mode_value(&CodexCollaborationMode::Custom).to_string()
+            }
         }),
         label: mask.name,
         model: mask.model,
@@ -955,6 +1039,12 @@ mod tests {
     fn build_turn_collaboration_mode_uses_selected_mode() {
         let mode = build_turn_collaboration_mode(
             Some(&CodexCollaborationMode::Plan),
+            Some(&[CodexRuntimeCollaborationMode {
+                value: Some("plan".to_string()),
+                label: "Plan".to_string(),
+                model: None,
+                reasoning_effort: Some("high".to_string()),
+            }]),
             "gpt-5.4".to_string(),
             Some(ReasoningEffort::High),
             Some("stay in planning mode".to_string()),
@@ -971,6 +1061,38 @@ mod tests {
             mode.settings.developer_instructions.as_deref(),
             Some("stay in planning mode")
         );
+    }
+
+    #[test]
+    fn build_turn_collaboration_mode_returns_none_when_runtime_does_not_offer_mode() {
+        let mode = build_turn_collaboration_mode(
+            Some(&CodexCollaborationMode::Plan),
+            Some(&[CodexRuntimeCollaborationMode {
+                value: Some("code".to_string()),
+                label: "Code".to_string(),
+                model: None,
+                reasoning_effort: None,
+            }]),
+            "gpt-5.4".to_string(),
+            Some(ReasoningEffort::High),
+            None,
+        );
+
+        assert!(mode.is_none());
+    }
+
+    #[test]
+    fn build_turn_collaboration_mode_keeps_requested_mode_when_discovery_is_unavailable() {
+        let mode = build_turn_collaboration_mode(
+            Some(&CodexCollaborationMode::Plan),
+            None,
+            "gpt-5.4".to_string(),
+            Some(ReasoningEffort::High),
+            Some("stay in planning mode".to_string()),
+        )
+        .expect("collaboration mode should be built when discovery is unavailable");
+
+        assert_eq!(mode.mode, ModeKind::Plan);
     }
 
     #[test]

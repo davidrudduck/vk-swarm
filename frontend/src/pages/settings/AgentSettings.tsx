@@ -523,8 +523,8 @@ export function AgentSettings() {
                     {runtimeCapabilitiesLoading
                       ? 'Discovering Codex runtime capabilities...'
                       : runtimeCapabilitiesError
-                        ? 'Codex runtime discovery unavailable. Falling back to saved schema defaults.'
-                        : `Discovered ${runtimeCapabilities?.models.length ?? 0} models and ${runtimeCapabilities?.collaboration_modes.length ?? 0} collaboration presets from the Codex runtime.`}
+                        ? 'Codex runtime discovery unavailable. Native collaboration modes are hidden until the runtime reports them.'
+                        : `Discovered ${runtimeCapabilities?.models.length ?? 0} models and ${runtimeCapabilities?.collaboration_modes.length ?? 0} native collaboration presets from the Codex runtime.`}
                   </AlertDescription>
                 </Alert>
               )}

@@ -4,7 +4,7 @@ import {
   getTailRenderSignature,
   mergeAppendOnlyItems,
   mergeRunningAppendOnlyItems,
-} from './VirtualizedList';
+} from './appendOnlyTimeline';
 import type { PatchTypeWithKey } from '@/hooks/useConversationHistory';
 import type { CommandExitStatus } from 'shared/types';
 
@@ -53,6 +53,42 @@ const commandRunItem = ({
   executionProcessId: 'process-1',
 });
 
+const assistantMessageItem = (
+  patchKey: string,
+  content: string
+): PatchTypeWithKey => ({
+  type: 'NORMALIZED_ENTRY',
+  content: {
+    entry_type: {
+      type: 'assistant_message',
+    },
+    content,
+    timestamp: null,
+    metadata: null,
+  },
+  patchKey,
+  executionProcessId: 'process-1',
+});
+
+const userFeedbackItem = (
+  patchKey: string,
+  deniedTool: string,
+  content: string
+): PatchTypeWithKey => ({
+  type: 'NORMALIZED_ENTRY',
+  content: {
+    entry_type: {
+      type: 'user_feedback',
+      denied_tool: deniedTool,
+    },
+    content,
+    timestamp: null,
+    metadata: null,
+  },
+  patchKey,
+  executionProcessId: 'process-1',
+});
+
 describe('mergeAppendOnlyItems', () => {
   it('preserves previously loaded content when a later update omits it', () => {
     const previousItems = [
@@ -74,7 +110,10 @@ describe('mergeAppendOnlyItems', () => {
   });
 
   it('adopts the latest chronological order when the next snapshot is a superset', () => {
-    const previousItems = [stdoutItem('middle', 'line 2'), stdoutItem('tail', 'line 3')];
+    const previousItems = [
+      stdoutItem('middle', 'line 2'),
+      stdoutItem('tail', 'line 3'),
+    ];
 
     const nextItems = [
       stdoutItem('head', 'line 1'),
@@ -86,7 +125,10 @@ describe('mergeAppendOnlyItems', () => {
   });
 
   it('inserts newly discovered older rows ahead of retained rows from a partial snapshot', () => {
-    const previousItems = [stdoutItem('middle', 'line 2'), stdoutItem('tail', 'line 3')];
+    const previousItems = [
+      stdoutItem('middle', 'line 2'),
+      stdoutItem('tail', 'line 3'),
+    ];
 
     const nextItems = [
       stdoutItem('head', 'line 1'),
@@ -231,7 +273,9 @@ describe('mergeRunningAppendOnlyItems', () => {
   });
 
   it('appends inserted earlier snapshot items at the end like a chat log', () => {
-    const previousItems = [commandRunItem({ patchKey: 'process-1:0', output: 'tool output' })];
+    const previousItems = [
+      commandRunItem({ patchKey: 'process-1:0', output: 'tool output' }),
+    ];
     const nextItems = [
       stdoutItem('process-1:0', 'assistant reply'),
       commandRunItem({ patchKey: 'process-1:1', output: 'tool output' }),
@@ -306,7 +350,10 @@ describe('mergeRunningAppendOnlyItems', () => {
       stdoutItem('process-1:1', 'world'),
       stdoutItem('loading', 'loading'),
     ];
-    const nextItems = [stdoutItem('process-1:0', 'hello'), stdoutItem('loading', 'loading')];
+    const nextItems = [
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('loading', 'loading'),
+    ];
 
     expect(
       mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
@@ -337,7 +384,9 @@ describe('mergeRunningAppendOnlyItems', () => {
   });
 
   it('appends command-run updates as new rows without overwriting earlier output', () => {
-    const previousItems = [commandRunItem({ patchKey: 'process-1:0', output: 'hello' })];
+    const previousItems = [
+      commandRunItem({ patchKey: 'process-1:0', output: 'hello' }),
+    ];
     const nextItems = [
       commandRunItem({
         patchKey: 'process-1:0',
@@ -364,6 +413,27 @@ describe('mergeRunningAppendOnlyItems', () => {
     ]);
   });
 
+  it('appends streaming assistant message growth instead of rewriting prior text', () => {
+    const previousItems = [assistantMessageItem('process-1:0', 'Thinking')];
+    const nextItems = [
+      assistantMessageItem('process-1:0', 'Thinking through the next step'),
+    ];
+    let revision = 0;
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        revision += 1;
+        return revision;
+      })
+    ).toEqual([
+      assistantMessageItem('process-1:0', 'Thinking'),
+      assistantMessageItem(
+        'process-1:0::append:1',
+        'Thinking through the next step'
+      ),
+    ]);
+  });
+
   it('suppresses command-run regressions instead of appending stale output', () => {
     const previousItems = [
       commandRunItem({
@@ -373,7 +443,24 @@ describe('mergeRunningAppendOnlyItems', () => {
         status: 'success',
       }),
     ];
-    const nextItems = [commandRunItem({ patchKey: 'process-1:0', output: 'hello' })];
+    const nextItems = [
+      commandRunItem({ patchKey: 'process-1:0', output: 'hello' }),
+    ];
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        throw new Error('revision should not advance');
+      })
+    ).toEqual(previousItems);
+  });
+
+  it('suppresses user-feedback semantic corrections instead of appending them as text growth', () => {
+    const previousItems = [
+      userFeedbackItem('process-1:0', 'Bash', 'Tool use denied'),
+    ];
+    const nextItems = [
+      userFeedbackItem('process-1:0', 'Write', 'Tool use denied and retried'),
+    ];
 
     expect(
       mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
