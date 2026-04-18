@@ -348,7 +348,6 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
     } else {
       mergedItems = mergeAppendOnlyItems(itemsRef.current, newEntries);
       runningSnapshotRef.current = newEntries;
-      runningReplaySnapshotRef.current = null;
     }
 
     itemsRef.current = mergedItems;
