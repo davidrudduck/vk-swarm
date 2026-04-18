@@ -5,6 +5,7 @@ use axum::{
     response::Json as ResponseJson,
     routing::{get, post},
 };
+use db::models::project::Project;
 use db::models::task::Task;
 use db::models::task_variable::{
     CreateTaskVariable, ResolvedVariable, TaskVariable, UpdateTaskVariable,
@@ -129,20 +130,21 @@ fn build_preview_expansion_response(
     }
 }
 
-async fn require_task_variable(
+async fn find_remote_project_title(
     pool: &sqlx::SqlitePool,
-    task_id: Uuid,
-    var_id: Uuid,
-) -> Result<TaskVariable, ApiError> {
-    let variable = TaskVariable::find_by_id(pool, var_id)
-        .await?
-        .ok_or(ApiError::Database(sqlx::Error::RowNotFound))?;
-
-    if variable.task_id != task_id {
-        return Err(ApiError::Database(sqlx::Error::RowNotFound));
+    task: &Task,
+) -> Result<Option<String>, sqlx::Error> {
+    if let Some(project) = Project::find_by_id(pool, task.project_id).await? {
+        return Ok(Some(project.name));
     }
 
-    Ok(variable)
+    if task.shared_task_id == Some(task.id) {
+        return Ok(Project::find_by_remote_project_id(pool, task.project_id)
+            .await?
+            .map(|project| project.name));
+    }
+
+    Ok(None)
 }
 
 /// Get all variables defined directly on a task (not inherited)
@@ -211,8 +213,13 @@ pub async fn update_task_variable(
         validate_var_name(name)?;
     }
 
-    require_task_variable(&deployment.db().pool, params.task_id, params.var_id).await?;
-    let variable = TaskVariable::update(&deployment.db().pool, params.var_id, &payload).await?;
+    let variable = TaskVariable::update_for_task(
+        &deployment.db().pool,
+        params.task_id,
+        params.var_id,
+        &payload,
+    )
+    .await?;
     Ok(ResponseJson(ApiResponse::success(variable)))
 }
 
@@ -221,8 +228,8 @@ pub async fn delete_task_variable(
     State(deployment): State<DeploymentImpl>,
     Path(params): Path<VariablePathParams>,
 ) -> Result<ResponseJson<ApiResponse<()>>, ApiError> {
-    require_task_variable(&deployment.db().pool, params.task_id, params.var_id).await?;
-    let rows_affected = TaskVariable::delete(&deployment.db().pool, params.var_id).await?;
+    let rows_affected =
+        TaskVariable::delete_for_task(&deployment.db().pool, params.task_id, params.var_id).await?;
     if rows_affected == 0 {
         Err(ApiError::Database(sqlx::Error::RowNotFound))
     } else {
@@ -265,10 +272,7 @@ pub async fn preview_expansion(
     Json(payload): Json<PreviewExpansionRequest>,
 ) -> Result<ResponseJson<ApiResponse<PreviewExpansionResponse>>, ApiError> {
     let variables = if remote_ctx.is_some() {
-        let project_title =
-            db::models::project::Project::find_by_id(&deployment.db().pool, task.project_id)
-                .await?
-                .map(|project| project.name);
+        let project_title = find_remote_project_title(&deployment.db().pool, &task).await?;
         remote_system_variables(&task, project_title.as_deref())
     } else {
         TaskVariable::find_inherited_with_system(&deployment.db().pool, task.id)
@@ -401,7 +405,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn require_task_variable_rejects_variable_from_different_task() {
+    async fn update_for_task_rejects_variable_from_different_task() {
         let (pool, _temp_dir) = create_test_pool().await;
         let task_a = create_task_for_variables_test(&pool, "alpha")
             .await
@@ -421,15 +425,21 @@ mod tests {
         .await
         .expect("create variable");
 
-        let result = require_task_variable(&pool, task_a.id, variable.id).await;
-        assert!(matches!(
-            result,
-            Err(ApiError::Database(sqlx::Error::RowNotFound))
-        ));
+        let result = TaskVariable::update_for_task(
+            &pool,
+            task_a.id,
+            variable.id,
+            &UpdateTaskVariable {
+                name: Some("BAR".to_string()),
+                value: None,
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(sqlx::Error::RowNotFound)));
     }
 
     #[tokio::test]
-    async fn require_task_variable_accepts_variable_for_matching_task() {
+    async fn update_for_task_accepts_variable_for_matching_task() {
         let (pool, _temp_dir) = create_test_pool().await;
         let task = create_task_for_variables_test(&pool, "gamma")
             .await
@@ -446,11 +456,150 @@ mod tests {
         .await
         .expect("create variable");
 
-        let resolved = require_task_variable(&pool, task.id, variable.id)
-            .await
-            .expect("resolve variable");
+        let updated = TaskVariable::update_for_task(
+            &pool,
+            task.id,
+            variable.id,
+            &UpdateTaskVariable {
+                name: None,
+                value: Some("baz".to_string()),
+            },
+        )
+        .await
+        .expect("update variable");
 
-        assert_eq!(resolved.id, variable.id);
-        assert_eq!(resolved.task_id, task.id);
+        assert_eq!(updated.id, variable.id);
+        assert_eq!(updated.task_id, task.id);
+        assert_eq!(updated.value, "baz");
+    }
+
+    #[tokio::test]
+    async fn delete_for_task_only_deletes_matching_task_variable() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let task_a = create_task_for_variables_test(&pool, "delta")
+            .await
+            .expect("create task A");
+        let task_b = create_task_for_variables_test(&pool, "epsilon")
+            .await
+            .expect("create task B");
+
+        let variable = TaskVariable::create(
+            &pool,
+            task_b.id,
+            &CreateTaskVariable {
+                name: "FOO".to_string(),
+                value: "bar".to_string(),
+            },
+        )
+        .await
+        .expect("create variable");
+
+        let wrong_task_rows = TaskVariable::delete_for_task(&pool, task_a.id, variable.id)
+            .await
+            .expect("delete with wrong task");
+        assert_eq!(wrong_task_rows, 0);
+
+        let matching_rows = TaskVariable::delete_for_task(&pool, task_b.id, variable.id)
+            .await
+            .expect("delete with matching task");
+        assert_eq!(matching_rows, 1);
+    }
+
+    #[tokio::test]
+    async fn find_remote_project_title_uses_remote_project_id_for_hive_only_task() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let remote_project_id = Uuid::new_v4();
+        let local_project = Project::create(
+            &pool,
+            &CreateProject {
+                name: "linked-project".to_string(),
+                git_repo_path: "/tmp/linked-project".to_string(),
+                use_existing_repo: true,
+                clone_url: None,
+                setup_script: None,
+                dev_script: None,
+                cleanup_script: None,
+                copy_files: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await
+        .expect("create project");
+        sqlx::query("UPDATE projects SET remote_project_id = $1 WHERE id = $2")
+            .bind(remote_project_id)
+            .bind(local_project.id)
+            .execute(&pool)
+            .await
+            .expect("set remote project id");
+
+        let shared_task_id = Uuid::new_v4();
+        let hive_task = Task {
+            id: shared_task_id,
+            project_id: remote_project_id,
+            title: "Remote title".to_string(),
+            description: None,
+            status: db::models::task::TaskStatus::Todo,
+            parent_task_id: None,
+            shared_task_id: Some(shared_task_id),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            remote_assignee_user_id: None,
+            remote_assignee_name: None,
+            remote_assignee_username: None,
+            remote_version: 0,
+            remote_last_synced_at: None,
+            remote_stream_node_id: None,
+            remote_stream_url: None,
+            archived_at: None,
+            activity_at: None,
+        };
+
+        let title = find_remote_project_title(&pool, &hive_task)
+            .await
+            .expect("resolve project title");
+        assert_eq!(title.as_deref(), Some("linked-project"));
+    }
+
+    #[tokio::test]
+    async fn find_remote_project_title_uses_direct_project_match_when_available() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let task = create_task_for_variables_test(&pool, "zeta")
+            .await
+            .expect("create task");
+
+        let title = find_remote_project_title(&pool, &task)
+            .await
+            .expect("resolve project title");
+        assert_eq!(title.as_deref(), Some("zeta-project"));
+    }
+
+    #[tokio::test]
+    async fn find_remote_project_title_returns_none_when_no_project_match_exists() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let task = Task {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            title: "Orphan task".to_string(),
+            description: None,
+            status: db::models::task::TaskStatus::Todo,
+            parent_task_id: None,
+            shared_task_id: Some(Uuid::new_v4()),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            remote_assignee_user_id: None,
+            remote_assignee_name: None,
+            remote_assignee_username: None,
+            remote_version: 0,
+            remote_last_synced_at: None,
+            remote_stream_node_id: None,
+            remote_stream_url: None,
+            archived_at: None,
+            activity_at: None,
+        };
+
+        let title = find_remote_project_title(&pool, &task)
+            .await
+            .expect("resolve project title");
+        assert_eq!(title, None);
     }
 }
