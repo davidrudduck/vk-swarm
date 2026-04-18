@@ -34,6 +34,89 @@ interface MessageListContext {
   task?: TaskWithAttemptStatus;
 }
 
+const TRANSIENT_PATCH_KEYS = new Set(['loading', 'next_action']);
+
+const isTransientItem = (item: PatchTypeWithKey) =>
+  TRANSIENT_PATCH_KEYS.has(item.patchKey);
+
+const findInsertionIndex = (
+  items: PatchTypeWithKey[],
+  nextKeys: Set<string>,
+  nextItems: PatchTypeWithKey[],
+  newItemIndex: number
+) => {
+  for (let index = newItemIndex + 1; index < nextItems.length; index += 1) {
+    const anchorKey = nextItems[index]?.patchKey;
+    const anchorIndex = items.findIndex((item) => item.patchKey === anchorKey);
+    if (anchorIndex !== -1) {
+      let insertionIndex = anchorIndex;
+      while (
+        insertionIndex > 0 &&
+        !nextKeys.has(items[insertionIndex - 1]?.patchKey ?? '')
+      ) {
+        insertionIndex -= 1;
+      }
+      return insertionIndex;
+    }
+  }
+
+  return items.length;
+};
+
+export const mergeAppendOnlyItems = (
+  previousItems: PatchTypeWithKey[],
+  nextItems: PatchTypeWithKey[]
+) => {
+  const previousPersistentItems = previousItems.filter(
+    (item) => !isTransientItem(item)
+  );
+  const nextPersistentItems = nextItems.filter((item) => !isTransientItem(item));
+  const nextTransientItems = nextItems.filter((item) => isTransientItem(item));
+
+  const nextKeys = new Set(nextPersistentItems.map((item) => item.patchKey));
+  const includesAllPrevious = previousPersistentItems.every((item) =>
+    nextKeys.has(item.patchKey)
+  );
+
+  if (includesAllPrevious) {
+    return [...nextPersistentItems, ...nextTransientItems];
+  }
+
+  const mergedPersistentItems = [...previousPersistentItems];
+
+  nextPersistentItems.forEach((item, nextIndex) => {
+    const existingIndex = mergedPersistentItems.findIndex(
+      (existingItem) => existingItem.patchKey === item.patchKey
+    );
+
+    if (existingIndex !== -1) {
+      mergedPersistentItems[existingIndex] = item;
+      return;
+    }
+
+    const insertionIndex = findInsertionIndex(
+      mergedPersistentItems,
+      nextKeys,
+      nextPersistentItems,
+      nextIndex
+    );
+    mergedPersistentItems.splice(insertionIndex, 0, item);
+  });
+
+  return [...mergedPersistentItems, ...nextTransientItems];
+};
+
+export const getTailRenderSignature = (items: PatchTypeWithKey[]) =>
+  items
+    .slice(-2)
+    .map(
+      (item) =>
+        `${item.patchKey}:${JSON.stringify(item, (_key, value) =>
+          typeof value === 'bigint' ? value.toString() : value
+        )}`
+    )
+    .join('|');
+
 const ItemContent = ({
   data,
   context,
@@ -65,8 +148,6 @@ const ItemContent = ({
   return null;
 };
 
-const LARGE_BURST = 10;
-
 const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
   const { t } = useTranslation('common');
   const [items, setItems] = useState<PatchTypeWithKey[]>([]);
@@ -77,10 +158,15 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
   const [paginationOverride, setPaginationOverride] = usePaginationOverride(
     attempt.id
   );
+  const itemsRef = useRef<PatchTypeWithKey[]>([]);
+  const listRef = useRef<VListHandle>(null);
+  const previousTailSignatureRef = useRef('');
 
   useEffect(() => {
     setLoading(true);
     setItems([]);
+    itemsRef.current = [];
+    previousTailSignatureRef.current = '';
     reset();
     didInitScroll.current = false;
     prevLenRef.current = 0;
@@ -93,8 +179,10 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
     _addType: AddEntryType,
     newLoading: boolean
   ) => {
-    setItems(newEntries);
-    setEntries(newEntries);
+    const mergedItems = mergeAppendOnlyItems(itemsRef.current, newEntries);
+    itemsRef.current = mergedItems;
+    setItems(mergedItems);
+    setEntries(mergedItems);
 
     if (loading) {
       setLoading(newLoading);
@@ -103,7 +191,6 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
 
   useConversationHistory({ attempt, onEntriesUpdated });
 
-  const listRef = useRef<VListHandle>(null);
   const didInitScroll = useRef(false);
   const prevLenRef = useRef(0);
   const messageListContext = useMemo(
@@ -116,7 +203,6 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
       align: 'end',
       smooth: false,
     });
-    // Force-mark as at-bottom after snap so the indicator clears
     requestAnimationFrame(() => setAtBottom(true));
   }, [items.length]);
 
@@ -128,13 +214,16 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
   useEffect(() => {
     const prev = prevLenRef.current;
     const grewBy = items.length - prev;
+    const previousTailSignature = previousTailSignatureRef.current;
+    const nextTailSignature = getTailRenderSignature(items);
     prevLenRef.current = items.length;
+    previousTailSignatureRef.current = nextTailSignature;
 
     if (items.length === 0) return;
 
     if (!didInitScroll.current) {
       didInitScroll.current = true;
-      // Double rAF: first frame lets virtua render, second lets it measure item heights
+      // Double rAF: first frame lets virtua render, second lets it measure item heights.
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           listRef.current?.scrollToIndex(items.length - 1, { align: 'end' });
@@ -143,16 +232,14 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
       return;
     }
 
-    if (grewBy > 0 && atBottom && !loading) {
-      const smooth = grewBy < LARGE_BURST;
-      requestAnimationFrame(() => {
-        listRef.current?.scrollToIndex(items.length - 1, {
-          align: 'end',
-          smooth,
-        });
-      });
+    const tailAdvanced =
+      nextTailSignature.length > 0 &&
+      nextTailSignature !== previousTailSignature;
+
+    if ((grewBy > 0 || tailAdvanced) && atBottom && !loading) {
+      requestAnimationFrame(scrollToBottom);
     }
-  }, [items.length, atBottom, loading]);
+  }, [items, atBottom, loading, scrollToBottom]);
 
   return (
     <ApprovalFormProvider>
@@ -164,10 +251,10 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
           bufferSize={600}
           style={{ paddingTop: 8, paddingBottom: 8 }}
           onScroll={(offset) => {
-            const h = listRef.current;
-            if (!h) return;
+            const handle = listRef.current;
+            if (!handle) return;
             setAtTop(offset <= 0);
-            setAtBottom(offset + h.viewportSize >= h.scrollSize - 20);
+            setAtBottom(offset + handle.viewportSize >= handle.scrollSize - 20);
           }}
         >
           {(item) => (
