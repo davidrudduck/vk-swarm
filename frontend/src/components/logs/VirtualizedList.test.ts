@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getTailRenderSignature,
-  isRunningSnapshotReplay,
   mergeAppendOnlyItems,
   mergeRunningAppendOnlyItems,
 } from './VirtualizedList';
@@ -180,10 +179,15 @@ describe('mergeRunningAppendOnlyItems', () => {
     let revision = 0;
 
     expect(
-      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
-        revision += 1;
-        return revision;
-      })
+      mergeRunningAppendOnlyItems(
+        previousItems,
+        nextItems,
+        () => {
+          revision += 1;
+          return revision;
+        },
+        [stdoutItem('process-1:0', 'hello')]
+      )
     ).toEqual([
       stdoutItem('process-1:0', 'hello'),
       stdoutItem('process-1:0::append:1', 'hello world'),
@@ -210,93 +214,171 @@ describe('mergeRunningAppendOnlyItems', () => {
     let revision = 1;
 
     expect(
-      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
-        revision += 1;
-        return revision;
-      })
+      mergeRunningAppendOnlyItems(
+        previousItems,
+        nextItems,
+        () => {
+          revision += 1;
+          return revision;
+        },
+        [stdoutItem('process-1:0', 'hello world')]
+      )
     ).toEqual([
       stdoutItem('process-1:0', 'hello'),
       stdoutItem('process-1:0::append:1', 'hello world'),
       stdoutItem('process-1:0::append:2', 'hello world!'),
     ]);
   });
-});
 
-describe('isRunningSnapshotReplay', () => {
-  it('treats a shorter running snapshot as replay traffic', () => {
+  it('appends inserted earlier snapshot items at the end like a chat log', () => {
+    const previousItems = [commandRunItem({ patchKey: 'process-1:0', output: 'tool output' })];
+    const nextItems = [
+      stdoutItem('process-1:0', 'assistant reply'),
+      commandRunItem({ patchKey: 'process-1:1', output: 'tool output' }),
+    ];
+    let revision = 0;
+
     expect(
-      isRunningSnapshotReplay(
-        [stdoutItem('process-1:0', 'hello'), stdoutItem('process-1:1', 'world')],
-        [stdoutItem('process-1:0', 'hello')]
-      )
-    ).toBe(true);
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        revision += 1;
+        return revision;
+      })
+    ).toEqual([
+      commandRunItem({ patchKey: 'process-1:0', output: 'tool output' }),
+      stdoutItem('process-1:0::append:1', 'assistant reply'),
+    ]);
   });
 
-  it('treats an older single-entry snapshot as replay traffic', () => {
-    expect(
-      isRunningSnapshotReplay(
-        [stdoutItem('process-1:0', 'hello world')],
-        [stdoutItem('process-1:0', 'hello')]
-      )
-    ).toBe(true);
-  });
+  it('continues appending later live rows after an earlier snapshot insert', () => {
+    let revision = 0;
+    const getNextRevision = () => {
+      revision += 1;
+      return revision;
+    };
 
-  it('treats a transient-only running snapshot as replay traffic', () => {
-    expect(
-      isRunningSnapshotReplay(
-        [stdoutItem('process-1:0', 'hello')],
-        [stdoutItem('loading', 'loading')]
-      )
-    ).toBe(true);
-  });
+    const afterInsert = mergeRunningAppendOnlyItems(
+      [commandRunItem({ patchKey: 'process-1:0', output: 'tool output' })],
+      [
+        stdoutItem('process-1:0', 'assistant reply'),
+        commandRunItem({ patchKey: 'process-1:1', output: 'tool output' }),
+      ],
+      getNextRevision
+    );
 
-  it('allows tail growth for the active streamed entry', () => {
     expect(
-      isRunningSnapshotReplay(
-        [stdoutItem('process-1:0', 'hello')],
-        [stdoutItem('process-1:0', 'hello world')]
-      )
-    ).toBe(false);
-  });
-
-  it('allows command-run normalized entries to grow append-only at the tail', () => {
-    expect(
-      isRunningSnapshotReplay(
-        [commandRunItem({ patchKey: 'process-1:0', output: 'hello' })],
+      mergeRunningAppendOnlyItems(
+        afterInsert,
         [
-          commandRunItem({
-            patchKey: 'process-1:0',
-            output: 'hello\nworld',
-            exitStatus: { type: 'exit_code', code: 0 },
-            status: 'success',
-          }),
+          stdoutItem('process-1:0', 'assistant reply'),
+          commandRunItem({ patchKey: 'process-1:1', output: 'tool output' }),
+          stdoutItem('process-1:2', 'final reply'),
+        ],
+        getNextRevision,
+        [
+          stdoutItem('process-1:0', 'assistant reply'),
+          commandRunItem({ patchKey: 'process-1:1', output: 'tool output' }),
         ]
       )
-    ).toBe(false);
+    ).toEqual([
+      commandRunItem({ patchKey: 'process-1:0', output: 'tool output' }),
+      stdoutItem('process-1:0::append:1', 'assistant reply'),
+      stdoutItem('process-1:2', 'final reply'),
+    ]);
   });
 
-  it('treats non-tail changes in a running snapshot as replay traffic', () => {
+  it('ignores shorter replay snapshots instead of appending stale rows', () => {
+    const previousItems = [
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:1', 'world'),
+    ];
+    const nextItems = [stdoutItem('process-1:0', 'hello')];
+
     expect(
-      isRunningSnapshotReplay(
-        [stdoutItem('process-1:0', 'hello'), stdoutItem('process-1:1', 'world')],
-        [stdoutItem('process-1:0', 'HELLO'), stdoutItem('process-1:1', 'world')]
-      )
-    ).toBe(true);
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        throw new Error('revision should not advance');
+      })
+    ).toEqual(previousItems);
   });
 
-  it('treats replayed command-run output regression as replay traffic', () => {
+  it('ignores stale replay snapshots and keeps only the current transient footer', () => {
+    const previousItems = [
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:1', 'world'),
+      stdoutItem('loading', 'loading'),
+    ];
+    const nextItems = [stdoutItem('process-1:0', 'hello'), stdoutItem('loading', 'loading')];
+
     expect(
-      isRunningSnapshotReplay(
-        [
-          commandRunItem({
-            patchKey: 'process-1:0',
-            output: 'hello\nworld',
-            exitStatus: { type: 'exit_code', code: 0 },
-            status: 'success',
-          }),
-        ],
-        [commandRunItem({ patchKey: 'process-1:0', output: 'hello' })]
-      )
-    ).toBe(true);
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        throw new Error('revision should not advance');
+      })
+    ).toEqual([
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:1', 'world'),
+      stdoutItem('loading', 'loading'),
+    ]);
+  });
+
+  it('suppresses non-tail corrections instead of appending duplicate rows', () => {
+    const previousItems = [
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:1', 'world'),
+    ];
+    const nextItems = [
+      stdoutItem('process-1:0', 'HELLO'),
+      stdoutItem('process-1:1', 'world'),
+    ];
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        throw new Error('revision should not advance');
+      })
+    ).toEqual(previousItems);
+  });
+
+  it('appends command-run updates as new rows without overwriting earlier output', () => {
+    const previousItems = [commandRunItem({ patchKey: 'process-1:0', output: 'hello' })];
+    const nextItems = [
+      commandRunItem({
+        patchKey: 'process-1:0',
+        output: 'hello\nworld',
+        exitStatus: { type: 'exit_code', code: 0 },
+        status: 'success',
+      }),
+    ];
+    let revision = 0;
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        revision += 1;
+        return revision;
+      })
+    ).toEqual([
+      commandRunItem({ patchKey: 'process-1:0', output: 'hello' }),
+      commandRunItem({
+        patchKey: 'process-1:0::append:1',
+        output: 'hello\nworld',
+        exitStatus: { type: 'exit_code', code: 0 },
+        status: 'success',
+      }),
+    ]);
+  });
+
+  it('suppresses command-run regressions instead of appending stale output', () => {
+    const previousItems = [
+      commandRunItem({
+        patchKey: 'process-1:0',
+        output: 'hello\nworld',
+        exitStatus: { type: 'exit_code', code: 0 },
+        status: 'success',
+      }),
+    ];
+    const nextItems = [commandRunItem({ patchKey: 'process-1:0', output: 'hello' })];
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        throw new Error('revision should not advance');
+      })
+    ).toEqual(previousItems);
   });
 });
