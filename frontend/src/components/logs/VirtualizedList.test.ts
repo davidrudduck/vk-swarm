@@ -70,25 +70,6 @@ const assistantMessageItem = (
   executionProcessId: 'process-1',
 });
 
-const userFeedbackItem = (
-  patchKey: string,
-  deniedTool: string,
-  content: string
-): PatchTypeWithKey => ({
-  type: 'NORMALIZED_ENTRY',
-  content: {
-    entry_type: {
-      type: 'user_feedback',
-      denied_tool: deniedTool,
-    },
-    content,
-    timestamp: null,
-    metadata: null,
-  },
-  patchKey,
-  executionProcessId: 'process-1',
-});
-
 describe('mergeAppendOnlyItems', () => {
   it('preserves previously loaded content when a later update omits it', () => {
     const previousItems = [
@@ -445,21 +426,6 @@ describe('mergeRunningAppendOnlyItems', () => {
     ];
     const nextItems = [
       commandRunItem({ patchKey: 'process-1:0', output: 'hello' }),
-    ];
-
-    expect(
-      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
-        throw new Error('revision should not advance');
-      })
-    ).toEqual(previousItems);
-  });
-
-  it('suppresses user-feedback semantic corrections instead of appending them as text growth', () => {
-    const previousItems = [
-      userFeedbackItem('process-1:0', 'Bash', 'Tool use denied'),
-    ];
-    const nextItems = [
-      userFeedbackItem('process-1:0', 'Write', 'Tool use denied and retried'),
     ];
 
     expect(

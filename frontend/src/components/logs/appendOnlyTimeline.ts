@@ -147,12 +147,7 @@ const getNormalizedTextAppendOnlyText = (item: PatchTypeWithKey) => {
   switch (entryType.type) {
     case 'assistant_message':
     case 'thinking':
-    case 'system_message':
       return `type:${entryType.type}\ncontent:${item.content.content}`;
-    case 'error_message':
-      return `type:${entryType.type}\nerror_type:${entryType.error_type.type}\ncontent:${item.content.content}`;
-    case 'user_feedback':
-      return `type:${entryType.type}\ndenied_tool:${entryType.denied_tool}\ncontent:${item.content.content}`;
     default:
       return null;
   }
