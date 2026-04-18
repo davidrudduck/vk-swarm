@@ -33,6 +33,7 @@
   },
   "conversation": {
     "args": "인자",
+    "loadingHistory": "기록을 불러오는 중",
     "deniedByUser": "{{toolName}} 사용자에 의해 거부됨",
     "output": "출력",
     "plan": "계획",
