@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { getTailRenderSignature, mergeAppendOnlyItems } from './VirtualizedList';
+import {
+  getTailRenderSignature,
+  isRunningSnapshotReplay,
+  mergeAppendOnlyItems,
+  mergeRunningAppendOnlyItems,
+} from './VirtualizedList';
 import type { PatchTypeWithKey } from '@/hooks/useConversationHistory';
 
 const stdoutItem = (
@@ -130,5 +135,92 @@ describe('getTailRenderSignature', () => {
     } as PatchTypeWithKey;
 
     expect(() => getTailRenderSignature([bigintTailItem])).not.toThrow();
+  });
+});
+
+describe('mergeRunningAppendOnlyItems', () => {
+  it('appends a new rendered row when a streamed entry updates an existing logical key', () => {
+    const previousItems = [stdoutItem('process-1:0', 'hello')];
+    const nextItems = [stdoutItem('process-1:0', 'hello world')];
+    let revision = 0;
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        revision += 1;
+        return revision;
+      })
+    ).toEqual([
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:0::append:1', 'hello world'),
+    ]);
+  });
+
+  it('does not duplicate a streamed entry when the rendered content is unchanged', () => {
+    const previousItems = [stdoutItem('process-1:0', 'hello')];
+    const nextItems = [stdoutItem('process-1:0', 'hello')];
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        throw new Error('revision should not advance');
+      })
+    ).toEqual(previousItems);
+  });
+
+  it('preserves append-only revisions across multiple streamed updates to the same logical key', () => {
+    const previousItems = [
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:0::append:1', 'hello world'),
+    ];
+    const nextItems = [stdoutItem('process-1:0', 'hello world!')];
+    let revision = 1;
+
+    expect(
+      mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
+        revision += 1;
+        return revision;
+      })
+    ).toEqual([
+      stdoutItem('process-1:0', 'hello'),
+      stdoutItem('process-1:0::append:1', 'hello world'),
+      stdoutItem('process-1:0::append:2', 'hello world!'),
+    ]);
+  });
+});
+
+describe('isRunningSnapshotReplay', () => {
+  it('treats a shorter running snapshot as replay traffic', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [stdoutItem('process-1:0', 'hello'), stdoutItem('process-1:1', 'world')],
+        [stdoutItem('process-1:0', 'hello')]
+      )
+    ).toBe(true);
+  });
+
+  it('treats an older single-entry snapshot as replay traffic', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [stdoutItem('process-1:0', 'hello world')],
+        [stdoutItem('process-1:0', 'hello')]
+      )
+    ).toBe(true);
+  });
+
+  it('allows tail growth for the active streamed entry', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [stdoutItem('process-1:0', 'hello')],
+        [stdoutItem('process-1:0', 'hello world')]
+      )
+    ).toBe(false);
+  });
+
+  it('treats non-tail changes in a running snapshot as replay traffic', () => {
+    expect(
+      isRunningSnapshotReplay(
+        [stdoutItem('process-1:0', 'hello'), stdoutItem('process-1:1', 'world')],
+        [stdoutItem('process-1:0', 'HELLO'), stdoutItem('process-1:1', 'world')]
+      )
+    ).toBe(true);
   });
 });

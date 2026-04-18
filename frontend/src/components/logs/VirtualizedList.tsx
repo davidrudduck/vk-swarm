@@ -35,9 +35,26 @@ interface MessageListContext {
 }
 
 const TRANSIENT_PATCH_KEYS = new Set(['loading', 'next_action']);
+const APPEND_ONLY_REVISION_MARKER = '::append:';
 
 const isTransientItem = (item: PatchTypeWithKey) =>
   TRANSIENT_PATCH_KEYS.has(item.patchKey);
+
+const serializeForRender = (value: unknown) =>
+  JSON.stringify(value, (_key, itemValue) =>
+    typeof itemValue === 'bigint' ? itemValue.toString() : itemValue
+  );
+
+const getLogicalPatchKey = (patchKey: string) => {
+  const markerIndex = patchKey.indexOf(APPEND_ONLY_REVISION_MARKER);
+  return markerIndex === -1 ? patchKey : patchKey.slice(0, markerIndex);
+};
+
+const getItemRenderSignature = (item: PatchTypeWithKey) =>
+  serializeForRender({
+    ...item,
+    patchKey: getLogicalPatchKey(item.patchKey),
+  });
 
 const findInsertionIndex = (
   items: PatchTypeWithKey[],
@@ -109,13 +126,119 @@ export const mergeAppendOnlyItems = (
 export const getTailRenderSignature = (items: PatchTypeWithKey[]) =>
   items
     .slice(-2)
-    .map(
-      (item) =>
-        `${item.patchKey}:${JSON.stringify(item, (_key, value) =>
-          typeof value === 'bigint' ? value.toString() : value
-        )}`
-    )
+    .map((item) => `${item.patchKey}:${getItemRenderSignature(item)}`)
     .join('|');
+
+const getPersistentItems = (items: PatchTypeWithKey[]) =>
+  items.filter((item) => !isTransientItem(item));
+
+const isTextualAppendOnlyAdvance = (
+  previousItem: PatchTypeWithKey,
+  nextItem: PatchTypeWithKey
+) => {
+  if (getLogicalPatchKey(previousItem.patchKey) !== getLogicalPatchKey(nextItem.patchKey)) {
+    return false;
+  }
+
+  if (getItemRenderSignature(previousItem) === getItemRenderSignature(nextItem)) {
+    return true;
+  }
+
+  if (
+    (previousItem.type === 'STDOUT' || previousItem.type === 'STDERR') &&
+    previousItem.type === nextItem.type
+  ) {
+    return nextItem.content.startsWith(previousItem.content);
+  }
+
+  if (
+    previousItem.type === 'NORMALIZED_ENTRY' &&
+    nextItem.type === 'NORMALIZED_ENTRY' &&
+    previousItem.content.entry_type.type === nextItem.content.entry_type.type
+  ) {
+    return nextItem.content.content.startsWith(previousItem.content.content);
+  }
+
+  return false;
+};
+
+export const isRunningSnapshotReplay = (
+  previousItems: PatchTypeWithKey[],
+  nextItems: PatchTypeWithKey[]
+) => {
+  const previousPersistentItems = getPersistentItems(previousItems);
+  const nextPersistentItems = getPersistentItems(nextItems);
+
+  if (previousPersistentItems.length === 0 || nextPersistentItems.length === 0) {
+    return false;
+  }
+
+  if (nextPersistentItems.length < previousPersistentItems.length) {
+    return true;
+  }
+
+  const commonLength = previousPersistentItems.length;
+  for (let index = 0; index < commonLength; index += 1) {
+    const previousItem = previousPersistentItems[index]!;
+    const nextItem = nextPersistentItems[index]!;
+
+    if (getLogicalPatchKey(previousItem.patchKey) !== getLogicalPatchKey(nextItem.patchKey)) {
+      return true;
+    }
+
+    const isLastSharedItem = index === commonLength - 1;
+    if (isLastSharedItem) {
+      continue;
+    }
+
+    if (getItemRenderSignature(previousItem) !== getItemRenderSignature(nextItem)) {
+      return true;
+    }
+  }
+
+  return !isTextualAppendOnlyAdvance(
+    previousPersistentItems[commonLength - 1]!,
+    nextPersistentItems[commonLength - 1]!
+  );
+};
+
+export const mergeRunningAppendOnlyItems = (
+  previousItems: PatchTypeWithKey[],
+  nextItems: PatchTypeWithKey[],
+  getNextRevision: (logicalPatchKey: string) => number
+) => {
+  const previousPersistentItems = getPersistentItems(previousItems);
+  const nextPersistentItems = getPersistentItems(nextItems);
+  const nextTransientItems = nextItems.filter((item) => isTransientItem(item));
+  const mergedItems = [...previousPersistentItems];
+
+  nextPersistentItems.forEach((item) => {
+    const logicalPatchKey = getLogicalPatchKey(item.patchKey);
+    const lastMatchingItem = [...mergedItems]
+      .reverse()
+      .find(
+        (existingItem) => getLogicalPatchKey(existingItem.patchKey) === logicalPatchKey
+      );
+
+    if (!lastMatchingItem) {
+      mergedItems.push(item);
+      return;
+    }
+
+    if (getItemRenderSignature(lastMatchingItem) === getItemRenderSignature(item)) {
+      return;
+    }
+
+    mergedItems.push({
+      ...item,
+      patchKey: `${logicalPatchKey}${APPEND_ONLY_REVISION_MARKER}${getNextRevision(
+        logicalPatchKey
+      )}`,
+    });
+  });
+
+  return [...mergedItems, ...nextTransientItems];
+};
 
 const ItemContent = ({
   data,
@@ -161,12 +284,18 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
   const itemsRef = useRef<PatchTypeWithKey[]>([]);
   const listRef = useRef<VListHandle>(null);
   const previousTailSignatureRef = useRef('');
+  const appendOnlyRevisionRef = useRef<Record<string, number>>({});
+  const runningSnapshotRef = useRef<PatchTypeWithKey[]>([]);
+  const runningReplaySnapshotRef = useRef<PatchTypeWithKey[] | null>(null);
 
   useEffect(() => {
     setLoading(true);
     setItems([]);
     itemsRef.current = [];
     previousTailSignatureRef.current = '';
+    appendOnlyRevisionRef.current = {};
+    runningSnapshotRef.current = [];
+    runningReplaySnapshotRef.current = null;
     reset();
     didInitScroll.current = false;
     prevLenRef.current = 0;
@@ -176,10 +305,52 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
 
   const onEntriesUpdated = (
     newEntries: PatchTypeWithKey[],
-    _addType: AddEntryType,
+    addType: AddEntryType,
     newLoading: boolean
   ) => {
-    const mergedItems = mergeAppendOnlyItems(itemsRef.current, newEntries);
+    const nextRunningRevision = (logicalPatchKey: string) => {
+      const nextRevision = (appendOnlyRevisionRef.current[logicalPatchKey] ?? 0) + 1;
+      appendOnlyRevisionRef.current[logicalPatchKey] = nextRevision;
+      return nextRevision;
+    };
+
+    let mergedItems: PatchTypeWithKey[];
+    if (addType === 'running') {
+      const shouldSuppressAsReplay = isRunningSnapshotReplay(
+        runningSnapshotRef.current,
+        newEntries
+      );
+
+      if (runningReplaySnapshotRef.current || shouldSuppressAsReplay) {
+        if (shouldSuppressAsReplay) {
+          runningReplaySnapshotRef.current = newEntries;
+          mergedItems = [
+            ...getPersistentItems(itemsRef.current),
+            ...newEntries.filter(isTransientItem),
+          ];
+        } else {
+          runningReplaySnapshotRef.current = null;
+          mergedItems = mergeRunningAppendOnlyItems(
+            itemsRef.current,
+            newEntries,
+            nextRunningRevision
+          );
+          runningSnapshotRef.current = newEntries;
+        }
+      } else {
+        mergedItems = mergeRunningAppendOnlyItems(
+          itemsRef.current,
+          newEntries,
+          nextRunningRevision
+        );
+        runningSnapshotRef.current = newEntries;
+      }
+    } else {
+      mergedItems = mergeAppendOnlyItems(itemsRef.current, newEntries);
+      runningSnapshotRef.current = newEntries;
+      runningReplaySnapshotRef.current = null;
+    }
+
     itemsRef.current = mergedItems;
     setItems(mergedItems);
     setEntries(mergedItems);
