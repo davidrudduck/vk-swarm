@@ -74,6 +74,7 @@ fn reject_remote_variable_mutation(remote_ctx: Option<&RemoteTaskContext>) -> Re
 
 fn remote_system_variables(
     task: &Task,
+    source_task_id: Uuid,
     project_title: Option<&str>,
 ) -> HashMap<String, (String, Option<Uuid>)> {
     [
@@ -106,7 +107,7 @@ fn remote_system_variables(
         ),
     ]
     .into_iter()
-    .map(|(name, value)| (name, (value, Some(task.id))))
+    .map(|(name, value)| (name, (value, Some(source_task_id))))
     .collect()
 }
 
@@ -271,9 +272,9 @@ pub async fn preview_expansion(
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<PreviewExpansionRequest>,
 ) -> Result<ResponseJson<ApiResponse<PreviewExpansionResponse>>, ApiError> {
-    let variables = if remote_ctx.is_some() {
+    let variables = if let Some(remote_ctx) = remote_ctx {
         let project_title = find_remote_project_title(&deployment.db().pool, &task).await?;
-        remote_system_variables(&task, project_title.as_deref())
+        remote_system_variables(&task, remote_ctx.0.shared_task_id, project_title.as_deref())
     } else {
         TaskVariable::find_inherited_with_system(&deployment.db().pool, task.id)
             .await?
@@ -359,6 +360,7 @@ mod tests {
 
     #[test]
     fn remote_system_variables_preserve_runtime_task_context() {
+        let shared_task_id = Uuid::new_v4();
         let task = Task {
             id: Uuid::new_v4(),
             project_id: Uuid::new_v4(),
@@ -366,7 +368,7 @@ mod tests {
             description: Some("Remote description".to_string()),
             status: db::models::task::TaskStatus::Todo,
             parent_task_id: Some(Uuid::new_v4()),
-            shared_task_id: Some(Uuid::new_v4()),
+            shared_task_id: Some(shared_task_id),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             remote_assignee_user_id: None,
@@ -382,7 +384,7 @@ mod tests {
 
         let response = build_preview_expansion_response(
             "Task $TASK_TITLE in $PROJECT_TITLE [$IS_SUBTASK]",
-            &remote_system_variables(&task, Some("Remote project")),
+            &remote_system_variables(&task, shared_task_id, Some("Remote project")),
         );
 
         assert_eq!(
@@ -391,10 +393,14 @@ mod tests {
         );
         assert!(response.undefined_variables.is_empty());
         assert_eq!(response.expanded_variables.len(), 3);
+        assert!(response.expanded_variables.iter().all(
+            |variable| variable.source_task_id.as_deref() == Some(&shared_task_id.to_string())
+        ));
     }
 
     #[test]
     fn remote_system_variables_match_system_variable_names() {
+        let shared_task_id = Uuid::new_v4();
         let task = Task {
             id: Uuid::new_v4(),
             project_id: Uuid::new_v4(),
@@ -402,7 +408,7 @@ mod tests {
             description: Some("Remote description".to_string()),
             status: db::models::task::TaskStatus::Todo,
             parent_task_id: None,
-            shared_task_id: Some(Uuid::new_v4()),
+            shared_task_id: Some(shared_task_id),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             remote_assignee_user_id: None,
@@ -417,17 +423,21 @@ mod tests {
         };
 
         let keys: std::collections::BTreeSet<_> =
-            remote_system_variables(&task, None).into_keys().collect();
-        let expected: std::collections::BTreeSet<_> = db::models::task_variable::SYSTEM_VARIABLE_NAMES
-            .iter()
-            .map(|name| (*name).to_string())
-            .collect();
+            remote_system_variables(&task, shared_task_id, None)
+                .into_keys()
+                .collect();
+        let expected: std::collections::BTreeSet<_> =
+            db::models::task_variable::SYSTEM_VARIABLE_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect();
 
         assert_eq!(keys, expected);
     }
 
     #[test]
     fn remote_system_variables_preserve_value_shapes() {
+        let shared_task_id = Uuid::new_v4();
         let task = Task {
             id: Uuid::new_v4(),
             project_id: Uuid::new_v4(),
@@ -435,7 +445,7 @@ mod tests {
             description: Some("Remote description".to_string()),
             status: db::models::task::TaskStatus::Todo,
             parent_task_id: Some(Uuid::new_v4()),
-            shared_task_id: Some(Uuid::new_v4()),
+            shared_task_id: Some(shared_task_id),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             remote_assignee_user_id: None,
@@ -449,27 +459,27 @@ mod tests {
             activity_at: None,
         };
 
-        let variables = remote_system_variables(&task, Some("Remote project"));
+        let variables = remote_system_variables(&task, shared_task_id, Some("Remote project"));
 
         assert_eq!(
             variables.get("TASK_ID"),
-            Some(&(task.id.to_string(), Some(task.id)))
+            Some(&(task.id.to_string(), Some(shared_task_id)))
         );
         assert_eq!(
             variables.get("PROJECT_ID"),
-            Some(&(task.project_id.to_string(), Some(task.id)))
+            Some(&(task.project_id.to_string(), Some(shared_task_id)))
         );
         assert_eq!(
             variables.get("PROJECT_TITLE"),
-            Some(&("Remote project".to_string(), Some(task.id)))
+            Some(&("Remote project".to_string(), Some(shared_task_id)))
         );
         assert_eq!(
             variables.get("TASK_DESCRIPTION"),
-            Some(&("Remote description".to_string(), Some(task.id)))
+            Some(&("Remote description".to_string(), Some(shared_task_id)))
         );
         assert_eq!(
             variables.get("IS_SUBTASK"),
-            Some(&("true".to_string(), Some(task.id)))
+            Some(&("true".to_string(), Some(shared_task_id)))
         );
     }
 
