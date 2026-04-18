@@ -892,14 +892,14 @@ fn build_turn_collaboration_mode(
         None => return None,
     };
 
-    if let Some(available_modes) = available_modes {
-        if !available_modes
-            .iter()
-            .filter_map(|available_mode| available_mode.value.as_deref())
-            .any(|available_mode| available_mode == collaboration_mode_value(mode))
-        {
-            return None;
-        }
+    let available_modes = available_modes?;
+
+    if !available_modes
+        .iter()
+        .filter_map(|available_mode| available_mode.value.as_deref())
+        .any(|available_mode| available_mode == collaboration_mode_value(mode))
+    {
+        return None;
     }
 
     Some(ProtocolCollaborationMode {
@@ -938,20 +938,26 @@ async fn resolve_turn_collaboration_mode(
         let requested_value = requested_mode
             .map(collaboration_mode_value)
             .unwrap_or("custom");
-        let available_values = available_modes
-            .unwrap_or(&[])
-            .iter()
-            .filter_map(|mode| mode.value.as_deref())
-            .collect::<Vec<_>>();
-        let message = if available_values.is_empty() {
-            format!(
-                "Codex collaboration mode `{requested_value}` is unavailable in this runtime. Continuing in standard mode."
-            )
-        } else {
-            format!(
-                "Codex collaboration mode `{requested_value}` is unavailable in this runtime. Available modes: {}. Continuing in standard mode.",
-                available_values.join(", ")
-            )
+        let message = match available_modes {
+            None => format!(
+                "Codex collaboration mode `{requested_value}` could not be verified because collaboration mode discovery failed. Continuing in standard mode."
+            ),
+            Some(available_modes) => {
+                let available_values = available_modes
+                    .iter()
+                    .filter_map(|mode| mode.value.as_deref())
+                    .collect::<Vec<_>>();
+                if available_values.is_empty() {
+                    format!(
+                        "Codex collaboration mode `{requested_value}` is unavailable in this runtime. Continuing in standard mode."
+                    )
+                } else {
+                    format!(
+                        "Codex collaboration mode `{requested_value}` is unavailable in this runtime. Available modes: {}. Continuing in standard mode.",
+                        available_values.join(", ")
+                    )
+                }
+            }
         };
         let _ = client
             .log_writer()
@@ -1082,17 +1088,16 @@ mod tests {
     }
 
     #[test]
-    fn build_turn_collaboration_mode_keeps_requested_mode_when_discovery_is_unavailable() {
+    fn build_turn_collaboration_mode_returns_none_when_discovery_is_unavailable() {
         let mode = build_turn_collaboration_mode(
             Some(&CodexCollaborationMode::Plan),
             None,
             "gpt-5.4".to_string(),
             Some(ReasoningEffort::High),
             Some("stay in planning mode".to_string()),
-        )
-        .expect("collaboration mode should be built when discovery is unavailable");
+        );
 
-        assert_eq!(mode.mode, ModeKind::Plan);
+        assert!(mode.is_none());
     }
 
     #[test]
