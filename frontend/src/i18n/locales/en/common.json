@@ -43,6 +43,7 @@
     "args": "Args",
     "output": "Output",
     "result": "Result",
+    "loadingHistory": "Loading history",
     "deniedByUser": "{{toolName}} denied by user",
     "pagination": {
       "label": "Load",

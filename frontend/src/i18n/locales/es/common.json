@@ -33,6 +33,7 @@
   },
   "conversation": {
     "args": "Argumentos",
+    "loadingHistory": "Cargando historial",
     "deniedByUser": "{{toolName}} denegado por el usuario",
     "output": "Salida",
     "plan": "Plan",
