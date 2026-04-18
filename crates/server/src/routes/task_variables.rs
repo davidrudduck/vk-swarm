@@ -394,6 +394,86 @@ mod tests {
     }
 
     #[test]
+    fn remote_system_variables_match_system_variable_names() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            title: "Remote title".to_string(),
+            description: Some("Remote description".to_string()),
+            status: db::models::task::TaskStatus::Todo,
+            parent_task_id: None,
+            shared_task_id: Some(Uuid::new_v4()),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            remote_assignee_user_id: None,
+            remote_assignee_name: None,
+            remote_assignee_username: None,
+            remote_version: 0,
+            remote_last_synced_at: None,
+            remote_stream_node_id: None,
+            remote_stream_url: None,
+            archived_at: None,
+            activity_at: None,
+        };
+
+        let keys: std::collections::BTreeSet<_> =
+            remote_system_variables(&task, None).into_keys().collect();
+        let expected: std::collections::BTreeSet<_> = db::models::task_variable::SYSTEM_VARIABLE_NAMES
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn remote_system_variables_preserve_value_shapes() {
+        let task = Task {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            title: "Remote title".to_string(),
+            description: Some("Remote description".to_string()),
+            status: db::models::task::TaskStatus::Todo,
+            parent_task_id: Some(Uuid::new_v4()),
+            shared_task_id: Some(Uuid::new_v4()),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            remote_assignee_user_id: None,
+            remote_assignee_name: None,
+            remote_assignee_username: None,
+            remote_version: 0,
+            remote_last_synced_at: None,
+            remote_stream_node_id: None,
+            remote_stream_url: None,
+            archived_at: None,
+            activity_at: None,
+        };
+
+        let variables = remote_system_variables(&task, Some("Remote project"));
+
+        assert_eq!(
+            variables.get("TASK_ID"),
+            Some(&(task.id.to_string(), Some(task.id)))
+        );
+        assert_eq!(
+            variables.get("PROJECT_ID"),
+            Some(&(task.project_id.to_string(), Some(task.id)))
+        );
+        assert_eq!(
+            variables.get("PROJECT_TITLE"),
+            Some(&("Remote project".to_string(), Some(task.id)))
+        );
+        assert_eq!(
+            variables.get("TASK_DESCRIPTION"),
+            Some(&("Remote description".to_string(), Some(task.id)))
+        );
+        assert_eq!(
+            variables.get("IS_SUBTASK"),
+            Some(&("true".to_string(), Some(task.id)))
+        );
+    }
+
+    #[test]
     fn reject_remote_variable_mutation_blocks_remote_tasks() {
         let ctx = RemoteTaskContext {
             shared_task_id: Uuid::new_v4(),

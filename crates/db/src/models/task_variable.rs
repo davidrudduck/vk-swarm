@@ -259,24 +259,28 @@ impl TaskVariable {
         id: Uuid,
         data: &UpdateTaskVariable,
     ) -> Result<Self, sqlx::Error> {
-        sqlx::query_as::<_, TaskVariable>(
+        let name = data.name.as_deref();
+        let value = data.value.as_deref();
+
+        sqlx::query_as!(
+            TaskVariable,
             r#"UPDATE task_variables
                SET name = COALESCE($3, name),
                    value = COALESCE($4, value),
                    updated_at = datetime('now', 'subsec')
                WHERE id = $1 AND task_id = $2
                RETURNING
-                id,
-                task_id,
+                id as "id!: Uuid",
+                task_id as "task_id!: Uuid",
                 name,
                 value,
-                created_at,
-                updated_at"#,
+                created_at as "created_at!: DateTime<Utc>",
+                updated_at as "updated_at!: DateTime<Utc>""#,
+            id,
+            task_id,
+            name,
+            value
         )
-        .bind(id)
-        .bind(task_id)
-        .bind(data.name.as_deref())
-        .bind(data.value.as_deref())
         .fetch_one(pool)
         .await
     }
@@ -295,11 +299,13 @@ impl TaskVariable {
         task_id: Uuid,
         id: Uuid,
     ) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM task_variables WHERE id = $1 AND task_id = $2")
-            .bind(id)
-            .bind(task_id)
-            .execute(pool)
-            .await?;
+        let result = sqlx::query!(
+            "DELETE FROM task_variables WHERE id = $1 AND task_id = $2",
+            id,
+            task_id
+        )
+        .execute(pool)
+        .await?;
         Ok(result.rows_affected())
     }
 
