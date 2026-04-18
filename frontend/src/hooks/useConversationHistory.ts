@@ -168,12 +168,12 @@ export const useConversationHistory = ({
   const executionProcesses = useRef<ExecutionProcess[]>(executionProcessesRaw);
   const displayedExecutionProcesses = useRef<ExecutionProcessStateStore>({});
   const loadedInitialEntries = useRef(false);
-  const lastActiveProcessId = useRef<string | null>(null);
   const onEntriesUpdatedRef = useRef<OnEntriesUpdated | null>(null);
   // Track active stream controllers to prevent duplicate connections and enable cleanup
   const activeStreamControllers = useRef<Map<string, { close: () => void }>>(
     new Map()
   );
+  const pendingStreamStarts = useRef<Set<string>>(new Set());
 
   const mergeIntoDisplayed = (
     mutator: (state: ExecutionProcessStateStore) => void
@@ -633,13 +633,21 @@ export const useConversationHistory = ({
           return;
         }
 
+        let settled = false;
+        const settle = (callback: () => void) => {
+          if (settled) return;
+          settled = true;
+          activeStreamControllers.current.delete(processId);
+          callback();
+        };
+
         let url = '';
         if (executionProcess.executor_action.typ.type === 'ScriptRequest') {
           url = `/api/execution-processes/${executionProcess.id}/raw-logs/ws`;
         } else {
           url = `/api/execution-processes/${executionProcess.id}/normalized-logs/ws`;
         }
-        const controller = streamJsonPatchEntries<PatchType>(url, {
+        const websocketController = streamJsonPatchEntries<PatchType>(url, {
           onEntries(entries) {
             const patchesWithKey = entries.map((entry, index) =>
               patchWithKey(entry, executionProcess.id, index)
@@ -653,17 +661,22 @@ export const useConversationHistory = ({
             emitEntries(displayedExecutionProcesses.current, 'running', false);
           },
           onFinished: () => {
-            activeStreamControllers.current.delete(processId); // Clean up tracking
             emitEntries(displayedExecutionProcesses.current, 'running', false);
-            controller.close();
-            resolve();
+            websocketController.close();
+            settle(resolve);
           },
           onError: () => {
-            activeStreamControllers.current.delete(processId); // Clean up tracking
-            controller.close();
-            reject();
+            websocketController.close();
+            settle(reject);
           },
         });
+
+        const controller = {
+          close: () => {
+            websocketController.close();
+            settle(resolve);
+          },
+        };
 
         // Track this controller
         activeStreamControllers.current.set(processId, controller);
@@ -679,15 +692,27 @@ export const useConversationHistory = ({
       executionProcess: ExecutionProcess,
       abortSignal?: { aborted: boolean }
     ) => {
-      for (let i = 0; i < 20; i++) {
-        if (abortSignal?.aborted) return;
-        try {
-          await loadRunningAndEmit(executionProcess);
-          break;
-        } catch (_) {
-          if (abortSignal?.aborted) return;
-          await new Promise((resolve) => setTimeout(resolve, 500));
+      const processId = executionProcess.id;
+      if (pendingStreamStarts.current.has(processId)) {
+        return;
+      }
+
+      pendingStreamStarts.current.add(processId);
+      let retryDelayMs = 500;
+
+      try {
+        while (!abortSignal?.aborted) {
+          try {
+            await loadRunningAndEmit(executionProcess);
+            return;
+          } catch (_) {
+            if (abortSignal?.aborted) return;
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+            retryDelayMs = Math.min(retryDelayMs * 2, 5000);
+          }
         }
+      } finally {
+        pendingStreamStarts.current.delete(processId);
       }
     },
     [loadRunningAndEmit]
@@ -939,7 +964,20 @@ export const useConversationHistory = ({
     const abortSignal = { aborted: false };
 
     const activeProcess = getActiveAgentProcess();
-    if (!activeProcess) return;
+    const controllersMap = activeStreamControllers.current;
+
+    for (const [processId, controller] of controllersMap.entries()) {
+      if (!activeProcess || processId !== activeProcess.id) {
+        controller.close();
+        controllersMap.delete(processId);
+      }
+    }
+
+    if (!activeProcess) {
+      return () => {
+        abortSignal.aborted = true;
+      };
+    }
 
     if (!displayedExecutionProcesses.current[activeProcess.id]) {
       const runningOrInitial =
@@ -952,22 +990,15 @@ export const useConversationHistory = ({
 
     if (
       activeProcess.status === ExecutionProcessStatus.running &&
-      lastActiveProcessId.current !== activeProcess.id
+      !controllersMap.has(activeProcess.id) &&
+      !pendingStreamStarts.current.has(activeProcess.id)
     ) {
-      lastActiveProcessId.current = activeProcess.id;
       loadRunningAndEmitWithBackoff(activeProcess, abortSignal);
     }
 
-    // Capture ref value for cleanup (React lint rule)
-    const controllersMap = activeStreamControllers.current;
-
-    // Cleanup: Close active streams and abort retry loops when effect re-runs or unmounts
+    // Cleanup: abort retry loops only. Active controllers stay open until process change or unmount.
     return () => {
       abortSignal.aborted = true;
-      for (const controller of controllersMap.values()) {
-        controller.close();
-      }
-      controllersMap.clear();
     };
   }, [
     attempt.id,
@@ -976,6 +1007,19 @@ export const useConversationHistory = ({
     ensureProcessVisible,
     loadRunningAndEmitWithBackoff,
   ]);
+
+  useEffect(() => {
+    const controllersMap = activeStreamControllers.current;
+    const pendingStarts = pendingStreamStarts.current;
+
+    return () => {
+      for (const controller of controllersMap.values()) {
+        controller.close();
+      }
+      controllersMap.clear();
+      pendingStarts.clear();
+    };
+  }, [attempt.id]);
 
   // If an execution process is removed, remove it from the state
   useEffect(() => {
@@ -998,7 +1042,7 @@ export const useConversationHistory = ({
   useEffect(() => {
     displayedExecutionProcesses.current = {};
     loadedInitialEntries.current = false;
-    lastActiveProcessId.current = null;
+    pendingStreamStarts.current.clear();
     emitEntries(displayedExecutionProcesses.current, 'initial', true);
   }, [attempt.id, emitEntries]);
 
