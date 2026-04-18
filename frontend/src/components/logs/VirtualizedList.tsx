@@ -132,6 +132,35 @@ export const getTailRenderSignature = (items: PatchTypeWithKey[]) =>
 const getPersistentItems = (items: PatchTypeWithKey[]) =>
   items.filter((item) => !isTransientItem(item));
 
+const getCommandRunAppendOnlyText = (item: PatchTypeWithKey) => {
+  if (item.type !== 'NORMALIZED_ENTRY') {
+    return null;
+  }
+
+  const entryType = item.content.entry_type;
+  if (entryType.type !== 'tool_use' || entryType.action_type.action !== 'command_run') {
+    return null;
+  }
+
+  const result = entryType.action_type.result;
+  const segments = [
+    `tool:${entryType.tool_name}`,
+    `label:${item.content.content}`,
+    `command:${entryType.action_type.command}`,
+    `output:${result?.output ?? ''}`,
+  ];
+
+  if (result?.exit_status) {
+    segments.push(`exit:${serializeForRender(result.exit_status)}`);
+  }
+
+  if (entryType.status.status !== 'created') {
+    segments.push(`status:${serializeForRender(entryType.status)}`);
+  }
+
+  return segments.join('\n');
+};
+
 const isTextualAppendOnlyAdvance = (
   previousItem: PatchTypeWithKey,
   nextItem: PatchTypeWithKey
@@ -156,7 +185,14 @@ const isTextualAppendOnlyAdvance = (
     nextItem.type === 'NORMALIZED_ENTRY' &&
     previousItem.content.entry_type.type === nextItem.content.entry_type.type
   ) {
-    return nextItem.content.content.startsWith(previousItem.content.content);
+    const previousCommandRunText = getCommandRunAppendOnlyText(previousItem);
+    const nextCommandRunText = getCommandRunAppendOnlyText(nextItem);
+
+    if (previousCommandRunText && nextCommandRunText) {
+      return nextCommandRunText.startsWith(previousCommandRunText);
+    }
+
+    return false;
   }
 
   return false;
@@ -169,8 +205,12 @@ export const isRunningSnapshotReplay = (
   const previousPersistentItems = getPersistentItems(previousItems);
   const nextPersistentItems = getPersistentItems(nextItems);
 
-  if (previousPersistentItems.length === 0 || nextPersistentItems.length === 0) {
+  if (previousPersistentItems.length === 0) {
     return false;
+  }
+
+  if (nextPersistentItems.length === 0) {
+    return true;
   }
 
   if (nextPersistentItems.length < previousPersistentItems.length) {
@@ -214,11 +254,15 @@ export const mergeRunningAppendOnlyItems = (
 
   nextPersistentItems.forEach((item) => {
     const logicalPatchKey = getLogicalPatchKey(item.patchKey);
-    const lastMatchingItem = [...mergedItems]
-      .reverse()
-      .find(
-        (existingItem) => getLogicalPatchKey(existingItem.patchKey) === logicalPatchKey
-      );
+    let lastMatchingItem: PatchTypeWithKey | undefined;
+
+    for (let index = mergedItems.length - 1; index >= 0; index -= 1) {
+      const existingItem = mergedItems[index];
+      if (existingItem && getLogicalPatchKey(existingItem.patchKey) === logicalPatchKey) {
+        lastMatchingItem = existingItem;
+        break;
+      }
+    }
 
     if (!lastMatchingItem) {
       mergedItems.push(item);
