@@ -9,7 +9,9 @@ function normalizeVariantConfig(
   const variants = profiles[executor];
   if (!variants) return null;
   const variantKey = variant ?? 'DEFAULT';
-  const variantConfig = variants[variantKey] as Record<string, unknown> | undefined;
+  const variantConfig = variants[variantKey] as
+    | Record<string, unknown>
+    | undefined;
   const configValue = variantConfig?.[executor];
   return configValue && typeof configValue === 'object'
     ? (configValue as VariantConfigValue)
@@ -26,9 +28,6 @@ export function describeExecutorVariant(
 
   if (executor === 'CODEX') {
     const parts = [
-      typeof config.collaboration_mode === 'string'
-        ? config.collaboration_mode
-        : null,
       typeof config.model === 'string' ? config.model : null,
       typeof config.sandbox === 'string' ? config.sandbox : null,
       typeof config.ask_for_approval === 'string'
