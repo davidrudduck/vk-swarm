@@ -17,6 +17,10 @@ When a coding agent executes a task, Vibe Kanban:
 
 This allows you to monitor agent activity regardless of which coding agent you're using.
 
+<Info>
+Streaming execution logs are rendered append-only in the viewer. New output is added beneath existing content rather than rewriting earlier rows, which keeps the transcript readable like a chat or log file.
+</Info>
+
 ## What Gets Logged
 
 ### Message Types
@@ -100,6 +104,7 @@ Claude Code provides comprehensive structured logging with full tool call detail
 - Thread, turn, and session tracking
 - Token usage statistics
 - Approval workflow
+- Runtime collaboration-mode fallback notices when a requested native mode is unavailable
 
 **Detail Level**: Full - Complete tool tracking with token usage metrics.
 
