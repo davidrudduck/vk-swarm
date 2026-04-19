@@ -1,10 +1,8 @@
-# Mintlify Starter Kit
-
-**[Mintlify Quickstart Guide](https://starter.mintlify.com/quickstart)**
+# Documentation Development
 
 ## Development
 
-Install the [Mintlify CLI](https://www.npmjs.com/package/mint) to preview your documentation changes locally. To install, use the following command:
+Install the Mintlify CLI to preview your documentation changes locally:
 
 ```
 npm i -g mint
@@ -20,7 +18,7 @@ View your local preview at `http://localhost:3000`.
 
 ## Publishing changes
 
-Install our GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app) to propagate changes from your repo to your deployment. Changes are deployed to production automatically after pushing to the default branch.
+Documentation changes for this fork are reviewed and merged through the main repository workflow. Keep links and references aligned with `davidrudduck/vk-swarm`.
 
 ## Need help?
 
@@ -30,5 +28,5 @@ Install our GitHub app from your [dashboard](https://dashboard.mintlify.com/sett
 - If a page loads as a 404: Make sure you are running in a folder with a valid `docs.json`.
 
 ### Resources
-- [Mintlify documentation](https://mintlify.com/docs)
-- [Mintlify community](https://mintlify.com/community)
+- [Repository root README](../README.md)
+- [Architecture docs](./architecture/README.md)

@@ -172,10 +172,11 @@ Keep the Vibe Kanban tab open while agents are running to ensure you can respond
 - **Auto-scroll**: Logs automatically scroll to show new entries as they arrive
 - **Manual scroll**: Scroll up to pause auto-scrolling and review earlier logs
 - **Return to bottom**: Click the "Jump to bottom" button to resume auto-scrolling
+- **Append-only transcript**: Live agent output is appended beneath existing entries instead of rewriting earlier lines
 
 ### Large Log Volumes
 
-For long-running tasks, logs use virtual scrolling for performance:
+For long-running tasks, logs use virtual scrolling for performance while preserving append-only transcript behavior:
 - Only visible entries are rendered
 - Scrolling remains smooth even with thousands of entries
 - Memory usage stays low regardless of log size

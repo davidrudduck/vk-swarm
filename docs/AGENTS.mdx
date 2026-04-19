@@ -61,7 +61,7 @@ You are an AI writing assistant specialised in creating exceptional technical do
 
 ### docs.json
 
-- Refer to the [docs.json schema](https://mintlify.com/docs.json) when building the docs.json file and site navigation
+- Refer to the existing `docs/docs.json` file in this repository when updating site navigation or global docs settings
 
 ### Callout components
 
@@ -337,16 +337,13 @@ Use the HTML video element for self-hosted video content:
   src="link-to-your-video.com"
 ></video>
 
-Embed YouTube videos using iframe elements:
+Embed videos only when they are hosted within the repository or this fork's approved docs assets:
 
-<iframe
+<video
+  controls
   className="w-full aspect-video rounded-xl"
-  src="https://www.youtube.com/embed/4KzFe50RQkQ"
-  title="YouTube video player"
-  frameBorder="0"
-  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-  allowFullScreen
-></iframe>
+  src="/images/example-demo.mp4"
+></video>
 
 #### Tooltips
 

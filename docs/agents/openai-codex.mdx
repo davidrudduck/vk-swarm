@@ -1,7 +1,7 @@
 ---
 title: "OpenAI Codex"
 description: "Set up OpenAI Codex integration"
-icon: https://www.vibekanban.com/images/logos/openai-logo.svg
+icon: "terminal"
 ---
 
 <Steps>
@@ -12,9 +12,9 @@ icon: https://www.vibekanban.com/images/logos/openai-logo.svg
 </Step>
 
 <Step title="Follow the login instructions">
-  Complete the authentication flow as prompted. Follow the authentication instructions from the [OpenAI help centre](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan) to use Codex with your ChatGPT plan.
+  Complete the authentication flow as prompted.
 
-  Alternatively, Codex can be used via the OpenAI API by setting the `OPENAI_API_KEY` environment variable. For more details, see the [OpenAI documentation](https://developers.openai.com/codex/pricing/#use-an-openai-api-key)
+  Alternatively, Codex can be used via the OpenAI API by setting the `OPENAI_API_KEY` environment variable.
 </Step>
 
 <Step title="Start Vibe Kanban">
@@ -24,6 +24,6 @@ icon: https://www.vibekanban.com/images/logos/openai-logo.svg
   npx vibe-kanban
   ```
 
-  You can now select OpenAI Codex when creating task attempts.
+  You can now select OpenAI Codex when creating task attempts. Native Codex collaboration modes are discovered from the runtime at startup, and unsupported modes fall back to standard execution automatically.
 </Step>
 </Steps>

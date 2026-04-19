@@ -48,7 +48,7 @@ You can accept or reject each suggestion individually before saving your project
 Setup scripts will be run before the coding agent is executed. This is useful for installing dependencies, for example you might run `npm install` or `cargo build`. This will save you time as your agent won't need to figure out that these commands haven't already been run.
 
 <Note>
-Each time a coding agent is executed it runs in a [git worktree](https://git-scm.com/docs/git-worktree) which is unlikely to contain your dependencies, configs, .env etc.
+Each time a coding agent is executed it runs in a git worktree, which is unlikely to contain your dependencies, configs, `.env`, and related local state.
 </Note>
 
 ### Dev Server Scripts
@@ -125,8 +125,7 @@ If the dev server preview shows an error or blank screen:
 2. **Verify network binding** - Ensure dev script uses `0.0.0.0` or `--host 0.0.0.0`
 3. **X-Frame-Options blocking** - Some dev servers block iframe embedding. Solutions:
    - Configure dev server to allow framing (see framework documentation)
-   - Install [Vibe Kanban Web Companion](https://github.com/BloopAI/vibe-kanban-web-companion) browser extension
+   - Install the Vibe Kanban Web Companion browser extension if your workflow requires browser-assisted testing
    - Use "Open in New Tab" button to view in separate window
 4. **Check firewall** - Ensure dev server port is accessible on your network
-
 
