@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://vibekanban.com">
+  <a href="https://github.com/davidrudduck/vk-swarm">
     <picture>
       <source srcset="frontend/public/vibe-kanban-logo-dark.svg" media="(prefers-color-scheme: dark)">
       <source srcset="frontend/public/vibe-kanban-logo.svg" media="(prefers-color-scheme: light)">
@@ -21,11 +21,11 @@ AI coding agents are increasingly writing the world's code and human engineers n
 - Centralise configuration of coding agent MCP configs
 - Open projects remotely via SSH when running Vibe Kanban on a remote server
 
-You can watch a video overview [here](https://youtu.be/TFT3KnZOOAk).
+Start with the repository documentation in [`docs/`](./docs) for setup and feature guides.
 
 ## Installation
 
-Make sure you have authenticated with your favourite coding agent. A full list of supported coding agents can be found in the [docs](https://vibekanban.com/docs). Then in your terminal run:
+Make sure you have authenticated with your favourite coding agent. A full list of supported coding agents can be found in [`docs/supported-coding-agents.mdx`](./docs/supported-coding-agents.mdx). Then in your terminal run:
 
 ```bash
 npx vibe-kanban
@@ -33,31 +33,31 @@ npx vibe-kanban
 
 ## Documentation
 
-Please head to the [website](https://vibekanban.com/docs) for the latest documentation and user guides.
+Start with the local docs in [`docs/`](./docs) for the latest documentation and user guides in this fork.
 
 ### Architecture Documentation
 
 For developers working on the codebase, see the [Architecture Documentation](docs/architecture/README.md) for detailed technical documentation including:
-- [Database Overview](docs/architecture/database-overview.mdx) - Dual-database architecture (SQLite + PostgreSQL)
-- [SQLite Local Schema](docs/architecture/sqlite-local-schema.mdx) - Local node database schema
-- [PostgreSQL Hive Schema](docs/architecture/postgresql-hive-schema.mdx) - Central hive database schema
-- [Database Synchronization](docs/architecture/database-synchronization.mdx) - How data syncs between nodes and hive
+- [Database Overview](docs/architecture/db/database-overview.mdx) - Dual-database architecture (SQLite + PostgreSQL)
+- [SQLite Local Schema](docs/architecture/db/sqlite-local-schema.mdx) - Local node database schema
+- [PostgreSQL Hive Schema](docs/architecture/db/postgresql-hive-schema.mdx) - Central hive database schema
+- [Database Synchronization](docs/architecture/db/database-synchronization.mdx) - How data syncs between nodes and hive
 
 ## Support
 
-We use [GitHub Discussions](https://github.com/BloopAI/vibe-kanban/discussions) for feature requests. Please open a discussion to create a feature request. For bugs please open an issue on this repo.
+We use [GitHub Discussions](https://github.com/davidrudduck/vk-swarm/discussions) for feature requests. Please open a discussion to create a feature request. For bugs please open an issue on this repo.
 
 ## Contributing
 
-We would prefer that ideas and changes are first raised with the core team via [GitHub Discussions](https://github.com/BloopAI/vibe-kanban/discussions) or Discord, where we can discuss implementation details and alignment with the existing roadmap. Please do not open PRs without first discussing your proposal with the team.
+We would prefer that ideas and changes are first raised via [GitHub Discussions](https://github.com/davidrudduck/vk-swarm/discussions), where implementation details and alignment with the existing roadmap can be discussed. Please do not open PRs without first discussing your proposal with the team.
 
 ## Development
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) (latest stable)
-- [Node.js](https://nodejs.org/) (>=18)
-- [pnpm](https://pnpm.io/) (>=8)
+- Rust (latest stable)
+- Node.js (>=18)
+- pnpm (>=8)
 
 Additional development tools:
 ```bash

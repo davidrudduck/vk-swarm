@@ -6,7 +6,7 @@ This folder contains technical architecture documentation for Vibe Kanban's inte
 
 | Document | Description |
 |----------|-------------|
-| [Database Documentation](./db/) | Complete database architecture, schema, and function reference |
+| [Database Documentation](./db/README.md) | Complete database architecture, schema, and function reference |
 | [Frontend Task Sorting](./frontend-sorting.mdx) | Task sorting strategy, implementation, and state management |
 
 ## Quick Reference
