@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { VList, VListHandle } from 'virtua';
 import { AlertCircle, ArrowDown, Radio, Wifi, WifiOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useLogStream } from '@/hooks/useLogStream';
 import {
   useNodeLogStream,
   type NodeLogEntry,
   type ConnectionType,
 } from '@/hooks/useNodeLogStream';
+import { useLogStream } from '@/hooks/useLogStream';
 import RawLogText from '@/components/common/RawLogText';
 import type { PatchType } from 'shared/types';
 
@@ -119,7 +119,10 @@ export function ProcessLogsViewerContent({
     if (!followRef.current) return;
 
     requestAnimationFrame(() => {
-      listRef.current?.scrollToIndex(logs.length - 1, { align: 'end', smooth: false });
+      listRef.current?.scrollToIndex(logs.length - 1, {
+        align: 'end',
+        smooth: false,
+      });
     });
   }, [logs.length]);
 
@@ -159,7 +162,9 @@ export function ProcessLogsViewerContent({
                 <RawLogText
                   key={i}
                   content={(entry as LogEntry).content}
-                  channel={(entry as LogEntry).type === 'STDERR' ? 'stderr' : 'stdout'}
+                  channel={
+                    (entry as LogEntry).type === 'STDERR' ? 'stderr' : 'stdout'
+                  }
                   className="text-sm px-4 py-1"
                 />
               )}
@@ -172,7 +177,10 @@ export function ProcessLogsViewerContent({
                 onClick={() => {
                   followRef.current = true;
                   setAtBottom(true);
-                  listRef.current?.scrollToIndex(logs.length - 1, { align: 'end', smooth: false });
+                  listRef.current?.scrollToIndex(logs.length - 1, {
+                    align: 'end',
+                    smooth: false,
+                  });
                 }}
                 aria-label="Scroll to bottom"
               >
@@ -230,7 +238,14 @@ export function NodeProcessLogsViewer({
  */
 function LocalProcessLogsViewer({ processId }: { processId: string }) {
   const { logs, error } = useLogStream(processId);
-  return <ProcessLogsViewerContent logs={logs} error={error} sourceKey={processId} />;
+
+  return (
+    <ProcessLogsViewerContent
+      logs={logs}
+      error={error}
+      sourceKey={processId}
+    />
+  );
 }
 
 export default function ProcessLogsViewer({

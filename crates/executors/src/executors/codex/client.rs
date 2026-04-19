@@ -11,12 +11,13 @@ use codex_app_server_protocol::{
     CollaborationModeListResponse, CommandExecutionApprovalDecision,
     CommandExecutionRequestApprovalResponse, FileChangeApprovalDecision,
     FileChangeRequestApprovalResponse, GetAuthStatusParams, GetAuthStatusResponse,
-    InitializeParams, InitializeResponse, JSONRPCError, JSONRPCNotification, JSONRPCRequest,
-    JSONRPCResponse, ModelListParams, ModelListResponse, RequestId, ReviewDelivery,
-    ReviewStartParams, ReviewStartResponse, ReviewTarget, ServerNotification, ServerRequest,
-    ThreadForkParams, ThreadForkResponse, ThreadStartParams, ThreadStartResponse,
-    ToolRequestUserInputAnswer, ToolRequestUserInputQuestion, ToolRequestUserInputResponse,
-    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse, UserInput,
+    InitializeCapabilities, InitializeParams, InitializeResponse, JSONRPCError,
+    JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, ModelListParams, ModelListResponse,
+    RequestId, ReviewDelivery, ReviewStartParams, ReviewStartResponse, ReviewTarget,
+    ServerNotification, ServerRequest, ThreadForkParams, ThreadForkResponse, ThreadStartParams,
+    ThreadStartResponse, ToolRequestUserInputAnswer, ToolRequestUserInputQuestion,
+    ToolRequestUserInputResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    TurnStartResponse, UserInput,
 };
 use codex_protocol::{ThreadId, config_types::CollaborationMode, protocol::ReviewDecision};
 use serde::{Serialize, de::DeserializeOwned};
@@ -81,7 +82,10 @@ impl AppServerClient {
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
-                capabilities: None,
+                capabilities: Some(InitializeCapabilities {
+                    experimental_api: true,
+                    ..Default::default()
+                }),
             },
         };
 
