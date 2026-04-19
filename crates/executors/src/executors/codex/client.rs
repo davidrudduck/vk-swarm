@@ -20,7 +20,7 @@ use codex_app_server_protocol::{
     TurnStartResponse, UserInput,
 };
 use codex_protocol::{ThreadId, config_types::CollaborationMode, protocol::ReviewDecision};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{self, Value};
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt, BufWriter},
@@ -33,6 +33,33 @@ use crate::{
     approvals::{ExecutorApprovalError, ExecutorApprovalService},
     executors::{ExecutorError, codex::normalize_logs::Approval},
 };
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LenientCollaborationModeListResponse {
+    data: Vec<LenientCollaborationModeMask>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LenientCollaborationModeMask {
+    name: String,
+    mode: Option<LenientModeKind>,
+    model: Option<String>,
+    reasoning_effort: Option<Option<codex_protocol::openai_models::ReasoningEffort>>,
+    developer_instructions: Option<Option<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LenientModeKind {
+    Default,
+    Plan,
+    Code,
+    PairProgramming,
+    Execute,
+    Custom,
+}
 
 pub struct AppServerClient {
     rpc: OnceLock<JsonRpcPeer>,
@@ -217,7 +244,8 @@ impl AppServerClient {
             request_id: self.next_request_id(),
             params: CollaborationModeListParams {},
         };
-        self.send_request(request, "collaborationMode/list").await
+        let raw_response: Value = self.send_request(request, "collaborationMode/list").await?;
+        decode_collaboration_mode_list_response(raw_response)
     }
     async fn handle_server_request(
         &self,
@@ -929,6 +957,42 @@ fn user_input_answers_from_response(
     mapped
 }
 
+fn decode_collaboration_mode_list_response(
+    raw_response: Value,
+) -> Result<CollaborationModeListResponse, ExecutorError> {
+    let response = serde_json::from_value::<LenientCollaborationModeListResponse>(raw_response)
+        .map_err(|err| {
+            ExecutorError::Io(io::Error::other(format!(
+                "failed to decode collaborationMode/list response: {err}"
+            )))
+        })?;
+
+    Ok(CollaborationModeListResponse {
+        data: response
+            .data
+            .into_iter()
+            .map(|item| codex_protocol::config_types::CollaborationModeMask {
+                name: item.name,
+                mode: item.mode.and_then(|mode| match mode {
+                    LenientModeKind::Default => None,
+                    LenientModeKind::Plan => Some(codex_protocol::config_types::ModeKind::Plan),
+                    LenientModeKind::Code => Some(codex_protocol::config_types::ModeKind::Code),
+                    LenientModeKind::PairProgramming => {
+                        Some(codex_protocol::config_types::ModeKind::PairProgramming)
+                    }
+                    LenientModeKind::Execute => {
+                        Some(codex_protocol::config_types::ModeKind::Execute)
+                    }
+                    LenientModeKind::Custom => Some(codex_protocol::config_types::ModeKind::Custom),
+                }),
+                model: item.model,
+                reasoning_effort: item.reasoning_effort,
+                developer_instructions: item.developer_instructions,
+            })
+            .collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -961,6 +1025,37 @@ mod tests {
             }
             other => panic!("unexpected request: {other:?}"),
         }
+    }
+
+    #[test]
+    fn decode_collaboration_mode_list_response_tolerates_default_preset() {
+        let response = decode_collaboration_mode_list_response(json!({
+            "data": [
+                {
+                    "name": "Default",
+                    "mode": "default",
+                    "model": "gpt-5.4",
+                    "reasoningEffort": null,
+                    "developerInstructions": null
+                },
+                {
+                    "name": "Plan",
+                    "mode": "plan",
+                    "model": "gpt-5.4",
+                    "reasoningEffort": "high",
+                    "developerInstructions": "stay in planning mode"
+                }
+            ]
+        }))
+        .expect("response should decode");
+
+        assert_eq!(response.data.len(), 2);
+        assert_eq!(response.data[0].name, "Default");
+        assert_eq!(response.data[0].mode, None);
+        assert_eq!(
+            response.data[1].mode,
+            Some(codex_protocol::config_types::ModeKind::Plan)
+        );
     }
 
     #[test]
