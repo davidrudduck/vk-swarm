@@ -4,7 +4,7 @@ import {
   getTailRenderSignature,
   mergeAppendOnlyItems,
   mergeRunningAppendOnlyItems,
-} from './appendOnlyTimeline';
+} from '@/utils/logs/appendOnlyTimeline';
 import type { PatchTypeWithKey } from '@/hooks/useConversationHistory';
 import type { CommandExitStatus } from 'shared/types';
 

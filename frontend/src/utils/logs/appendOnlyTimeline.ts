@@ -1,10 +1,10 @@
-import type { PatchTypeWithKey } from '@/hooks/useConversationHistory';
+import type { PatchTypeWithKey } from '@/utils/logEntryToPatch';
 
-const TRANSIENT_PATCH_KEYS = new Set(['loading', 'next_action']);
-const APPEND_ONLY_REVISION_MARKER = '::append:';
+const transientPatchKeys = new Set(['loading', 'next_action']);
+const appendOnlyRevisionMarker = '::append:';
 
 const isTransientItem = (item: PatchTypeWithKey) =>
-  TRANSIENT_PATCH_KEYS.has(item.patchKey);
+  transientPatchKeys.has(item.patchKey);
 
 const serializeForRender = (value: unknown) =>
   JSON.stringify(value, (_key, itemValue) =>
@@ -12,7 +12,7 @@ const serializeForRender = (value: unknown) =>
   );
 
 export const getLogicalPatchKey = (patchKey: string) => {
-  const markerIndex = patchKey.indexOf(APPEND_ONLY_REVISION_MARKER);
+  const markerIndex = patchKey.indexOf(appendOnlyRevisionMarker);
   return markerIndex === -1 ? patchKey : patchKey.slice(0, markerIndex);
 };
 
@@ -32,12 +32,17 @@ const findInsertionIndex = (
   items: PatchTypeWithKey[],
   nextKeys: Set<string>,
   nextItems: PatchTypeWithKey[],
-  newItemIndex: number
+  newItemIndex: number,
+  itemIndexes: Map<string, number>
 ) => {
   for (let index = newItemIndex + 1; index < nextItems.length; index += 1) {
     const anchorKey = nextItems[index]?.patchKey;
-    const anchorIndex = items.findIndex((item) => item.patchKey === anchorKey);
-    if (anchorIndex !== -1) {
+    if (!anchorKey) {
+      continue;
+    }
+
+    const anchorIndex = itemIndexes.get(anchorKey);
+    if (anchorIndex !== undefined) {
       let insertionIndex = anchorIndex;
       while (
         insertionIndex > 0 &&
@@ -50,6 +55,19 @@ const findInsertionIndex = (
   }
 
   return items.length;
+};
+
+const rebuildItemIndexes = (
+  items: PatchTypeWithKey[],
+  itemIndexes: Map<string, number>,
+  startIndex = 0
+) => {
+  for (let index = startIndex; index < items.length; index += 1) {
+    const item = items[index];
+    if (item) {
+      itemIndexes.set(item.patchKey, index);
+    }
+  }
 };
 
 export const mergeAppendOnlyItems = (
@@ -74,13 +92,14 @@ export const mergeAppendOnlyItems = (
   }
 
   const mergedPersistentItems = [...previousPersistentItems];
+  const mergedIndexes = new Map(
+    mergedPersistentItems.map((item, index) => [item.patchKey, index])
+  );
 
   nextPersistentItems.forEach((item, nextIndex) => {
-    const existingIndex = mergedPersistentItems.findIndex(
-      (existingItem) => existingItem.patchKey === item.patchKey
-    );
+    const existingIndex = mergedIndexes.get(item.patchKey);
 
-    if (existingIndex !== -1) {
+    if (existingIndex !== undefined) {
       mergedPersistentItems[existingIndex] = item;
       return;
     }
@@ -89,9 +108,11 @@ export const mergeAppendOnlyItems = (
       mergedPersistentItems,
       nextKeys,
       nextPersistentItems,
-      nextIndex
+      nextIndex,
+      mergedIndexes
     );
     mergedPersistentItems.splice(insertionIndex, 0, item);
+    rebuildItemIndexes(mergedPersistentItems, mergedIndexes, insertionIndex);
   });
 
   return [...mergedPersistentItems, ...nextTransientItems];
@@ -166,6 +187,9 @@ export const getRunningAppendOnlyResult = (
   const nextPersistentItems = getPersistentItems(nextItems);
   const nextTransientItems = nextItems.filter((item) => isTransientItem(item));
   const mergedItems = [...previousPersistentItems];
+  const mergedLogicalPatchKeys = new Set(
+    mergedItems.map((item) => getLogicalPatchKey(item.patchKey))
+  );
   let previousSnapshotIndex = 0;
   const pendingAppends: Array<{
     item: PatchTypeWithKey;
@@ -234,20 +258,17 @@ export const getRunningAppendOnlyResult = (
   pendingAppends.forEach(({ item, priorPatchKey }) => {
     const logicalPatchKey = getLogicalPatchKey(priorPatchKey ?? item.patchKey);
     const hasExistingLogicalPatchKey =
-      priorPatchKey !== null ||
-      mergedItems.some(
-        (existingItem) =>
-          getLogicalPatchKey(existingItem.patchKey) === logicalPatchKey
-      );
+      priorPatchKey !== null || mergedLogicalPatchKeys.has(logicalPatchKey);
 
     if (!hasExistingLogicalPatchKey) {
       mergedItems.push(item);
+      mergedLogicalPatchKeys.add(logicalPatchKey);
       return;
     }
 
     mergedItems.push({
       ...item,
-      patchKey: `${logicalPatchKey}${APPEND_ONLY_REVISION_MARKER}${getNextRevision(
+      patchKey: `${logicalPatchKey}${appendOnlyRevisionMarker}${getNextRevision(
         logicalPatchKey
       )}`,
     });

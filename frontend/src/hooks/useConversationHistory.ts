@@ -17,7 +17,7 @@ import { streamJsonPatchEntries } from '@/utils/streamJsonPatchEntries';
 import { useEffectivePagination } from './useEffectivePagination';
 import { logsApi } from '@/lib/api';
 import { logEntriesToPatches } from '@/utils/logEntryToPatch';
-import { getRunningAppendOnlyResult } from '@/components/logs/appendOnlyTimeline';
+import { getRunningAppendOnlyResult } from '@/utils/logs/appendOnlyTimeline';
 
 export type PatchTypeWithKey = PatchType & {
   patchKey: string;

@@ -521,10 +521,16 @@ export function AgentSettings() {
                 <Alert>
                   <AlertDescription>
                     {runtimeCapabilitiesLoading
-                      ? 'Discovering Codex runtime capabilities...'
+                      ? t('settings.agents.editor.runtimeLoading')
                       : runtimeCapabilitiesError
-                        ? 'Codex runtime discovery unavailable. Native collaboration modes are hidden until the runtime reports them.'
-                        : `Discovered ${runtimeCapabilities?.models.length ?? 0} models and ${runtimeCapabilities?.collaboration_modes.length ?? 0} native collaboration presets from the Codex runtime.`}
+                        ? t('settings.agents.editor.runtimeError')
+                        : t('settings.agents.editor.runtimeSuccess', {
+                            modelsCount:
+                              runtimeCapabilities?.models.length ?? 0,
+                            modesCount:
+                              runtimeCapabilities?.collaboration_modes.length ??
+                              0,
+                          })}
                   </AlertDescription>
                 </Alert>
               )}
@@ -539,6 +545,13 @@ export function AgentSettings() {
                     <ExecutorConfigForm
                       executor={selectedExecutorType}
                       runtimeCapabilities={runtimeCapabilities ?? null}
+                      runtimeCapabilitiesStatus={
+                        runtimeCapabilitiesLoading
+                          ? 'loading'
+                          : runtimeCapabilitiesError
+                            ? 'unavailable'
+                            : 'ready'
+                      }
                       value={
                         (executorsMap[selectedExecutorType][
                           selectedConfiguration

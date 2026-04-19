@@ -27,7 +27,7 @@ import {
   getTailRenderSignature,
   mergeAppendOnlyItems,
   getRunningAppendOnlyResult,
-} from './appendOnlyTimeline';
+} from '@/utils/logs/appendOnlyTimeline';
 
 interface VirtualizedListProps {
   attempt: TaskAttempt;

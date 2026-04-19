@@ -1,8 +1,9 @@
-import { useMemo, useEffect, useState } from 'react';
+import { useMemo, useEffect, useState, useCallback } from 'react';
 import Form from '@rjsf/core';
 import type { IChangeEvent } from '@rjsf/core';
 import { RJSFValidationError } from '@rjsf/utils';
 import { customizeValidator } from '@rjsf/validator-ajv8';
+import { useTranslation } from 'react-i18next';
 
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -25,6 +26,7 @@ interface ExecutorConfigFormProps {
   executor: BaseCodingAgent;
   value: unknown;
   runtimeCapabilities?: AgentRuntimeCapabilities | null;
+  runtimeCapabilitiesStatus?: 'loading' | 'ready' | 'unavailable';
   onSubmit?: (formData: unknown) => void;
   onChange?: (formData: unknown) => void;
   onSave?: (formData: unknown) => Promise<void>;
@@ -39,6 +41,7 @@ export function ExecutorConfigForm({
   executor,
   value,
   runtimeCapabilities,
+  runtimeCapabilitiesStatus = 'ready',
   onSubmit,
   onChange,
   onSave,
@@ -46,6 +49,7 @@ export function ExecutorConfigForm({
   isSaving = false,
   isDirty = false,
 }: ExecutorConfigFormProps) {
+  const { t } = useTranslation('settings');
   const [formData, setFormData] = useState<unknown>(value || {});
   const [validationErrors, setValidationErrors] = useState<
     RJSFValidationError[]
@@ -67,6 +71,39 @@ export function ExecutorConfigForm({
     );
   }, [executor, runtimeCapabilities]);
 
+  const sanitizeCodexFormData = useCallback(
+    (rawFormData: unknown) => {
+      if (
+        executor !== BaseCodingAgent.CODEX ||
+        !rawFormData ||
+        typeof rawFormData !== 'object' ||
+        Array.isArray(rawFormData)
+      ) {
+        return rawFormData;
+      }
+
+      const nextValue = { ...(rawFormData as Record<string, unknown>) };
+      const selectedMode = nextValue.collaboration_mode;
+      const shouldPruneForUnavailableRuntime =
+        runtimeCapabilitiesStatus === 'unavailable' &&
+        typeof selectedMode === 'string';
+      const shouldPruneInvalidDiscoveredMode =
+        typeof selectedMode === 'string' &&
+        !!allowedCodexCollaborationModes &&
+        !allowedCodexCollaborationModes.has(selectedMode);
+
+      if (
+        shouldPruneForUnavailableRuntime ||
+        shouldPruneInvalidDiscoveredMode
+      ) {
+        delete nextValue.collaboration_mode;
+      }
+
+      return nextValue;
+    },
+    [allowedCodexCollaborationModes, executor, runtimeCapabilitiesStatus]
+  );
+
   const schema = useMemo(() => {
     const baseSchema = schemas[executor];
     if (!baseSchema || executor !== BaseCodingAgent.CODEX) {
@@ -83,7 +120,7 @@ export function ExecutorConfigForm({
     if (runtimeCapabilities?.models?.length) {
       const defaultModel =
         runtimeCapabilities.models.find((model) => model.is_default)
-          ?.display_name ?? 'Runtime default';
+          ?.display_name ?? t('settings.agents.editor.runtimeDefaultModel');
       properties.model = {
         ...(properties.model as Record<string, unknown>),
         enum: [...runtimeCapabilities.models.map((model) => model.model), null],
@@ -91,7 +128,9 @@ export function ExecutorConfigForm({
           ...runtimeCapabilities.models.map(
             (model) => `${model.display_name} (${model.model})`
           ),
-          `Use ${defaultModel}`,
+          t('settings.agents.editor.useRuntimeDefaultModel', {
+            defaultModel,
+          }),
         ],
       };
     }
@@ -102,68 +141,37 @@ export function ExecutorConfigForm({
     if (discoveredModes?.length) {
       properties.collaboration_mode = {
         type: ['string', 'null'],
-        title: 'Native Collaboration Mode',
+        title: t('settings.agents.editor.nativeCollaborationMode'),
         enum: [...discoveredModes.map((mode) => mode.value), null],
         enumNames: [
           ...discoveredModes.map((mode) => {
             const details = [mode.model, mode.reasoning_effort]
               .filter(Boolean)
               .join(' • ');
-            return details ? `${mode.label} (${details})` : mode.label;
+            return details
+              ? t('settings.agents.editor.nativeCollaborationModeOption', {
+                  label: mode.label,
+                  details,
+                })
+              : mode.label;
           }),
-          'No native collaboration mode',
+          t('settings.agents.editor.noNativeCollaborationMode'),
         ],
       };
     }
 
     return nextSchema;
-  }, [executor, runtimeCapabilities]);
+  }, [executor, runtimeCapabilities, t]);
 
   useEffect(() => {
-    const nextFormData =
-      executor === BaseCodingAgent.CODEX &&
-      value &&
-      typeof value === 'object' &&
-      !Array.isArray(value)
-        ? (() => {
-            const nextValue = { ...(value as Record<string, unknown>) };
-            const selectedMode = nextValue.collaboration_mode;
-            if (
-              typeof selectedMode === 'string' &&
-              allowedCodexCollaborationModes &&
-              !allowedCodexCollaborationModes.has(selectedMode)
-            ) {
-              delete nextValue.collaboration_mode;
-            }
-            return nextValue;
-          })()
-        : value || {};
+    const nextFormData = sanitizeCodexFormData(value || {});
 
     setFormData(nextFormData);
     setValidationErrors([]);
-  }, [value, executor, allowedCodexCollaborationModes]);
+  }, [sanitizeCodexFormData, value]);
 
   const handleChange = (event: IChangeEvent<unknown>) => {
-    const newFormData =
-      executor === BaseCodingAgent.CODEX &&
-      event.formData &&
-      typeof event.formData === 'object' &&
-      !Array.isArray(event.formData)
-        ? (() => {
-            const nextValue = {
-              ...(event.formData as Record<string, unknown>),
-            };
-            const selectedMode = nextValue.collaboration_mode;
-            if (
-              typeof selectedMode === 'string' &&
-              allowedCodexCollaborationModes &&
-              !allowedCodexCollaborationModes.has(selectedMode)
-            ) {
-              delete nextValue.collaboration_mode;
-            }
-            return nextValue;
-          })()
-        : event.formData;
+    const newFormData = sanitizeCodexFormData(event.formData);
     setFormData(newFormData);
     if (onChange) {
       onChange(newFormData);
@@ -171,7 +179,7 @@ export function ExecutorConfigForm({
   };
 
   const handleSubmit = async (event: IChangeEvent<unknown>) => {
-    const submitData = event.formData;
+    const submitData = sanitizeCodexFormData(event.formData);
     setValidationErrors([]);
     if (onSave) {
       await onSave(submitData);
@@ -188,7 +196,7 @@ export function ExecutorConfigForm({
     return (
       <Alert variant="destructive">
         <AlertDescription>
-          Schema not found for executor type: {executor}
+          {t('settings.agents.editor.schemaNotFound', { executor })}
         </AlertDescription>
       </Alert>
     );
@@ -220,7 +228,7 @@ export function ExecutorConfigForm({
                   {isSaving && (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   )}
-                  Save Configuration
+                  {t('settings.agents.save.button')}
                 </Button>
               </div>
             )}
