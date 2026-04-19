@@ -70,6 +70,20 @@ const rebuildItemIndexes = (
   }
 };
 
+const findLastLogicalPatchKeyIndex = (
+  items: PatchTypeWithKey[],
+  logicalPatchKey: string
+) => {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item && getLogicalPatchKey(item.patchKey) === logicalPatchKey) {
+      return index;
+    }
+  }
+
+  return -1;
+};
+
 export const mergeAppendOnlyItems = (
   previousItems: PatchTypeWithKey[],
   nextItems: PatchTypeWithKey[]
@@ -124,6 +138,39 @@ export const getTailRenderSignature = (items: PatchTypeWithKey[]) =>
     .map((item) => `${item.patchKey}:${getItemRenderSignature(item)}`)
     .join('|');
 
+export const getAutoFollowTarget = (items: PatchTypeWithKey[]) => {
+  if (items.length === 0) {
+    return { index: 0, align: 'end' as const };
+  }
+
+  const lastItem = items[items.length - 1];
+  if (!lastItem) {
+    return { index: 0, align: 'end' as const };
+  }
+
+  if (!isTransientItem(lastItem)) {
+    return {
+      index: items.length - 1,
+      align: 'end' as const,
+    };
+  }
+
+  for (let index = items.length - 2; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item && !isTransientItem(item)) {
+      return {
+        index,
+        align: 'start' as const,
+      };
+    }
+  }
+
+  return {
+    index: items.length - 1,
+    align: 'end' as const,
+  };
+};
+
 const getPersistentItems = (items: PatchTypeWithKey[]) =>
   items.filter((item) => !isTransientItem(item));
 
@@ -169,6 +216,10 @@ const getNormalizedTextAppendOnlyText = (item: PatchTypeWithKey) => {
     case 'assistant_message':
     case 'thinking':
       return `type:${entryType.type}\ncontent:${item.content.content}`;
+    case 'error_message':
+      return `type:${entryType.type}\nerror:${serializeForRender(
+        entryType.error_type
+      )}\ncontent:${item.content.content}`;
     default:
       return null;
   }
@@ -257,9 +308,28 @@ export const getRunningAppendOnlyResult = (
 
   pendingAppends.forEach(({ item, priorPatchKey }) => {
     const logicalPatchKey = getLogicalPatchKey(priorPatchKey ?? item.patchKey);
-    const hasExistingLogicalPatchKey =
-      priorPatchKey !== null || mergedLogicalPatchKeys.has(logicalPatchKey);
+    if (priorPatchKey !== null) {
+      const existingIndex = findLastLogicalPatchKeyIndex(
+        mergedItems,
+        logicalPatchKey
+      );
+      if (existingIndex !== -1) {
+        const existingItem = mergedItems[existingIndex];
+        if (existingItem) {
+          mergedItems[existingIndex] = {
+            ...item,
+            patchKey: existingItem.patchKey,
+          };
+          return;
+        }
+      }
 
+      mergedItems.push(item);
+      mergedLogicalPatchKeys.add(logicalPatchKey);
+      return;
+    }
+
+    const hasExistingLogicalPatchKey = mergedLogicalPatchKeys.has(logicalPatchKey);
     if (!hasExistingLogicalPatchKey) {
       mergedItems.push(item);
       mergedLogicalPatchKeys.add(logicalPatchKey);

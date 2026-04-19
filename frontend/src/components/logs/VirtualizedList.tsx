@@ -24,6 +24,7 @@ import { TaskAttempt, TaskWithAttemptStatus } from 'shared/types';
 import { ApprovalFormProvider } from '@/contexts/ApprovalFormContext';
 import { useTranslation } from 'react-i18next';
 import {
+  getAutoFollowTarget,
   getTailRenderSignature,
   mergeAppendOnlyItems,
   getRunningAppendOnlyResult,
@@ -148,12 +149,13 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
   );
 
   const scrollToBottom = useCallback(() => {
-    listRef.current?.scrollToIndex(items.length - 1, {
-      align: 'end',
+    const { index, align } = getAutoFollowTarget(items);
+    listRef.current?.scrollToIndex(index, {
+      align,
       smooth: false,
     });
     requestAnimationFrame(() => setAtBottom(true));
-  }, [items.length]);
+  }, [items]);
 
   const scrollToTop = useCallback(() => {
     listRef.current?.scrollToIndex(0, { align: 'start', smooth: true });
@@ -175,7 +177,8 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
       // Double rAF: first frame lets virtua render, second lets it measure item heights.
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          listRef.current?.scrollToIndex(items.length - 1, { align: 'end' });
+          const { index, align } = getAutoFollowTarget(items);
+          listRef.current?.scrollToIndex(index, { align });
         });
       });
       return;

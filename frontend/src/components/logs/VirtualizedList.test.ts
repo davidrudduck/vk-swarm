@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getAutoFollowTarget,
   getTailRenderSignature,
   mergeAppendOnlyItems,
   mergeRunningAppendOnlyItems,
@@ -195,26 +196,52 @@ describe('getTailRenderSignature', () => {
   });
 });
 
+describe('getAutoFollowTarget', () => {
+  it('anchors on the latest non-transient row when a next-action footer is present', () => {
+    expect(
+      getAutoFollowTarget([
+        assistantMessageItem('process-1:0', 'analysis'),
+        commandRunItem({
+          patchKey: 'process-1:1',
+          output: 'tool output',
+          status: 'success',
+        }),
+        stdoutItem('next_action', 'next'),
+      ])
+    ).toEqual({
+      index: 1,
+      align: 'start',
+    });
+  });
+
+  it('keeps end alignment when the newest row is actual conversation output', () => {
+    expect(
+      getAutoFollowTarget([
+        assistantMessageItem('process-1:0', 'analysis'),
+        assistantMessageItem('process-1:1', 'final reply'),
+      ])
+    ).toEqual({
+      index: 1,
+      align: 'end',
+    });
+  });
+});
+
 describe('mergeRunningAppendOnlyItems', () => {
   it('appends a new rendered row when a streamed entry updates an existing logical key', () => {
     const previousItems = [stdoutItem('process-1:0', 'hello')];
     const nextItems = [stdoutItem('process-1:0', 'hello world')];
-    let revision = 0;
 
     expect(
       mergeRunningAppendOnlyItems(
         previousItems,
         nextItems,
         () => {
-          revision += 1;
-          return revision;
+          throw new Error('revision should not advance');
         },
         [stdoutItem('process-1:0', 'hello')]
       )
-    ).toEqual([
-      stdoutItem('process-1:0', 'hello'),
-      stdoutItem('process-1:0::append:1', 'hello world'),
-    ]);
+    ).toEqual([stdoutItem('process-1:0', 'hello world')]);
   });
 
   it('does not duplicate a streamed entry when the rendered content is unchanged', () => {
@@ -228,29 +255,20 @@ describe('mergeRunningAppendOnlyItems', () => {
     ).toEqual(previousItems);
   });
 
-  it('preserves append-only revisions across multiple streamed updates to the same logical key', () => {
-    const previousItems = [
-      stdoutItem('process-1:0', 'hello'),
-      stdoutItem('process-1:0::append:1', 'hello world'),
-    ];
+  it('replaces the latest visible row across multiple streamed updates to the same logical key', () => {
+    const previousItems = [stdoutItem('process-1:0', 'hello world')];
     const nextItems = [stdoutItem('process-1:0', 'hello world!')];
-    let revision = 1;
 
     expect(
       mergeRunningAppendOnlyItems(
         previousItems,
         nextItems,
         () => {
-          revision += 1;
-          return revision;
+          throw new Error('revision should not advance');
         },
         [stdoutItem('process-1:0', 'hello world')]
       )
-    ).toEqual([
-      stdoutItem('process-1:0', 'hello'),
-      stdoutItem('process-1:0::append:1', 'hello world'),
-      stdoutItem('process-1:0::append:2', 'hello world!'),
-    ]);
+    ).toEqual([stdoutItem('process-1:0', 'hello world!')]);
   });
 
   it('appends inserted earlier snapshot items at the end like a chat log', () => {
@@ -364,7 +382,7 @@ describe('mergeRunningAppendOnlyItems', () => {
     ).toEqual(previousItems);
   });
 
-  it('appends command-run updates as new rows without overwriting earlier output', () => {
+  it('replaces command-run updates without duplicating earlier output', () => {
     const previousItems = [
       commandRunItem({ patchKey: 'process-1:0', output: 'hello' }),
     ];
@@ -376,17 +394,13 @@ describe('mergeRunningAppendOnlyItems', () => {
         status: 'success',
       }),
     ];
-    let revision = 0;
-
     expect(
       mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
-        revision += 1;
-        return revision;
+        throw new Error('revision should not advance');
       })
     ).toEqual([
-      commandRunItem({ patchKey: 'process-1:0', output: 'hello' }),
       commandRunItem({
-        patchKey: 'process-1:0::append:1',
+        patchKey: 'process-1:0',
         output: 'hello\nworld',
         exitStatus: { type: 'exit_code', code: 0 },
         status: 'success',
@@ -394,24 +408,18 @@ describe('mergeRunningAppendOnlyItems', () => {
     ]);
   });
 
-  it('appends streaming assistant message growth instead of rewriting prior text', () => {
+  it('replaces streaming assistant message growth instead of duplicating prefixes', () => {
     const previousItems = [assistantMessageItem('process-1:0', 'Thinking')];
     const nextItems = [
       assistantMessageItem('process-1:0', 'Thinking through the next step'),
     ];
-    let revision = 0;
 
     expect(
       mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
-        revision += 1;
-        return revision;
+        throw new Error('revision should not advance');
       })
     ).toEqual([
-      assistantMessageItem('process-1:0', 'Thinking'),
-      assistantMessageItem(
-        'process-1:0::append:1',
-        'Thinking through the next step'
-      ),
+      assistantMessageItem('process-1:0', 'Thinking through the next step'),
     ]);
   });
 
@@ -433,5 +441,83 @@ describe('mergeRunningAppendOnlyItems', () => {
         throw new Error('revision should not advance');
       })
     ).toEqual(previousItems);
+  });
+
+  it('surfaces inserted system and assistant rows after an initial streamed error entry', () => {
+    let revision = 0;
+    const getNextRevision = () => {
+      revision += 1;
+      return revision;
+    };
+
+    const errorItem = (content: string, patchKey = 'process-1:0'): PatchTypeWithKey => ({
+      type: 'NORMALIZED_ENTRY',
+      content: {
+        entry_type: {
+          type: 'error_message',
+          error_type: { type: 'other' },
+        },
+        content,
+        timestamp: null,
+        metadata: null,
+      },
+      patchKey,
+      executionProcessId: 'process-1',
+    });
+
+    const systemMessageItem = (
+      patchKey: string,
+      content: string
+    ): PatchTypeWithKey => ({
+      type: 'NORMALIZED_ENTRY',
+      content: {
+        entry_type: {
+          type: 'system_message',
+        },
+        content,
+        timestamp: null,
+        metadata: null,
+      },
+      patchKey,
+      executionProcessId: 'process-1',
+    });
+
+    const first = mergeRunningAppendOnlyItems(
+      [],
+      [errorItem('warn')],
+      getNextRevision,
+      []
+    );
+
+    const second = mergeRunningAppendOnlyItems(
+      first,
+      [errorItem('warn\nerror')],
+      getNextRevision,
+      [errorItem('warn')]
+    );
+
+    const third = mergeRunningAppendOnlyItems(
+      second,
+      [systemMessageItem('process-1:0', 'model: gpt-5.4'), errorItem('warn\nerror', 'process-1:1')],
+      getNextRevision,
+      [errorItem('warn\nerror')]
+    );
+
+    const fourth = mergeRunningAppendOnlyItems(
+      third,
+      [
+        systemMessageItem('process-1:0', 'model: gpt-5.4'),
+        assistantMessageItem('process-1:1', 'I'),
+        errorItem('warn\nerror', 'process-1:2'),
+      ],
+      getNextRevision,
+      [systemMessageItem('process-1:0', 'model: gpt-5.4'), errorItem('warn\nerror', 'process-1:1')]
+    );
+
+    expect(fourth).toEqual([
+      errorItem('warn\nerror'),
+      systemMessageItem('process-1:0::append:1', 'model: gpt-5.4'),
+      assistantMessageItem('process-1:1', 'I'),
+    ]);
   });
 });
