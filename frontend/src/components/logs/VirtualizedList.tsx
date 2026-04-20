@@ -84,7 +84,6 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
   const itemsRef = useRef<PatchTypeWithKey[]>([]);
   const listRef = useRef<VListHandle>(null);
   const previousTailSignatureRef = useRef('');
-  const appendOnlyRevisionRef = useRef<Record<string, number>>({});
   const runningSnapshotRef = useRef<PatchTypeWithKey[]>([]);
 
   useEffect(() => {
@@ -92,7 +91,6 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
     setItems([]);
     itemsRef.current = [];
     previousTailSignatureRef.current = '';
-    appendOnlyRevisionRef.current = {};
     runningSnapshotRef.current = [];
     reset();
     didInitScroll.current = false;
@@ -106,19 +104,12 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
     addType: AddEntryType,
     newLoading: boolean
   ) => {
-    const nextRunningRevision = (logicalPatchKey: string) => {
-      const nextRevision =
-        (appendOnlyRevisionRef.current[logicalPatchKey] ?? 0) + 1;
-      appendOnlyRevisionRef.current[logicalPatchKey] = nextRevision;
-      return nextRevision;
-    };
-
     let mergedItems: PatchTypeWithKey[];
     if (addType === 'running') {
       const runningResult = getRunningAppendOnlyResult(
         itemsRef.current,
         newEntries,
-        nextRunningRevision,
+        () => 0,
         runningSnapshotRef.current
       );
       mergedItems = runningResult.items;

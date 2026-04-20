@@ -735,13 +735,9 @@ impl LocalContainerService {
                     container
                         .finalize_task(&container.config, publisher.as_ref().ok(), &ctx)
                         .await;
-
-                    // NOTE: We intentionally DO NOT auto-consume queued follow-ups or
-                    // queued messages here. The "Queue For Next Turn" button has been
-                    // removed in favor of the message queue with live injection.
-                    // Messages are injected directly into running processes via the
-                    // /inject-message endpoint and removed from queue on success.
-                    // See: Sessions 2 & 3 of message-queue-injection fix plan.
+                    if let Err(e) = container.try_consume_queued_message(&ctx).await {
+                        tracing::error!("Failed to start queued next-turn message: {}", e);
+                    }
                 }
             }
 
@@ -1179,12 +1175,7 @@ impl LocalContainerService {
     }
 
     /// If a queued message exists in the in-memory queue for this attempt and nothing is running,
-    /// pop and start it as a follow-up request.
-    ///
-    /// NOTE: This function is currently unused. Messages are now injected directly into
-    /// running processes via the /inject-message endpoint and removed from queue on success.
-    /// Keeping this for potential future use or manual triggering via API.
-    #[allow(dead_code)]
+    /// start it as a follow-up request for the next turn.
     async fn try_consume_queued_message(
         &self,
         ctx: &ExecutionContext,
@@ -1208,8 +1199,8 @@ impl LocalContainerService {
             return Ok(());
         }
 
-        // Pop the next message from the queue
-        let Some(queued_msg) = self.message_queue.pop_next(ctx.task_attempt.id).await else {
+        // Peek first so setup failures do not silently drop the queued message.
+        let Some(queued_msg) = self.message_queue.peek_next(ctx.task_attempt.id).await else {
             return Ok(());
         };
 
@@ -1299,6 +1290,14 @@ impl LocalContainerService {
                 &ExecutionProcessRunReason::CodingAgent,
             )
             .await?;
+
+        if !self.message_queue.remove(ctx.task_attempt.id, queued_msg.id).await {
+            tracing::warn!(
+                task_attempt_id = %ctx.task_attempt.id,
+                message_id = %queued_msg.id,
+                "Queued message started but could not be removed from the queue"
+            );
+        }
 
         Ok(())
     }

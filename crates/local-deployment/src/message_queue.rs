@@ -1,4 +1,4 @@
-//! In-memory message queue for storing messages to be sent to running or completed execution processes.
+//! In-memory message queue for storing follow-up messages for the next turn.
 
 use serde::{Deserialize, Serialize};
 use sqlx::types::chrono::{DateTime, Utc};
@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 use ts_rs::TS;
 use uuid::Uuid;
 
-/// A queued message waiting to be sent to an execution process.
+/// A queued message waiting to be started as a follow-up on the next turn.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct QueuedMessage {
@@ -154,6 +154,13 @@ impl MessageQueueStore {
         Some(queue.clone())
     }
 
+    pub async fn peek_next(&self, task_attempt_id: Uuid) -> Option<QueuedMessage> {
+        let queues = self.queues.read().await;
+        queues
+            .get(&task_attempt_id)
+            .and_then(|queue| queue.first().cloned())
+    }
+
     pub async fn pop_next(&self, task_attempt_id: Uuid) -> Option<QueuedMessage> {
         let mut queues = self.queues.write().await;
         let queue = queues.get_mut(&task_attempt_id)?;
@@ -196,6 +203,24 @@ mod tests {
         let remaining = store.list(attempt_id).await;
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].position, 0);
+    }
+
+    #[tokio::test]
+    async fn test_queue_peek_next_returns_first_without_removing() {
+        let store = MessageQueueStore::new();
+        let attempt_id = Uuid::new_v4();
+        store.add(attempt_id, "first".to_string(), None).await;
+        store.add(attempt_id, "second".to_string(), None).await;
+
+        let peeked = store.peek_next(attempt_id).await.unwrap();
+        assert_eq!(peeked.content, "first");
+
+        let remaining = store.list(attempt_id).await;
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(remaining[0].content, "first");
+        assert_eq!(remaining[0].position, 0);
+        assert_eq!(remaining[1].content, "second");
+        assert_eq!(remaining[1].position, 1);
     }
 
     #[tokio::test]

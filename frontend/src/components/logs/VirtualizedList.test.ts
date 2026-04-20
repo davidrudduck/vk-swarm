@@ -271,7 +271,7 @@ describe('mergeRunningAppendOnlyItems', () => {
     ).toEqual([stdoutItem('process-1:0', 'hello world!')]);
   });
 
-  it('appends inserted earlier snapshot items at the end like a chat log', () => {
+  it('keeps inserted earlier snapshot items in chronological snapshot order', () => {
     const previousItems = [
       commandRunItem({ patchKey: 'process-1:0', output: 'tool output' }),
     ];
@@ -287,12 +287,12 @@ describe('mergeRunningAppendOnlyItems', () => {
         return revision;
       })
     ).toEqual([
-      commandRunItem({ patchKey: 'process-1:0', output: 'tool output' }),
-      stdoutItem('process-1:0::append:1', 'assistant reply'),
+      stdoutItem('process-1:0', 'assistant reply'),
+      commandRunItem({ patchKey: 'process-1:1', output: 'tool output' }),
     ]);
   });
 
-  it('continues appending later live rows after an earlier snapshot insert', () => {
+  it('keeps later live rows in chronological order after an earlier snapshot insert', () => {
     let revision = 0;
     const getNextRevision = () => {
       revision += 1;
@@ -323,8 +323,8 @@ describe('mergeRunningAppendOnlyItems', () => {
         ]
       )
     ).toEqual([
-      commandRunItem({ patchKey: 'process-1:0', output: 'tool output' }),
-      stdoutItem('process-1:0::append:1', 'assistant reply'),
+      stdoutItem('process-1:0', 'assistant reply'),
+      commandRunItem({ patchKey: 'process-1:1', output: 'tool output' }),
       stdoutItem('process-1:2', 'final reply'),
     ]);
   });
@@ -365,7 +365,7 @@ describe('mergeRunningAppendOnlyItems', () => {
     ]);
   });
 
-  it('suppresses non-tail corrections instead of appending duplicate rows', () => {
+  it('applies non-tail corrections from the latest snapshot', () => {
     const previousItems = [
       stdoutItem('process-1:0', 'hello'),
       stdoutItem('process-1:1', 'world'),
@@ -379,7 +379,7 @@ describe('mergeRunningAppendOnlyItems', () => {
       mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
         throw new Error('revision should not advance');
       })
-    ).toEqual(previousItems);
+    ).toEqual(nextItems);
   });
 
   it('replaces command-run updates without duplicating earlier output', () => {
@@ -423,7 +423,7 @@ describe('mergeRunningAppendOnlyItems', () => {
     ]);
   });
 
-  it('suppresses command-run regressions instead of appending stale output', () => {
+  it('applies command-run regressions from the latest snapshot', () => {
     const previousItems = [
       commandRunItem({
         patchKey: 'process-1:0',
@@ -440,7 +440,7 @@ describe('mergeRunningAppendOnlyItems', () => {
       mergeRunningAppendOnlyItems(previousItems, nextItems, () => {
         throw new Error('revision should not advance');
       })
-    ).toEqual(previousItems);
+    ).toEqual(nextItems);
   });
 
   it('surfaces inserted system and assistant rows after an initial streamed error entry', () => {
@@ -515,9 +515,9 @@ describe('mergeRunningAppendOnlyItems', () => {
     );
 
     expect(fourth).toEqual([
-      errorItem('warn\nerror'),
-      systemMessageItem('process-1:0::append:1', 'model: gpt-5.4'),
+      systemMessageItem('process-1:0', 'model: gpt-5.4'),
       assistantMessageItem('process-1:1', 'I'),
+      errorItem('warn\nerror', 'process-1:2'),
     ]);
   });
 });

@@ -241,13 +241,24 @@ async fn update_config(
 fn map_codex_runtime_capabilities(
     capabilities: CodexRuntimeCapabilities,
 ) -> AgentRuntimeCapabilities {
+    let mut models = capabilities.models;
+    models.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let mut collaboration_modes = capabilities.collaboration_modes;
+    collaboration_modes.sort_by(|left, right| {
+        left.value
+            .as_deref()
+            .unwrap_or(left.label.as_str())
+            .cmp(right.value.as_deref().unwrap_or(right.label.as_str()))
+            .then_with(|| left.label.cmp(&right.label))
+    });
+
     AgentRuntimeCapabilities {
         executor: BaseCodingAgent::Codex,
         supports_interrupt: capabilities.supports_interrupt,
         supports_review: capabilities.supports_review,
         supports_live_follow_up_messages: capabilities.supports_live_follow_up_messages,
-        models: capabilities
-            .models
+        models: models
             .into_iter()
             .map(|model| AgentRuntimeModel {
                 id: model.id,
@@ -259,8 +270,7 @@ fn map_codex_runtime_capabilities(
                 is_default: model.is_default,
             })
             .collect(),
-        collaboration_modes: capabilities
-            .collaboration_modes
+        collaboration_modes: collaboration_modes
             .into_iter()
             .map(|mode| AgentRuntimeCollaborationMode {
                 value: mode.value,
@@ -307,6 +317,62 @@ mod tests {
         assert_eq!(mapped.models.len(), 1);
         assert_eq!(mapped.collaboration_modes.len(), 1);
         assert_eq!(mapped.collaboration_modes[0].value.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn map_codex_runtime_capabilities_sorts_models_and_modes_for_stable_contract() {
+        let mapped = map_codex_runtime_capabilities(CodexRuntimeCapabilities {
+            models: vec![
+                CodexRuntimeModel {
+                    id: "z-model".to_string(),
+                    model: "z-model".to_string(),
+                    display_name: "Z".to_string(),
+                    description: "later".to_string(),
+                    supported_reasoning_efforts: vec!["medium".to_string()],
+                    default_reasoning_effort: Some("medium".to_string()),
+                    is_default: false,
+                },
+                CodexRuntimeModel {
+                    id: "a-model".to_string(),
+                    model: "a-model".to_string(),
+                    display_name: "A".to_string(),
+                    description: "first".to_string(),
+                    supported_reasoning_efforts: vec!["high".to_string()],
+                    default_reasoning_effort: Some("high".to_string()),
+                    is_default: true,
+                },
+            ],
+            collaboration_modes: vec![
+                CodexRuntimeCollaborationMode {
+                    value: Some("plan".to_string()),
+                    label: "Plan".to_string(),
+                    model: Some("z-model".to_string()),
+                    reasoning_effort: Some("high".to_string()),
+                },
+                CodexRuntimeCollaborationMode {
+                    value: Some("code".to_string()),
+                    label: "Code".to_string(),
+                    model: Some("a-model".to_string()),
+                    reasoning_effort: Some("medium".to_string()),
+                },
+            ],
+            supports_interrupt: true,
+            supports_review: true,
+            supports_live_follow_up_messages: true,
+        });
+
+        assert_eq!(
+            mapped.models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            vec!["a-model", "z-model"]
+        );
+        assert_eq!(
+            mapped
+                .collaboration_modes
+                .iter()
+                .map(|mode| mode.value.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("code"), Some("plan")]
+        );
     }
 }
 

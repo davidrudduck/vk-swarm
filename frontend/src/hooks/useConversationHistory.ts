@@ -176,9 +176,6 @@ export const useConversationHistory = ({
   );
   const pendingStreamStarts = useRef<Set<string>>(new Set());
   const runningSnapshotEntries = useRef<Record<string, PatchTypeWithKey[]>>({});
-  const runningAppendOnlyRevisions = useRef<
-    Record<string, Record<string, number>>
-  >({});
 
   const mergeIntoDisplayed = (
     mutator: (state: ExecutionProcessStateStore) => void
@@ -664,19 +661,10 @@ export const useConversationHistory = ({
                 ?.entries ?? [];
             const previousSnapshotEntries =
               runningSnapshotEntries.current[executionProcess.id] ?? [];
-            const revisionState =
-              runningAppendOnlyRevisions.current[executionProcess.id] ?? {};
-            runningAppendOnlyRevisions.current[executionProcess.id] =
-              revisionState;
-            const nextRunningRevision = (logicalPatchKey: string) => {
-              const nextRevision = (revisionState[logicalPatchKey] ?? 0) + 1;
-              revisionState[logicalPatchKey] = nextRevision;
-              return nextRevision;
-            };
             const runningResult = getRunningAppendOnlyResult(
               previousAcceptedEntries,
               snapshotEntries,
-              nextRunningRevision,
+              () => 0,
               previousSnapshotEntries
             );
             if (runningResult.acceptedSnapshot) {
@@ -1043,7 +1031,6 @@ export const useConversationHistory = ({
     const controllersMap = activeStreamControllers.current;
     const pendingStarts = pendingStreamStarts.current;
     const snapshotEntries = runningSnapshotEntries.current;
-    const revisionState = runningAppendOnlyRevisions.current;
 
     return () => {
       for (const controller of controllersMap.values()) {
@@ -1054,7 +1041,6 @@ export const useConversationHistory = ({
       Object.keys(snapshotEntries).forEach(
         (key) => delete snapshotEntries[key]
       );
-      Object.keys(revisionState).forEach((key) => delete revisionState[key]);
     };
   }, [attempt.id]);
 
@@ -1071,7 +1057,6 @@ export const useConversationHistory = ({
         removedProcessIds.forEach((id) => {
           delete state[id];
           delete runningSnapshotEntries.current[id];
-          delete runningAppendOnlyRevisions.current[id];
         });
       });
     }
@@ -1083,7 +1068,6 @@ export const useConversationHistory = ({
     loadedInitialEntries.current = false;
     pendingStreamStarts.current.clear();
     runningSnapshotEntries.current = {};
-    runningAppendOnlyRevisions.current = {};
     emitEntries(displayedExecutionProcesses.current, 'initial', true);
   }, [attempt.id, emitEntries]);
 
