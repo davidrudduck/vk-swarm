@@ -45,8 +45,8 @@ describe('useMessageQueueInjection', () => {
     mockMessageQueueApi.list.mockResolvedValue([]);
   });
 
-  describe('addAndInject', () => {
-    it('removes message from queue after successful injection', async () => {
+  describe('queueMessage', () => {
+    it('keeps message queued for the next turn even when a process is running', async () => {
       const mockMessage = {
         id: 'msg-1',
         task_attempt_id: testAttemptId,
@@ -59,8 +59,6 @@ describe('useMessageQueueInjection', () => {
       mockExecutionProcessesApi.injectMessage.mockResolvedValue({
         injected: true,
       });
-      mockMessageQueueApi.remove.mockResolvedValue(undefined);
-
       const { result } = renderHook(
         () => useMessageQueueInjection(testAttemptId, testProcessId),
         { wrapper: createWrapper() }
@@ -72,26 +70,20 @@ describe('useMessageQueueInjection', () => {
 
       let response: { queued: boolean; injected: boolean };
       await act(async () => {
-        response = await result.current.addAndInject('test message', null);
+        response = await result.current.queueMessage('test message', null);
       });
 
-      expect(response!).toEqual({ queued: false, injected: true });
+      expect(response!).toEqual({ queued: true, injected: false });
       expect(mockMessageQueueApi.add).toHaveBeenCalledWith(
         testAttemptId,
         'test message',
         null
       );
-      expect(mockExecutionProcessesApi.injectMessage).toHaveBeenCalledWith(
-        testProcessId,
-        'test message'
-      );
-      expect(mockMessageQueueApi.remove).toHaveBeenCalledWith(
-        testAttemptId,
-        'msg-1'
-      );
+      expect(mockExecutionProcessesApi.injectMessage).not.toHaveBeenCalled();
+      expect(mockMessageQueueApi.remove).not.toHaveBeenCalled();
     });
 
-    it('keeps message in queue when injection returns false', async () => {
+    it('queues the message without attempting injection', async () => {
       const mockMessage = {
         id: 'msg-1',
         task_attempt_id: testAttemptId,
@@ -101,9 +93,6 @@ describe('useMessageQueueInjection', () => {
         created_at: '2024-01-01',
       };
       mockMessageQueueApi.add.mockResolvedValue(mockMessage);
-      mockExecutionProcessesApi.injectMessage.mockResolvedValue({
-        injected: false,
-      });
 
       const { result } = renderHook(
         () => useMessageQueueInjection(testAttemptId, testProcessId),
@@ -116,81 +105,12 @@ describe('useMessageQueueInjection', () => {
 
       let response: { queued: boolean; injected: boolean };
       await act(async () => {
-        response = await result.current.addAndInject('test message', null);
-      });
-
-      expect(response!).toEqual({ queued: true, injected: false });
-      expect(mockMessageQueueApi.remove).not.toHaveBeenCalled();
-    });
-
-    it('keeps message in queue when injection throws error', async () => {
-      const mockMessage = {
-        id: 'msg-1',
-        task_attempt_id: testAttemptId,
-        content: 'test message',
-        variant: null,
-        position: 0,
-        created_at: '2024-01-01',
-      };
-      mockMessageQueueApi.add.mockResolvedValue(mockMessage);
-      mockExecutionProcessesApi.injectMessage.mockRejectedValue(
-        new Error('Network error')
-      );
-
-      // Suppress console.error for this test
-      const consoleSpy = vi
-        .spyOn(console, 'error')
-        .mockImplementation(() => {});
-
-      const { result } = renderHook(
-        () => useMessageQueueInjection(testAttemptId, testProcessId),
-        { wrapper: createWrapper() }
-      );
-
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
-      let response: { queued: boolean; injected: boolean };
-      await act(async () => {
-        response = await result.current.addAndInject('test message', null);
-      });
-
-      expect(response!).toEqual({ queued: true, injected: false });
-      expect(mockMessageQueueApi.remove).not.toHaveBeenCalled();
-      expect(result.current.lastInjectionError).toBeInstanceOf(Error);
-      expect(result.current.lastInjectionError?.message).toBe('Network error');
-
-      consoleSpy.mockRestore();
-    });
-
-    it('does not attempt injection when no running process', async () => {
-      const mockMessage = {
-        id: 'msg-1',
-        task_attempt_id: testAttemptId,
-        content: 'test message',
-        variant: null,
-        position: 0,
-        created_at: '2024-01-01',
-      };
-      mockMessageQueueApi.add.mockResolvedValue(mockMessage);
-
-      const { result } = renderHook(
-        () => useMessageQueueInjection(testAttemptId, undefined),
-        { wrapper: createWrapper() }
-      );
-
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
-      let response: { queued: boolean; injected: boolean };
-      await act(async () => {
-        response = await result.current.addAndInject('test message', null);
+        response = await result.current.queueMessage('test message', null);
       });
 
       expect(response!).toEqual({ queued: true, injected: false });
       expect(mockExecutionProcessesApi.injectMessage).not.toHaveBeenCalled();
+      expect(mockMessageQueueApi.remove).not.toHaveBeenCalled();
     });
 
     it('passes variant to addMessage', async () => {
@@ -206,8 +126,6 @@ describe('useMessageQueueInjection', () => {
       mockExecutionProcessesApi.injectMessage.mockResolvedValue({
         injected: true,
       });
-      mockMessageQueueApi.remove.mockResolvedValue(undefined);
-
       const { result } = renderHook(
         () => useMessageQueueInjection(testAttemptId, testProcessId),
         { wrapper: createWrapper() }
@@ -218,7 +136,7 @@ describe('useMessageQueueInjection', () => {
       });
 
       await act(async () => {
-        await result.current.addAndInject('test message', 'plan');
+        await result.current.queueMessage('test message', 'plan');
       });
 
       expect(mockMessageQueueApi.add).toHaveBeenCalledWith(
@@ -226,6 +144,7 @@ describe('useMessageQueueInjection', () => {
         'test message',
         'plan'
       );
+      expect(mockExecutionProcessesApi.injectMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -341,17 +260,6 @@ describe('useMessageQueueInjection', () => {
             resolveInjection = resolve;
           })
       );
-      const mockMessage = {
-        id: 'msg-1',
-        task_attempt_id: testAttemptId,
-        content: 'test message',
-        variant: null,
-        position: 0,
-        created_at: '2024-01-01',
-      };
-      mockMessageQueueApi.add.mockResolvedValue(mockMessage);
-      mockMessageQueueApi.remove.mockResolvedValue(undefined);
-
       const { result } = renderHook(
         () => useMessageQueueInjection(testAttemptId, testProcessId),
         { wrapper: createWrapper() }
@@ -364,9 +272,9 @@ describe('useMessageQueueInjection', () => {
       expect(result.current.isInjecting).toBe(false);
 
       // Start the injection but don't await it
-      let injectionPromise: Promise<{ queued: boolean; injected: boolean }>;
+      let injectionPromise: Promise<{ injected: boolean }>;
       act(() => {
-        injectionPromise = result.current.addAndInject('test message', null);
+        injectionPromise = result.current.injectOnly('test message');
       });
 
       // Wait for isInjecting to become true

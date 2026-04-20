@@ -1,8 +1,6 @@
 import type { PatchTypeWithKey } from '@/utils/logEntryToPatch';
 
 const transientPatchKeys = new Set(['loading', 'next_action']);
-const appendOnlyRevisionMarker = '::append:';
-
 const isTransientItem = (item: PatchTypeWithKey) =>
   transientPatchKeys.has(item.patchKey);
 
@@ -11,10 +9,7 @@ const serializeForRender = (value: unknown) =>
     typeof itemValue === 'bigint' ? itemValue.toString() : itemValue
   );
 
-export const getLogicalPatchKey = (patchKey: string) => {
-  const markerIndex = patchKey.indexOf(appendOnlyRevisionMarker);
-  return markerIndex === -1 ? patchKey : patchKey.slice(0, markerIndex);
-};
+export const getLogicalPatchKey = (patchKey: string) => patchKey;
 
 const getItemRenderSignature = (item: PatchTypeWithKey) =>
   serializeForRender({
@@ -68,20 +63,6 @@ const rebuildItemIndexes = (
       itemIndexes.set(item.patchKey, index);
     }
   }
-};
-
-const findLastLogicalPatchKeyIndex = (
-  items: PatchTypeWithKey[],
-  logicalPatchKey: string
-) => {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item && getLogicalPatchKey(item.patchKey) === logicalPatchKey) {
-      return index;
-    }
-  }
-
-  return -1;
 };
 
 export const mergeAppendOnlyItems = (
@@ -174,61 +155,10 @@ export const getAutoFollowTarget = (items: PatchTypeWithKey[]) => {
 const getPersistentItems = (items: PatchTypeWithKey[]) =>
   items.filter((item) => !isTransientItem(item));
 
-const getCommandRunAppendOnlyText = (item: PatchTypeWithKey) => {
-  if (item.type !== 'NORMALIZED_ENTRY') {
-    return null;
-  }
-
-  const entryType = item.content.entry_type;
-  if (
-    entryType.type !== 'tool_use' ||
-    entryType.action_type.action !== 'command_run'
-  ) {
-    return null;
-  }
-
-  const result = entryType.action_type.result;
-  const segments = [
-    `tool:${entryType.tool_name}`,
-    `label:${item.content.content}`,
-    `command:${entryType.action_type.command}`,
-    `output:${result?.output ?? ''}`,
-  ];
-
-  if (result?.exit_status) {
-    segments.push(`exit:${serializeForRender(result.exit_status)}`);
-  }
-
-  if (entryType.status.status !== 'created') {
-    segments.push(`status:${serializeForRender(entryType.status)}`);
-  }
-
-  return segments.join('\n');
-};
-
-const getNormalizedTextAppendOnlyText = (item: PatchTypeWithKey) => {
-  if (item.type !== 'NORMALIZED_ENTRY') {
-    return null;
-  }
-
-  const entryType = item.content.entry_type;
-  switch (entryType.type) {
-    case 'assistant_message':
-    case 'thinking':
-      return `type:${entryType.type}\ncontent:${item.content.content}`;
-    case 'error_message':
-      return `type:${entryType.type}\nerror:${serializeForRender(
-        entryType.error_type
-      )}\ncontent:${item.content.content}`;
-    default:
-      return null;
-  }
-};
-
 export const getRunningAppendOnlyResult = (
   previousItems: PatchTypeWithKey[],
   nextItems: PatchTypeWithKey[],
-  getNextRevision: (logicalPatchKey: string) => number,
+  _getNextRevision: (logicalPatchKey: string) => number,
   previousSnapshotItems: PatchTypeWithKey[] = previousItems
 ) => {
   const previousPersistentItems = getPersistentItems(previousItems);
@@ -237,116 +167,27 @@ export const getRunningAppendOnlyResult = (
   );
   const nextPersistentItems = getPersistentItems(nextItems);
   const nextTransientItems = nextItems.filter((item) => isTransientItem(item));
-  const mergedItems = [...previousPersistentItems];
-  const mergedLogicalPatchKeys = new Set(
-    mergedItems.map((item) => getLogicalPatchKey(item.patchKey))
-  );
-  let previousSnapshotIndex = 0;
-  const pendingAppends: Array<{
-    item: PatchTypeWithKey;
-    priorPatchKey: string | null;
-  }> = [];
-
-  nextPersistentItems.forEach((item) => {
-    const previousSnapshotItem =
-      previousSnapshotPersistentItems[previousSnapshotIndex];
-    const isExactMatch =
-      previousSnapshotItem &&
-      getItemConversationSignature(previousSnapshotItem) ===
-        getItemConversationSignature(item);
-    const isStdoutAppendOnlyGrowth =
-      !!previousSnapshotItem &&
-      (previousSnapshotItem.type === 'STDOUT' ||
-        previousSnapshotItem.type === 'STDERR') &&
-      previousSnapshotItem.type === item.type &&
-      item.content.startsWith(previousSnapshotItem.content);
-    const previousCommandRunText = previousSnapshotItem
-      ? getCommandRunAppendOnlyText(previousSnapshotItem)
-      : null;
-    const nextCommandRunText = getCommandRunAppendOnlyText(item);
-    const previousNormalizedText = previousSnapshotItem
-      ? getNormalizedTextAppendOnlyText(previousSnapshotItem)
-      : null;
-    const nextNormalizedText = getNormalizedTextAppendOnlyText(item);
-    const isAppendOnlyGrowth =
-      isStdoutAppendOnlyGrowth ||
-      (!!previousSnapshotItem &&
-        !!previousCommandRunText &&
-        !!nextCommandRunText &&
-        nextCommandRunText.startsWith(previousCommandRunText)) ||
-      (!!previousSnapshotItem &&
-        !!previousNormalizedText &&
-        !!nextNormalizedText &&
-        nextNormalizedText.startsWith(previousNormalizedText));
-
-    if (isExactMatch) {
-      previousSnapshotIndex += 1;
-      return;
-    }
-
-    if (isAppendOnlyGrowth) {
-      pendingAppends.push({
-        item,
-        priorPatchKey: previousSnapshotItem.patchKey,
-      });
-      previousSnapshotIndex += 1;
-      return;
-    }
-
-    pendingAppends.push({
-      item,
-      priorPatchKey: null,
+  const isObviousStaleReplay =
+    nextPersistentItems.length < previousSnapshotPersistentItems.length &&
+    nextPersistentItems.every((item, index) => {
+      const previousSnapshotItem = previousSnapshotPersistentItems[index];
+      return (
+        !!previousSnapshotItem &&
+        getItemConversationSignature(previousSnapshotItem) ===
+          getItemConversationSignature(item)
+      );
     });
-  });
 
-  if (previousSnapshotIndex < previousSnapshotPersistentItems.length) {
+  if (isObviousStaleReplay) {
     return {
       acceptedSnapshot: false,
       items: [...previousPersistentItems, ...nextTransientItems],
     };
   }
 
-  pendingAppends.forEach(({ item, priorPatchKey }) => {
-    const logicalPatchKey = getLogicalPatchKey(priorPatchKey ?? item.patchKey);
-    if (priorPatchKey !== null) {
-      const existingIndex = findLastLogicalPatchKeyIndex(
-        mergedItems,
-        logicalPatchKey
-      );
-      if (existingIndex !== -1) {
-        const existingItem = mergedItems[existingIndex];
-        if (existingItem) {
-          mergedItems[existingIndex] = {
-            ...item,
-            patchKey: existingItem.patchKey,
-          };
-          return;
-        }
-      }
-
-      mergedItems.push(item);
-      mergedLogicalPatchKeys.add(logicalPatchKey);
-      return;
-    }
-
-    const hasExistingLogicalPatchKey = mergedLogicalPatchKeys.has(logicalPatchKey);
-    if (!hasExistingLogicalPatchKey) {
-      mergedItems.push(item);
-      mergedLogicalPatchKeys.add(logicalPatchKey);
-      return;
-    }
-
-    mergedItems.push({
-      ...item,
-      patchKey: `${logicalPatchKey}${appendOnlyRevisionMarker}${getNextRevision(
-        logicalPatchKey
-      )}`,
-    });
-  });
-
   return {
     acceptedSnapshot: true,
-    items: [...mergedItems, ...nextTransientItems],
+    items: [...nextPersistentItems, ...nextTransientItems],
   };
 };
 

@@ -88,9 +88,8 @@ export function TaskFollowUpSection({
   // Message queue for adding messages with live injection support
   // Note: Queue UI is now in MobileConversationLayout via MessageQueueBadge
   const {
-    addAndInject,
+    queueMessage,
     isAdding: isAddingToQueue,
-    isInjecting,
   } = useMessageQueueInjection(selectedAttemptId, runningProcessId);
   const { comments, generateReviewMarkdown, clearComments } = useReview();
   const {
@@ -449,16 +448,15 @@ export function TaskFollowUpSection({
     images.length,
   ]);
 
-  // Keyboard shortcut handler - unified submit (add to queue when running, send when idle)
+  // Keyboard shortcut handler - queue when running, send when idle
   const handleSubmitShortcut = useCallback(
     async (e?: KeyboardEvent) => {
       e?.preventDefault();
 
-      // When attempt is running, add to message queue (with injection)
-      // Note: variant is always null - injected messages use executor's current mode
+      // Running attempts queue follow-ups for the next turn.
       if (isAttemptRunning) {
         if (followUpMessage.trim()) {
-          await addAndInject(followUpMessage.trim(), null);
+          await queueMessage(followUpMessage.trim(), null);
           setFollowUpMessage('');
         }
       } else {
@@ -469,7 +467,7 @@ export function TaskFollowUpSection({
     [
       isAttemptRunning,
       followUpMessage,
-      addAndInject,
+      queueMessage,
       setFollowUpMessage,
       onSendFollowUp,
     ]
@@ -749,26 +747,24 @@ export function TaskFollowUpSection({
                       </>
                     )}
                   </Button>
-                  {/* Add to Message Queue button (with live injection when running) */}
-                  {/* Note: variant is always null - injected messages use executor's current mode */}
+                  {/* Queue a follow-up for the next turn while the current run is active. */}
                   <Button
                     onClick={async () => {
                       if (followUpMessage.trim()) {
-                        await addAndInject(followUpMessage.trim(), null);
+                        await queueMessage(followUpMessage.trim(), null);
                         setFollowUpMessage('');
                       }
                     }}
                     disabled={
                       !followUpMessage.trim() ||
                       isAddingToQueue ||
-                      isInjecting ||
                       !isDraftLoaded ||
                       isRetryActive
                     }
                     size="sm"
                     title={t('messageQueue.addToQueueTooltip')}
                   >
-                    {isAddingToQueue || isInjecting ? (
+                    {isAddingToQueue ? (
                       <>
                         <Loader2 className="animate-spin h-4 w-4 mr-2" />
                         <span className="hidden sm:inline">
