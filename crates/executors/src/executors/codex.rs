@@ -305,7 +305,7 @@ impl StandardCodingAgentExecutor for Codex {
 
 impl Codex {
     pub fn base_command() -> &'static str {
-        "npx -y @openai/codex@latest"
+        "npx -y @openai/codex@0.121.0"
     }
 
     fn build_command_builder(&self) -> CommandBuilder {
@@ -1152,5 +1152,10 @@ mod tests {
             target,
             ReviewTarget::BaseBranch { ref branch } if branch == "main"
         ));
+    }
+
+    #[test]
+    fn base_command_uses_pinned_version() {
+        assert_eq!(Codex::base_command(), "npx -y @openai/codex@0.121.0");
     }
 }

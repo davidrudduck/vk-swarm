@@ -42,9 +42,9 @@ use crate::{
 
 fn base_command(claude_code_router: bool) -> &'static str {
     if claude_code_router {
-        "npx -y @musistudio/claude-code-router@latest code"
+        "npx -y @musistudio/claude-code-router@2.0.0 code"
     } else {
-        "npx -y @anthropic-ai/claude-code@latest"
+        "npx -y @anthropic-ai/claude-code@2.1.114"
     }
 }
 
@@ -3032,5 +3032,21 @@ mod tests {
             signature: "abc".into(),
         });
         assert_eq!(content.buffer, "test");
+    }
+
+    #[test]
+    fn base_command_uses_pinned_version() {
+        assert_eq!(
+            base_command(false),
+            "npx -y @anthropic-ai/claude-code@2.1.114"
+        );
+    }
+
+    #[test]
+    fn router_base_command_uses_pinned_version() {
+        assert_eq!(
+            base_command(true),
+            "npx -y @musistudio/claude-code-router@2.0.0 code"
+        );
     }
 }

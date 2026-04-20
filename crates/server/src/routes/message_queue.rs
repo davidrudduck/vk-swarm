@@ -1,7 +1,7 @@
 //! HTTP endpoints for the in-memory message queue.
 //!
-//! Messages can be queued for a task attempt and will be automatically sent
-//! as follow-up requests when the current agent execution completes.
+//! Messages can be queued for a task attempt and will be started
+//! as follow-up requests on the next turn after the current execution completes.
 
 use axum::{
     Extension, Router,
@@ -87,7 +87,7 @@ pub async fn list_queued_messages(
 /// Maximum number of messages allowed in a queue.
 const MAX_QUEUE_SIZE: usize = 50;
 
-/// Add a new message to the queue.
+/// Add a new message to the next-turn queue.
 pub async fn add_queued_message(
     Extension(task_attempt): Extension<TaskAttempt>,
     remote_ctx: Option<Extension<RemoteTaskAttemptContext>>,
