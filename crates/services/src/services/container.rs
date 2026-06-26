@@ -334,7 +334,12 @@ pub trait ContainerService {
 
             match fence_result {
                 FenceOutcome::NotOurProcess => {
-                    // PID was reused by another process; do not kill, skip recovery
+                    // PID was reused by another process; do not kill, skip recovery.
+                    // Mark abandoned so mark_orphaned_as_failed can clean up this row —
+                    // without this, a row with resume_state='resumed' is excluded from the
+                    // blanket cleanup guard and stays status='running' indefinitely (zombie).
+                    let _ =
+                        ExecutionProcess::set_resume_state(pool, process.id, "abandoned").await;
                     tracing::warn!(
                         process_id = %process.id,
                         pid = pid_raw,
@@ -386,11 +391,10 @@ pub trait ContainerService {
                     }
                 };
 
-                let resume_prompt = match &stored_action.typ {
-                    ExecutorActionType::CodingAgentInitialRequest(req) => req.prompt.clone(),
-                    ExecutorActionType::CodingAgentFollowUpRequest(req) => req.prompt.clone(),
-                    _ => String::new(),
-                };
+                // Minimal continuation prompt per ledger task 303 decision:
+                // re-sending the original task prompt over --resume reads as "redo the task",
+                // not "continue where you left off". A minimal prompt is the safer default.
+                let resume_prompt = "Your previous session was interrupted. Please continue the task from where you left off.".to_string();
 
                 match self
                     .resume_execution(
