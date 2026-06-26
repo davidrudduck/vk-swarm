@@ -123,8 +123,8 @@ impl LocalContainerService {
         // Initialize log batcher for batched database writes
         let log_batcher = LogBatcher::spawn(&db);
 
-        // Initialize in-memory message queue store
-        let message_queue = crate::message_queue::MessageQueueStore::new();
+        // Initialize database-backed message queue store
+        let message_queue = crate::message_queue::MessageQueueStore::new(db.pool.clone());
 
         // Initialize normalization handles store
         let normalization_handles = Arc::new(RwLock::new(HashMap::new()));
