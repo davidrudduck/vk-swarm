@@ -110,6 +110,7 @@ impl ExecutionProcess {
     /// Mark orphaned running processes as failed on startup.
     /// A process is orphaned if it has status = 'running' but its server_instance_id
     /// is not in the list of currently active instances (or has no instance ID at all).
+    /// Excludes rows with resume_state IN ('pending', 'resumed') for SC8 safety.
     /// Returns the number of processes marked as failed.
     pub async fn mark_orphaned_as_failed(
         pool: &SqlitePool,
@@ -119,13 +120,44 @@ impl ExecutionProcess {
             r#"UPDATE execution_processes
                SET status = 'failed', updated_at = datetime('now')
                WHERE status = 'running'
-                 AND (server_instance_id IS NULL OR server_instance_id != ?)"#,
+                 AND (server_instance_id IS NULL OR server_instance_id != ?)
+                 AND (resume_state IS NULL OR resume_state NOT IN ('pending', 'resumed'))"#,
             current_instance_id
         )
         .execute(pool)
         .await?;
 
         Ok(result.rows_affected())
+    }
+
+    /// Set the resume_state for an execution process.
+    pub async fn set_resume_state(
+        pool: &SqlitePool,
+        id: Uuid,
+        state: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE execution_processes SET resume_state = ?, updated_at = datetime('now') WHERE id = ?"#,
+            state,
+            id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get the resume_state for an execution process.
+    pub async fn get_resume_state(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query_scalar!(
+            r#"SELECT resume_state FROM execution_processes WHERE id = ?"#,
+            id
+        )
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.flatten())
     }
 
     /// Find running dev servers for a specific project

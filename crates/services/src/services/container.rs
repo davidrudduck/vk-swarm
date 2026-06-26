@@ -49,6 +49,8 @@ use crate::services::{
     log_batcher::LogBatcherHandle,
     normalization_metrics::NormalizationMetrics,
     notification::NotificationService,
+    process_fence::{self, FenceOutcome},
+    process_inspector::SysinfoProcessInspector,
     share::SharePublisher,
     variable_expander,
     worktree_manager::WorktreeError,
@@ -265,85 +267,197 @@ pub trait ContainerService {
     }
 
     /// Cleanup executions marked as running in the db, call at startup.
-    /// With instance-scoped process tracking, this marks as failed any processes
-    /// that don't belong to the current instance (orphans from crashed/restarted servers).
+    /// Uses fence-then-resume: for each running coding-agent process with a PID,
+    /// fence the process first, then resume if a session_id exists, or mark-failed otherwise.
+    /// Non-coding-agent orphans are handled by the blanket mark_orphaned_as_failed call.
     async fn cleanup_orphan_executions(&self) -> Result<(), ContainerError> {
         let instance_id = self.instance_id();
+        let pool = &self.db().pool;
+
         tracing::info!(
             instance_id = %instance_id,
-            "Cleaning up orphaned execution processes"
+            "Starting fence-then-resume recovery for orphaned execution processes"
         );
 
-        // First, batch-mark orphaned processes (those with different or NULL instance_id)
-        let orphaned_count =
-            ExecutionProcess::mark_orphaned_as_failed(&self.db().pool, instance_id).await?;
+        // Fetch running coding-agent processes that have a PID (may be orphaned)
+        let candidates = ExecutionProcess::find_running_with_pids(pool).await?;
+
+        // Build a single inspector for all fence calls (avoids per-call sysinfo refresh)
+        let inspector = SysinfoProcessInspector::new();
+
+        for process in &candidates {
+            // Only recover coding-agent runs (SC8 target: resume, not script runs)
+            if process.run_reason != ExecutionProcessRunReason::CodingAgent {
+                continue;
+            }
+
+            let Some(pid_raw) = process.pid else {
+                continue;
+            };
+
+            // Step 1: Fence the process (safety invariant: never resume into a live writer)
+            let task_attempt = match TaskAttempt::find_by_id(pool, process.task_attempt_id).await {
+                Ok(Some(ta)) => ta,
+                _ => {
+                    tracing::warn!(
+                        process_id = %process.id,
+                        "Could not find task attempt for process; skipping recovery"
+                    );
+                    continue;
+                }
+            };
+
+            let container_ref = task_attempt.container_ref.clone().unwrap_or_default();
+            let fence_result = process_fence::fence(&inspector, pid_raw, &container_ref).await;
+
+            match fence_result {
+                FenceOutcome::NotOurProcess => {
+                    // PID was reused by another process; do not kill, skip recovery
+                    tracing::warn!(
+                        process_id = %process.id,
+                        pid = pid_raw,
+                        "PID reused by another process; skipping fence-resume"
+                    );
+                    continue;
+                }
+                FenceOutcome::AlreadyGone | FenceOutcome::Fenced => {
+                    // Process is confirmed dead; safe to proceed with resume classification
+                }
+            }
+
+            // Step 2: Classify — resume if session_id exists, mark-failed otherwise
+            let session_id =
+                ExecutionProcess::find_latest_session_id_by_task_attempt(pool, process.task_attempt_id)
+                    .await
+                    .unwrap_or(None);
+
+            if let Some(session_id) = session_id {
+                // Resume: executor supports session recovery (task 301 audit: all 9 executors do)
+                let _ = ExecutionProcess::set_resume_state(pool, process.id, "pending").await;
+
+                // Reconstruct stored action from the process record
+                let stored_action = match process.executor_action() {
+                    Ok(action) => action.clone(),
+                    Err(_) => {
+                        // Fallback: create a minimal action; resume_execution will fail gracefully
+                        ExecutorAction::new(
+                            ExecutorActionType::CodingAgentInitialRequest(
+                                CodingAgentInitialRequest {
+                                    prompt: String::new(),
+                                    executor_profile_id: executors::profile::ExecutorProfileId::new(
+                                        executors::executors::BaseCodingAgent::ClaudeCode,
+                                    ),
+                                },
+                            ),
+                            None,
+                        )
+                    }
+                };
+
+                let resume_prompt = match &stored_action.typ {
+                    ExecutorActionType::CodingAgentInitialRequest(req) => req.prompt.clone(),
+                    ExecutorActionType::CodingAgentFollowUpRequest(req) => req.prompt.clone(),
+                    _ => String::new(),
+                };
+
+                match self
+                    .resume_execution(
+                        &task_attempt,
+                        process,
+                        &stored_action,
+                        session_id,
+                        resume_prompt,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let _ =
+                            ExecutionProcess::set_resume_state(pool, process.id, "resumed").await;
+                        tracing::info!(
+                            process_id = %process.id,
+                            "Successfully resumed execution"
+                        );
+                    }
+                    Err(e) => {
+                        // Resume failed; fall through to mark-failed
+                        tracing::warn!(
+                            process_id = %process.id,
+                            error = ?e,
+                            "Resume failed; marking as abandoned"
+                        );
+                        let _ =
+                            ExecutionProcess::set_resume_state(pool, process.id, "abandoned").await;
+                        self.mark_process_failed_with_task_update(pool, process, &task_attempt)
+                            .await;
+                    }
+                }
+            } else {
+                // No session_id: mark-failed (abandoned)
+                let _ = ExecutionProcess::set_resume_state(pool, process.id, "abandoned").await;
+                self.mark_process_failed_with_task_update(pool, process, &task_attempt)
+                    .await;
+            }
+        }
+
+        // Now run the blanket mark-orphaned-as-failed for non-coding-agent orphans
+        // (mark_orphaned_as_failed now excludes rows with resume_state IN ('pending','resumed'))
+        let orphaned_count = ExecutionProcess::mark_orphaned_as_failed(pool, instance_id).await?;
 
         if orphaned_count > 0 {
             tracing::info!(
                 instance_id = %instance_id,
                 orphaned_count = orphaned_count,
-                "Marked {} orphaned processes as failed",
+                "Marked {} non-resumable orphaned processes as failed",
                 orphaned_count
             );
         }
 
-        // Now process them one by one for after-head commit and task status updates
-        // Get all recently-failed processes that were orphaned (don't have our instance_id)
-        let running_processes = ExecutionProcess::find_running(&self.db().pool).await?;
-        for process in running_processes {
-            // This shouldn't find any now since we just marked them all failed,
-            // but handle any edge cases
-            tracing::info!(
-                "Found orphaned execution process {} for task attempt {}",
+        Ok(())
+    }
+
+    /// Mark an execution process as failed and update the parent task status to InReview.
+    async fn mark_process_failed_with_task_update(
+        &self,
+        pool: &sqlx::SqlitePool,
+        process: &ExecutionProcess,
+        task_attempt: &TaskAttempt,
+    ) {
+        if let Err(e) = ExecutionProcess::update_completion(
+            pool,
+            process.id,
+            ExecutionProcessStatus::Failed,
+            None,
+            Some("eof"),
+            None,
+        )
+        .await
+        {
+            tracing::error!(
+                "Failed to update orphaned execution process {} status: {}",
                 process.id,
-                process.task_attempt_id
+                e
             );
-            // Update the execution process status first
-            if let Err(e) = ExecutionProcess::update_completion(
-                &self.db().pool,
-                process.id,
-                ExecutionProcessStatus::Failed,
-                None,        // No exit code for orphaned processes
-                Some("eof"), // Orphaned processes ended without proper completion
-                None,        // No message
-            )
-            .await
-            {
-                tracing::error!(
-                    "Failed to update orphaned execution process {} status: {}",
-                    process.id,
-                    e
-                );
-                continue;
-            }
-            // Capture after-head commit OID (best-effort)
-            if let Ok(Some(task_attempt)) =
-                TaskAttempt::find_by_id(&self.db().pool, process.task_attempt_id).await
-                && let Some(container_ref) = task_attempt.container_ref
-            {
-                let wt = std::path::PathBuf::from(container_ref);
-                if let Ok(head) = self.git().get_head_info(&wt) {
-                    let _ = ExecutionProcess::update_after_head_commit(
-                        &self.db().pool,
-                        process.id,
-                        &head.oid,
-                    )
+            return;
+        }
+
+        // Capture after-head commit (best-effort)
+        if let Some(container_ref) = &task_attempt.container_ref {
+            let wt = std::path::PathBuf::from(container_ref);
+            if let Ok(head) = self.git().get_head_info(&wt) {
+                let _ = ExecutionProcess::update_after_head_commit(pool, process.id, &head.oid)
                     .await;
-                }
             }
-            // Process marked as failed
-            tracing::info!("Marked orphaned execution process {} as failed", process.id);
-            // Update task status to InReview for coding agent and setup script failures
-            if matches!(
-                process.run_reason,
-                ExecutionProcessRunReason::CodingAgent
-                    | ExecutionProcessRunReason::SetupScript
-                    | ExecutionProcessRunReason::CleanupScript
-            ) && let Ok(Some(task_attempt)) =
-                TaskAttempt::find_by_id(&self.db().pool, process.task_attempt_id).await
-                && let Ok(Some(task)) = task_attempt.parent_task(&self.db().pool).await
-            {
-                match Task::update_status(&self.db().pool, task.id, TaskStatus::InReview).await {
+        }
+
+        // Update task status to InReview for coding agent failures
+        if matches!(
+            process.run_reason,
+            ExecutionProcessRunReason::CodingAgent
+                | ExecutionProcessRunReason::SetupScript
+                | ExecutionProcessRunReason::CleanupScript
+        ) {
+            if let Ok(Some(task)) = task_attempt.parent_task(pool).await {
+                match Task::update_status(pool, task.id, TaskStatus::InReview).await {
                     Ok(_) => {
                         if let Some(publisher) = self.share_publisher()
                             && let Err(err) = publisher.update_shared_task_by_id(task.id).await
@@ -357,14 +471,15 @@ pub trait ContainerService {
                     }
                     Err(e) => {
                         tracing::error!(
-                            "Failed to update task status to InReview for orphaned attempt: {}",
+                            "Failed to update task status to InReview: {}",
                             e
                         );
                     }
                 }
             }
         }
-        Ok(())
+
+        tracing::info!("Marked orphaned process {} as failed", process.id);
     }
 
     /// Resume a coding-agent execution from a previous session.
@@ -1349,6 +1464,7 @@ pub trait ContainerService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use db::models::execution_process::{ExecutionProcess, ExecutionProcessStatus};
     use executors::logs::utils::ConversationPatch;
     use executors::logs::{NormalizedEntry, NormalizedEntryType};
 
@@ -1539,6 +1655,81 @@ mod tests {
             history1.len(),
             history2.len(),
             "Both calls should produce same number of messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_orphan_executions_accessor_set_and_get_resume_state() {
+        use db::test_utils::create_test_pool;
+
+        let (pool, _tmp) = create_test_pool().await;
+
+        // Seed a project
+        let project_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO projects (id, name, git_repo_path) VALUES ($1, 'test-project', '/tmp/test')"#,
+        )
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Seed a task
+        let task_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO tasks (id, project_id, title, status) VALUES ($1, $2, 'test', 'todo')"#,
+        )
+        .bind(task_id)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Seed a task attempt
+        let attempt_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref)
+               VALUES ($1, $2, 'CLAUDE_CODE', 'test-branch', 'main', '/tmp/test-wt')"#,
+        )
+        .bind(attempt_id)
+        .bind(task_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Seed an execution process
+        let process_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO execution_processes (id, task_attempt_id, run_reason, executor_action, status, started_at)
+               VALUES ($1, $2, 'codingagent', '{}', 'running', datetime('now'))"#,
+        )
+        .bind(process_id)
+        .bind(attempt_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Verify initial state
+        let initial = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+        assert_eq!(initial, None);
+
+        // Set resume_state to 'pending'
+        ExecutionProcess::set_resume_state(&pool, process_id, "pending").await.unwrap();
+        let after_pending = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+        assert_eq!(after_pending, Some("pending".to_string()));
+
+        // Set resume_state to 'resumed'
+        ExecutionProcess::set_resume_state(&pool, process_id, "resumed").await.unwrap();
+        let after_resumed = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+        assert_eq!(after_resumed, Some("resumed".to_string()));
+
+        // Verify mark_orphaned_as_failed does NOT touch resumed rows (SC8 safety)
+        ExecutionProcess::mark_orphaned_as_failed(&pool, "other-instance").await.unwrap();
+        let after_mark = ExecutionProcess::find_by_id(&pool, process_id).await.unwrap().unwrap();
+        assert_eq!(
+            after_mark.status,
+            ExecutionProcessStatus::Running,
+            "resumed process must not be marked failed by blanket mark_orphaned"
         );
     }
 }
