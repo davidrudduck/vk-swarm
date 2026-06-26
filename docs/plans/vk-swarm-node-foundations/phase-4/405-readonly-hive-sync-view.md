@@ -3,7 +3,7 @@ id: "405"
 phase: 4
 title: Read-only Hive sync-status view (extend /api/database/sync-status + Settings card)
 status: ready
-depends_on: ["403"]
+depends_on: []
 parallel: false
 conflicts_with: []
 files:
@@ -27,7 +27,7 @@ gate's compile/type-check.
 ## Change
 
 **A. `crates/server/src/routes/database.rs` — extend `SyncStatusResponse` + populate it.**
-- Anchor: `struct SyncStatusResponse` (L98) — add two optional fields after `node_id` (L110):
+- Anchor: `struct SyncStatusResponse` (L98) — add three optional fields after `node_id` (L110):
 ```bash
     /// Current node ID (if connected to Hive).
     pub node_id: Option<Uuid>,
@@ -35,18 +35,35 @@ gate's compile/type-check.
     pub hive_url: Option<String>,
     /// Human-readable node name (from VK_NODE_NAME), if configured.
     pub node_name: Option<String>,
+    /// Most recent successful sync timestamp across synced entities (NULL = never synced).
+    #[ts(type = "Date | null")]
+    pub last_synced_at: Option<DateTime<Utc>>,
 ```
 
 - Anchor: `async fn sync_status` final `Ok(ResponseJson(ApiResponse::success(SyncStatusResponse {`
-  (L323). Read the config the same way the node runner does — directly from the environment (the node
-  runner loads `VK_HIVE_URL`/`VK_NODE_NAME` from env; reading them here keeps this a single-file change
-  and avoids adding a `services`-crate accessor). Before the `Ok(...)`, add:
+  (L323). Read `VK_HIVE_URL`/`VK_NODE_NAME` from env (the node runner already loads them from env;
+  reading here avoids a `services`-crate accessor). Before the `Ok(...)`, add:
 ```text
     let hive_url = std::env::var("VK_HIVE_URL").ok();
     let node_name = std::env::var("VK_NODE_NAME").ok();
 ```
 
-  and add `hive_url,` and `node_name,` to the struct literal:
+  and compute `last_synced_at` (the spec REQUIRES a real last-synced — breakdown-review R6 — counts
+  alone are not it). `execution_processes.hive_synced_at` is the representative highest-volume synced
+  surface; add a scalar query (mirror the existing `count_unsynced_*` query style in this handler):
+```text
+    let last_synced_at = sqlx::query_scalar!(
+        r#"SELECT MAX(hive_synced_at) as "last: DateTime<Utc>" FROM execution_processes"#
+    )
+    .fetch_one(&deployment.db().pool)
+    .await
+    .unwrap_or(None);
+```
+  (If review of the handler shows tasks/attempts also carry `hive_synced_at` and a cross-entity MAX is
+  wanted, UNION them; the single-table MAX is the minimum that satisfies "last-synced". Record the
+  choice in the ledger.)
+
+  Then add `hive_url,`, `node_name,`, `last_synced_at,` to the struct literal:
 ```text
     Ok(ResponseJson(ApiResponse::success(SyncStatusResponse {
         unsynced_tasks,
@@ -57,18 +74,15 @@ gate's compile/type-check.
         node_id,
         hive_url,
         node_name,
+        last_synced_at,
     })))
 ```
 
-  > "Last-synced" intent is already carried by the four `unsynced_*` counts (0 = fully synced) +
-  > `is_connected`. We deliberately do NOT add a new MAX(hive_synced_at) aggregate query: that would
-  > cross into a new DB query (Trap 2, new `.sqlx`) and the four counts already express sync freshness.
-  > If a true timestamp is later required, it is a separate task.
-
 **B. `shared/types.ts` — regenerate (do NOT hand-edit).**
 - Run `npm run generate-types`. The generated `SyncStatusResponse` (L1415) gains
-  `hive_url: string | null` and `node_name: string | null`. List `shared/types.ts` in `files:` because
-  the generator rewrites it; the diff must be exactly those two added fields.
+  `hive_url: string | null`, `node_name: string | null`, and `last_synced_at: Date | null`. List
+  `shared/types.ts` in `files:` because the generator rewrites it; the diff must be exactly those three
+  added fields.
 
 **C. `frontend/src/lib/api/database.ts` — add a read accessor.**
 - Add `SyncStatusResponse` to the `import type { … } from 'shared/types'` block.
@@ -87,7 +101,8 @@ gate's compile/type-check.
 **D. `frontend/src/components/settings/HiveSyncStatusCard.tsx` — new read-only card (create).**
 - A presentational component: `useQuery({ queryKey: ['hiveSyncStatus'], queryFn: databaseApi.getSyncStatus })`,
   renders a `Card` showing (read-only, no mutations/buttons): connection state (`is_connected`),
-  `node_name`, `hive_url`, `node_id`, and the four `unsynced_*` counts. Mirror the `Card`/`CardHeader`/
+  `node_name`, `hive_url`, `node_id`, `last_synced_at` (formatted; "never" when null), and the four
+  `unsynced_*` counts. Mirror the `Card`/`CardHeader`/
   `CardContent` usage already in `SystemSettings.tsx`. No inputs, no actions — display only.
 - This new component sits beside the existing sibling `frontend/src/components/settings/BackupsSection.tsx`
   (same directory). READ it first (see Sibling alignment) and mirror its `useQuery` + `Card` + `*Api`
@@ -130,7 +145,7 @@ Two siblings — read BOTH before writing, list their guards, justify any diverg
 ## STOP triggers
 
 - `SyncStatusResponse` struct at L98 does not match (fields changed) — re-anchor.
-- `npm run generate-types` changes more than the two intended fields in `shared/types.ts` (means an
+- `npm run generate-types` changes more than the three intended fields in `shared/types.ts` (means an
   unrelated Rust type drifted) — STOP and investigate; do not commit unrelated type churn.
 - `databaseApi`/`makeRequest`/`handleApiResponse` have a different shape than `getStats` uses — match
   the real one; do not guess.
@@ -147,7 +162,10 @@ Two siblings — read BOTH before writing, list their guards, justify any diverg
 
 ## Done when
 
-`WAI_TYPECHECK_CMD="cargo check -p server && cd frontend && npx tsc --noEmit" WAI_TEST_CMD="cd frontend && npm run lint" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 405` exits 0
+`WAI_TYPECHECK_CMD="cargo sqlx prepare --workspace --check || cargo sqlx prepare --workspace; cargo check -p server && cd frontend && npx tsc --noEmit" WAI_TEST_CMD="cd frontend && npm run lint" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 405` exits 0
 
-> Trap 1/2: server crate + frontend toolchain. Adds no new SQL query (env reads only) → no `.sqlx`
-> regen; the `#[ts(export)]` change is picked up by `npm run generate-types` (step B), not `.sqlx`.
+> Trap 1/2: server crate + frontend toolchain. This task ADDS a `query_scalar!(MAX(hive_synced_at))`
+> (the `last_synced_at` field), so the schema must be materialized — apply migrations to the dev DB
+> and/or `cargo sqlx prepare --workspace` (Trap 2). The `#[ts(export)]` change is picked up by
+> `npm run generate-types` (step B). `shared/types.ts` diff now adds THREE fields (`hive_url`,
+> `node_name`, `last_synced_at`).

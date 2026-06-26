@@ -80,11 +80,21 @@ async fn test_queue_persists_across_store_recreation() {
 - **Anchor:** L127 `let message_queue = crate::message_queue::MessageQueueStore::new();`
 - **Before:** `MessageQueueStore::new()`
 - **After:** `MessageQueueStore::new(<pool>)` — pass the same `SqlitePool` the deployment already holds
-  (find the pool/`DBService` in scope at L127; it is constructed nearby — use it). The boot drain is
-  AUTOMATIC: because the queue now reads from the table, any rows present at startup are returned by
-  the existing `peek_next`/drain path (`try_consume_queued_message`, `container.rs:1179`, fired at
-  `:738`) with NO new boot code. Confirm no other `MessageQueueStore::new()` call sites exist
-  (`grep -rn "MessageQueueStore::new" crates/`); update each.
+  (find the pool/`DBService` in scope at L127; it is constructed nearby — use it). Confirm no other
+  `MessageQueueStore::new()` call sites exist (`grep -rn "MessageQueueStore::new" crates/`); update each.
+
+  > **Scope of THIS task = durability only (SC2-survive).** It makes the queue PERSIST; it does NOT add
+  > a boot-drain. Verified (breakdown-review R1): `try_consume_queued_message` is called ONLY at
+  > `container.rs:738`, inside the live per-process exit monitor (`if container.should_finalize(&ctx)`).
+  > On a crash-restart no exit event fires, so nothing drains the persisted queue at boot. The
+  > drain-on-resume (SC2-drain) is owned by **task 305** (runs after recovery). Do NOT add boot-drain
+  > logic here.
+
+  > **SQLx `usize` trap (breakdown-review R8):** `QueuedMessage.position` is `usize`
+  > (`message_queue.rs:19`), and sqlx's SQLite driver has no `Decode`/`Type` for `usize` — so a
+  > `query_as!(QueuedMessage, …)` macro will NOT compile. Use untyped `sqlx::query!(…)` + manual
+  > construction (`position: row.position as usize`) for every SELECT. Do NOT change the
+  > `QueuedMessage` struct. (`id`/`task_attempt_id: Uuid` map fine via the repo's BLOB-UUID support.)
 
 ## Allowed moves
 Convert the queue's backing store from in-memory to SQLite, preserving every method signature and the

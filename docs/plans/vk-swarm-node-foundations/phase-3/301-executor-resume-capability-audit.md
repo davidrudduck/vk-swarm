@@ -51,8 +51,9 @@ selection and 303's prompt choice non-arbitrary.
 
 ## Manual verification (record in decisions-ledger)
 - `test -f docs/plans/vk-swarm-node-foundations/notes/301-executor-resume-capability.md` → exists.
-- The table has a row for EVERY variant in `enum CodingAgent` (cross-check count against
-  `grep -c '(' ` the enum body) → record both counts; they must match.
+- The table has a row for EVERY variant in `enum CodingAgent` (the variants are bare, one per line:
+  `ClaudeCode,` `Amp,` … — count them BY LINE within the `enum CodingAgent { … }` body, NOT by `(`,
+  which mis-counts on this `#[enum_dispatch]` enum) → record both counts; they must match.
 - Every row's "how" column cites a real `file:line` in `crates/executors/src/` → spot-check 3.
 - The resume-prompt recommendation is stated → confirm present; record the chosen default in the ledger
   so 303 consumes it.

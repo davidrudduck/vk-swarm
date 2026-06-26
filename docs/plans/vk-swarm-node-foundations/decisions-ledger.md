@@ -77,17 +77,18 @@ determine. Task 303 specifies the mechanism and carries a STOP-and-decide point:
 continuation prompt, but 301's findings may override. This is the spec's only underspecified point;
 it is surfaced to the user and the adversarial review rather than papered over.
 
-### Decompose decision — fence fingerprint is a cmdline/worktree heuristic, NOT persisted start-time (302/304)
+### Decompose decision — fence builds on the EXISTING `process_inspector`; fingerprint = worktree-cwd match (302/304)
 ADR-0001 names the PID-reuse fingerprint as "process start-time / pgid" (by example). A persisted
-start-time would require capturing it at spawn + a new column + a spawn-path edit — work not in this
-plan. **Decision:** the fence uses sysinfo (`services` already depends on `sysinfo = "0.37"`, which can
-both inspect AND kill a PID) to read the *live* process's command line / exe and confirm it references
-the expected worktree (`task_attempts.container_ref`) or executor before killing. A live PID whose
-cmdline does NOT match is treated as a reused PID → NOT killed. This defeats PID reuse with no schema
-change, within the ADR's intent (the ADR's mechanism was illustrative). If the heuristic proves
-insufficient at implementation (e.g. cmdline not introspectable on the target OS), 302 STOPs and
-escalates — persisting start-time becomes a spec-scope question, not a silent addition. `nix` (in
-`local-deployment`) is NOT needed; the fence lives entirely in `services`.
+start-time would require a spawn-path edit + new column — not in this plan. **Decision (revised after
+breakdown-review R2/F4):** do NOT reimplement liveness/kill on raw sysinfo — the repo ALREADY has
+`crates/services/src/services/process_inspector/` (`ProcessInspector` trait + `SysinfoProcessInspector`
++ `MockProcessInspector`) providing `process_exists`, `kill_process` (SIGTERM→SIGKILL),
+`get_process_tree`, and **`find_processes_by_cwd_prefix`**. Task 302 builds a thin `fence()`
+orchestration ATOP that trait. The PID-reuse fingerprint is the **worktree-cwd match**
+(`find_processes_by_cwd_prefix(container_ref)` — a stronger guard than a cmdline heuristic): a live PID
+whose cwd is not under the attempt's worktree is a reused PID → NOT killed. No schema change, no new
+dependency, and the existing `MockProcessInspector` makes 302 hermetically testable. (Reinventing the
+inspector was the original 302's mistake — the exact sibling-duplication antipattern the review caught.)
 
 ### Sibling-advisory acknowledgement (wai-plan-lint `W:` lines, SC6)
 The lint emits advisory `W:` warnings for new files placed beside unlisted same-directory siblings.

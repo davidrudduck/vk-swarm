@@ -71,24 +71,30 @@ Phase dependency spine: **P1 (schema) → P3 (recovery)** and **P2 (qa_mock) →
 | id  | title | dep | conflicts | SC |
 |-----|-------|-----|-----------|----|
 | 301 | Executor resume-capability audit (capability map) | dep: - | conflicts: none | SC1 |
-| 302 | Process liveness + fingerprint fence primitive | dep: - | conflicts: none | SC1 |
+| 302 | Process fence primitive built on existing `ProcessInspector` | dep: - | conflicts: none | SC1 |
 | 303 | Reconstruct ExecutorAction + resume re-entry helper | dep: - | conflicts: 304 | SC1 |
 | 304 | Rewrite `cleanup_orphan_executions` to fence-then-resume incl. fallback (before mark-failed) | dep: 301 302 303 104 | conflicts: 303 | SC1, SC8 |
+| 305 | Boot-drain persisted message queue for non-resumed attempts | dep: 102 304 | conflicts: none | SC2 |
 
 > **Fallback folded into 304 (no separate task):** the non-resumable-executor fallback (SC1-fallback)
 > is a *branch* of the recovery routine, not a separate edit — splitting it would mean a second task
 > re-editing the same function 304 just wrote. 304 covers fence → resume → cold-respawn-or-mark-failed
 > → fail-last in one cohesive rewrite, informed by 301's capability map.
+>
+> **305 closes the SC2 drain-on-resume gap** (breakdown-review R1): 102 makes the queue *persist*, but
+> the live drain (`container.rs:738`) only fires on a process exit — a crash emits none. 305 runs after
+> recovery (304) and starts queued messages for attempts that are NOT being resumed. So SC2 spans P1
+> (durability) + P3 (drain), an honest P1↔P3 coupling.
 
 ### Phase 4 — UI local-only
 
 | id  | title | dep | conflicts | SC |
 |-----|-------|-----|-----------|----|
-| 401 | Visibility discriminator in `find_by_project_id_with_attempt_status` | dep: - | conflicts: 402 | SC5 |
-| 402 | Remove request-time remote merge in `get_tasks` | dep: 401 | conflicts: 401 | SC5 |
-| 403 | Remove node-surface remote API proxies | dep: - | conflicts: none | SC5 |
+| 401 | Visibility discriminator in `find_by_project_id_with_attempt_status` | dep: - | conflicts: none | SC5 |
+| 402 | Remove request-time remote merge in `get_tasks` | dep: 401 | conflicts: none | SC5 |
+| 403 | Remove pure-proxy remote API modules (nodes, swarm_*, merged-projects) | dep: - | conflicts: none | SC5 |
 | 404 | Delete frontend Nodes-management feature | dep: - | conflicts: none | SC5 |
-| 405 | Read-only hive sync-status view | dep: 403 | conflicts: none | SC5 |
+| 405 | Read-only hive sync-status view | dep: - | conflicts: none | SC5 |
 | 406 | Standalone-run + UI-always-on verification | dep: 402 404 405 | conflicts: none | SC6 |
 
 > **Phase 4 is the clean local-only subset (user-approved scope split, 2026-06-26).** It makes the node
@@ -115,6 +121,6 @@ Phase dependency spine: **P1 (schema) → P3 (recovery)** and **P2 (qa_mock) →
 
 ## SC coverage map (enforced ids SC1–SC8)
 
-SC1→{301,302,303,304} · SC2→{101,102} · SC3→{103,104} · SC4→{105} · SC5→{401,402,403,404,405} ·
-SC6→{406} · SC7→{201,501,502,503} · SC8→{304}. (`SC1-fallback` is covered substantively by 301/305
+SC1→{301,302,303,304} · SC2→{101,102,305} · SC3→{103,104} · SC4→{105} · SC5→{401,402,403,404,405} ·
+SC6→{406} · SC7→{201,501,502,503} · SC8→{304}. (`SC1-fallback` is covered substantively by 301/304
 under the SC1 umbrella; the lint cannot parse its hyphenated id and does not enforce it separately.)

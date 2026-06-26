@@ -5,7 +5,7 @@ title: Remove request-time remote task merge from get_tasks (local-only)
 status: ready
 depends_on: ["401"]
 parallel: false
-conflicts_with: ["401"]
+conflicts_with: []
 files:
   - crates/server/src/routes/tasks/handlers/core.rs
 irreversible: false

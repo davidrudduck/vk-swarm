@@ -5,7 +5,7 @@ title: Add node-local visibility discriminator to find_by_project_id_with_attemp
 status: ready
 depends_on: []
 parallel: false
-conflicts_with: ["402"]
+conflicts_with: []
 files:
   - crates/db/src/models/task/queries.rs
   - crates/db/tests/task_visibility_discriminator.rs
