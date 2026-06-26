@@ -2,13 +2,14 @@
 id: "305"
 phase: 3
 title: Boot-drain the persisted message queue for non-resumed attempts
-status: ready
+status: passed
 depends_on: ["102", "304"]
 parallel: false
 conflicts_with: []
 files:
   - crates/local-deployment/src/container.rs
   - crates/server/src/main.rs
+  - crates/services/src/services/container.rs
 irreversible: false
 scope_test: "crates/local-deployment/src/container.rs"
 allowed_change: mixed
