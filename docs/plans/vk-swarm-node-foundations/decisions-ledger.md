@@ -117,6 +117,10 @@ Acknowledged here per the decompose contract:
   type, trait surface, tests). These are the genuine pattern-sibling cases and are handled in-task.
 - **503 `check-npm-runtime-vulns.mjs` beside `check-i18n.sh`** — different language/purpose; the
   Phase-5 author read `check-i18n.sh` and justified divergence in 503's Sibling-alignment section.
+- **405 `HiveSyncStatusCard.tsx` beside `BackupsSection.tsx`** — same settings-section shape;
+  `BackupsSection.tsx` IS a structural sibling. The task 405 implementer MUST read it and match
+  its Card/section layout, prop types, and query hook conventions. Missing from the original `files:`
+  list but recorded here per W: policy.
 
 ### USER-APPROVED SCOPE SPLIT — entangled remote-display removal → `vk-swarm-node-ui-localize` (Phase 4)
 Decompose discovered that ADR-0002's "remove remote-display surfaces" is NOT a clean delete: the
@@ -139,3 +143,25 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
   yet — a future `/wai:prd-new`+`/wai:spec`). The entanglement map lives there as the seed.
 
 ## Per-task decisions (executor appends below)
+
+### Task 101 — Add queued_messages table migration
+- **Timestamp selection:** Verified `20260201000000` sorts AFTER latest migration (`20260131000000_add_webhooks.sql`). No collisions detected.
+- **FK column type:** Confirmed `task_attempts.id` uses `BLOB PRIMARY KEY` (verified: `20250617183714_init.sql:43`). Migration uses `BLOB` for both `id` and `task_attempt_id`.
+- **Migration file location:** `crates/db/migrations/20260201000000_add_queued_messages.sql` created successfully.
+- **Schema validation:** File exists: `ls crates/db/migrations/20260201000000_add_queued_messages.sql` ✓
+- **DB test pool:** `cargo test -p db --lib` exit status: 0 (180 tests passed, 0 failed).
+- **Table schema:** `sqlite3 dev_assets/db.sqlite ".schema queued_messages"` output:
+  ```sql
+  CREATE TABLE queued_messages (
+      id              BLOB PRIMARY KEY,
+      task_attempt_id BLOB NOT NULL,
+      content         TEXT NOT NULL,
+      variant         TEXT,
+      position        INTEGER NOT NULL,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now', 'subsec')),
+      FOREIGN KEY (task_attempt_id) REFERENCES task_attempts(id) ON DELETE CASCADE
+  );
+  CREATE INDEX idx_queued_messages_attempt_position
+      ON queued_messages(task_attempt_id, position);
+  ```
+- **Commit:** `9945d61feca236ebba6c11a01677e647ce6ee125`
