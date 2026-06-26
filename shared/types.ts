@@ -250,9 +250,9 @@ export type ScriptRequest = { script: string, language: ScriptRequestLanguage, c
 
 export type ScriptRequestLanguage = "Bash";
 
-export enum BaseCodingAgent { CLAUDE_CODE = "CLAUDE_CODE", AMP = "AMP", GEMINI = "GEMINI", CODEX = "CODEX", OPENCODE = "OPENCODE", CURSOR_AGENT = "CURSOR_AGENT", QWEN_CODE = "QWEN_CODE", COPILOT = "COPILOT", DROID = "DROID", QA_MOCK = "QA_MOCK" }
+export enum BaseCodingAgent { CLAUDE_CODE = "CLAUDE_CODE", AMP = "AMP", GEMINI = "GEMINI", CODEX = "CODEX", OPENCODE = "OPENCODE", CURSOR_AGENT = "CURSOR_AGENT", QWEN_CODE = "QWEN_CODE", COPILOT = "COPILOT", DROID = "DROID" }
 
-export type CodingAgent = { "CLAUDE_CODE": ClaudeCode } | { "AMP": Amp } | { "GEMINI": Gemini } | { "CODEX": Codex } | { "OPENCODE": Opencode } | { "CURSOR_AGENT": CursorAgent } | { "QWEN_CODE": QwenCode } | { "COPILOT": Copilot } | { "DROID": Droid } | { "QA_MOCK": QaMock };
+export type CodingAgent = { "CLAUDE_CODE": ClaudeCode } | { "AMP": Amp } | { "GEMINI": Gemini } | { "CODEX": Codex } | { "OPENCODE": Opencode } | { "CURSOR_AGENT": CursorAgent } | { "QWEN_CODE": QwenCode } | { "COPILOT": Copilot } | { "DROID": Droid };
 
 export type Template = { id: string, template_name: string, content: string, created_at: string, updated_at: string, };
 
@@ -730,7 +730,7 @@ executor: BaseCodingAgent,
  */
 variant: string | null, };
 
-export type ExecutorConfig = { [key in string]?: { "CLAUDE_CODE": ClaudeCode } | { "AMP": Amp } | { "GEMINI": Gemini } | { "CODEX": Codex } | { "OPENCODE": Opencode } | { "CURSOR_AGENT": CursorAgent } | { "QWEN_CODE": QwenCode } | { "COPILOT": Copilot } | { "DROID": Droid } | { "QA_MOCK": QaMock } };
+export type ExecutorConfig = { [key in string]?: { "CLAUDE_CODE": ClaudeCode } | { "AMP": Amp } | { "GEMINI": Gemini } | { "CODEX": Codex } | { "OPENCODE": Opencode } | { "CURSOR_AGENT": CursorAgent } | { "QWEN_CODE": QwenCode } | { "COPILOT": Copilot } | { "DROID": Droid } };
 
 export type ExecutorConfigs = { executors: { [key in BaseCodingAgent]?: ExecutorConfig }, };
 
@@ -1436,19 +1436,19 @@ is_connected: boolean,
 /**
  * Current node ID (if connected to Hive).
  */
-node_id: string | null, 
+node_id: string | null,
 /**
- * Hive WebSocket URL this node is configured to sync with (from VK_HIVE_URL), if any.
+ * Hive WebSocket URL (from VK_HIVE_URL env var).
  */
-hive_url: string | null, 
+hive_url: string | null,
 /**
- * Human-readable node name (from VK_NODE_NAME), if configured.
+ * Node name (from VK_NODE_NAME env var).
  */
-node_name: string | null, 
+node_name: string | null,
 /**
- * Most recent successful sync timestamp across synced entities (NULL = never synced).
+ * Timestamp of last successful sync to Hive.
  */
-last_synced_at: Date | null, };
+last_synced_at: string | null, };
 
 export type ForceResyncResult = { 
 /**
