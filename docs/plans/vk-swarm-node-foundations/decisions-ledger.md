@@ -235,3 +235,35 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
 - **Compilation:** `cargo check -p db 2>&1` completed without errors (no sqlx prepare invoked) ✓
 - **Module registration:** Added `pub mod workstream_state;` to `crates/db/src/models/mod.rs` after `webhook` in alphabetical order.
 - **Commit:** (pending)
+
+### Task 105 — Local-durability audit
+- Grep command: `grep -rn "Arc<RwLock<HashMap" crates/local-deployment/src crates/services/src`
+- Total hits found: 13
+- Elements audited: 13 state structures (5 DB-backed durable, 8 in-memory volatile-but-recoverable)
+- New durability holes found: None — all volatile structures are reconstructible from DB at boot or inherently ephemeral by design (task handles, OAuth flow state, protocol peers)
+- Audit note location: `docs/plans/vk-swarm-node-foundations/notes/105-local-durability-audit.md`
+- Key finding: queued_messages (task 101) + MessageQueueStore (task 102) + resume_state (task 103) + workstream_state view (task 104) complete the durability picture for crash recovery. No backlog filing required.
+- Manual verification: grep reconciliation confirms all 13 hits mapped to audit rows; no production durability gaps identified
+
+### Task 301 — Executor resume-capability audit (SC1)
+- **Variants enumerated:** 9 total (ClaudeCode, Amp, Gemini, QwenCode, Codex, CursorAgent, Opencode, Copilot, Droid)
+- **Variants classified resume:** All 9 (100% coverage)
+  - ClaudeCode: --fork-session --resume (claude.rs:264-267)
+  - Amp: threads fork (amp.rs:105-109)
+  - Gemini: ACP harness with existing_session (gemini.rs:140 + acp/harness.rs:136)
+  - QwenCode: ACP harness with existing_session + qwen_sessions namespace (qwen.rs:68 + acp/harness.rs:136)
+  - Codex: AppServerClient session state via spawn_internal (codex.rs:233,247)
+  - CursorAgent: --resume flag (cursor.rs:128)
+  - Opencode: --session flag (opencode.rs:220)
+  - Copilot: --resume flag (copilot.rs:165)
+  - Droid: fork_session + --session-id (droid.rs:171-178)
+- **Variants classified cold-respawn:** 0
+- **Variants classified mark-failed:** 0
+- **Resume-prompt default chosen:** Re-send original prompt from executor_sessions.prompt
+  - **Rationale:** All executors preserve conversation state via session recovery. Sending original prompt provides task context for intelligent resumption. Minimal continuation prompt rejected as context-losing.
+- **Spot-check citations verified:**
+  1. claude.rs:264 — `command_builder.build_follow_up(&["--fork-session".to_string(), "--resume".to_string(), session_id.to_string()])?`
+  2. acp/harness.rs:136 — `existing_session: Option<String>` passed to `bootstrap_acp_connection` for Gemini/QwenCode
+  3. codex.rs:247 — `self.spawn_internal(..., Some(session_id), ...)`
+- **Audit note location:** `docs/plans/vk-swarm-node-foundations/notes/301-executor-resume-capability.md`
+- **Findings impact:** Unblocks task 303 (recovery mechanism spec); informs task 304 (crash-recovery relaunch implementation)

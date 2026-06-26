@@ -2,7 +2,7 @@
 id: "105"
 phase: 1
 title: Local-durability audit (findings note)
-status: ready
+status: passed
 depends_on: ["102"]
 parallel: false
 conflicts_with: []

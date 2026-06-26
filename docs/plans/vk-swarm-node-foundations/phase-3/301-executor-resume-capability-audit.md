@@ -2,7 +2,7 @@
 id: "301"
 phase: 3
 title: Executor resume-capability audit (capability map)
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
