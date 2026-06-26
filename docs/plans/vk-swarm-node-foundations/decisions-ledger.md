@@ -166,6 +166,35 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
   ```
 - **Commit:** `9945d61feca236ebba6c11a01677e647ce6ee125`
 
+### Task 102 — Back MessageQueueStore with queued_messages table + boot drain
+- **Scope statement:** Task implements durability only (SC2-survive); boot drain is owned by task 305. No boot-drain logic added (verified: `try_consume_queued_message` called only at `container.rs:738` inside exit monitor).
+- **File identification:** Task touches only `crates/local-deployment/src/message_queue.rs` (store impl + tests) and `crates/local-deployment/src/container.rs` (constructor call site).
+- **Constructor site verification:** Single call at `container.rs:127`; grep shows all test invocations are within message_queue.rs test module. All sites updated to pass pool.
+- **Pool access:** Used `db.pool.clone()` from `DBService` parameter already in scope at `LocalContainerService::new`.
+- **Type annotations for sqlx::query!():** 
+  - Used `as "field!: Uuid"` (non-null) for id and task_attempt_id fields
+  - Used `as "created_at!: DateTime<Utc>"` to parse TEXT created_at into DateTime
+  - Position stored as SQLite INTEGER (i64) cast to usize on SELECT, cast back on INSERT
+  - Variant and content remain TEXT/nullable as in schema
+- **Error handling degradation:** All DB errors logged and degraded to return signature (Vec::default(), None, false) so method signatures unchanged.
+- **Position re-packing:** Implemented in `remove()` and `pop_next()` via `UPDATE queued_messages SET position = position - 1 WHERE task_attempt_id = ? AND position > X` to maintain 0-based contiguity.
+- **Transaction usage:** `reorder()` uses `pool.begin()` and wraps all position updates in a transaction for atomicity.
+- **Test helper:** Created local `seed_task_attempt()` in test module to insert minimal parent rows (projects, tasks, task_attempts) for FK constraint satisfaction.
+- **Existing test migration:** All 7 in-memory tests updated to:
+  - Call `create_test_pool()` from `db::test_utils`
+  - Seed task_attempt via helper
+  - Create store with `MessageQueueStore::new(pool.clone())`
+  - Keep all assertions unchanged
+- **Persistence test:** Added `test_queue_persists_across_store_recreation()` matching spec exactly:
+  - Seeds task_attempt
+  - Adds 2 messages to store1
+  - Drops store1, creates store2 over same pool
+  - Verifies list() returns 2 messages with correct content and position
+  - Verifies pop_next() reindexes remaining message to position 0
+- **Library build:** `cargo build --lib -p local-deployment` exits cleanly (Finished dev profile).
+- **Removed Default impl:** `impl Default for MessageQueueStore` deleted (cannot default SqlitePool); constructor call at container.rs:127 updated to pass pool parameter explicitly.
+- **Commit:** `e7d96cad020e49c46a2b716e9fc1dc55e074bb4d`
+
 ### Task 103 — Add resume-intent column migration on execution_processes
 - **Timestamp selection:** Verified `20260201000100` sorts AFTER task 101's `20260201000000_add_queued_messages.sql`. No collisions detected.
 - **Migration file existence:** `ls crates/db/migrations/20260201000100_add_resume_state_to_execution_processes.sql` ✓
