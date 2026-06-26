@@ -106,7 +106,10 @@ writer, and the task is NOT shown as `failed`/`InReview`. Record the observed PI
 
 ## Done when
 This task adds `set_resume_state`/`get_resume_state` (`query!`) against the `resume_state` column from
-103 — the schema MUST be materialized first or the build fails (ledger Trap 2; breakdown-review R7):
-apply migrations to the dev DB and/or `cargo sqlx prepare --workspace`.
+103 — the schema MUST be materialized first or the build fails (ledger Trap 2; breakdown-review R7).
+**Precondition (Trap 2):** export `DATABASE_URL=sqlite://<repo>/dev_assets/db.sqlite` to a dev DB with
+the 103 migration applied (`sqlx migrate run`), so `query!` checks the LIVE schema. Do NOT
+`cargo sqlx prepare` here — it churns the tracked `.sqlx` cache the gate rejects (regen is a `/wai:close`
+step). With `DATABASE_URL` set, the offline cache is bypassed.
 
-`WAI_TYPECHECK_CMD="cargo sqlx prepare --workspace --check || cargo sqlx prepare --workspace; cargo check -p services && cargo check -p db" WAI_TEST_CMD="cargo test -p services cleanup_orphan" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 304` exits 0
+`WAI_TYPECHECK_CMD="cargo check -p services && cargo check -p db" WAI_TEST_CMD="cargo test -p services cleanup_orphan" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 304` exits 0

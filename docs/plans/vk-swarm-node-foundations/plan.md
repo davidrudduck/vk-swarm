@@ -111,6 +111,17 @@ Phase dependency spine: **P1 (schema) → P3 (recovery)** and **P2 (qa_mock) →
 | 502 | WAL-monitor panic supervision | dep: - | conflicts: none | SC7 |
 | 503 | npm runtime-vuln CI gate | dep: - | conflicts: none | SC7 |
 
+## Execution preconditions & closeout (READ — affects whether the gate passes)
+
+- **SQLx is offline-mode here** (211 committed `.sqlx/*.json`, `DATABASE_URL` unset). Tasks that add or
+  change a query (101→102, 103→104, 304, 305, 401, 405) must execute with
+  **`DATABASE_URL=sqlite://<repo>/dev_assets/db.sqlite` exported and that DB migrated** so `query!`
+  checks the live schema. No task runs `cargo sqlx prepare` (it rewrites tracked `.sqlx` files the
+  gate's file-allow-list rejects — see decisions-ledger Trap 2).
+- **Closeout (NOT a gated task):** after all schema/query tasks land, run `cargo sqlx prepare
+  --workspace` ONCE and commit the `.sqlx` delta as a standalone housekeeping commit at `/wai:close`,
+  so offline builds/CI work again. Do not skip this — the committed cache is stale until then.
+
 ## Irreversible tasks (🚧 human gate)
 
 - **403** — removes public API routes (`/api/nodes*`, `/api/swarm/*`, `/api/merged-projects`) → contract change.

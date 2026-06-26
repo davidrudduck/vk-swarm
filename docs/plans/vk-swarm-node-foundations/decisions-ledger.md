@@ -19,13 +19,28 @@ Rust task therefore sets BOTH overrides in its `## Done when` line:
 - `WAI_TEST_CMD="cargo test -p <crate> <test_name>"`
 A Rust task that omits these silently runs the wrong (or no) check and the gate's "pass" is hollow.
 
-### Trap 2 — SQLx compile-time queries need the schema materialized
-This repo uses `sqlx::query_as!`/`query!` (compile-time-checked against a live schema). The moment a
-query references a new table/column/view (tasks 102, 104, and the recovery queries in 303/304), the
-build needs that schema present: either the dev DB has the migration **applied**, or the offline
-`.sqlx` cache is **regenerated** (`cargo sqlx prepare --workspace`). A migration-add + query-use in the
-**same commit** will NOT compile otherwise. Each such task's `## Done when` includes the apply/prepare
-step. Migration-only tasks (101, 103) that add no query are safe alone.
+### Trap 2 — SQLx is OFFLINE-mode here; build against a live migrated DB, do NOT `cargo sqlx prepare` in a task
+This repo commits a `.sqlx` offline cache (**211 tracked `.sqlx/query-*.json`**) and leaves
+`DATABASE_URL` unset (`.env:24` commented) — so by default `query!`/`query_as!` validate against the
+cache, NOT a live DB. A task that adds a migration + a new query (102, 104, 304, 305, 405) will FAIL to
+compile against the stale cache.
+
+**Do NOT run `cargo sqlx prepare` inside a task.** It rewrites the tracked `.sqlx/*.json`, and those are
+NOT in any task's `files:`. `task-gate.sh`'s dir-scope trick can't cover them: `.sqlx`'s basename has a
+leading dot, so `${d##*/}` matches `*.*` and the gate treats `.sqlx` as a *file*, not a directory — the
+regenerated cache files are rejected as "outside files:" (verified against task-gate.sh `is_declared`).
+
+**Instead: execute schema/query tasks against a LIVE migrated dev DB.** Export
+`DATABASE_URL=sqlite://<repo>/dev_assets/db.sqlite` and apply migrations (`sqlx migrate run --source
+crates/db/migrations`, or let the dev server auto-migrate on startup) so `query!` macros check the live
+schema. `SQLX_OFFLINE` is NOT forced anywhere, so a set `DATABASE_URL` takes precedence over the cache.
+The gate's `cargo check`/`test` then pass WITHOUT touching `.sqlx`. **`DATABASE_URL` exported to a
+migrated dev DB is a precondition of executing these tasks** (the opencode runner must set it).
+
+**`.sqlx` regeneration is a single closeout step, intentionally OUTSIDE the per-task gates:** after all
+schema/query tasks land, run `cargo sqlx prepare --workspace` ONCE and commit the `.sqlx` delta as a
+standalone housekeeping commit at `/wai:close` (so offline builds/CI work again). Do NOT try to fold it
+into a gated task. Migration-only tasks (101, 103) add no query and are safe alone.
 
 ### Trap 3 — Rust module registration + `enum_dispatch` exhaustiveness
 `CodingAgent` is a hand-written enum with **explicit match arms** (capabilities @ `mod.rs:211`,

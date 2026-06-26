@@ -110,8 +110,9 @@ method names, or the consumer logic at `container.rs:1179/1203/1294`.
   reuse a `crates/db` test fixture if one is exported. Record which.
 - Removing `impl Default for MessageQueueStore` breaks a caller relying on `Default`/`derive(Default)`
   on an owner struct → STOP and thread the pool instead.
-- The `query_as!`/`query!` macros fail to compile because the schema isn't materialized → apply the
-  101 migration to the dev DB AND/OR run `cargo sqlx prepare --workspace` (Trap 2 in the ledger).
+- The `query!` macros fail to compile because the schema isn't materialized → export `DATABASE_URL` to
+  a dev DB with the 101 migration applied so `query!` checks the live schema (Trap 2). Do NOT
+  `cargo sqlx prepare` in this task (it churns the tracked `.sqlx` cache the gate rejects).
 
 ## Done when
 `WAI_TYPECHECK_CMD="cargo check -p local-deployment" WAI_TEST_CMD="cargo test -p local-deployment message_queue" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 102` exits 0

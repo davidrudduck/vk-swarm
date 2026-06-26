@@ -162,10 +162,11 @@ Two siblings — read BOTH before writing, list their guards, justify any diverg
 
 ## Done when
 
-`WAI_TYPECHECK_CMD="cargo sqlx prepare --workspace --check || cargo sqlx prepare --workspace; cargo check -p server && cd frontend && npx tsc --noEmit" WAI_TEST_CMD="cd frontend && npm run lint" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 405` exits 0
+`WAI_TYPECHECK_CMD="cargo check -p server && cd frontend && npx tsc --noEmit" WAI_TEST_CMD="cd frontend && npm run lint" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 405` exits 0
 
 > Trap 1/2: server crate + frontend toolchain. This task ADDS a `query_scalar!(MAX(hive_synced_at))`
-> (the `last_synced_at` field), so the schema must be materialized — apply migrations to the dev DB
-> and/or `cargo sqlx prepare --workspace` (Trap 2). The `#[ts(export)]` change is picked up by
-> `npm run generate-types` (step B). `shared/types.ts` diff now adds THREE fields (`hive_url`,
-> `node_name`, `last_synced_at`).
+> (the `last_synced_at` field), so `query!` must check a live schema — **precondition: export
+> `DATABASE_URL=sqlite://<repo>/dev_assets/db.sqlite`** to a migrated dev DB (Trap 2). Do NOT
+> `cargo sqlx prepare` here (it churns the tracked `.sqlx` cache the gate rejects; regen is a
+> `/wai:close` step). The `#[ts(export)]` change is picked up by `npm run generate-types` (step B);
+> `shared/types.ts` diff adds THREE fields (`hive_url`, `node_name`, `last_synced_at`).

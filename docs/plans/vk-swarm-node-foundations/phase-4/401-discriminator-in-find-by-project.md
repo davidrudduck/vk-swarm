@@ -223,6 +223,9 @@ this predicate replaces it.
 
 `WAI_TYPECHECK_CMD="cargo check -p db" WAI_TEST_CMD="cargo test -p db --test task_visibility_discriminator" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 401` exits 0
 
-> SQLx note (Trap 2): this query references only existing columns, so no `.sqlx` regen or migration
-> apply is required. If the offline cache is stale for an unrelated reason, run
-> `cargo sqlx prepare --workspace` (or apply migrations to the dev DB) before the gate.
+> SQLx note (Trap 2): this task CHANGES the query's WHERE clause — even though it references only
+> existing columns, the modified query text is a NEW entry from sqlx's offline-cache perspective (the
+> cache keys on the query string's hash), so the stale `.sqlx` will NOT contain it and an offline build
+> fails. **Precondition:** export `DATABASE_URL=sqlite://<repo>/dev_assets/db.sqlite` (migrated) so
+> `query_as!` checks the live schema. Do NOT `cargo sqlx prepare` in this task (it churns the tracked
+> `.sqlx` cache the gate rejects; regen is a `/wai:close` step).

@@ -41,11 +41,20 @@ the chosen seam in the ledger.)
 - **File:** `crates/local-deployment/src/container.rs` — add an async method
   `drain_queued_messages_on_boot(&self) -> Result<(), ContainerError>` that:
   1. SELECTs distinct `task_attempt_id`s having rows in `queued_messages` (the table from 101).
-  2. For EACH, skips it if that attempt currently has a running/just-resumed execution process
-     (`has_running_processes_for_attempt`, the trait method at `services/container.rs:144`) — those are
-     handled by task 304's resume + the live `:738` drain; starting a queued message under a live writer
-     would create a second writer (the ADR-0001 hazard).
-  3. For attempts with NO active execution, start the next queued message via the SAME path the live
+  2. For EACH, drain ONLY a genuinely-idle attempt — one recovery left untouched whose last run ended
+     cleanly. Skip the attempt if ANY of:
+     - it has a running/just-resumed execution (`has_running_processes_for_attempt`,
+       `services/container.rs:144`) — 304 + the live `:738` drain own it; draining now = second writer
+       (ADR-0001 hazard); OR
+     - any of its executions carries a non-NULL `resume_state` (i.e. recovery TOUCHED it — `'pending'` /
+       `'resumed'` = being resumed; **`'abandoned'`** = 304 failed it with no session). An abandoned
+       attempt has no session to follow up, so starting its queued message as a `CodingAgentFollowUp`
+       would fail/be undefined — leave it queued for the operator. (Advisor catch: the original
+       predicate skipped only pending/resumed, stranding abandoned attempts.); OR
+     - its latest execution did not complete normally (no valid session to resume from).
+     Net: drain iff `resume_state IS NULL` for all its executions AND the latest execution is
+     `Completed`. Confirm the exact predicate against how 304 stamps `resume_state` before locking it in.
+  3. For attempts that pass step 2, start the next queued message via the SAME path the live
      drain uses (`try_consume_queued_message` / the start-execution machinery) so the queued follow-up
      becomes a real execution.
 - **File:** `crates/server/src/main.rs` — the recovery call is a **detached `tokio::spawn`** at
@@ -82,20 +91,23 @@ owns it).
   execution_process, OR call the lower-level start path directly; record the chosen approach. Do NOT
   fabricate a fake exit event.
 - The "is this attempt being resumed by 304?" signal is ambiguous (304 may mark `resume_state='resumed'`
-  but not yet have a running process at the instant the drain runs) → key the skip on BOTH
-  `has_running_processes_for_attempt` AND `resume_state IN ('pending','resumed')` to avoid the
-  double-writer race; record the predicate.
+  but not yet have a running process at the instant the drain runs) → key the skip on
+  `has_running_processes_for_attempt` OR **any** non-NULL `resume_state` (`'pending'`/`'resumed'`/
+  `'abandoned'`) to avoid both the double-writer race AND draining a dead-session abandoned attempt;
+  record the predicate.
 - Ordering (CRITICAL — double-writer hazard): the drain MUST be `.await`-chained AFTER
   `cleanup_orphan_executions().await` **completes**, in the SAME task. A sibling `tokio::spawn` runs
   concurrently with recovery and races 304 into the worktree. If you cannot guarantee completion-ordering
   (e.g. recovery is structured so it can't be awaited before the drain), STOP — do not start the drain.
 
 ## Done when
-Adds no new schema (reads the 101 table) but its `query!`/`query_as!` reference `queued_messages` (101)
-— ensure the schema is materialized (Trap 2): apply migrations and/or `cargo sqlx prepare --workspace`.
+Adds no new schema (reads the 101 table) but its `query!`/`query_as!` reference `queued_messages` (101).
+**Precondition (Trap 2):** export `DATABASE_URL=sqlite://<repo>/dev_assets/db.sqlite` to a dev DB with
+101 applied so `query!` checks the LIVE schema. Do NOT `cargo sqlx prepare` here (it churns the tracked
+`.sqlx` cache the gate rejects; regen is a `/wai:close` step).
 
 **Completion-ordering assertion (record in ledger):** the diff at `main.rs:130` shows
 `cleanup_orphan_executions().await` and `drain_queued_messages_on_boot().await` in the SAME `tokio::spawn`
 body, the drain second — NOT a separate `tokio::spawn`. Confirm by reading the final hunk.
 
-`WAI_TYPECHECK_CMD="cargo sqlx prepare --workspace --check || cargo sqlx prepare --workspace; cargo check -p local-deployment && cargo check -p server" WAI_TEST_CMD="cargo test -p local-deployment boot_drain" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 305` exits 0
+`WAI_TYPECHECK_CMD="cargo check -p local-deployment && cargo check -p server" WAI_TEST_CMD="cargo test -p local-deployment boot_drain" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 305` exits 0

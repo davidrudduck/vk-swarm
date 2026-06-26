@@ -77,3 +77,28 @@ verbatim; no new surface introduced.
 **GATE CLEARED:** 12/12 findings resolved (round 1) + the single round-2 ordering regression fixed.
 Spine verified sound by all three round-1 challengers and re-confirmed in round 2.
 **VERDICT: APPROVE.**
+
+---
+
+## Advisor post-review hardening (two execution-blockers the four reviews missed)
+
+After round-2 APPROVE, a final advisor pass caught two gaps that would bite during opencode execution:
+
+**A. Task 305 skip predicate stranded ABANDONED attempts.** After 304, attempts are resumed /
+abandoned / idle. 305 skipped only `pending`/`resumed` — so an abandoned attempt (304 failed it, no
+session) with a queued message would have its follow-up auto-started against a dead session. Fixed:
+drain ONLY genuinely-idle attempts (`resume_state IS NULL` for all executions AND latest `Completed`);
+skip any non-NULL `resume_state` (incl. `abandoned`). Updated Change step 2 + STOP trigger.
+
+**B. SQLx offline-cache vs the gate's file-allow-list.** Verified the repo is offline-mode (211
+committed `.sqlx/*.json`, `DATABASE_URL` unset, `SQLX_OFFLINE` not forced). The earlier "run
+`cargo sqlx prepare` in the gate" would rewrite tracked `.sqlx/*.json` that NO task lists in `files:` —
+and the gate's dir-scope trick can't cover `.sqlx` (leading-dot basename matches `*.*`, treated as a
+file), so every schema task would fail the file-allow-list. Fixed across 102/104/304/305/401/405:
+build against a LIVE migrated dev DB (`DATABASE_URL` exported) so `query!` checks live schema; removed
+`cargo sqlx prepare` from all gate commands; documented the one-time `.sqlx` regen as a `/wai:close`
+housekeeping commit (intentionally outside the per-task gates). Ledger Trap 2 rewritten; plan.md gains
+an "Execution preconditions & closeout" section.
+
+Both fixes are body/gate-command only (no frontmatter/dep change) → PLAN-LINT still PASS. **GATE
+remains APPROVE**; these harden execution, they don't reopen the breakdown.

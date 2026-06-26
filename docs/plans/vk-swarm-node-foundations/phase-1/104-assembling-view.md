@@ -85,8 +85,10 @@ header, and test conventions (`create_test_pool`). Justify any divergence in the
 - No reusable seed helper exists for a running attempt + session → write a local `seed_running_attempt
   _with_session` in the test module inserting the full chain (project→task→task_attempt→
   execution_process→executor_session). Record it.
-- `query_as!` against `v_workstream_state` fails to compile (schema not materialized) → apply 101/103/
-  104 migrations to the dev DB and/or `cargo sqlx prepare --workspace` (Trap 2).
+- `query_as!` against `v_workstream_state` fails to compile (schema not materialized) → export
+  `DATABASE_URL` to a dev DB with 101/103/104 migrations applied so `query_as!` checks the live schema
+  (Trap 2). Do NOT `cargo sqlx prepare` in this task (it churns the tracked `.sqlx` cache the gate
+  rejects; regen is a `/wai:close` step).
 - A column referenced in the view (`ta.branch`, `es.session_id`, `ep.resume_state`) does not exist with
   that exact name → STOP and reconcile against the real schema before finalizing.
 
