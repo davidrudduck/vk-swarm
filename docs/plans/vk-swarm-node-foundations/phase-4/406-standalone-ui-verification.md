@@ -6,7 +6,8 @@ status: ready
 depends_on: ["402","404","405"]
 parallel: false
 conflicts_with: []
-files: []
+files:
+  - docs/plans/vk-swarm-node-foundations/decisions-ledger.md
 irreversible: false
 scope_test: "N/A"
 allowed_change: edit
