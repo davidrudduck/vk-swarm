@@ -33,8 +33,6 @@ use handlers::{
     force_resync_tasks,
     // GitHub handlers
     get_github_counts,
-    // Merged handlers
-    get_merged_projects,
     get_project,
     get_project_branches,
     // Linking handlers
@@ -59,7 +57,7 @@ use handlers::{
 /// Builds the axum router containing all project-related HTTP routes.
 ///
 /// This router mounts the `/projects` subtree (including per-project, file, by-remote-id, and orphaned routes),
-/// exposes `/merged-projects`, and applies the appropriate per-route middleware for loading projects
+/// and applies the appropriate per-route middleware for loading projects
 /// (including wildcard and by-remote-id variants).
 ///
 /// # Returns
@@ -145,7 +143,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
 
     Router::new()
         .nest("/projects", projects_router)
-        .route("/merged-projects", get(get_merged_projects))
 }
 
 // Note: Type tests are in types.rs
