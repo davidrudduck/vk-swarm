@@ -430,7 +430,7 @@ export function TaskFollowUpSection({
     ) {
       return false;
     }
-    return !Boolean(
+    return !(
       conflictResolutionInstructions ||
         reviewMarkdown ||
         clickedMarkdown ||
