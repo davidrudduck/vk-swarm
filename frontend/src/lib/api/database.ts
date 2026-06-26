@@ -10,6 +10,7 @@ import type {
   LogStatsResponse,
   LogPurgeResult,
   Task,
+  SyncStatusResponse,
 } from 'shared/types';
 import { makeRequest, handleApiResponse } from './utils';
 
@@ -117,5 +118,13 @@ export const databaseApi = {
       method: 'POST',
     });
     return handleApiResponse<LogPurgeResult>(response);
+  },
+
+  /**
+   * Get Hive sync status (unsynced counts, connection, configured hive url/node name).
+   */
+  getSyncStatus: async (): Promise<SyncStatusResponse> => {
+    const response = await makeRequest('/api/database/sync-status');
+    return handleApiResponse<SyncStatusResponse>(response);
   },
 };

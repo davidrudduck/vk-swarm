@@ -108,6 +108,13 @@ pub struct SyncStatusResponse {
     pub is_connected: bool,
     /// Current node ID (if connected to Hive).
     pub node_id: Option<Uuid>,
+    /// Hive WebSocket URL this node is configured to sync with (from VK_HIVE_URL), if any.
+    pub hive_url: Option<String>,
+    /// Human-readable node name (from VK_NODE_NAME), if configured.
+    pub node_name: Option<String>,
+    /// Most recent successful sync timestamp across synced entities (NULL = never synced).
+    #[ts(type = "Date | null")]
+    pub last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Response for force resync operation.
@@ -320,6 +327,21 @@ async fn sync_status(
         (false, None)
     };
 
+    // Get Hive configuration from environment
+    let hive_url = std::env::var("VK_HIVE_URL").ok();
+    let node_name = std::env::var("VK_NODE_NAME").ok();
+
+    // Get most recent successful sync timestamp
+    let last_synced_at: Option<String> = sqlx::query_scalar(
+        "SELECT MAX(hive_synced_at) FROM execution_processes"
+    )
+    .fetch_one(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let last_synced_at = last_synced_at.and_then(|ts| chrono::DateTime::parse_from_rfc3339(&ts).ok().map(|dt| dt.with_timezone(&chrono::Utc)));
+
     Ok(ResponseJson(ApiResponse::success(SyncStatusResponse {
         unsynced_tasks,
         unsynced_attempts,
@@ -327,6 +349,9 @@ async fn sync_status(
         unsynced_logs,
         is_connected,
         node_id,
+        hive_url,
+        node_name,
+        last_synced_at,
     })))
 }
 
