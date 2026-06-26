@@ -2,7 +2,7 @@
 id: "403"
 phase: 4
 title: Remove pure-proxy remote API modules (nodes, swarm_*, merged-projects)
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

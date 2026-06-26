@@ -2,7 +2,7 @@
 id: "404"
 phase: 4
 title: Delete the frontend Nodes-management feature (page, components, context, dialog, hooks, nav)
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
