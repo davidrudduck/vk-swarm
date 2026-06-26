@@ -2,7 +2,7 @@
 id: "406"
 phase: 4
 title: Verify the node builds + serves its UI standalone with no hive env (SC6)
-status: ready
+status: passed
 depends_on: ["402","404","405"]
 parallel: false
 conflicts_with: []
