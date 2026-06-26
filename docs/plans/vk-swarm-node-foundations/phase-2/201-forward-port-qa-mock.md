@@ -10,6 +10,7 @@ files:
   - crates/executors/src/executors/qa_mock.rs
   - crates/executors/src/executors/mod.rs
   - crates/executors/default_profiles.json
+  - crates/executors/src/mcp_config.rs
 irreversible: false
 scope_test: "crates/executors/src/executors/qa_mock.rs"
 allowed_change: mixed

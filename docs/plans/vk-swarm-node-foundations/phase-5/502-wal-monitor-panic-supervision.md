@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - crates/db/src/wal_monitor.rs
   - crates/db/Cargo.toml
+  - Cargo.lock
 irreversible: false
 scope_test: "crates/db/src/wal_monitor.rs"
 allowed_change: edit

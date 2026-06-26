@@ -14,7 +14,7 @@
     "clean": "cargo clean && cd frontend && rm -rf node_modules/.vite",
     "clean:cache": "bash scripts/clean-cargo-cache.sh",
     "clean:cache:aggressive": "bash scripts/clean-cargo-cache.sh --aggressive",
-    "lint": "pnpm run frontend:lint && pnpm run backend:lint",
+    "lint": "pnpm run frontend:lint && pnpm run backend:lint && node scripts/check-npm-runtime-vulns.mjs",
     "format": "cargo fmt --all && cd frontend && pnpm run format",
     "check": "pnpm run frontend:check && pnpm run backend:check",
     "dev": "node scripts/start-dev.js",
@@ -54,7 +54,10 @@
   "pnpm": {
     "overrides": {
       "@tanstack/db": "^0.6.4",
-      "@codemirror/state": "^6.6.0"
+      "@codemirror/state": "^6.6.0",
+      "preact@<10.27.3": "^10.27.3",
+      "devalue@<5.6.4": "^5.6.4",
+      "fast-uri@<3.1.2": "^3.1.2"
     }
   }
 }
