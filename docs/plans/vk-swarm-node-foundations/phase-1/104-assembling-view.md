@@ -2,7 +2,7 @@
 id: "104"
 phase: 1
 title: Add assembling view over attempts+processes+sessions + read accessor
-status: ready
+status: passed
 depends_on: ["103"]
 parallel: false
 conflicts_with: []

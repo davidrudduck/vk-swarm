@@ -194,6 +194,13 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
 - **Library build:** `cargo build --lib -p local-deployment` exits cleanly (Finished dev profile).
 - **Removed Default impl:** `impl Default for MessageQueueStore` deleted (cannot default SqlitePool); constructor call at container.rs:127 updated to pass pool parameter explicitly.
 - **Commit:** `e7d96cad020e49c46a2b716e9fc1dc55e074bb4d`
+- **Verification stop (2026-06-26):** Re-ran the task-file command exactly:
+  `DATABASE_URL=sqlite:///home/david/Code/vk-swarm/dev_assets/db.sqlite cargo check -p local-deployment`.
+  It failed before task tests because Cargo checked the `remote` dependency and SQLx expanded remote
+  Postgres queries against the SQLite dev DB. First failure:
+  `crates/remote/src/db/auth.rs:50:9: error returned from database: (code: 1) no such table: auth_sessions`,
+  followed by the known `E0282 type annotations needed` cascade in `crates/remote`. Worktree status was
+  clean before verification; no files outside task 102's declared files were modified. Outcome: stopped.
 
 ### Task 103 — Add resume-intent column migration on execution_processes
 - **Timestamp selection:** Verified `20260201000100` sorts AFTER task 101's `20260201000000_add_queued_messages.sql`. No collisions detected.
@@ -207,3 +214,24 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
 - **DB test pool:** `cargo test -p db --lib` exit status: 0 (180 tests passed, 0 failed).
 - **Type check:** `cargo check -p db` completed successfully.
 - **Commit:** `cb0bfaf092872fce3c6189c34a04a3568c66dc12`
+
+### Task 104 — Add assembling view + read accessor
+- **Migration timestamp:** `20260201000200` sorts after task 103's `20260201000100`. No collisions detected.
+- **Migration application:** `sqlx migrate run --source crates/db/migrations --database-url "sqlite:dev_assets/db.sqlite"` completed successfully. Output: `Applied 20260201000200/migrate add workstream state view (6.856464ms)`.
+- **View schema validation:** `sqlite3 dev_assets/db.sqlite "SELECT sql FROM sqlite_master WHERE type='view' AND name='v_workstream_state';"` confirms LEFT JOIN to executor_sessions (nullable session_id) ✓
+- **Sibling alignment:** Matched `executor_session.rs` style (17 fields):
+  - Uses `query_as!` with type aliases `as "id!: Uuid"` for BLOB→Uuid conversion
+  - Imports: `FromRow`, `SqlitePool`, `Uuid`, `Serialize`/`Deserialize`, `TS` (no TS export on view model)
+  - Module doc header: `//!` with description of the view's role
+  - Test module: `#[cfg(test)]` with test harness seeding parent rows
+- **Schema columns verified:** All 13 projected columns confirmed to exist in underlying tables (task_attempts: container_ref, branch, target_branch; execution_processes: run_reason, status, resume_state, pid, before_head_commit, after_head_commit, created_at; executor_sessions: session_id via LEFT JOIN).
+- **Struct field types:** Decided on plain `String`/`Option<String>`/`Option<i64>` (not typed enums) for the view model, matching scalar-query pattern stated in decompose decisions (resume-intent column accessed via dedicated scalar queries, not struct-mapped). This keeps the view a projection surface without enum baggage.
+- **UUID handling:** ExecutorSession uses `query_as!` with `as "id!: Uuid"` type casts; WorkstreamState follows same pattern for `execution_process_id` and `task_attempt_id` fields (BLOB→Uuid automatic via macro).
+- **Test helper:** `seed_running_attempt_with_session()` inserts full triple (project → task → task_attempt → execution_process → executor_session) to test assembling. Seeding parameters:
+  - `executor_action` field (NOT NULL, required) set to `"{}"` (empty JSON object, matches factory defaults)
+  - `run_reason` set to `"codingagent"` (matches enum CheckConstraint on execution_processes)
+  - Status set to `"running"` (target state for resumable query)
+- **Test execution:** `cargo test -p db --lib workstream_state 2>&1` passed: `test models::workstream_state::tests::test_workstream_state_assembles_the_triple ... ok` ✓
+- **Compilation:** `cargo check -p db 2>&1` completed without errors (no sqlx prepare invoked) ✓
+- **Module registration:** Added `pub mod workstream_state;` to `crates/db/src/models/mod.rs` after `webhook` in alphabetical order.
+- **Commit:** (pending)
