@@ -165,3 +165,16 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
       ON queued_messages(task_attempt_id, position);
   ```
 - **Commit:** `9945d61feca236ebba6c11a01677e647ce6ee125`
+
+### Task 103 — Add resume-intent column migration on execution_processes
+- **Timestamp selection:** Verified `20260201000100` sorts AFTER task 101's `20260201000000_add_queued_messages.sql`. No collisions detected.
+- **Migration file existence:** `ls crates/db/migrations/20260201000100_add_resume_state_to_execution_processes.sql` ✓
+- **No prior column:** `grep -rn "resume_state" crates/db/migrations/` (no output) — column does not exist in any migration.
+- **Schema validation:** Applied cleanly via `sqlx migrate run --source crates/db/migrations`. Output: `Applied 20260201000100/migrate add resume state to execution processes (7.15378ms)`.
+- **DB schema inspection:** `sqlite3 dev_assets/db.sqlite ".schema execution_processes"` confirms:
+  - `resume_state TEXT` column present
+  - `idx_execution_processes_resume_state` index created with `WHERE status = 'running'` condition ✓
+- **No Rust struct changes:** `git diff --stat` shows only the migration file added (no ExecutionProcess struct modification) ✓
+- **DB test pool:** `cargo test -p db --lib` exit status: 0 (180 tests passed, 0 failed).
+- **Type check:** `cargo check -p db` completed successfully.
+- **Commit:** `cb0bfaf092872fce3c6189c34a04a3568c66dc12`
