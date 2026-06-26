@@ -135,6 +135,16 @@ async fn main() -> Result<(), VibeKanbanError> {
         {
             tracing::warn!("Failed to cleanup orphan executions: {}", e);
         }
+        // Drain persisted queued messages for idle attempts AFTER cleanup completes.
+        // Sequenced in the same spawn (not a sibling spawn) so cleanup_orphan_executions
+        // finishes first, preventing 304's resume path from racing with the drain.
+        if let Err(e) = deployment_for_orphan_cleanup
+            .container()
+            .drain_queued_messages_on_boot()
+            .await
+        {
+            tracing::warn!("Failed to drain queued messages on boot: {}", e);
+        }
     });
 
     let deployment_for_backfill = deployment.clone();

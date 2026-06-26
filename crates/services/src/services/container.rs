@@ -266,6 +266,12 @@ pub trait ContainerService {
         NotificationService::notify_execution_halted(notify_cfg, ctx).await;
     }
 
+    /// Drain persisted queued messages for idle attempts on boot.
+    /// Called AFTER cleanup_orphan_executions; no-op by default (overridden in LocalContainerService).
+    async fn drain_queued_messages_on_boot(&self) -> Result<(), ContainerError> {
+        Ok(())
+    }
+
     /// Cleanup executions marked as running in the db, call at startup.
     /// Uses fence-then-resume: for each running coding-agent process with a PID,
     /// fence the process first, then resume if a session_id exists, or mark-failed otherwise.
