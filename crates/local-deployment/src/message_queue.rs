@@ -163,13 +163,11 @@ impl MessageQueueStore {
             }
         };
 
-        if existing.is_none() {
-            return None;
-        }
+        existing?;
 
         // Update content if provided
-        if let Some(new_content) = content {
-            if let Err(e) = sqlx::query!(
+        if let Some(new_content) = content
+            && let Err(e) = sqlx::query!(
                 "UPDATE queued_messages SET content = ? WHERE id = ? AND task_attempt_id = ?",
                 new_content,
                 message_id,
@@ -177,10 +175,9 @@ impl MessageQueueStore {
             )
             .execute(&self.pool)
             .await
-            {
-                tracing::error!(error = ?e, message_id = ?message_id, "Failed to update message content");
-                return None;
-            }
+        {
+            tracing::error!(error = ?e, message_id = ?message_id, "Failed to update message content");
+            return None;
         }
 
         // Update variant if explicitly provided
@@ -415,9 +412,7 @@ impl MessageQueueStore {
             }
         };
 
-        let Some(row) = first_msg else {
-            return None;
-        };
+        let row = first_msg?;
 
         let message_id = row.id;
         let popped_message = QueuedMessage {

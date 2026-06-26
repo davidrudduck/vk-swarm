@@ -39,19 +39,17 @@ fn ensure_configured_dirs() -> Result<(), VibeKanbanError> {
 
     // database_path() creates its parent dir when VK_DATABASE_PATH is set.
     let db = database_path();
-    if let Some(parent) = db.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                std::io::Error::new(
-                    e.kind(),
-                    format!(
-                        "Failed to create database directory '{}': {}",
-                        parent.display(),
-                        e
-                    ),
-                )
-            })?;
-        }
+    if let Some(parent) = db.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!(
+                    "Failed to create database directory '{}': {}",
+                    parent.display(),
+                    e
+                ),
+            )
+        })?;
     }
 
     // backup_dir() creates itself when VK_BACKUP_DIR is set; also ensure the

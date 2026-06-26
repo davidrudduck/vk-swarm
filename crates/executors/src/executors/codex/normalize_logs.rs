@@ -11,14 +11,14 @@ use std::{
 
 use codex_app_server_protocol::{
     AgentMessageDeltaNotification, CommandExecutionRequestApprovalParams,
-    CommandExecutionStatus as V2CommandExecutionStatus, FileUpdateChange as V2FileUpdateChange,
-    ItemCompletedNotification, ItemStartedNotification, JSONRPCNotification, JSONRPCRequest,
-    JSONRPCResponse, McpToolCallProgressNotification, McpToolCallResult as V2McpToolCallResult,
-    McpToolCallStatus as V2McpToolCallStatus, PatchApplyStatus as V2PatchApplyStatus,
-    ReasoningSummaryTextDeltaNotification, ReasoningTextDeltaNotification, ServerNotification,
-    ThreadForkResponse, ThreadItem, ThreadStartResponse, ThreadTokenUsageUpdatedNotification,
-    ToolRequestUserInputParams, ToolRequestUserInputQuestion, TurnPlanStep,
-    TurnPlanUpdatedNotification,
+    CommandExecutionStatus as V2CommandExecutionStatus, DynamicToolCallParams,
+    FileUpdateChange as V2FileUpdateChange, ItemCompletedNotification, ItemStartedNotification,
+    JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, McpToolCallProgressNotification,
+    McpToolCallResult as V2McpToolCallResult, McpToolCallStatus as V2McpToolCallStatus,
+    PatchApplyStatus as V2PatchApplyStatus, ReasoningSummaryTextDeltaNotification,
+    ReasoningTextDeltaNotification, ServerNotification, ThreadForkResponse, ThreadItem,
+    ThreadStartResponse, ThreadTokenUsageUpdatedNotification, ToolRequestUserInputParams,
+    ToolRequestUserInputQuestion, TurnPlanStep, TurnPlanUpdatedNotification,
 };
 use codex_mcp_types::ContentBlock;
 use codex_protocol::{
@@ -276,6 +276,19 @@ impl LogNormalizer for CodexNormalizer {
             return Some(CodexEvent::UserInputRequest {
                 item_id: params.item_id,
                 questions: map_user_input_questions(params.questions),
+            });
+        }
+
+        if let Ok(request) = serde_json::from_str::<JSONRPCRequest>(line)
+            && request.method == "item/tool/call"
+            && let Ok(params) = serde_json::from_value::<DynamicToolCallParams>(
+                request.params.unwrap_or(Value::Null),
+            )
+        {
+            return Some(CodexEvent::DynamicToolCall {
+                item_id: params.call_id,
+                tool: params.tool,
+                arguments: params.arguments,
             });
         }
 

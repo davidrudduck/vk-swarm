@@ -998,17 +998,15 @@ impl ClaudeLogProcessor {
                         }
                     }
                     Some("local_command_output") => {
-                        if let ClaudeJson::System { content, .. } = claude_json {
-                            if let Some(text) = content {
-                                let entry = NormalizedEntry {
-                                    timestamp: None,
-                                    entry_type: NormalizedEntryType::SystemMessage,
-                                    content: text.clone(),
-                                    metadata: None,
-                                };
-                                let idx = entry_index_provider.next();
-                                patches.push(ConversationPatch::add_normalized_entry(idx, entry));
-                            }
+                        if let ClaudeJson::System { content: Some(text), .. } = claude_json {
+                            let entry = NormalizedEntry {
+                                timestamp: None,
+                                entry_type: NormalizedEntryType::SystemMessage,
+                                content: text.clone(),
+                                metadata: None,
+                            };
+                            let idx = entry_index_provider.next();
+                            patches.push(ConversationPatch::add_normalized_entry(idx, entry));
                         }
                     }
                     Some(subtype) => {
@@ -1496,35 +1494,35 @@ impl ClaudeLogProcessor {
                 }
 
                 // Surface permission denials as a system message
-                if let Some(denials) = permission_denials {
-                    if !denials.is_empty() {
-                        let tool_names: Vec<String> = denials
-                            .iter()
-                            .filter_map(|d| {
-                                d.get("toolName")
-                                    .or_else(|| d.get("tool_name"))
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string())
-                            })
-                            .collect();
-                        let msg = if tool_names.is_empty() {
-                            format!("Tools blocked by permissions ({} denial(s))", denials.len())
-                        } else {
-                            format!(
-                                "Tools blocked by permissions: {} ({} denial(s))",
-                                tool_names.join(", "),
-                                denials.len()
-                            )
-                        };
-                        let denial_entry = NormalizedEntry {
-                            timestamp: None,
-                            entry_type: NormalizedEntryType::SystemMessage,
-                            content: msg,
-                            metadata: None,
-                        };
-                        let idx = entry_index_provider.next();
-                        patches.push(ConversationPatch::add_normalized_entry(idx, denial_entry));
-                    }
+                if let Some(denials) = permission_denials
+                    && !denials.is_empty()
+                {
+                    let tool_names: Vec<String> = denials
+                        .iter()
+                        .filter_map(|d| {
+                            d.get("toolName")
+                                .or_else(|| d.get("tool_name"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .collect();
+                    let msg = if tool_names.is_empty() {
+                        format!("Tools blocked by permissions ({} denial(s))", denials.len())
+                    } else {
+                        format!(
+                            "Tools blocked by permissions: {} ({} denial(s))",
+                            tool_names.join(", "),
+                            denials.len()
+                        )
+                    };
+                    let denial_entry = NormalizedEntry {
+                        timestamp: None,
+                        entry_type: NormalizedEntryType::SystemMessage,
+                        content: msg,
+                        metadata: None,
+                    };
+                    let idx = entry_index_provider.next();
+                    patches.push(ConversationPatch::add_normalized_entry(idx, denial_entry));
                 }
             }
             ClaudeJson::ApprovalResponse {

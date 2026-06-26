@@ -27,7 +27,7 @@ use executors::{
         coding_agent_initial::CodingAgentInitialRequest,
         script::{ScriptContext, ScriptRequest, ScriptRequestLanguage},
     },
-    executors::{BaseCodingAgent, ExecutorError, StandardCodingAgentExecutor},
+    executors::{ExecutorError, StandardCodingAgentExecutor},
     logs::{NormalizedEntry, NormalizedEntryError, NormalizedEntryType, utils::ConversationPatch},
     profile::{ExecutorConfigs, ExecutorProfileId},
 };
@@ -79,11 +79,13 @@ pub enum ContainerError {
 
 /// Build a resume action from a stored coding-agent action.
 ///
-/// Extracts the executor profile ID from the stored action and constructs
-/// a new `CodingAgentFollowUpRequest` with the provided session ID and prompt,
-/// preserving the `next_action` from the stored action.
+/// Constructs a new `CodingAgentFollowUpRequest` using the provided session ID and prompt,
+/// preserving the executor profile and `next_action` from the stored action.
 ///
-/// Returns `None` if the stored action is not a coding-agent initial request.
+/// Handles both `CodingAgentInitialRequest` (first-turn crash) and
+/// `CodingAgentFollowUpRequest` (multi-turn crash), covering the full resume surface.
+///
+/// Returns `None` if the stored action is not a coding-agent action (e.g. a script request).
 pub fn build_resume_action(
     stored: &ExecutorAction,
     session_id: String,
@@ -96,6 +98,20 @@ pub fn build_resume_action(
                 prompt,
                 session_id,
                 executor_profile_id: ExecutorProfileId::new(executor_profile_id),
+            };
+            let action = ExecutorAction::new(
+                ExecutorActionType::CodingAgentFollowUpRequest(follow_up),
+                stored.next_action().map(|next| Box::new(next.clone())),
+            );
+            Some(action)
+        }
+        ExecutorActionType::CodingAgentFollowUpRequest(req) => {
+            // Multi-turn crash: preserve the existing profile; use the new session_id
+            // (stored session_id may be stale across turns).
+            let follow_up = CodingAgentFollowUpRequest {
+                prompt,
+                session_id,
+                executor_profile_id: req.executor_profile_id.clone(),
             };
             let action = ExecutorAction::new(
                 ExecutorActionType::CodingAgentFollowUpRequest(follow_up),
@@ -329,6 +345,16 @@ pub trait ContainerService {
                 FenceOutcome::AlreadyGone | FenceOutcome::Fenced => {
                     // Process is confirmed dead; safe to proceed with resume classification
                 }
+                FenceOutcome::CouldNotKill => {
+                    // Process survived SIGKILL (D-state / uninterruptible sleep).
+                    // Resuming into a potentially live writer violates SC1; skip this process.
+                    tracing::warn!(
+                        process_id = %process.id,
+                        pid = pid_raw,
+                        "Process survived SIGKILL (D-state); skipping recovery to avoid concurrent writer"
+                    );
+                    continue;
+                }
             }
 
             // Step 2: Classify — resume if session_id exists, mark-failed otherwise
@@ -461,26 +487,25 @@ pub trait ContainerService {
             ExecutionProcessRunReason::CodingAgent
                 | ExecutionProcessRunReason::SetupScript
                 | ExecutionProcessRunReason::CleanupScript
-        ) {
-            if let Ok(Some(task)) = task_attempt.parent_task(pool).await {
-                match Task::update_status(pool, task.id, TaskStatus::InReview).await {
-                    Ok(_) => {
-                        if let Some(publisher) = self.share_publisher()
-                            && let Err(err) = publisher.update_shared_task_by_id(task.id).await
-                        {
-                            tracing::warn!(
-                                ?err,
-                                "Failed to propagate shared task update for {}",
-                                task.id
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to update task status to InReview: {}",
-                            e
+        ) && let Ok(Some(task)) = task_attempt.parent_task(pool).await
+        {
+            match Task::update_status(pool, task.id, TaskStatus::InReview).await {
+                Ok(_) => {
+                    if let Some(publisher) = self.share_publisher()
+                        && let Err(err) = publisher.update_shared_task_by_id(task.id).await
+                    {
+                        tracing::warn!(
+                            ?err,
+                            "Failed to propagate shared task update for {}",
+                            task.id
                         );
                     }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to update task status to InReview: {}",
+                        e
+                    );
                 }
             }
         }
@@ -1471,6 +1496,7 @@ pub trait ContainerService {
 mod tests {
     use super::*;
     use db::models::execution_process::{ExecutionProcess, ExecutionProcessStatus};
+    use executors::executors::BaseCodingAgent;
     use executors::logs::utils::ConversationPatch;
     use executors::logs::{NormalizedEntry, NormalizedEntryType};
 
@@ -1494,6 +1520,43 @@ mod tests {
             ExecutorActionType::CodingAgentFollowUpRequest(req) => {
                 assert_eq!(req.session_id, "sess-abc");
                 assert_eq!(req.prompt, "continue");
+                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
+            }
+            _ => panic!("expected a follow-up resume action"),
+        }
+    }
+
+    #[test]
+    fn test_build_resume_action_follow_up_preserves_profile_and_updates_session() {
+        // A crash during a multi-turn follow-up must be resumable (SC1 coverage gap fix).
+        let initial_req = CodingAgentInitialRequest {
+            prompt: "Initial".to_string(),
+            executor_profile_id: ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+        };
+        let first_follow_up = CodingAgentFollowUpRequest {
+            prompt: "Turn 2".to_string(),
+            session_id: "old-sess-111".to_string(),
+            executor_profile_id: ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+        };
+        // Simulate a stored action that is already a follow-up (mid-conversation crash)
+        let stored = ExecutorAction::new(
+            ExecutorActionType::CodingAgentFollowUpRequest(first_follow_up),
+            Some(Box::new(ExecutorAction::new(
+                ExecutorActionType::CodingAgentInitialRequest(initial_req),
+                None,
+            ))),
+        );
+
+        let action =
+            build_resume_action(&stored, "new-sess-999".to_string(), "resume turn 2".to_string())
+                .expect("follow-up crash must be resumable");
+
+        match action.typ {
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => {
+                // New session_id (stale stored session must not be reused)
+                assert_eq!(req.session_id, "new-sess-999");
+                assert_eq!(req.prompt, "resume turn 2");
+                // Profile preserved from stored follow-up
                 assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
             }
             _ => panic!("expected a follow-up resume action"),

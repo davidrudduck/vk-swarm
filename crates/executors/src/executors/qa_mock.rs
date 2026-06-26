@@ -54,7 +54,7 @@ impl StandardCodingAgentExecutor for QaMock {
         let content = logs.join("\n") + "\n";
         tokio::fs::write(&log_file, &content)
             .await
-            .map_err(|e| ExecutorError::Io(e))?;
+            .map_err(ExecutorError::Io)?;
 
         // 3. Create shell script that reads file and outputs with delays
         // Using IFS= read -r to preserve exact content (no word splitting, no backslash interpretation)

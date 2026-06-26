@@ -426,14 +426,15 @@ async fn get_hive_attempt(
     // Fall back to remote_client (OAuth) for non-node deployments
     let remote_client = match deployment.node_auth_client().cloned() {
         Some(c) => c,
-        None => deployment.remote_client().map_err(|e| {
-            tracing::warn!(
-                assignment_id = %assignment_id,
-                error = %e,
-                "No client available for Hive attempt fetch"
-            );
-            e
-        })?,
+        None => deployment
+            .remote_client()
+            .inspect_err(|e| {
+                tracing::warn!(
+                    assignment_id = %assignment_id,
+                    error = %e,
+                    "No client available for Hive attempt fetch"
+                );
+            })?,
     };
 
     // Fetch the attempt data from the Hive using the remote client

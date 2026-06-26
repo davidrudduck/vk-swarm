@@ -17,6 +17,10 @@ pub enum FenceOutcome {
     /// Process exists but is not running under the worktree marker.
     /// This is a PID-reuse guard: do NOT kill this process.
     NotOurProcess,
+    /// Process survived SIGKILL (uninterruptible D-state sleep).
+    /// The process may still be alive; callers MUST NOT resume into it,
+    /// as that would violate the "no concurrent writer" invariant (SC1).
+    CouldNotKill,
 }
 
 /// Fence the process identified by `pid` that is expected to be running under
@@ -98,8 +102,15 @@ pub async fn fence<I: ProcessInspector + ?Sized>(
     let _ = inspector.kill_process(pid_u32, false).await;
 
     // Poll for process_exists until false or max retries
+    #[cfg(not(test))]
     const MAX_RETRIES: u32 = 50;
+    #[cfg(not(test))]
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    // Reduced retries and interval in test builds to keep tests fast
+    #[cfg(test)]
+    const MAX_RETRIES: u32 = 3;
+    #[cfg(test)]
+    const POLL_INTERVAL: Duration = Duration::from_millis(1);
 
     for _ in 0..MAX_RETRIES {
         if !inspector.process_exists(pid_u32).await {
@@ -119,12 +130,9 @@ pub async fn fence<I: ProcessInspector + ?Sized>(
         sleep(POLL_INTERVAL).await;
     }
 
-    // Process survived SIGKILL (D-state / uninterruptible sleep). The spec invariant
-    // "Never return Fenced until process_exists is false" cannot be satisfied here because
-    // FenceOutcome has no "CouldNotKill" variant; adding one requires a spec amendment
-    // (tracked in decisions-ledger §302). Fenced is the least-bad return: callers resuming
-    // over a D-state process will fail anyway, but the 3-variant enum leaves no better option.
-    FenceOutcome::Fenced
+    // Process survived SIGKILL (D-state / uninterruptible sleep).
+    // Callers must not attempt to resume into this process.
+    FenceOutcome::CouldNotKill
 }
 
 #[cfg(test)]
@@ -244,6 +252,51 @@ mod tests {
 
         // Child is also dead (fence kills the process tree before fencing the parent)
         assert!(!insp.process_exists(4243).await);
+    }
+
+    #[tokio::test]
+    async fn test_fence_sigkill_escalation_kills_resilient_process() {
+        let insp = MockProcessInspector::new();
+
+        // Process survives SIGTERM but dies on SIGKILL
+        insp.add_process(RawProcessInfo::new(
+            5000,
+            Some(1),
+            "node".to_string(),
+            vec!["node".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-b".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+        insp.set_resilient(5000);
+
+        let r = fence(&insp, 5000, "/var/tmp/vibe-kanban/worktrees/wt-b").await;
+        // SIGKILL escalation path must succeed and return Fenced
+        assert_eq!(r, FenceOutcome::Fenced);
+        assert!(!insp.process_exists(5000).await);
+    }
+
+    #[tokio::test]
+    async fn test_fence_could_not_kill_d_state_process() {
+        let insp = MockProcessInspector::new();
+
+        // Process survives both SIGTERM and SIGKILL (D-state simulation)
+        insp.add_process(RawProcessInfo::new(
+            6000,
+            Some(1),
+            "node".to_string(),
+            vec!["node".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-c".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+        insp.set_unkillable(6000);
+
+        let r = fence(&insp, 6000, "/var/tmp/vibe-kanban/worktrees/wt-c").await;
+        // Must return CouldNotKill, NOT Fenced — caller must not resume into this process
+        assert_eq!(r, FenceOutcome::CouldNotKill);
+        // Process is still alive (D-state; we couldn't kill it)
+        assert!(insp.process_exists(6000).await);
     }
 
     #[tokio::test]
