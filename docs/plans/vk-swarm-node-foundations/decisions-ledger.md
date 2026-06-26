@@ -491,3 +491,55 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
 **Step 5 — Teardown:** `kill $SERVER_PID` (exact PID 324566). ✓
 
 **SC6 verdict: PASS** — node builds, starts standalone, serves UI unconditionally on both `/` and `/projects`, no headless flag exists, sync-status reports disconnected standalone state.
+
+## Reachability gate
+
+`change_kind: behaviour` — gate is mandatory (SC#10). Evidence for (a)/(b)/(c) below.
+
+### (a) Call-path traces
+
+**SC5 — task visibility discriminator (task 401):**
+Production entry: `GET /api/projects/:id/tasks`
+→ `crates/server/src/routes/tasks/mod.rs:65` `.route("/", get(handlers::get_tasks))`
+→ `crates/server/src/routes/tasks/handlers/core.rs:56` `Task::find_by_project_id_with_attempt_status(pool, project.id, query.include_archived)` (comment at :43 names the discriminator)
+→ `crates/db/src/models/task/queries.rs` WHERE clause: `(t.remote_last_synced_at IS NULL OR EXISTS (SELECT 1 FROM task_attempts ta WHERE ta.task_id = t.id))`
+Changed code confirmed on production path by file:line. Task 402's removal of the `get_remote_tasks` merge was at the same handler (core.rs) — also on the production path.
+
+**SC1/SC8 — crash recovery (task 304):**
+Production entry: `crates/server/src/main.rs:130` `tokio::spawn(async move { … .cleanup_orphan_executions().await … })`
+→ `crates/services/src/services/container.rs` `ContainerService::cleanup_orphan_executions` (fence-then-resume rewrite)
+→ `mark_orphaned_as_failed` with narrowed WHERE (SC8 guard: excludes `resume_state IN ('pending','resumed')`)
+Changed code confirmed on production path.
+
+**SC2 — queued message drain (task 305):**
+Production entry: `crates/server/src/main.rs:141-147` same `tokio::spawn`, `.drain_queued_messages_on_boot().await` await-chained after cleanup
+→ `crates/local-deployment/src/container.rs` `LocalContainerService::drain_queued_messages_on_boot` (3-part skip predicate SQL)
+Changed code confirmed on production path.
+
+**SC6 — standalone UI (task 406):**
+Production entry: `GET /` or `GET /{*path}`
+→ `crates/server/src/routes/mod.rs:75-77` `.route("/", get(frontend::serve_frontend_root))` / `.route("/{*path}", get(frontend::serve_frontend))`
+Registered unconditionally, outside any conditional; no headless flag found (`git grep -niE 'headless|no_?ui|serve_ui' crates/server` → zero hits). Confirmed by smoke test at task 406 log entry.
+
+### (b) Real-seam tests (drive the production seam, not a mock past it)
+
+| Spec clause | Test | File:line | Seam |
+|---|---|---|---|
+| SC5a visibility discriminator | `hive_assigned_task_without_local_attempt_is_hidden` | `crates/db/tests/task_visibility_discriminator.rs:87` | Calls `find_by_project_id_with_attempt_status` on real SQLite pool — the production DB function itself |
+| SC5a (local always visible) | `locally_created_task_is_visible` | `crates/db/tests/task_visibility_discriminator.rs:58` | Same real-seam function, local-only branch |
+| SC2 drain | `test_boot_drain_includes_completed_idle_attempt` | `crates/local-deployment/src/container.rs:2591` | Calls `drain_queued_messages_on_boot` on real SQLite pool |
+| SC8 guard | `cleanup_orphan_executions_accessor_set_and_get_resume_state` | `crates/services/src/services/container.rs:1668` | Drives `set_resume_state`/`mark_orphaned_as_failed` on real SQLite pool; asserts guard excludes `resume_state='pending'` |
+| SC6 standalone UI | Task 406 smoke test | Ledger "Task 406 smoke result" | Release binary, no hive env, HTTP 200 for `/` and `/projects` |
+
+**SC1 full integration test gap (documented):** A full "kill -9 → restart → agent re-spawned with session" end-to-end test requires spawning live executor processes. The spec's Test Strategy (§ "Test strategy", line ~184) explicitly names `qa_mock` as the keystone for this test and marks it as future work — SC7d (forward-port qa_mock) was done in task 201 to enable this test, but the test itself is not part of this run's scope. The SC8 guard test + the per-unit fence/resume tests cover each component; the missing integration wiring is a tracked follow-up.
+
+### (c) Incident-symptom assertions
+
+| Symptom (from SC spec clause) | Assertion | Location |
+|---|---|---|
+| "Queued follow-up prompts survive restart" (SC2) | `test_boot_drain_includes_completed_idle_attempt` — asserts `peek_next(attempt_id)` returns `None` after drain, confirming the queued message was consumed into a started execution | `container.rs:2591` |
+| "Node web UI manages only locally-created/locally-run tasks" (SC5a) | `hive_assigned_task_without_local_attempt_is_hidden` — seeds a remote-mirrored task (non-null `remote_last_synced_at`, no local attempt), asserts `find_by_project_id_with_attempt_status` returns empty Vec | `task_visibility_discriminator.rs:87` |
+| "Crash recovery runs BEFORE failure-marking" (SC8) | `cleanup_orphan_executions_accessor_set_and_get_resume_state` — seeds process with `resume_state='pending'`, calls `mark_orphaned_as_failed`, asserts process is NOT marked failed (WHERE clause guard active) | `container.rs:1668` |
+| "Single node build runs fully standalone with local UI always available" (SC6) | Task 406 smoke: binary started with `VK_HIVE_URL` unset, `curl /` → `200`, `curl /projects` → `200`, `sync-status.is_connected = false` | Ledger "Task 406 smoke result" |
+
+**Reachability gate verdict: PASS** — all four critical production paths (SC5a discriminator, SC1/SC8 crash recovery, SC2 boot drain, SC6 standalone) traced file:line to changed code. Real-seam tests exercise the production DB functions on actual SQLite pools (no mock bypass). Symptom assertions map to the spec's stated success criteria. SC1 full integration test is a documented gap in the spec's Test Strategy, not a new finding.
