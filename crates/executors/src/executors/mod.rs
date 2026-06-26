@@ -29,6 +29,7 @@ use crate::{
         droid::Droid,
         gemini::Gemini,
         opencode::Opencode,
+        qa_mock::QaMock,
         qwen::QwenCode,
     },
     mcp_config::McpConfig,
@@ -43,6 +44,7 @@ pub mod cursor;
 pub mod droid;
 pub mod gemini;
 pub mod opencode;
+pub mod qa_mock;
 pub mod qwen;
 pub mod session_index;
 
@@ -111,6 +113,7 @@ pub enum CodingAgent {
     QwenCode,
     Copilot,
     Droid,
+    QaMock,
 }
 
 impl CodingAgent {
@@ -176,7 +179,7 @@ impl CodingAgent {
                 BaseAgentCapability::SetupHelper,
             ],
             Self::CursorAgent(_) => vec![BaseAgentCapability::SetupHelper],
-            Self::Opencode(_) | Self::Copilot(_) => vec![],
+            Self::Opencode(_) | Self::Copilot(_) | Self::QaMock(_) => vec![],
         }
     }
 
@@ -193,6 +196,7 @@ impl CodingAgent {
             Self::QwenCode(c) => c.no_context.unwrap_or(false),
             Self::Copilot(c) => c.no_context.unwrap_or(false),
             Self::Droid(c) => c.no_context.unwrap_or(false),
+            Self::QaMock(_) => false,
         }
     }
 
@@ -208,6 +212,7 @@ impl CodingAgent {
             Self::QwenCode(_) => None,
             Self::Copilot(c) => c.model.as_deref(),
             Self::Droid(c) => c.model.as_deref(),
+            Self::QaMock(_) => None,
         }
     }
 }
