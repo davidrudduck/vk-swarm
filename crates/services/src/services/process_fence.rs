@@ -64,8 +64,20 @@ pub async fn fence<I: ProcessInspector + ?Sized>(
         }
     };
 
-    // Check if our pid is in the matching set
-    if !matching.iter().any(|p| p.pid == pid_u32) {
+    // Check if our pid is in the matching set, with path-boundary safety:
+    // a prefix like "wt-a" must not match "wt-a-other". Require that the
+    // process CWD equals the marker exactly OR starts with marker + "/".
+    let marker_with_slash = format!("{}/", worktree_marker);
+    let is_ours = matching.iter().any(|p| {
+        if p.pid != pid_u32 {
+            return false;
+        }
+        match &p.working_directory {
+            Some(cwd) => cwd == worktree_marker || cwd.starts_with(&marker_with_slash),
+            None => false,
+        }
+    });
+    if !is_ours {
         return FenceOutcome::NotOurProcess;
     }
 
@@ -244,8 +256,23 @@ mod tests {
             1.0,
         ));
 
-        // Try to fence pid 9999 (not in the list)
+        // pid 9999 EXISTS (no PID reuse confusion) but its CWD is outside our worktree.
+        // The fence must return NotOurProcess rather than killing it.
+        insp.add_process(RawProcessInfo::new(
+            9999,
+            Some(1),
+            "bash".to_string(),
+            vec!["bash".to_string()],
+            Some("/other/path/project".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+
+        // Fence 9999 with marker wt-a: it exists but its CWD is not under wt-a.
         let r = fence(&insp, 9999, "/var/tmp/vibe-kanban/worktrees/wt-a").await;
         assert_eq!(r, FenceOutcome::NotOurProcess);
+
+        // Process 9999 must still be alive (we didn't kill it)
+        assert!(insp.process_exists(9999).await);
     }
 }
