@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "2a1e48b7f7edee4de960c07b830059fb76df7cfe8427e670123d4a7b40c09bd2"
+}

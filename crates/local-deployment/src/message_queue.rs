@@ -474,13 +474,13 @@ mod tests {
     async fn seed_task_attempt(pool: &SqlitePool) -> Uuid {
         // Create a test project
         let project_id = Uuid::new_v4();
+        let now = Utc::now();
         if let Err(e) = sqlx::query!(
-            "INSERT INTO projects (id, name, git_repo_path, use_existing_repo, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO projects (id, name, git_repo_path, created_at) VALUES (?, ?, ?, ?)",
             project_id,
             "Test Project",
             "/tmp/test-repo",
-            true,
-            Utc::now()
+            now
         )
         .execute(pool)
         .await
@@ -490,12 +490,13 @@ mod tests {
 
         // Create a test task
         let task_id = Uuid::new_v4();
+        let now = Utc::now();
         if let Err(e) = sqlx::query!(
             "INSERT INTO tasks (id, project_id, title, created_at) VALUES (?, ?, ?, ?)",
             task_id,
             project_id,
             "Test Task",
-            Utc::now()
+            now
         )
         .execute(pool)
         .await
@@ -505,6 +506,7 @@ mod tests {
 
         // Create a test task_attempt
         let attempt_id = Uuid::new_v4();
+        let now = Utc::now();
         if let Err(e) = sqlx::query!(
             "INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             attempt_id,
@@ -512,7 +514,7 @@ mod tests {
             "CLAUDE_CODE",
             "test-branch",
             "main",
-            Utc::now()
+            now
         )
         .execute(pool)
         .await

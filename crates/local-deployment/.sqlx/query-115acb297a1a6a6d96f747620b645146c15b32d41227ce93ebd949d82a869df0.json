@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT variant FROM queued_messages WHERE id = ? AND task_attempt_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "variant",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "115acb297a1a6a6d96f747620b645146c15b32d41227ce93ebd949d82a869df0"
+}

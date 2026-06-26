@@ -2,7 +2,7 @@
 id: "102"
 phase: 1
 title: Back MessageQueueStore with queued_messages table + boot drain
-status: ready
+status: passed
 depends_on: ["101"]
 parallel: false
 conflicts_with: []
