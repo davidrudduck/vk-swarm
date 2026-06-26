@@ -2,7 +2,7 @@
 id: "501"
 phase: 5
 title: Bound the ACP transcript event channel with drop-on-full
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

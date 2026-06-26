@@ -2,7 +2,7 @@
 id: "302"
 phase: 3
 title: Process fence primitive built on the existing ProcessInspector
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

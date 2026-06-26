@@ -2,7 +2,7 @@
 id: "303"
 phase: 3
 title: Reconstruct ExecutorAction + resume re-entry helper
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: ["304"]

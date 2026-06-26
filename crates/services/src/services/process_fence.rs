@@ -81,8 +81,20 @@ pub async fn fence<I: ProcessInspector + ?Sized>(
         return FenceOutcome::NotOurProcess;
     }
 
-    // Step 3: Kill + confirm gone
-    // Try graceful termination first
+    // Step 3: Kill process tree (descendants first), then the target PID, confirm gone.
+    // Collect descendants before killing anything.
+    if let Ok(descendants) = inspector.get_process_tree(pid_u32).await {
+        for desc in &descendants {
+            let _ = inspector.kill_process(desc.pid, false).await;
+        }
+        for desc in &descendants {
+            if inspector.process_exists(desc.pid).await {
+                let _ = inspector.kill_process(desc.pid, true).await;
+            }
+        }
+    }
+
+    // Kill the target pid: graceful first, then force.
     let _ = inspector.kill_process(pid_u32, false).await;
 
     // Poll for process_exists until false or max retries
@@ -107,8 +119,11 @@ pub async fn fence<I: ProcessInspector + ?Sized>(
         sleep(POLL_INTERVAL).await;
     }
 
-    // If process still exists after force kill, return Fenced anyway
-    // (we've done everything we can; caller should handle this)
+    // Process survived SIGKILL (D-state / uninterruptible sleep). The spec invariant
+    // "Never return Fenced until process_exists is false" cannot be satisfied here because
+    // FenceOutcome has no "CouldNotKill" variant; adding one requires a spec amendment
+    // (tracked in decisions-ledger §302). Fenced is the least-bad return: callers resuming
+    // over a D-state process will fail anyway, but the 3-variant enum leaves no better option.
     FenceOutcome::Fenced
 }
 
@@ -222,13 +237,13 @@ mod tests {
             1.0,
         ));
 
-        // Fence the parent; only parent is killed (fence only kills the given pid)
+        // Fence the parent; fence must kill the child (process tree) then the parent
         let r = fence(&insp, 4242, "/var/tmp/vibe-kanban/worktrees/wt-a").await;
         assert_eq!(r, FenceOutcome::Fenced);
         assert!(!insp.process_exists(4242).await);
 
-        // Child is still alive (we only fenced the parent pid)
-        assert!(insp.process_exists(4243).await);
+        // Child is also dead (fence kills the process tree before fencing the parent)
+        assert!(!insp.process_exists(4243).await);
     }
 
     #[tokio::test]

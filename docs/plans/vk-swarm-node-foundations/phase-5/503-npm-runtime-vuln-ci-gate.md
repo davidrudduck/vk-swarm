@@ -2,7 +2,7 @@
 id: "503"
 phase: 5
 title: Add npm runtime-vuln CI gate (check-npm-runtime-vulns + overrides)
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

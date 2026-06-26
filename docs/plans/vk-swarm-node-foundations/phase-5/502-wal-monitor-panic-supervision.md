@@ -2,7 +2,7 @@
 id: "502"
 phase: 5
 title: Supervise the WAL-monitor background task against panic
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

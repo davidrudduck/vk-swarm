@@ -2,7 +2,7 @@
 id: "401"
 phase: 4
 title: Add node-local visibility discriminator to find_by_project_id_with_attempt_status
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "201"
 phase: 2
 title: Forward-port qa_mock executor and wire into CodingAgent (single commit)
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
