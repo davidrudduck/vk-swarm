@@ -2,7 +2,7 @@
 id: "101"
 phase: 1
 title: Add queued_messages table migration
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

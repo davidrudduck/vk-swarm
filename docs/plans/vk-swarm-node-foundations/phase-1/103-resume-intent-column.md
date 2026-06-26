@@ -2,7 +2,7 @@
 id: "103"
 phase: 1
 title: Add resume-intent column migration on execution_processes
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
