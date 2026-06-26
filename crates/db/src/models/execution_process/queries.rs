@@ -151,7 +151,7 @@ impl ExecutionProcess {
         pool: &SqlitePool,
         id: Uuid,
     ) -> Result<Option<String>, sqlx::Error> {
-        let row = sqlx::query_scalar!(
+        let row: Option<Option<String>> = sqlx::query_scalar!(
             r#"SELECT resume_state FROM execution_processes WHERE id = ?"#,
             id
         )
