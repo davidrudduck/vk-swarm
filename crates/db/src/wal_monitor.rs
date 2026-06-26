@@ -369,6 +369,11 @@ pub fn get_wal_size(db_path: impl AsRef<Path>) -> u64 {
     std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0)
 }
 
+/// Run `fut` to completion, catching any panic and logging it at error level.
+///
+/// Returns `Ok(())` on normal completion, `Err(panic_message)` on panic. This
+/// lets long-running background tasks fail noisily instead of being silently
+/// swallowed by a dropped `JoinHandle`.
 async fn supervised_run<F>(name: &'static str, fut: F) -> Result<(), String>
 where
     F: std::future::Future<Output = ()>,
