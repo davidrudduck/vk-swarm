@@ -48,9 +48,27 @@ the chosen seam in the ledger.)
   3. For attempts with NO active execution, start the next queued message via the SAME path the live
      drain uses (`try_consume_queued_message` / the start-execution machinery) so the queued follow-up
      becomes a real execution.
-- **File:** `crates/server/src/main.rs` — call `drain_queued_messages_on_boot()` at startup **AFTER**
-  `cleanup_orphan_executions()` (the recovery call at `main.rs:133`), so step 2's "is it being resumed?"
-  check sees 304's results. One added call, guarded/logged like the existing recovery call.
+- **File:** `crates/server/src/main.rs` — the recovery call is a **detached `tokio::spawn`** at
+  `main.rs:130` (`tokio::spawn(async move { … cleanup_orphan_executions().await … })`). Do NOT add a
+  SECOND spawn for the drain — that would run it CONCURRENTLY with recovery and reintroduce the
+  double-writer race (breakdown-review R1/round-2): at drain time a crashed resumable attempt has
+  `has_running_processes=false` AND `resume_state=NULL` (cleanup hasn't reached it yet), so the drain
+  would start a queued message while 304 resumes into the same worktree. Instead, **await-chain the
+  drain after cleanup COMPLETES inside the existing spawn**:
+```text
+    tokio::spawn(async move {
+        if let Err(e) = deployment_for_orphan_cleanup.container().cleanup_orphan_executions().await {
+            tracing::warn!("Failed to cleanup orphan executions: {}", e);
+        }
+        // Drain persisted queue ONLY after recovery has finished classifying/resuming, so the
+        // skip-if-being-resumed guard is valid (resume_state is set by cleanup above).
+        if let Err(e) = deployment_for_orphan_cleanup.container().drain_queued_messages_on_boot().await {
+            tracing::warn!("Failed to drain queued messages on boot: {}", e);
+        }
+    });
+```
+  (Reuse the same cloned deployment handle; the drain must be sequenced by `.await`, NOT a sibling
+  `tokio::spawn`.)
 
 ## Allowed moves
 Add the boot-drain method + its one startup call site. Reuse existing primitives
@@ -67,11 +85,17 @@ owns it).
   but not yet have a running process at the instant the drain runs) → key the skip on BOTH
   `has_running_processes_for_attempt` AND `resume_state IN ('pending','resumed')` to avoid the
   double-writer race; record the predicate.
-- Ordering: if `main.rs` calls the drain BEFORE `cleanup_orphan_executions`, the skip check is wrong —
-  it MUST run after recovery.
+- Ordering (CRITICAL — double-writer hazard): the drain MUST be `.await`-chained AFTER
+  `cleanup_orphan_executions().await` **completes**, in the SAME task. A sibling `tokio::spawn` runs
+  concurrently with recovery and races 304 into the worktree. If you cannot guarantee completion-ordering
+  (e.g. recovery is structured so it can't be awaited before the drain), STOP — do not start the drain.
 
 ## Done when
 Adds no new schema (reads the 101 table) but its `query!`/`query_as!` reference `queued_messages` (101)
 — ensure the schema is materialized (Trap 2): apply migrations and/or `cargo sqlx prepare --workspace`.
+
+**Completion-ordering assertion (record in ledger):** the diff at `main.rs:130` shows
+`cleanup_orphan_executions().await` and `drain_queued_messages_on_boot().await` in the SAME `tokio::spawn`
+body, the drain second — NOT a separate `tokio::spawn`. Confirm by reading the final hunk.
 
 `WAI_TYPECHECK_CMD="cargo sqlx prepare --workspace --check || cargo sqlx prepare --workspace; cargo check -p local-deployment && cargo check -p server" WAI_TEST_CMD="cargo test -p local-deployment boot_drain" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 305` exits 0
