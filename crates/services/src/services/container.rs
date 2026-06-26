@@ -23,10 +23,11 @@ use db::{
 use executors::{
     actions::{
         ExecutorAction, ExecutorActionType,
+        coding_agent_follow_up::CodingAgentFollowUpRequest,
         coding_agent_initial::CodingAgentInitialRequest,
         script::{ScriptContext, ScriptRequest, ScriptRequestLanguage},
     },
-    executors::{ExecutorError, StandardCodingAgentExecutor},
+    executors::{BaseCodingAgent, ExecutorError, StandardCodingAgentExecutor},
     logs::{NormalizedEntry, NormalizedEntryError, NormalizedEntryType, utils::ConversationPatch},
     profile::{ExecutorConfigs, ExecutorProfileId},
 };
@@ -72,6 +73,36 @@ pub enum ContainerError {
     TaskAttemptError(#[from] TaskAttemptError),
     #[error(transparent)]
     Other(#[from] AnyhowError), // Catches any unclassified errors
+}
+
+/// Build a resume action from a stored coding-agent action.
+///
+/// Extracts the executor profile ID from the stored action and constructs
+/// a new `CodingAgentFollowUpRequest` with the provided session ID and prompt,
+/// preserving the `next_action` from the stored action.
+///
+/// Returns `None` if the stored action is not a coding-agent initial request.
+pub fn build_resume_action(
+    stored: &ExecutorAction,
+    session_id: String,
+    prompt: String,
+) -> Option<ExecutorAction> {
+    match &stored.typ {
+        ExecutorActionType::CodingAgentInitialRequest(req) => {
+            let executor_profile_id = req.base_executor();
+            let follow_up = CodingAgentFollowUpRequest {
+                prompt,
+                session_id,
+                executor_profile_id: ExecutorProfileId::new(executor_profile_id),
+            };
+            let action = ExecutorAction::new(
+                ExecutorActionType::CodingAgentFollowUpRequest(follow_up),
+                stored.next_action().map(|next| Box::new(next.clone())),
+            );
+            Some(action)
+        }
+        _ => None,
+    }
 }
 
 #[async_trait]
@@ -334,6 +365,41 @@ pub trait ContainerService {
             }
         }
         Ok(())
+    }
+
+    /// Resume a coding-agent execution from a previous session.
+    ///
+    /// This method takes a stored executor action (typically from a previous execution),
+    /// builds a resume action with the new session ID and prompt, and starts the execution.
+    ///
+    /// # Arguments
+    /// * `task_attempt` - The task attempt to resume execution for
+    /// * `execution_process` - The execution process record to track this run
+    /// * `stored_action` - The previously stored executor action to resume from
+    /// * `session_id` - The session ID for the follow-up conversation
+    /// * `prompt` - The prompt text to send as a follow-up
+    ///
+    /// # Returns
+    /// * `Ok(())` if the execution starts successfully
+    /// * `Err(ContainerError::Other)` if the stored action is not a resumable coding-agent action
+    async fn resume_execution(
+        &self,
+        task_attempt: &TaskAttempt,
+        execution_process: &ExecutionProcess,
+        stored_action: &ExecutorAction,
+        session_id: String,
+        prompt: String,
+    ) -> Result<(), ContainerError> {
+        // Build the resume action from the stored action
+        let action = build_resume_action(stored_action, session_id, prompt).ok_or_else(|| {
+            ContainerError::Other(anyhow!(
+                "stored action is not a resumable coding-agent action"
+            ))
+        })?;
+
+        // Start the execution with the built resume action
+        self.start_execution_inner(task_attempt, execution_process, &action)
+            .await
     }
 
     /// Backfill before_head_commit for legacy execution processes.
@@ -1285,6 +1351,47 @@ mod tests {
     use super::*;
     use executors::logs::utils::ConversationPatch;
     use executors::logs::{NormalizedEntry, NormalizedEntryType};
+
+    /// Helper: Create a sample ExecutorAction with a Claude Code profile
+    fn sample_coding_agent_action_claude() -> ExecutorAction {
+        let initial = CodingAgentInitialRequest {
+            prompt: "Initial prompt".to_string(),
+            executor_profile_id: ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+        };
+        ExecutorAction::new(ExecutorActionType::CodingAgentInitialRequest(initial), None)
+    }
+
+    #[test]
+    fn test_build_resume_action_preserves_profile_and_session() {
+        let stored = sample_coding_agent_action_claude();
+        let action = build_resume_action(&stored, "sess-abc".to_string(), "continue".to_string())
+            .expect("resumable");
+
+        // Verify the action type is a follow-up request
+        match action.typ {
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => {
+                assert_eq!(req.session_id, "sess-abc");
+                assert_eq!(req.prompt, "continue");
+                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
+            }
+            _ => panic!("expected a follow-up resume action"),
+        }
+    }
+
+    #[test]
+    fn test_build_resume_action_non_coding_agent_returns_none() {
+        // Create a ScriptRequest action (not resumable)
+        let script = ScriptRequest {
+            language: ScriptRequestLanguage::Bash,
+            script: "echo hello".to_string(),
+            context: ScriptContext::SetupScript,
+        };
+        let stored = ExecutorAction::new(ExecutorActionType::ScriptRequest(script), None);
+
+        // Should return None for non-coding-agent actions
+        let result = build_resume_action(&stored, "sess-abc".to_string(), "prompt".to_string());
+        assert!(result.is_none(), "ScriptRequest should not be resumable");
+    }
 
     #[tokio::test]
     async fn test_stream_normalized_logs_no_duplicates() {
