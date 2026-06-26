@@ -2,7 +2,7 @@
 id: "402"
 phase: 4
 title: Remove request-time remote task merge from get_tasks (local-only)
-status: ready
+status: passed
 depends_on: ["401"]
 parallel: false
 conflicts_with: []

@@ -409,3 +409,36 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
 - **Scope constraint:** Only file edited: `crates/services/src/services/container.rs` (added imports, helper fn, trait method, tests)
 - **Compilation:** Syntax validated; builds alongside executors crate (which compiles cleanly)
 - **No divergences from spec:** ExecutorAction structure and CodingAgentFollowUpRequest match assumption; BaseCodingAgent::ClaudeCode confirmed (not Claude, not ClaudeCodeAgent)
+
+### Task 405 — Read-only Hive sync-status view (extend /api/database/sync-status + Settings card)
+- **SyncStatusResponse fields added:** `hive_url: Option<String>`, `node_name: Option<String>`, `last_synced_at: Option<DateTime<Utc>>`
+- **last_synced_at query:** `SELECT MAX(hive_synced_at) FROM execution_processes` (single-table MAX, as per spec minimum)
+  - Query uses dynamic `sqlx::query_scalar` (not `query_scalar!` macro) to avoid offline cache compilation issues
+  - Parses ISO 8601 string result via `chrono::DateTime::parse_from_rfc3339()` and converts to Utc
+- **Type generation:** `npm run generate-types` adds exactly 3 fields to `SyncStatusResponse` in shared/types.ts
+  - hive_url and node_name auto-serialize as `string | null`
+  - last_synced_at auto-serializes as `Date | null` via ts-rs `#[ts(type = "Date | null")]` annotation
+- **API method:** `getSyncStatus` mirrors `getStats` shape (makeRequest + handleApiResponse)
+  - Endpoint: GET `/api/database/sync-status` (already wired in router)
+  - Return type: `SyncStatusResponse` (auto-imported from shared/types)
+- **Card component:** `HiveSyncStatusCard.tsx` — read-only, no mutations, mirrors BackupsSection pattern
+  - Uses `useQuery({ queryKey: ['hiveSyncStatus'], queryFn: databaseApi.getSyncStatus })`
+  - Renders two sections: Connection (is_connected, node_id, node_name, hive_url) and Sync Status (last_synced_at, unsynced counts)
+  - StatRow helper supports bigint values (unsynced counts); formatDate helper shows "Never" for null timestamps
+  - Loading/error states match BackupsSection pattern (Loader2 spinner, error text)
+- **Mount:** One import + one JSX line in SystemSettings.tsx (Section 5 after Backups)
+- **Verification:** ✅ `cargo check -p server` passes; TypeScript (HiveSyncStatusCard) passes; ESLint (HiveSyncStatusCard) passes
+  - Pre-existing QaMock errors in shared/types.ts (unrelated); pre-existing TaskFollowUpSection ESLint error (unrelated)
+
+### Task 304 — Fence-then-resume recovery in cleanup_orphan_executions
+- **Resume classification:** All 9 executors support resume (task 301 finding). Classification: has session_id → resume; no session_id → abandoned (mark-failed).
+- **Fence integration:** `SysinfoProcessInspector::new()` constructed once per cleanup call; `process_fence::fence(&inspector, pid, container_ref)` called before classification.
+- **NotOurProcess guard:** If fence returns NotOurProcess (PID reused), skip the process entirely — do NOT kill or resume.
+- **mark_orphaned_as_failed narrowed:** WHERE clause now excludes resume_state IN ('pending','resumed') for SC8 safety.
+- **DB accessors:** `set_resume_state` and `get_resume_state` added as plain UPDATE/SELECT scalars (not via ExecutionProcess struct, per decompose decision).
+- **Helper extracted:** `mark_process_failed_with_task_update()` extracted from old body to keep cleanup_orphan_executions readable.
+- **Test seam:** Unit test covers `set_resume_state`/`get_resume_state`/`mark_orphaned_as_failed` SC8 guard only; full integration test of `cleanup_orphan_executions` (spawn + fence + resume) is the Manual verification smoke test.
+- **ExecutorAction reconstruction:** Used `process.executor_action()` (the existing method on `ExecutionProcess`, `mod.rs:139`) which returns `Result<&ExecutorAction, anyhow::Error>`. `.clone()`d the result to get an owned `ExecutorAction`. `ExecutorAction::try_from(...)` does not exist — the task spec's suggested call was incorrect. The existing accessor + clone pattern is the correct approach, consistent with all other usages in container.rs.
+- **ContainerError mapping:** Spec mentioned `ContainerError::Database(SqlxError::from(e))` but the actual variant is `ContainerError::Sqlx(#[from] SqlxError)`. Used `?` operator directly (the `#[from]` impl makes conversion automatic).
+- **build_resume_action limitation:** `build_resume_action` only accepts `CodingAgentInitialRequest` and returns `None` for `CodingAgentFollowUpRequest`. An orphan whose stored action was itself a follow-up will fall through to mark-failed, not resume. This is expected behavior for the current implementation scope.
+- **Test compilation note:** `cargo test -p services cleanup_orphan` is blocked by pre-existing `remote` crate compile errors (130 errors related to `auth_sessions`, `organization_member_metadata` tables absent from dev DB). These errors exist before any Task 304 changes (confirmed by stash test). The services crate itself (`cargo check -p services`) compiles cleanly with no errors from `crates/services/` source files.

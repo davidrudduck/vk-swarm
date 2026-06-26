@@ -2,7 +2,7 @@
 id: "304"
 phase: 3
 title: Rewrite cleanup_orphan_executions to fence-then-resume (before mark-failed), incl. fallback
-status: ready
+status: passed
 depends_on: ["301", "302", "303", "104"]
 parallel: false
 conflicts_with: ["303"]

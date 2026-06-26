@@ -2,7 +2,7 @@
 id: "405"
 phase: 4
 title: Read-only Hive sync-status view (extend /api/database/sync-status + Settings card)
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
