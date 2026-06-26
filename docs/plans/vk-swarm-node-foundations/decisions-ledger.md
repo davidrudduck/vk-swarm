@@ -452,3 +452,42 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
 - **SQLx offline cache:** `crates/local-deployment/.sqlx/query-998394...json` added for the production drain query. `cargo sqlx prepare --workspace` fails due to pre-existing `remote` crate errors (auth_sessions table absent); ran `cargo sqlx prepare` from inside `crates/local-deployment/` (without `--tests`) to generate only the production query cache. Test helper functions use `sqlx::query()` (not `query!()`) to avoid needing test-code cache entries.
 - **Test seam:** 7 unit tests in `container::tests` verify the SQL skip-predicate directly. Tests use `db::test_utils::create_test_pool()` and seed data via `sqlx::query()` (not `query!()`) to avoid cache dependency. `query_drainable()` re-runs the same SQL as the production drain and returns `Vec<Uuid>`. Covers: running process skip, resume_state pending/resumed/abandoned skip, failed latest-process skip, completed-idle inclusion, empty-queue case.
 - **Services/container.rs unused import note:** Pre-existing `BaseCodingAgent` unused import warning in `crates/services/src/services/container.rs:30` (not in task 305 files list; not touched).
+
+### Task 403 — Remove pure-proxy remote API modules
+- **Routes removed:** `/api/nodes*` (nodes.rs), `/api/swarm/*` (swarm_projects.rs, swarm_labels.rs, swarm_templates.rs), `/api/merged-projects` (projects/handlers/merged.rs).
+- **Kept:** `/available-nodes` and `/stream-connection-info` in tasks/mod.rs (live callers: MCP `list_nodes` tool and `useAvailableNodes`/`useRemoteConnectionStatus` frontend hooks). Deferred to `vk-swarm-node-ui-localize`.
+- **`MergedProject`/`MergedProjectsResponse`:** Left in `projects/types.rs` (not in files:); they compile and export to TS but have no surviving route consumer. Clean at codegen boundary per spec.
+- **Stale doc comment:** `projects/mod.rs` had a doc comment referencing the `/merged-projects` route; updated to remove that mention. Within files: list; not a scope expansion.
+- **Verification:** `cargo test -p server --no-run` exit 0; no remaining `nodes::`/`swarm_*::`/`get_merged_projects` references in routes/.
+
+### Task 404 — Delete frontend Nodes-management feature
+- **Files deleted:** 11 Nodes feature files (page, 6 components, dialog, context, 2 hooks).
+- **`Server` icon:** Confirmed used only by the Nodes nav entry in Navbar.tsx; import removed cleanly. No other `Server` consumer in that file.
+- **Kept:** `useNode.ts`, `lib/api/nodes.ts`, `NodeApiKeySection.tsx`, `NodeProjectsSection.tsx`, and all entangled remote-display hooks — these have live non-Nodes consumers and are out of scope per user-approved scope split.
+- **`hooks/index.ts`:** `useNodeMutations`/`useNodeProjects` were never re-exported through the barrel (not present); no change needed.
+- **Pre-existing lint error:** `TaskFollowUpSection.tsx:433` had a `Redundant Boolean call (no-extra-boolean-cast)` error pre-dating task 404. Fixed in a separate commit before the gate so `npm run lint` passes.
+- **Verification:** `tsc --noEmit` exit 0; `npm run lint` exit 0; `git grep` for all deleted paths: zero hits.
+
+### Task 406 — Standalone node smoke test (SC6)
+
+**Date:** 2026-06-26 | **Binary:** `./target/release/vks-node-server` (built from `pnpm run prod:build`)
+
+**Step 1 — Hive env unset:** `VK_HIVE_URL` and `VK_NODE_API_KEY` confirmed unset via `env | grep` → printed "hive env unset OK". ✓
+
+**Step 2 — Standalone start:** Server started on `BACKEND_PORT=8099 HOST=127.0.0.1` with no hive config. Startup log: "Hive connection: not configured (standalone mode)" — no panic, no "hive required" error. Node runner disabled ("VK_HIVE_URL not set; node runner disabled"). ✓
+
+**Step 3 — UI routes return 200 (SC6 core):**
+- `curl http://127.0.0.1:8099/` → **200** ✓
+- `curl http://127.0.0.1:8099/projects` → **200** ✓
+- Frontend routes confirmed registered unconditionally at `routes/mod.rs:74-77` (outside any conditional, no headless gate). ✓
+
+**No headless flag:** `git grep -niE 'headless|no_?ui|serve_ui' crates/server crates/services crates/deployment` → zero hits. ✓
+
+**Step 4 — sync-status endpoint standalone response:**
+- `curl http://127.0.0.1:8099/api/database/sync-status | jq '.data | {is_connected, hive_url, node_name}'`
+- Note: initial jq extracted from `ApiResponse` wrapper top-level (null); corrected extraction via `.data`: `{"is_connected": false, "hive_url": null, "node_name": null}`.
+- Code at `database.rs:326-328`: standalone path (`node_runner_context() == None`) returns `is_connected = false`. ✓
+
+**Step 5 — Teardown:** `kill $SERVER_PID` (exact PID 324566). ✓
+
+**SC6 verdict: PASS** — node builds, starts standalone, serves UI unconditionally on both `/` and `/projects`, no headless flag exists, sync-status reports disconnected standalone state.
