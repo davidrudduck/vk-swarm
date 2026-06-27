@@ -48,11 +48,11 @@ pub fn credentials_path() -> std::path::PathBuf {
 pub fn database_path() -> std::path::PathBuf {
     if let Ok(path) = std::env::var("VK_DATABASE_PATH") {
         let expanded = crate::path::expand_tilde(&path);
-        if let Some(parent) = expanded.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                std::fs::create_dir_all(parent)
-                    .expect("Failed to create parent directory for VK_DATABASE_PATH");
-            }
+        if let Some(parent) =
+            expanded.parent().filter(|p| !p.as_os_str().is_empty() && !p.exists())
+        {
+            std::fs::create_dir_all(parent)
+                .expect("Failed to create parent directory for VK_DATABASE_PATH");
         }
         return expanded;
     }

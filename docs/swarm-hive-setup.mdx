@@ -339,6 +339,70 @@ When you create a task locally on a node that's connected to a hive:
 3. The hive assigns a `shared_task_id` so execution data can be tracked
 4. The task remains editable on the originating node
 
+### Node-Local Task Visibility
+
+In a multi-node swarm, each node's UI shows only the tasks that belong to it — tasks created locally or tasks from the hive that have a local execution attempt on this node. Tasks running on other nodes are not shown in the queue.
+
+**Why this matters:** In a swarm with many nodes each running independent tasks, showing all tasks from all nodes would make the queue unmanageable. Each node operator sees only the work that is actually executing on their machine.
+
+**The visibility rule:** A task appears in the node's queue if:
+- It was created locally (no hive sync echo yet), **OR**
+- It has at least one `task_attempt` record on this node
+
+Tasks that were mirrored from another node via the hive (i.e., tasks with a recorded sync timestamp but no local attempt) are visible on the hive's dashboard but not in the local node's queue.
+
+---
+
+## Process Recovery
+
+When a node server restarts unexpectedly (crash, SIGKILL, power loss), any AI agent processes that were running are orphaned. Vibe Kanban performs automatic recovery on startup.
+
+### How Recovery Works
+
+On startup, the server:
+
+1. **Fences each running process** — sends SIGTERM then SIGKILL to confirm the process is gone. Uses the worktree path as a fingerprint to detect PID reuse.
+2. **Classifies the outcome** and takes the appropriate action:
+
+| Fence Result | Meaning | Action |
+|---|---|---|
+| `AlreadyGone` | Process died before the fence | Proceed to resume or mark-failed |
+| `Fenced` | Process was successfully killed | Proceed to resume or mark-failed |
+| `NotOurProcess` | PID was reused by an unrelated process | Skip recovery (row is cleaned up by the orphan sweep) |
+| `CouldNotKill` | Process is in D-state (kernel wait) | Skip — process may still be writing; marked pending for next restart |
+
+3. **Resumes if possible** — if the agent has an active session ID (stored from before the crash), a follow-up request is dispatched with a minimal continuation prompt: *"Your previous session was interrupted. Please continue the task from where you left off."* The agent picks up where it left off using its session's conversation history.
+
+4. **Marks failed if not resumable** — if no session ID is found (e.g., the process crashed before the agent established a session), the execution is marked failed and the attempt is left for manual review.
+
+5. **Drains the boot queue** — any messages that were queued for execution before the restart and were not yet consumed are re-queued for delivery.
+
+### D-State Processes
+
+A process in D-state (uninterruptible kernel wait, typically blocked on I/O) cannot be killed by SIGKILL. Vibe Kanban detects this and **skips** that process:
+
+- The process is left running (it will likely exit on its own when the I/O completes)
+- It is **not** marked as failed
+- On the next server restart, if the process is gone, normal resume logic applies
+- If the process is still in D-state, it is skipped again
+
+<Warning>
+A D-state process is usually a sign of a stuck filesystem operation (NFS, hanging disk). If a process stays in D-state for more than a few minutes, investigate the underlying I/O issue on the host.
+</Warning>
+
+### Resume State
+
+Each execution process tracks a `resume_state` column:
+
+| Value | Meaning |
+|---|---|
+| `NULL` | Not yet reached by recovery (freshly started) |
+| `pending` | Recovery is in progress (fence done; waiting to resume) or process is in D-state |
+| `resumed` | Crash-resume has been dispatched |
+| `abandoned` | Recovery was skipped (PID reuse, no session, or resume failed) |
+
+The orphan cleanup on startup (`mark_orphaned_as_failed`) deliberately excludes rows with `resume_state IN ('pending', 'resumed')` so that processes being actively recovered are not prematurely marked failed.
+
 ---
 
 ## Task Flow

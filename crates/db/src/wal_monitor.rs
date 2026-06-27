@@ -12,9 +12,11 @@
 //! - Optionally triggers passive checkpoint when WAL is large
 //! - Runs periodic TRUNCATE checkpoints to minimize data loss on abrupt shutdown
 
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use futures::FutureExt;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
@@ -148,7 +150,9 @@ impl WalMonitor {
             metrics,
             config,
         };
-        tokio::spawn(monitor.run(rx));
+        tokio::spawn(async move {
+            let _ = supervised_run("wal_monitor", monitor.run(rx)).await;
+        });
         WalMonitorHandle { tx }
     }
 
@@ -365,6 +369,29 @@ pub fn get_wal_size(db_path: impl AsRef<Path>) -> u64 {
     std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0)
 }
 
+/// Run `fut` to completion, catching any panic and logging it at error level.
+///
+/// Returns `Ok(())` on normal completion, `Err(panic_message)` on panic. This
+/// lets long-running background tasks fail noisily instead of being silently
+/// swallowed by a dropped `JoinHandle`.
+async fn supervised_run<F>(name: &'static str, fut: F) -> Result<(), String>
+where
+    F: std::future::Future<Output = ()>,
+{
+    match AssertUnwindSafe(fut).catch_unwind().await {
+        Ok(()) => Ok(()),
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<&'static str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic>".to_string());
+            tracing::error!(task = name, panic = %msg, "background task panicked");
+            Err(msg)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,5 +419,35 @@ mod tests {
     fn test_get_wal_size_nonexistent() {
         let size = get_wal_size("/nonexistent/path/db.sqlite");
         assert_eq!(size, 0);
+    }
+
+    #[tokio::test]
+    async fn supervised_run_passes_through_normal_completion() {
+        let result = supervised_run("test", async {
+            // no-op
+        })
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn supervised_run_catches_panic_and_reports_message() {
+        let result = supervised_run("test", async {
+            panic!("synthetic boom for test");
+        })
+        .await;
+        assert!(matches!(result, Err(ref msg) if msg.contains("synthetic boom for test")));
+    }
+
+    #[tokio::test]
+    async fn supervised_run_catches_non_string_panic_with_fallback_marker() {
+        let result = supervised_run("test", async {
+            std::panic::panic_any(123_u32);
+        })
+        .await;
+        assert!(
+            matches!(result, Err(ref msg) if msg.contains("<non-string panic>")),
+            "non-string panic payload should yield the fallback marker, got {result:?}"
+        );
     }
 }

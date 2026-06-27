@@ -1,0 +1,92 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                execution_process_id as \"execution_process_id!: Uuid\",\n                task_attempt_id as \"task_attempt_id!: Uuid\",\n                container_ref,\n                branch,\n                target_branch,\n                run_reason,\n                status,\n                resume_state,\n                pid,\n                before_head_commit,\n                after_head_commit,\n                session_id,\n                created_at as \"created_at!: DateTime<Utc>\"\n               FROM v_workstream_state\n               WHERE task_attempt_id = ?\n               ORDER BY created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "execution_process_id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "task_attempt_id!: Uuid",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "container_ref",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "branch",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "target_branch",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "run_reason",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "resume_state",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "pid",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "before_head_commit",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "after_head_commit",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "session_id",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: DateTime<Utc>",
+        "ordinal": 12,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "286e261eb106a58bd5754034b07e39752225a3fd1c6c0e2d8e019e5b2ca672ce"
+}

@@ -129,12 +129,10 @@ pub async fn update_webhook(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateWebhook>,
 ) -> Result<ResponseJson<ApiResponse<WebhookResponse>>, ApiError> {
-    if let Some(events) = &payload.events {
-        if events.is_empty() {
-            return Err(ApiError::BadRequest(
-                "At least one event type must be selected.".into(),
-            ));
-        }
+    if let Some(events) = &payload.events && events.is_empty() {
+        return Err(ApiError::BadRequest(
+            "At least one event type must be selected.".into(),
+        ));
     }
     if let Some(headers) = &payload.headers {
         validate_headers(headers)?;
@@ -211,12 +209,11 @@ pub async fn test_webhook(
             continue;
         }
         // Defensive header application — skip malformed bytes (Step 5 H5)
-        match (
+        if let (Ok(name), Ok(value)) = (
             axum::http::HeaderName::from_bytes(k.as_bytes()),
             axum::http::HeaderValue::from_str(&v),
         ) {
-            (Ok(name), Ok(value)) => builder = builder.header(name, value),
-            _ => {} // silently skip malformed stored headers in test path
+            builder = builder.header(name, value);
         }
     }
 
@@ -244,7 +241,7 @@ pub async fn test_webhook(
                 .map(|(_, c)| c)
                 .collect();
             // Step 7 (H1+M7): use is_success() instead of < 400 (fixes 3xx being reported as ok)
-            let ok = status_code >= 200 && status_code < 300;
+            let ok = (200..300).contains(&status_code);
             Ok(ResponseJson(ApiResponse::success(serde_json::json!({
                 "ok": ok,
                 "status_code": status_code,

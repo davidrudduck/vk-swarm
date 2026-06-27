@@ -43,6 +43,7 @@ pub mod normalization_metrics;
 pub mod notification;
 pub mod oauth_credentials;
 pub mod pr_monitor;
+pub mod process_fence;
 pub mod process_inspector;
 pub mod process_service;
 pub mod project_detector;

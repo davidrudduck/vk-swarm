@@ -1,0 +1,114 @@
+---
+id: "305"
+phase: 3
+title: Boot-drain the persisted message queue for non-resumed attempts
+status: passed
+depends_on: ["102", "304"]
+parallel: false
+conflicts_with: []
+files:
+  - crates/local-deployment/src/container.rs
+  - crates/server/src/main.rs
+  - crates/services/src/services/container.rs
+irreversible: false
+scope_test: "crates/local-deployment/src/container.rs"
+allowed_change: mixed
+covers_criteria: [SC2]
+---
+## Failing test (write first)
+The drain-on-resume half of SC2 (breakdown-review R1): task 102 makes the queue PERSIST, but nothing
+drains it at boot — `try_consume_queued_message` fires only on a live process exit (`container.rs:738`).
+A crashed-and-restarted attempt that has queued messages but is NOT being resumed would otherwise sit
+forever. Test that a boot-drain starts the next queued message for such an attempt:
+```rust
+#[tokio::test]
+async fn test_boot_drain_starts_queued_message_for_idle_attempt() {
+    let (pool, _tmp) = db::test_utils::create_test_pool().await;
+    let svc = test_local_container_service(pool.clone()).await; // existing/standard harness
+    // Seed an attempt with a persisted queued message and NO running execution_process.
+    let attempt_id = seed_attempt_with_queued_message(&pool, "do the next thing").await;
+
+    svc.drain_queued_messages_on_boot().await.unwrap();
+
+    // The queued message was consumed (a new execution start was triggered) and removed from the queue.
+    assert!(svc.message_queue().peek_next(attempt_id).await.is_none());
+}
+```
+(Match the real test harness for building a `LocalContainerService`; if starting a real execution is too
+heavy, assert the drain SELECTED the attempt + called the start path — stub/observe the start. Record
+the chosen seam in the ledger.)
+
+## Change
+- **File:** `crates/local-deployment/src/container.rs` — add an async method
+  `drain_queued_messages_on_boot(&self) -> Result<(), ContainerError>` that:
+  1. SELECTs distinct `task_attempt_id`s having rows in `queued_messages` (the table from 101).
+  2. For EACH, drain ONLY a genuinely-idle attempt — one recovery left untouched whose last run ended
+     cleanly. Skip the attempt if ANY of:
+     - it has a running/just-resumed execution (`has_running_processes_for_attempt`,
+       `services/container.rs:144`) — 304 + the live `:738` drain own it; draining now = second writer
+       (ADR-0001 hazard); OR
+     - any of its executions carries a non-NULL `resume_state` (i.e. recovery TOUCHED it — `'pending'` /
+       `'resumed'` = being resumed; **`'abandoned'`** = 304 failed it with no session). An abandoned
+       attempt has no session to follow up, so starting its queued message as a `CodingAgentFollowUp`
+       would fail/be undefined — leave it queued for the operator. (Advisor catch: the original
+       predicate skipped only pending/resumed, stranding abandoned attempts.); OR
+     - its latest execution did not complete normally (no valid session to resume from).
+     Net: drain iff `resume_state IS NULL` for all its executions AND the latest execution is
+     `Completed`. Confirm the exact predicate against how 304 stamps `resume_state` before locking it in.
+  3. For attempts that pass step 2, start the next queued message via the SAME path the live
+     drain uses (`try_consume_queued_message` / the start-execution machinery) so the queued follow-up
+     becomes a real execution.
+- **File:** `crates/server/src/main.rs` — the recovery call is a **detached `tokio::spawn`** at
+  `main.rs:130` (`tokio::spawn(async move { … cleanup_orphan_executions().await … })`). Do NOT add a
+  SECOND spawn for the drain — that would run it CONCURRENTLY with recovery and reintroduce the
+  double-writer race (breakdown-review R1/round-2): at drain time a crashed resumable attempt has
+  `has_running_processes=false` AND `resume_state=NULL` (cleanup hasn't reached it yet), so the drain
+  would start a queued message while 304 resumes into the same worktree. Instead, **await-chain the
+  drain after cleanup COMPLETES inside the existing spawn**:
+```text
+    tokio::spawn(async move {
+        if let Err(e) = deployment_for_orphan_cleanup.container().cleanup_orphan_executions().await {
+            tracing::warn!("Failed to cleanup orphan executions: {}", e);
+        }
+        // Drain persisted queue ONLY after recovery has finished classifying/resuming, so the
+        // skip-if-being-resumed guard is valid (resume_state is set by cleanup above).
+        if let Err(e) = deployment_for_orphan_cleanup.container().drain_queued_messages_on_boot().await {
+            tracing::warn!("Failed to drain queued messages on boot: {}", e);
+        }
+    });
+```
+  (Reuse the same cloned deployment handle; the drain must be sequenced by `.await`, NOT a sibling
+  `tokio::spawn`.)
+
+## Allowed moves
+Add the boot-drain method + its one startup call site. Reuse existing primitives
+(`has_running_processes_for_attempt`, `try_consume_queued_message`, the message-queue accessors). Do NOT
+modify recovery (304) or the live-exit drain at `:738`. Do NOT change `MessageQueueStore`'s API (102
+owns it).
+
+## STOP triggers
+- `try_consume_queued_message` cannot be invoked at boot without a live `ExecutionContext` it constructs
+  from an exit event → build the minimal context the start path needs from the attempt's latest
+  execution_process, OR call the lower-level start path directly; record the chosen approach. Do NOT
+  fabricate a fake exit event.
+- The "is this attempt being resumed by 304?" signal is ambiguous (304 may mark `resume_state='resumed'`
+  but not yet have a running process at the instant the drain runs) → key the skip on
+  `has_running_processes_for_attempt` OR **any** non-NULL `resume_state` (`'pending'`/`'resumed'`/
+  `'abandoned'`) to avoid both the double-writer race AND draining a dead-session abandoned attempt;
+  record the predicate.
+- Ordering (CRITICAL — double-writer hazard): the drain MUST be `.await`-chained AFTER
+  `cleanup_orphan_executions().await` **completes**, in the SAME task. A sibling `tokio::spawn` runs
+  concurrently with recovery and races 304 into the worktree. If you cannot guarantee completion-ordering
+  (e.g. recovery is structured so it can't be awaited before the drain), STOP — do not start the drain.
+
+## Done when
+Adds no new schema (reads the 101 table) but its `query!`/`query_as!` reference `queued_messages` (101).
+**Precondition (Trap 2):** export `DATABASE_URL=sqlite://<repo>/dev_assets/db.sqlite` to a dev DB with
+101 applied so `query!` checks the LIVE schema. Do NOT `cargo sqlx prepare` here (it churns the tracked
+`.sqlx` cache the gate rejects; regen is a `/wai:close` step).
+
+**Completion-ordering assertion (record in ledger):** the diff at `main.rs:130` shows
+`cleanup_orphan_executions().await` and `drain_queued_messages_on_boot().await` in the SAME `tokio::spawn`
+body, the drain second — NOT a separate `tokio::spawn`. Confirm by reading the final hunk.
+
+`WAI_TYPECHECK_CMD="cargo check -p local-deployment && cargo check -p server" WAI_TEST_CMD="cargo test -p local-deployment boot_drain" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-node-foundations 305` exits 0
