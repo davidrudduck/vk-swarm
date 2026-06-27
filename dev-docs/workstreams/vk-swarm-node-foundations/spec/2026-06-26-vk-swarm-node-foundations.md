@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: vk-swarm-node-foundations
 change_kind: behaviour
 ---

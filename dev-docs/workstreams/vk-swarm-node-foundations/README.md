@@ -1,11 +1,12 @@
 ---
 workstream: vk-swarm-node-foundations
 doc_type: readme
-status: active
+status: shipped
 title: "Phase 2a — node correct, durable, crash-resumable (ships first)"
-staging_pointers:
-  - docs/superpowers/specs/2026-06-26-vk-swarm-node-foundations.md
 adrs: [0001, 0002, 0003]
+staging_pointers:
+  - docs/plans/vk-swarm-node-foundations
+  - docs/superpowers/specs/2026-06-26-vk-swarm-node-foundations.md
 ---
 
 # vk-swarm-node-foundations
