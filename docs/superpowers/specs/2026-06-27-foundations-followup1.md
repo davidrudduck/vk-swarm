@@ -53,7 +53,7 @@ design changes to Phase 2a's production code, only new tests and two small suppo
 
 ### GAP 1 — SC1 end-to-end crash-resume integration test
 
-**SC1a.** `cargo test -p services` includes a test that:
+**SC1a:** `cargo test -p services` includes a test that:
 - Uses `qa_mock` to create a real `ExecutionProcess` row with a stored `ExecutorAction` of type
   `CodingAgentInitialRequest` (executor: QaMock) and a real `executor_sessions` row with a known
   `session_id`.
@@ -64,55 +64,55 @@ design changes to Phase 2a's production code, only new tests and two small suppo
   executor session) and that the resulting `ExecutorAction` is a `CodingAgentFollowUpRequest`
   with `executor_profile_id.executor == BaseCodingAgent::QaMock`.
 
-**SC1b.** The test does NOT require a real running process; process spawning is suppressed via a
+**SC1b:** The test does NOT require a real running process; process spawning is suppressed via a
 mock or a no-op `start_execution_inner` override, or the test asserts only as far as the point
 `resume_execution` would be called (verifying the classification branch, not the full spawn).
 
-**SC1c.** `cargo test -p services <test_name>` exits 0 on CI.
+**SC1c:** `cargo test -p services <test_name>` exits 0 on CI.
 
 ### GAP 2 — MockProcessInspector stubborn-PID mode + fence_attempt_count escalation
 
-**SC2a.** `MockProcessInspector` has a `stubborn_pids: HashSet<i64>` (or equivalent) field.
+**SC2a:** `MockProcessInspector` has a `stubborn_pids: HashSet<i64>` (or equivalent) field.
 Processes in this set return "alive" on every `kill_process` call (SIGTERM and SIGKILL), causing
 `process_fence::fence()` to return `FenceOutcome::CouldNotKill`.
 
-**SC2b.** A migration adds `fence_attempt_count INTEGER NOT NULL DEFAULT 0` to
+**SC2b:** A migration adds `fence_attempt_count INTEGER NOT NULL DEFAULT 0` to
 `execution_processes`. A scalar accessor (`increment_fence_attempt_count`, `get_fence_attempt_count`
 or equivalent) in `crates/db/src/models/execution_process/queries.rs` increments and reads it.
 
-**SC2c.** `cleanup_orphan_executions` increments `fence_attempt_count` each time `CouldNotKill`
+**SC2c:** `cleanup_orphan_executions` increments `fence_attempt_count` each time `CouldNotKill`
 is returned for a process. After reaching a configurable threshold (default: 5 attempts), it emits
 a structured `tracing::warn!` including `process_id`, `fence_attempt_count`, and a human-readable
 message suitable for surfacing to an operator (e.g., "process stuck in D-state after N restart
 attempts — manual intervention may be required").
 
-**SC2d.** `cargo test -p services` includes a test using stubborn-PID mode that:
+**SC2d:** `cargo test -p services` includes a test using stubborn-PID mode that:
 - Verifies `resume_state` stays `'pending'` across multiple `CouldNotKill` cycles.
 - Verifies `fence_attempt_count` increments each cycle.
 - Verifies the escalation `tracing::warn!` fires when the attempt counter reaches the threshold
   (verified via a `tracing_subscriber::recorder` capture or equivalent in-process subscriber).
 
-**SC2e.** `cargo test -p services <test_name>` exits 0 on CI.
+**SC2e:** `cargo test -p services <test_name>` exits 0 on CI.
 
 ### GAP 3 — SC2 boot-drain full call path integration test
 
-**SC3a.** A test in `crates/local-deployment/src/container.rs` (or
+**SC3a:** A test in `crates/local-deployment/src/container.rs` (or
 `crates/local-deployment/tests/`) seeds:
 - A `queued_messages` row for a known `task_attempt_id`.
 - An idle/completed `execution_processes` row for that attempt (so the skip-predicate passes).
 - The parent `task` and `project` rows for FK validity.
 
-**SC3b.** The test calls `drain_queued_messages_on_boot` on a real `LocalContainerService`
+**SC3b:** The test calls `drain_queued_messages_on_boot` on a real `LocalContainerService`
 instance (or a minimal test double that exposes the method without requiring full executor
 infrastructure). It does NOT call `query_drainable`.
 
-**SC3c.** The test asserts that `start_queued_message_for_attempt` was invoked for the seeded
+**SC3c:** The test asserts that `start_queued_message_for_attempt` was invoked for the seeded
 attempt — either by observing a side effect (an `execution_processes` row created) or by
 instrumenting/wrapping `start_queued_message_for_attempt`. If spawning a real executor is
 infeasible in the test environment, the test may intercept at the `start_queued_message_for_attempt`
 boundary and assert it was called with the correct `task_attempt_id`.
 
-**SC3d.** `cargo test -p local-deployment <test_name>` exits 0 on CI.
+**SC3d:** `cargo test -p local-deployment <test_name>` exits 0 on CI.
 
 ### CI gate (all gaps)
 
@@ -507,7 +507,7 @@ Add a default method to `ContainerService` trait so tests can inject `MockProces
 Default behavior is unchanged (`SysinfoProcessInspector::new()`). Reversible — removing the
 default method restores the original behaviour. No ADR required.
 
-**D2 — `fence_attempt_count` column (IRREVERSIBLE — see [ADR-0005](../../dev-docs/adr/0005-fence-attempt-count-column.md))**
+**D2 — `fence_attempt_count` column (IRREVERSIBLE — see [ADR-0005](../../../dev-docs/adr/0005-fence-attempt-count-column.md))**
 Store attempt count in DB so it persists across server restarts. In-memory counter was rejected
 because it resets on every crash (which is exactly when D-state processes occur). SQLite column
 additions are forward-only — cannot be dropped without a full table rebuild. ADR-0005 records
