@@ -36,6 +36,9 @@ Functions for managing execution processes in the local SQLite database. Executi
 | `find_prev_after_head_commit` | Previous commit | `Option<String>` |
 | `load_context` | Load with task/attempt | `ExecutionContext` |
 | `latest_executor_profile_for_attempt` | Get profile | `ExecutorProfileId` |
+| `mark_orphaned_as_failed` | Orphan sweep on startup | `u64` (rows updated) |
+| `set_resume_state` | Track crash-recovery state | `()` |
+| `get_resume_state` | Read crash-recovery state | `Option<String>` |
 
 ---
 
@@ -510,3 +513,81 @@ async fn latest_executor_profile_for_attempt(
 
 **Used By:**
 - `services/execution.rs` - Profile lookup for follow-ups
+
+---
+
+## Process Recovery Functions
+
+These functions support automatic crash recovery on server startup. They manage the `resume_state` column and the orphan-cleanup sweep.
+
+### mark_orphaned_as_failed
+
+Mark execution processes that were left in `status='running'` by a previous server crash as failed.
+
+**Signature:**
+```rust
+async fn mark_orphaned_as_failed(
+    pool: &SqlitePool,
+    server_instance_id: &str,
+) -> Result<u64, sqlx::Error>
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `pool` | `&SqlitePool` | Database connection pool |
+| `server_instance_id` | `&str` | Current server instance ID (rows owned by this instance are excluded) |
+
+**Returns:** Count of rows updated.
+
+**Guard clause:** Rows with `resume_state IN ('pending', 'resumed')` are excluded — these are under active crash-recovery and must not be prematurely marked failed.
+
+**Used By:**
+- `services/container.rs` - `cleanup_orphan_executions` on startup
+
+---
+
+### set_resume_state
+
+Set the `resume_state` column on an execution process row.
+
+**Signature:**
+```rust
+async fn set_resume_state(
+    pool: &SqlitePool,
+    id: Uuid,
+    state: &str,
+) -> Result<(), sqlx::Error>
+```
+
+**Valid values:**
+
+| Value | Set by | Meaning |
+|---|---|---|
+| `pending` | `cleanup_orphan_executions` | Fence complete; crash-resume is being prepared (or process is in D-state) |
+| `resumed` | `resume_execution` | Crash-resume has been dispatched to the executor |
+| `abandoned` | `cleanup_orphan_executions` | Recovery was skipped (PID reuse detected, or resume failed) |
+
+`NULL` is the initial state for all newly created rows and means the process has not been through crash-recovery logic.
+
+**Used By:**
+- `services/container.rs` - `cleanup_orphan_executions`, `resume_execution`
+
+---
+
+### get_resume_state
+
+Read the `resume_state` column for an execution process.
+
+**Signature:**
+```rust
+async fn get_resume_state(
+    pool: &SqlitePool,
+    id: Uuid,
+) -> Result<Option<String>, sqlx::Error>
+```
+
+**Returns:** `Some(state_string)` or `None` if the row doesn't exist or the column is NULL.
+
+**Used By:**
+- Tests — verify resume lifecycle transitions
