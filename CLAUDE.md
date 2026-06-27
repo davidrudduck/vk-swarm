@@ -9,6 +9,7 @@
 - **UUID Identifiers**: All entities use UUID v4 for primary keys.
 - **UTC Timestamps**: All timestamps stored as `DateTime<Utc>` (Rust) and ISO 8601 strings (JSON/SQLite).
 - **GitHub Targeting**: Open pull requests only against `davidrudduck/vk-swarm`. Do not open PRs against `BloopAI/vibe-kanban` from this workspace.
+- **Finish What We Start**: A PR must leave `cargo clippy --all --all-targets --all-features -- -D warnings`, `cargo test --workspace`, `cd frontend && npm run lint`, and `npx tsc --noEmit` all green. No CI-breaking or half-implemented debt is deferred to the next session. Legitimate scope splits (entangled features, approved `vk-swarm-node-ui-localize`-style workstreams) are the only exception — they must be explicitly named, tracked in a follow-up workstream, and documented in the decisions-ledger before the PR is submitted.
 
 ## 2. Tech Stack
 

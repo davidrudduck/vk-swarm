@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM queued_messages WHERE id = ? AND task_attempt_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "db5ba764511b6bbda1618533dfd3f37a0b54e262b0b72346c2f2249b0fa05e9b"
+}

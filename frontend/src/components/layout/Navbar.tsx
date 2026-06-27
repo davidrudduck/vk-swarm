@@ -10,7 +10,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import {
   FolderOpen,
-  Server,
   Settings,
   BookOpen,
   MessageCircleQuestion,
@@ -51,7 +50,6 @@ import { ProjectSwitcher } from './ProjectSwitcher';
 
 const INTERNAL_NAV = [
   { label: 'Projects', icon: FolderOpen, to: '/projects' },
-  { label: 'Nodes', icon: Server, to: '/nodes' },
   { label: 'Processes', icon: Activity, to: '/processes' },
 ];
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE execution_processes\n               SET status = 'failed', updated_at = datetime('now')\n               WHERE status = 'running'\n                 AND (server_instance_id IS NULL OR server_instance_id != ?)\n                 AND (resume_state IS NULL OR resume_state NOT IN ('pending', 'resumed'))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "afaaa471515fa32abed197db8d25ca4ae5e4e8057b79e1857cbd2ce1d051655a"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: Uuid\" FROM queued_messages WHERE task_attempt_id = ? ORDER BY position ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "b094756be85f7d7cc561e484cf2a502e4412e76915e431a6948081b894d0408e"
+}

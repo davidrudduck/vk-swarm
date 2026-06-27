@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT qm.task_attempt_id AS \"task_attempt_id!: Uuid\"\n               FROM queued_messages qm\n               -- (1) Skip if any execution process for this attempt is currently running\n               WHERE NOT EXISTS (\n                   SELECT 1 FROM execution_processes ep\n                   WHERE ep.task_attempt_id = qm.task_attempt_id\n                     AND ep.status = 'running'\n               )\n               -- (2) Skip if any execution process has a non-NULL resume_state (304 owns it)\n               AND NOT EXISTS (\n                   SELECT 1 FROM execution_processes ep\n                   WHERE ep.task_attempt_id = qm.task_attempt_id\n                     AND ep.resume_state IS NOT NULL\n               )\n               -- (3) Skip if the latest non-dropped execution process did not complete normally\n               AND EXISTS (\n                   SELECT 1 FROM execution_processes ep\n                   WHERE ep.task_attempt_id = qm.task_attempt_id\n                     AND ep.dropped = FALSE\n                     AND ep.status = 'completed'\n                     AND ep.created_at = (\n                         SELECT MAX(ep2.created_at)\n                         FROM execution_processes ep2\n                         WHERE ep2.task_attempt_id = qm.task_attempt_id\n                           AND ep2.dropped = FALSE\n                     )\n               )",
+  "describe": {
+    "columns": [
+      {
+        "name": "task_attempt_id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "998394f4c5da93399927ab57d887236508fcc281337160ec977ec955214bd421"
+}

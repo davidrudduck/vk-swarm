@@ -271,11 +271,11 @@ impl WebhookService {
         match val {
             serde_json::Value::String(s) => {
                 // Full-field replacement: entire string is "{{var}}" → substitute typed value
-                if let Some(key) = s.strip_prefix("{{").and_then(|s| s.strip_suffix("}}")) {
-                    if let Some(replacement) = vars.get(key) {
-                        *val = replacement.clone();
-                        return;
-                    }
+                if let Some(key) = s.strip_prefix("{{").and_then(|s| s.strip_suffix("}}"))
+                    && let Some(replacement) = vars.get(key)
+                {
+                    *val = replacement.clone();
+                    return;
                 }
                 // Inline substitution: replace {{var}} occurrences within a longer string
                 let mut result = s.clone();

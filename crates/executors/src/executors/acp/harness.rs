@@ -22,6 +22,12 @@ use crate::{
     executors::{ExecutorError, ExecutorExitResult, SpawnContext, SpawnedChild, acp::AcpEvent},
 };
 
+/// Capacity of the bounded ACP transcript-event channel (drop-on-full per ADR-0004).
+///
+/// Transcript events are display/diagnostic only; under flood the channel drops
+/// the oldest-unsent lines rather than growing without bound (OOM guard).
+const ACP_EVENT_CHANNEL_CAPACITY: usize = 1024;
+
 /// Reusable harness for ACP-based conns (Gemini, Qwen, etc.)
 pub struct AcpAgentHarness {
     session_namespace: String,
@@ -256,7 +262,9 @@ impl AcpAgentHarness {
                         // Create event and raw channels
                         // Typed events available for future use; raw lines forwarded and persisted
                         let (event_tx, mut event_rx) =
-                            mpsc::unbounded_channel::<crate::executors::acp::AcpEvent>();
+                            mpsc::channel::<crate::executors::acp::AcpEvent>(
+                                ACP_EVENT_CHANNEL_CAPACITY,
+                            );
 
                         // Create session manager
                         let session_manager = match SessionManager::new(session_namespace) {

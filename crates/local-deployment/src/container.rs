@@ -123,8 +123,8 @@ impl LocalContainerService {
         // Initialize log batcher for batched database writes
         let log_batcher = LogBatcher::spawn(&db);
 
-        // Initialize in-memory message queue store
-        let message_queue = crate::message_queue::MessageQueueStore::new();
+        // Initialize database-backed message queue store
+        let message_queue = crate::message_queue::MessageQueueStore::new(db.pool.clone());
 
         // Initialize normalization handles store
         let normalization_handles = Arc::new(RwLock::new(HashMap::new()));
@@ -1174,6 +1174,240 @@ impl LocalContainerService {
         Ok(())
     }
 
+    /// Shared helper: start the next queued message for a given attempt+task pair.
+    ///
+    /// Does NOT check whether a process is currently running — the caller is responsible
+    /// for that guard. Returns `Ok(())` if nothing was started (no queued message, no
+    /// session id, no prior CodingAgent process, etc.).
+    async fn start_queued_message_for_attempt(
+        &self,
+        task_attempt: &TaskAttempt,
+        task: &Task,
+    ) -> Result<(), ContainerError> {
+        // Peek first so setup failures do not silently drop the queued message.
+        let Some(queued_msg) = self.message_queue.peek_next(task_attempt.id).await else {
+            return Ok(());
+        };
+
+        tracing::info!(
+            task_attempt_id = %task_attempt.id,
+            message_id = %queued_msg.id,
+            "Consuming queued message to start follow-up"
+        );
+
+        // Ensure worktree exists
+        let container_ref = self.ensure_container_exists(task_attempt).await?;
+
+        // Get session id - use find_previous_session_ids to skip invalidated sessions
+        let session_ids =
+            ExecutionProcess::find_previous_session_ids(&self.db.pool, task_attempt.id, 5).await?;
+
+        let Some(session_id) = session_ids.into_iter().next() else {
+            tracing::warn!(
+                "No valid session id found for attempt {}. Cannot start queued message.",
+                task_attempt.id
+            );
+            return Ok(());
+        };
+
+        // Get last coding agent process to inherit executor profile
+        let Some(latest) = ExecutionProcess::find_latest_by_task_attempt_and_run_reason(
+            &self.db.pool,
+            task_attempt.id,
+            &ExecutionProcessRunReason::CodingAgent,
+        )
+        .await?
+        else {
+            tracing::warn!(
+                "No prior CodingAgent process for attempt {}. Cannot start queued message.",
+                task_attempt.id
+            );
+            return Ok(());
+        };
+
+        use executors::actions::ExecutorActionType;
+        let initial_executor_profile_id = match &latest.executor_action()?.typ {
+            ExecutorActionType::CodingAgentInitialRequest(req) => req.executor_profile_id.clone(),
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => req.executor_profile_id.clone(),
+            _ => {
+                tracing::warn!(
+                    "Latest process for attempt {} is not a coding agent; skipping queued message",
+                    task_attempt.id
+                );
+                return Ok(());
+            }
+        };
+
+        let executor_profile_id = executors::profile::ExecutorProfileId {
+            executor: initial_executor_profile_id.executor,
+            variant: queued_msg.variant.clone(),
+        };
+
+        // Prepare cleanup action
+        let cleanup_action = task
+            .parent_project(&self.db.pool)
+            .await?
+            .and_then(|project| self.cleanup_action(project.cleanup_script));
+
+        // Handle images: copy to worktree and canonicalize prompt
+        let worktree_path = std::path::PathBuf::from(&container_ref);
+        let prompt = ImageService::canonicalise_image_paths(&queued_msg.content, &worktree_path);
+
+        let follow_up_request =
+            executors::actions::coding_agent_follow_up::CodingAgentFollowUpRequest {
+                prompt,
+                session_id,
+                executor_profile_id,
+            };
+
+        let follow_up_action = executors::actions::ExecutorAction::new(
+            executors::actions::ExecutorActionType::CodingAgentFollowUpRequest(follow_up_request),
+            cleanup_action,
+        );
+
+        // Start the execution
+        let _ = self
+            .start_execution(
+                task_attempt,
+                &follow_up_action,
+                &ExecutionProcessRunReason::CodingAgent,
+            )
+            .await?;
+
+        if !self.message_queue.remove(task_attempt.id, queued_msg.id).await {
+            tracing::warn!(
+                task_attempt_id = %task_attempt.id,
+                message_id = %queued_msg.id,
+                "Queued message started but could not be removed from the queue"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// On boot, drain any persisted queued messages for attempts that are idle
+    /// (not being recovered by task 304's resume path).
+    ///
+    /// Skip predicate (3-part): an attempt is skipped if ANY of:
+    /// 1. It has a currently-running execution process.
+    /// 2. Any execution process for the attempt has a non-NULL `resume_state`
+    ///    (covers 'pending', 'resumed', and 'abandoned' — all 304 recovery states).
+    /// 3. The latest (most-recent, non-dropped) execution process did NOT complete
+    ///    with status = 'completed'.
+    ///
+    /// Per-attempt errors are logged and skipped so one bad attempt does not abort
+    /// the whole drain.
+    pub async fn drain_queued_messages_on_boot(&self) -> Result<(), ContainerError> {
+        let pool = &self.db.pool;
+
+        // Find all distinct task_attempt_ids that have at least one queued message
+        // AND pass the 3-part skip predicate (all filters applied in SQL for efficiency).
+        let drainable = sqlx::query!(
+            r#"SELECT DISTINCT qm.task_attempt_id AS "task_attempt_id!: Uuid"
+               FROM queued_messages qm
+               -- (1) Skip if any execution process for this attempt is currently running
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM execution_processes ep
+                   WHERE ep.task_attempt_id = qm.task_attempt_id
+                     AND ep.status = 'running'
+               )
+               -- (2) Skip if any execution process has a non-NULL resume_state (304 owns it)
+               AND NOT EXISTS (
+                   SELECT 1 FROM execution_processes ep
+                   WHERE ep.task_attempt_id = qm.task_attempt_id
+                     AND ep.resume_state IS NOT NULL
+               )
+               -- (3) Skip if the latest non-dropped execution process did not complete normally
+               AND EXISTS (
+                   SELECT 1 FROM execution_processes ep
+                   WHERE ep.task_attempt_id = qm.task_attempt_id
+                     AND ep.dropped = FALSE
+                     AND ep.status = 'completed'
+                     AND ep.created_at = (
+                         SELECT MAX(ep2.created_at)
+                         FROM execution_processes ep2
+                         WHERE ep2.task_attempt_id = qm.task_attempt_id
+                           AND ep2.dropped = FALSE
+                     )
+               )"#
+        )
+        .fetch_all(pool)
+        .await?;
+
+        if drainable.is_empty() {
+            tracing::debug!("Boot drain: no drainable queued-message attempts found");
+            return Ok(());
+        }
+
+        tracing::info!(
+            count = drainable.len(),
+            "Boot drain: found queued-message attempts eligible for drain"
+        );
+
+        for row in drainable {
+            let attempt_id = row.task_attempt_id;
+
+            // Load the task attempt
+            let task_attempt = match TaskAttempt::find_by_id(pool, attempt_id).await {
+                Ok(Some(ta)) => ta,
+                Ok(None) => {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        "Boot drain: task attempt not found; skipping"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        error = ?e,
+                        "Boot drain: failed to load task attempt; skipping"
+                    );
+                    continue;
+                }
+            };
+
+            // Load the parent task
+            let task = match Task::find_by_id(pool, task_attempt.task_id).await {
+                Ok(Some(t)) => t,
+                Ok(None) => {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        task_id = %task_attempt.task_id,
+                        "Boot drain: parent task not found; skipping"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        error = ?e,
+                        "Boot drain: failed to load parent task; skipping"
+                    );
+                    continue;
+                }
+            };
+
+            tracing::info!(
+                attempt_id = %attempt_id,
+                "Boot drain: starting queued message for idle attempt"
+            );
+
+            if let Err(e) = self
+                .start_queued_message_for_attempt(&task_attempt, &task)
+                .await
+            {
+                tracing::warn!(
+                    attempt_id = %attempt_id,
+                    error = ?e,
+                    "Boot drain: failed to start queued message; skipping"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// If a queued message exists in the in-memory queue for this attempt and nothing is running,
     /// start it as a follow-up request for the next turn.
     async fn try_consume_queued_message(
@@ -1199,107 +1433,8 @@ impl LocalContainerService {
             return Ok(());
         }
 
-        // Peek first so setup failures do not silently drop the queued message.
-        let Some(queued_msg) = self.message_queue.peek_next(ctx.task_attempt.id).await else {
-            return Ok(());
-        };
-
-        tracing::info!(
-            task_attempt_id = %ctx.task_attempt.id,
-            message_id = %queued_msg.id,
-            "Consuming queued message to start follow-up"
-        );
-
-        // Ensure worktree exists
-        let container_ref = self.ensure_container_exists(&ctx.task_attempt).await?;
-
-        // Get session id - use find_previous_session_ids to skip invalidated sessions
-        let session_ids =
-            ExecutionProcess::find_previous_session_ids(&self.db.pool, ctx.task_attempt.id, 5)
-                .await?;
-
-        let Some(session_id) = session_ids.into_iter().next() else {
-            tracing::warn!(
-                "No valid session id found for attempt {}. Cannot start queued message.",
-                ctx.task_attempt.id
-            );
-            return Ok(());
-        };
-
-        // Get last coding agent process to inherit executor profile
-        let Some(latest) = ExecutionProcess::find_latest_by_task_attempt_and_run_reason(
-            &self.db.pool,
-            ctx.task_attempt.id,
-            &ExecutionProcessRunReason::CodingAgent,
-        )
-        .await?
-        else {
-            tracing::warn!(
-                "No prior CodingAgent process for attempt {}. Cannot start queued message.",
-                ctx.task_attempt.id
-            );
-            return Ok(());
-        };
-
-        use executors::actions::ExecutorActionType;
-        let initial_executor_profile_id = match &latest.executor_action()?.typ {
-            ExecutorActionType::CodingAgentInitialRequest(req) => req.executor_profile_id.clone(),
-            ExecutorActionType::CodingAgentFollowUpRequest(req) => req.executor_profile_id.clone(),
-            _ => {
-                tracing::warn!(
-                    "Latest process for attempt {} is not a coding agent; skipping queued message",
-                    ctx.task_attempt.id
-                );
-                return Ok(());
-            }
-        };
-
-        let executor_profile_id = executors::profile::ExecutorProfileId {
-            executor: initial_executor_profile_id.executor,
-            variant: queued_msg.variant.clone(),
-        };
-
-        // Prepare cleanup action
-        let cleanup_action = ctx
-            .task
-            .parent_project(&self.db.pool)
-            .await?
-            .and_then(|project| self.cleanup_action(project.cleanup_script));
-
-        // Handle images: copy to worktree and canonicalize prompt
-        let worktree_path = std::path::PathBuf::from(&container_ref);
-        let prompt = ImageService::canonicalise_image_paths(&queued_msg.content, &worktree_path);
-
-        let follow_up_request =
-            executors::actions::coding_agent_follow_up::CodingAgentFollowUpRequest {
-                prompt,
-                session_id,
-                executor_profile_id,
-            };
-
-        let follow_up_action = executors::actions::ExecutorAction::new(
-            executors::actions::ExecutorActionType::CodingAgentFollowUpRequest(follow_up_request),
-            cleanup_action,
-        );
-
-        // Start the execution
-        let _ = self
-            .start_execution(
-                &ctx.task_attempt,
-                &follow_up_action,
-                &ExecutionProcessRunReason::CodingAgent,
-            )
-            .await?;
-
-        if !self.message_queue.remove(ctx.task_attempt.id, queued_msg.id).await {
-            tracing::warn!(
-                task_attempt_id = %ctx.task_attempt.id,
-                message_id = %queued_msg.id,
-                "Queued message started but could not be removed from the queue"
-            );
-        }
-
-        Ok(())
+        self.start_queued_message_for_attempt(&ctx.task_attempt, &ctx.task)
+            .await
     }
 
     /// Create a .env file in the worktree with auto-assigned ports
@@ -1406,6 +1541,11 @@ impl ContainerService for LocalContainerService {
 
     fn instance_id(&self) -> &str {
         &self.instance_id
+    }
+
+    /// Override the no-op default: delegate to the LocalContainerService implementation.
+    async fn drain_queued_messages_on_boot(&self) -> Result<(), ContainerError> {
+        LocalContainerService::drain_queued_messages_on_boot(self).await
     }
 
     async fn git_branch_prefix(&self) -> String {
@@ -2232,5 +2372,239 @@ mod tests {
                 None => remove_env("VK_NORMALIZATION_TIMEOUT_SECS"),
             }
         }
+    }
+
+    // ── Boot-drain predicate tests ──────────────────────────────────────────────
+    //
+    // These tests verify the SQL skip-predicate used by drain_queued_messages_on_boot
+    // against a real (in-memory) SQLite database with migrations applied.  They do NOT
+    // construct a full LocalContainerService (too many dependencies); instead they
+    // exercise the exact query from drain_queued_messages_on_boot directly.
+    //
+    // Note: test helpers use sqlx::query() (not query!()) to avoid needing compile-time
+    // cache entries for ad-hoc INSERT/UPDATE statements.
+
+    /// Seed a minimal attempt with an execution_process at the given status and optional
+    /// resume_state.  Returns (project_id, task_id, attempt_id, process_id).
+    async fn seed_attempt_with_process(
+        pool: &sqlx::SqlitePool,
+        ep_status: &str,
+        resume_state: Option<&str>,
+    ) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid, uuid::Uuid) {
+        let project_id = uuid::Uuid::new_v4();
+        let task_id = uuid::Uuid::new_v4();
+        let attempt_id = uuid::Uuid::new_v4();
+        let process_id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Use sqlx::query() (not query!()) to avoid needing a compile-time cache entry.
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path, created_at) VALUES (?, ?, ?, ?)")
+            .bind(project_id.to_string())
+            .bind("p")
+            .bind("/tmp/r")
+            .bind(&now)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO tasks (id, project_id, title, created_at) VALUES (?, ?, ?, ?)")
+            .bind(task_id.to_string())
+            .bind(project_id.to_string())
+            .bind("t")
+            .bind(&now)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(attempt_id.to_string())
+            .bind(task_id.to_string())
+            .bind("CLAUDE_CODE")
+            .bind("b")
+            .bind("main")
+            .bind(&now)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        // Minimal executor_action JSON matching the production format
+        let action_json = r#"{"typ":{"CodingAgentInitialRequest":{"prompt":"hi","executor_profile_id":{"executor":"claude_code","variant":null},"setup_script":null,"cleanup_script":null}},"cleanup":null}"#;
+
+        sqlx::query("INSERT INTO execution_processes (id, task_attempt_id, run_reason, executor_action, status, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(process_id.to_string())
+            .bind(attempt_id.to_string())
+            .bind("codingagent")
+            .bind(action_json)
+            .bind(ep_status)
+            .bind(&now)
+            .bind(&now)
+            .bind(&now)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        if let Some(rs) = resume_state {
+            sqlx::query("UPDATE execution_processes SET resume_state = ? WHERE id = ?")
+                .bind(rs)
+                .bind(process_id.to_string())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+
+        // Add a queued message for this attempt
+        let msg_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO queued_messages (id, task_attempt_id, content, position, created_at) VALUES (?, ?, ?, ?, ?)")
+            .bind(msg_id.to_string())
+            .bind(attempt_id.to_string())
+            .bind("hello")
+            .bind(0i64)
+            .bind(&now)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        (project_id, task_id, attempt_id, process_id)
+    }
+
+    /// The drain predicate query extracted for direct testing.
+    /// Uses sqlx::query() + manual Uuid parsing to avoid needing a test-only cache entry.
+    /// Note: test data is inserted as TEXT strings, so we decode as strings here.
+    async fn query_drainable(pool: &sqlx::SqlitePool) -> Vec<uuid::Uuid> {
+        use sqlx::Row;
+        sqlx::query(
+            r#"SELECT DISTINCT qm.task_attempt_id
+               FROM queued_messages qm
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM execution_processes ep
+                   WHERE ep.task_attempt_id = qm.task_attempt_id
+                     AND ep.status = 'running'
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM execution_processes ep
+                   WHERE ep.task_attempt_id = qm.task_attempt_id
+                     AND ep.resume_state IS NOT NULL
+               )
+               AND EXISTS (
+                   SELECT 1 FROM execution_processes ep
+                   WHERE ep.task_attempt_id = qm.task_attempt_id
+                     AND ep.dropped = FALSE
+                     AND ep.status = 'completed'
+                     AND ep.created_at = (
+                         SELECT MAX(ep2.created_at)
+                         FROM execution_processes ep2
+                         WHERE ep2.task_attempt_id = qm.task_attempt_id
+                           AND ep2.dropped = FALSE
+                     )
+               )"#,
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| {
+            // Test data was inserted as text strings (to_string()); parse accordingly.
+            // Production data is stored as BLOB bytes by sqlx's uuid feature.
+            if let Ok(s) = r.try_get::<String, _>(0) {
+                uuid::Uuid::parse_str(&s).ok()
+            } else if let Ok(bytes) = r.try_get::<Vec<u8>, _>(0) {
+                // 16-byte binary UUID (production path)
+                uuid::Uuid::from_slice(&bytes).ok().or_else(|| {
+                    // Might be UTF-8 text stored in blob column
+                    std::str::from_utf8(&bytes)
+                        .ok()
+                        .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+    }
+
+    #[tokio::test]
+    async fn test_boot_drain_skips_attempt_with_running_processes() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let (_, _, attempt_id, _) =
+            seed_attempt_with_process(&pool, "running", None).await;
+
+        let drainable = query_drainable(&pool).await;
+        assert!(
+            !drainable.contains(&attempt_id),
+            "Running process should be skipped by boot drain"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_boot_drain_skips_attempt_with_resume_state_pending() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let (_, _, attempt_id, _) =
+            seed_attempt_with_process(&pool, "completed", Some("pending")).await;
+
+        let drainable = query_drainable(&pool).await;
+        assert!(
+            !drainable.contains(&attempt_id),
+            "Attempt with resume_state='pending' should be skipped (owned by 304)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_boot_drain_skips_attempt_with_resume_state_resumed() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let (_, _, attempt_id, _) =
+            seed_attempt_with_process(&pool, "completed", Some("resumed")).await;
+
+        let drainable = query_drainable(&pool).await;
+        assert!(
+            !drainable.contains(&attempt_id),
+            "Attempt with resume_state='resumed' should be skipped (owned by 304)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_boot_drain_skips_attempt_with_resume_state_abandoned() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let (_, _, attempt_id, _) =
+            seed_attempt_with_process(&pool, "completed", Some("abandoned")).await;
+
+        let drainable = query_drainable(&pool).await;
+        assert!(
+            !drainable.contains(&attempt_id),
+            "Attempt with resume_state='abandoned' should be skipped (owned by 304)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_boot_drain_skips_attempt_with_failed_latest_process() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let (_, _, attempt_id, _) =
+            seed_attempt_with_process(&pool, "failed", None).await;
+
+        let drainable = query_drainable(&pool).await;
+        assert!(
+            !drainable.contains(&attempt_id),
+            "Attempt whose latest process failed should be skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_boot_drain_includes_completed_idle_attempt() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let (_, _, attempt_id, _) =
+            seed_attempt_with_process(&pool, "completed", None).await;
+
+        let drainable = query_drainable(&pool).await;
+        assert!(
+            drainable.contains(&attempt_id),
+            "Completed idle attempt with queued message should be included"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_boot_drain_no_queued_messages_returns_empty() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        // No data seeded — table is empty
+        let drainable = query_drainable(&pool).await;
+        assert!(drainable.is_empty(), "Empty queue should yield no drainable attempts");
     }
 }

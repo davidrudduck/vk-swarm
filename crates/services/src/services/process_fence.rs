@@ -1,0 +1,346 @@
+//! Process fence primitive built on ProcessInspector.
+//!
+//! This module provides pre-resume PID fencing to ensure orphaned processes from
+//! previous worktree sessions are safely terminated before resuming development.
+
+use crate::services::process_inspector::ProcessInspector;
+use std::time::Duration;
+use tokio::time::sleep;
+
+/// Outcome of a fence operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FenceOutcome {
+    /// Process was not found; already terminated.
+    AlreadyGone,
+    /// Process was successfully fenced (killed and confirmed dead).
+    Fenced,
+    /// Process exists but is not running under the worktree marker.
+    /// This is a PID-reuse guard: do NOT kill this process.
+    NotOurProcess,
+    /// Process survived SIGKILL (uninterruptible D-state sleep).
+    /// The process may still be alive; callers MUST NOT resume into it,
+    /// as that would violate the "no concurrent writer" invariant (SC1).
+    CouldNotKill,
+}
+
+/// Fence the process identified by `pid` that is expected to be running under
+/// `worktree_marker` (the worktree directory path).
+///
+/// # Safety
+///
+/// This function implements three safety layers:
+///
+/// 1. **Liveness check**: If the PID doesn't exist, return `AlreadyGone` (safe to resume).
+///
+/// 2. **PID-reuse guard**: Verify the PID's working directory is under `worktree_marker`
+///    by calling `find_processes_by_cwd_prefix`. If the PID is NOT found in the results,
+///    return `NotOurProcess` (PID was reused by a different process; do NOT kill).
+///
+/// 3. **Kill and confirm**: Kill the process (with escalation from SIGTERM to SIGKILL if needed),
+///    then poll `process_exists()` until false (with bounded retries). Return `Fenced` only
+///    when the process is confirmed dead.
+///
+/// # Panics
+///
+/// Does not panic. Returns `AlreadyGone` for out-of-range i64 values.
+pub async fn fence<I: ProcessInspector + ?Sized>(
+    inspector: &I,
+    pid: i64,
+    worktree_marker: &str,
+) -> FenceOutcome {
+    // Cast i64 → u32; out-of-range means the pid can't exist
+    let pid_u32 = match u32::try_from(pid) {
+        Ok(p) => p,
+        Err(_) => return FenceOutcome::AlreadyGone,
+    };
+
+    // Step 1: Check liveness
+    if !inspector.process_exists(pid_u32).await {
+        return FenceOutcome::AlreadyGone;
+    }
+
+    // Step 2: PID-reuse guard — verify process cwd is under our worktree
+    let matching = match inspector.find_processes_by_cwd_prefix(worktree_marker).await {
+        Ok(procs) => procs,
+        Err(_) => {
+            // If we can't query processes, assume it's not ours to be safe
+            return FenceOutcome::NotOurProcess;
+        }
+    };
+
+    // Check if our pid is in the matching set, with path-boundary safety:
+    // a prefix like "wt-a" must not match "wt-a-other". Require that the
+    // process CWD equals the marker exactly OR starts with marker + "/".
+    let marker_with_slash = format!("{}/", worktree_marker);
+    let is_ours = matching.iter().any(|p| {
+        if p.pid != pid_u32 {
+            return false;
+        }
+        match &p.working_directory {
+            Some(cwd) => cwd == worktree_marker || cwd.starts_with(&marker_with_slash),
+            None => false,
+        }
+    });
+    if !is_ours {
+        return FenceOutcome::NotOurProcess;
+    }
+
+    // Step 3: Kill process tree (descendants first), then the target PID, confirm gone.
+    // Collect descendants before killing anything.
+    if let Ok(descendants) = inspector.get_process_tree(pid_u32).await {
+        for desc in &descendants {
+            let _ = inspector.kill_process(desc.pid, false).await;
+        }
+        for desc in &descendants {
+            if inspector.process_exists(desc.pid).await {
+                let _ = inspector.kill_process(desc.pid, true).await;
+            }
+        }
+    }
+
+    // Kill the target pid: graceful first, then force.
+    let _ = inspector.kill_process(pid_u32, false).await;
+
+    // Poll for process_exists until false or max retries
+    #[cfg(not(test))]
+    const MAX_RETRIES: u32 = 50;
+    #[cfg(not(test))]
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    // Reduced retries and interval in test builds to keep tests fast
+    #[cfg(test)]
+    const MAX_RETRIES: u32 = 3;
+    #[cfg(test)]
+    const POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+    for _ in 0..MAX_RETRIES {
+        if !inspector.process_exists(pid_u32).await {
+            return FenceOutcome::Fenced;
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+
+    // Graceful kill didn't work; escalate to force kill
+    let _ = inspector.kill_process(pid_u32, true).await;
+
+    // Poll again with force kill
+    for _ in 0..MAX_RETRIES {
+        if !inspector.process_exists(pid_u32).await {
+            return FenceOutcome::Fenced;
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+
+    // Process survived SIGKILL (D-state / uninterruptible sleep).
+    // Callers must not attempt to resume into this process.
+    FenceOutcome::CouldNotKill
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::process_inspector::{MockProcessInspector, RawProcessInfo};
+
+    #[tokio::test]
+    async fn test_fence_already_gone_when_pid_absent() {
+        let insp = MockProcessInspector::new();
+        let r = fence(&insp, 4242, "/var/tmp/vibe-kanban/worktrees/wt-a").await;
+        assert_eq!(r, FenceOutcome::AlreadyGone);
+    }
+
+    #[tokio::test]
+    async fn test_fence_already_gone_when_out_of_range() {
+        let insp = MockProcessInspector::new();
+        // i64 value outside u32 range
+        let r = fence(&insp, i64::MAX, "/var/tmp/vibe-kanban/worktrees/wt-a").await;
+        assert_eq!(r, FenceOutcome::AlreadyGone);
+    }
+
+    #[tokio::test]
+    async fn test_fence_not_our_process_when_cwd_marker_mismatch() {
+        let insp = MockProcessInspector::new();
+
+        // pid 4242 EXISTS but cwd does NOT match worktree marker
+        insp.add_process(RawProcessInfo::new(
+            4242,
+            Some(1),
+            "node".to_string(),
+            vec!["node".to_string()],
+            Some("/somewhere/else".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+
+        let r = fence(&insp, 4242, "/var/tmp/vibe-kanban/worktrees/wt-a").await;
+        assert_eq!(r, FenceOutcome::NotOurProcess);
+    }
+
+    #[tokio::test]
+    async fn test_fence_kills_and_confirms_dead_when_marker_matches() {
+        let insp = MockProcessInspector::new();
+
+        // pid 4242 alive, cwd under worktree marker
+        insp.add_process(RawProcessInfo::new(
+            4242,
+            Some(1),
+            "node".to_string(),
+            vec!["node".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-a/project".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+
+        let r = fence(&insp, 4242, "/var/tmp/vibe-kanban/worktrees/wt-a").await;
+        assert_eq!(r, FenceOutcome::Fenced);
+
+        // Verify process is actually gone
+        assert!(!insp.process_exists(4242).await);
+    }
+
+    #[tokio::test]
+    async fn test_fence_guards_against_cwd_prefix_issues() {
+        let insp = MockProcessInspector::new();
+
+        // Create process under /var/tmp/vibe-kanban/worktrees/wt-a-other
+        insp.add_process(RawProcessInfo::new(
+            4242,
+            Some(1),
+            "node".to_string(),
+            vec!["node".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-a-other/project".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+
+        // Try to fence with marker /var/tmp/vibe-kanban/worktrees/wt-a
+        // The prefix check should NOT match because wt-a-other does not start with wt-a
+        let r = fence(&insp, 4242, "/var/tmp/vibe-kanban/worktrees/wt-a").await;
+        assert_eq!(r, FenceOutcome::NotOurProcess);
+
+        // Process should still be alive (was not killed)
+        assert!(insp.process_exists(4242).await);
+    }
+
+    #[tokio::test]
+    async fn test_fence_kills_process_tree() {
+        let insp = MockProcessInspector::new();
+
+        // Create a parent process and a child
+        insp.add_process(RawProcessInfo::new(
+            4242,
+            Some(1),
+            "cargo".to_string(),
+            vec!["cargo".to_string(), "run".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-a".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+
+        insp.add_process(RawProcessInfo::new(
+            4243,
+            Some(4242),
+            "rustc".to_string(),
+            vec!["rustc".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-a".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+
+        // Fence the parent; fence must kill the child (process tree) then the parent
+        let r = fence(&insp, 4242, "/var/tmp/vibe-kanban/worktrees/wt-a").await;
+        assert_eq!(r, FenceOutcome::Fenced);
+        assert!(!insp.process_exists(4242).await);
+
+        // Child is also dead (fence kills the process tree before fencing the parent)
+        assert!(!insp.process_exists(4243).await);
+    }
+
+    #[tokio::test]
+    async fn test_fence_sigkill_escalation_kills_resilient_process() {
+        let insp = MockProcessInspector::new();
+
+        // Process survives SIGTERM but dies on SIGKILL
+        insp.add_process(RawProcessInfo::new(
+            5000,
+            Some(1),
+            "node".to_string(),
+            vec!["node".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-b".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+        insp.set_resilient(5000);
+
+        let r = fence(&insp, 5000, "/var/tmp/vibe-kanban/worktrees/wt-b").await;
+        // SIGKILL escalation path must succeed and return Fenced
+        assert_eq!(r, FenceOutcome::Fenced);
+        assert!(!insp.process_exists(5000).await);
+    }
+
+    #[tokio::test]
+    async fn test_fence_could_not_kill_d_state_process() {
+        let insp = MockProcessInspector::new();
+
+        // Process survives both SIGTERM and SIGKILL (D-state simulation)
+        insp.add_process(RawProcessInfo::new(
+            6000,
+            Some(1),
+            "node".to_string(),
+            vec!["node".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-c".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+        insp.set_unkillable(6000);
+
+        let r = fence(&insp, 6000, "/var/tmp/vibe-kanban/worktrees/wt-c").await;
+        // Must return CouldNotKill, NOT Fenced — caller must not resume into this process
+        assert_eq!(r, FenceOutcome::CouldNotKill);
+        // Process is still alive (D-state; we couldn't kill it)
+        assert!(insp.process_exists(6000).await);
+    }
+
+    #[tokio::test]
+    async fn test_fence_not_our_process_with_multiple_matching() {
+        let insp = MockProcessInspector::new();
+
+        // Add multiple processes in the same worktree
+        insp.add_process(RawProcessInfo::new(
+            4240,
+            Some(1),
+            "node".to_string(),
+            vec!["node".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-a/project".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+
+        insp.add_process(RawProcessInfo::new(
+            4241,
+            Some(1),
+            "npm".to_string(),
+            vec!["npm".to_string()],
+            Some("/var/tmp/vibe-kanban/worktrees/wt-a/project".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+
+        // pid 9999 EXISTS (no PID reuse confusion) but its CWD is outside our worktree.
+        // The fence must return NotOurProcess rather than killing it.
+        insp.add_process(RawProcessInfo::new(
+            9999,
+            Some(1),
+            "bash".to_string(),
+            vec!["bash".to_string()],
+            Some("/other/path/project".to_string()),
+            1024 * 1024,
+            1.0,
+        ));
+
+        // Fence 9999 with marker wt-a: it exists but its CWD is not under wt-a.
+        let r = fence(&insp, 9999, "/var/tmp/vibe-kanban/worktrees/wt-a").await;
+        assert_eq!(r, FenceOutcome::NotOurProcess);
+
+        // Process 9999 must still be alive (we didn't kill it)
+        assert!(insp.process_exists(9999).await);
+    }
+}

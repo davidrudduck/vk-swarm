@@ -23,6 +23,7 @@ use db::{
 use executors::{
     actions::{
         ExecutorAction, ExecutorActionType,
+        coding_agent_follow_up::CodingAgentFollowUpRequest,
         coding_agent_initial::CodingAgentInitialRequest,
         script::{ScriptContext, ScriptRequest, ScriptRequestLanguage},
     },
@@ -48,6 +49,8 @@ use crate::services::{
     log_batcher::LogBatcherHandle,
     normalization_metrics::NormalizationMetrics,
     notification::NotificationService,
+    process_fence::{self, FenceOutcome},
+    process_inspector::SysinfoProcessInspector,
     share::SharePublisher,
     variable_expander,
     worktree_manager::WorktreeError,
@@ -72,6 +75,53 @@ pub enum ContainerError {
     TaskAttemptError(#[from] TaskAttemptError),
     #[error(transparent)]
     Other(#[from] AnyhowError), // Catches any unclassified errors
+}
+
+/// Build a resume action from a stored coding-agent action.
+///
+/// Constructs a new `CodingAgentFollowUpRequest` using the provided session ID and prompt,
+/// preserving the executor profile and `next_action` from the stored action.
+///
+/// Handles both `CodingAgentInitialRequest` (first-turn crash) and
+/// `CodingAgentFollowUpRequest` (multi-turn crash), covering the full resume surface.
+///
+/// Returns `None` if the stored action is not a coding-agent action (e.g. a script request).
+pub fn build_resume_action(
+    stored: &ExecutorAction,
+    session_id: String,
+    prompt: String,
+) -> Option<ExecutorAction> {
+    match &stored.typ {
+        ExecutorActionType::CodingAgentInitialRequest(req) => {
+            // Clone the full ExecutorProfileId (including variant) so that a profile like
+            // "ClaudeCode:PLAN" is preserved across the resume — not downgraded to DEFAULT.
+            let follow_up = CodingAgentFollowUpRequest {
+                prompt,
+                session_id,
+                executor_profile_id: req.executor_profile_id.clone(),
+            };
+            let action = ExecutorAction::new(
+                ExecutorActionType::CodingAgentFollowUpRequest(follow_up),
+                stored.next_action().map(|next| Box::new(next.clone())),
+            );
+            Some(action)
+        }
+        ExecutorActionType::CodingAgentFollowUpRequest(req) => {
+            // Multi-turn crash: preserve the existing profile; use the new session_id
+            // (stored session_id may be stale across turns).
+            let follow_up = CodingAgentFollowUpRequest {
+                prompt,
+                session_id,
+                executor_profile_id: req.executor_profile_id.clone(),
+            };
+            let action = ExecutorAction::new(
+                ExecutorActionType::CodingAgentFollowUpRequest(follow_up),
+                stored.next_action().map(|next| Box::new(next.clone())),
+            );
+            Some(action)
+        }
+        _ => None,
+    }
 }
 
 #[async_trait]
@@ -233,107 +283,294 @@ pub trait ContainerService {
         NotificationService::notify_execution_halted(notify_cfg, ctx).await;
     }
 
+    /// Drain persisted queued messages for idle attempts on boot.
+    /// Called AFTER cleanup_orphan_executions; no-op by default (overridden in LocalContainerService).
+    async fn drain_queued_messages_on_boot(&self) -> Result<(), ContainerError> {
+        Ok(())
+    }
+
     /// Cleanup executions marked as running in the db, call at startup.
-    /// With instance-scoped process tracking, this marks as failed any processes
-    /// that don't belong to the current instance (orphans from crashed/restarted servers).
+    /// Uses fence-then-resume: for each running coding-agent process with a PID,
+    /// fence the process first, then resume if a session_id exists, or mark-failed otherwise.
+    /// Non-coding-agent orphans are handled by the blanket mark_orphaned_as_failed call.
     async fn cleanup_orphan_executions(&self) -> Result<(), ContainerError> {
         let instance_id = self.instance_id();
+        let pool = &self.db().pool;
+
         tracing::info!(
             instance_id = %instance_id,
-            "Cleaning up orphaned execution processes"
+            "Starting fence-then-resume recovery for orphaned execution processes"
         );
 
-        // First, batch-mark orphaned processes (those with different or NULL instance_id)
-        let orphaned_count =
-            ExecutionProcess::mark_orphaned_as_failed(&self.db().pool, instance_id).await?;
+        // Fetch running coding-agent processes that have a PID (may be orphaned)
+        let candidates = ExecutionProcess::find_running_with_pids(pool).await?;
+
+        // Build a single inspector for all fence calls (avoids per-call sysinfo refresh)
+        let inspector = SysinfoProcessInspector::new();
+
+        for process in &candidates {
+            // Only recover coding-agent runs (SC8 target: resume, not script runs)
+            if process.run_reason != ExecutionProcessRunReason::CodingAgent {
+                continue;
+            }
+
+            let Some(pid_raw) = process.pid else {
+                continue;
+            };
+
+            // Step 1: Fence the process (safety invariant: never resume into a live writer)
+            let task_attempt = match TaskAttempt::find_by_id(pool, process.task_attempt_id).await {
+                Ok(Some(ta)) => ta,
+                _ => {
+                    tracing::warn!(
+                        process_id = %process.id,
+                        "Could not find task attempt for process; skipping recovery"
+                    );
+                    continue;
+                }
+            };
+
+            let Some(container_ref) = task_attempt.container_ref.clone().filter(|s| !s.is_empty()) else {
+                // No worktree path recorded — cannot safely identify the process by cwd.
+                // An empty marker would match every process on the system, defeating the
+                // PID-reuse guard.  Treat as not-ours and skip recovery.
+                tracing::warn!(
+                    process_id = %process.id,
+                    pid = pid_raw,
+                    "No container_ref; cannot safely fence — skipping recovery"
+                );
+                continue;
+            };
+            let fence_result = process_fence::fence(&inspector, pid_raw, &container_ref).await;
+
+            match fence_result {
+                FenceOutcome::NotOurProcess => {
+                    // PID was reused by another process; do not kill, skip recovery.
+                    // Mark abandoned and update task status to InReview — the execution
+                    // is gone (the process is not ours), so treat it as a failure.
+                    let _ =
+                        ExecutionProcess::set_resume_state(pool, process.id, "abandoned").await;
+                    tracing::warn!(
+                        process_id = %process.id,
+                        pid = pid_raw,
+                        "PID reused by another process; marking execution as failed"
+                    );
+                    self.mark_process_failed_with_task_update(pool, process, &task_attempt)
+                        .await;
+                    continue;
+                }
+                FenceOutcome::AlreadyGone | FenceOutcome::Fenced => {
+                    // Process is confirmed dead; safe to proceed with resume classification
+                }
+                FenceOutcome::CouldNotKill => {
+                    // Process survived SIGKILL (D-state / uninterruptible sleep).
+                    // Resuming into a potentially live writer violates SC1; skip this process.
+                    // Set resume_state='pending' so the blanket mark_orphaned_as_failed guard
+                    // (which excludes 'pending' and 'resumed') does NOT mark this row failed —
+                    // the process is still alive and will be fenced again on next restart.
+                    let _ =
+                        ExecutionProcess::set_resume_state(pool, process.id, "pending").await;
+                    tracing::warn!(
+                        process_id = %process.id,
+                        pid = pid_raw,
+                        "Process survived SIGKILL (D-state); skipping recovery to avoid concurrent writer"
+                    );
+                    continue;
+                }
+            }
+
+            // Step 2: Classify — resume if session_id exists, mark-failed otherwise
+            let session_id =
+                ExecutionProcess::find_latest_session_id_by_task_attempt(pool, process.task_attempt_id)
+                    .await
+                    .unwrap_or(None);
+
+            if let Some(session_id) = session_id {
+                // Resume: executor supports session recovery (task 301 audit: all 9 executors do)
+                let _ = ExecutionProcess::set_resume_state(pool, process.id, "pending").await;
+
+                // Reconstruct stored action from the process record
+                let stored_action = match process.executor_action() {
+                    Ok(action) => action.clone(),
+                    Err(_) => {
+                        // executor_action JSON is unparseable (database corruption or schema
+                        // mismatch). Fall back to ClaudeCode:DEFAULT — the original executor
+                        // variant is lost, but the minimal continuation prompt still gives
+                        // the session a chance to recover. If start_execution_inner then fails,
+                        // the error path below marks the process abandoned.
+                        ExecutorAction::new(
+                            ExecutorActionType::CodingAgentInitialRequest(
+                                CodingAgentInitialRequest {
+                                    prompt: String::new(),
+                                    executor_profile_id: executors::profile::ExecutorProfileId::new(
+                                        executors::executors::BaseCodingAgent::ClaudeCode,
+                                    ),
+                                },
+                            ),
+                            None,
+                        )
+                    }
+                };
+
+                // Minimal continuation prompt per ledger task 303 decision:
+                // re-sending the original task prompt over --resume reads as "redo the task",
+                // not "continue where you left off". A minimal prompt is the safer default.
+                let resume_prompt = "Your previous session was interrupted. Please continue the task from where you left off.".to_string();
+
+                match self
+                    .resume_execution(
+                        &task_attempt,
+                        process,
+                        &stored_action,
+                        session_id,
+                        resume_prompt,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let _ =
+                            ExecutionProcess::set_resume_state(pool, process.id, "resumed").await;
+                        tracing::info!(
+                            process_id = %process.id,
+                            "Successfully resumed execution"
+                        );
+                    }
+                    Err(e) => {
+                        // Resume failed; fall through to mark-failed
+                        tracing::warn!(
+                            process_id = %process.id,
+                            error = ?e,
+                            "Resume failed; marking as abandoned"
+                        );
+                        let _ =
+                            ExecutionProcess::set_resume_state(pool, process.id, "abandoned").await;
+                        self.mark_process_failed_with_task_update(pool, process, &task_attempt)
+                            .await;
+                    }
+                }
+            } else {
+                // No session_id: mark-failed (abandoned)
+                let _ = ExecutionProcess::set_resume_state(pool, process.id, "abandoned").await;
+                self.mark_process_failed_with_task_update(pool, process, &task_attempt)
+                    .await;
+            }
+        }
+
+        // Now run the blanket mark-orphaned-as-failed for non-coding-agent orphans
+        // (mark_orphaned_as_failed now excludes rows with resume_state IN ('pending','resumed'))
+        let orphaned_count = ExecutionProcess::mark_orphaned_as_failed(pool, instance_id).await?;
 
         if orphaned_count > 0 {
             tracing::info!(
                 instance_id = %instance_id,
                 orphaned_count = orphaned_count,
-                "Marked {} orphaned processes as failed",
+                "Marked {} non-resumable orphaned processes as failed",
                 orphaned_count
             );
         }
 
-        // Now process them one by one for after-head commit and task status updates
-        // Get all recently-failed processes that were orphaned (don't have our instance_id)
-        let running_processes = ExecutionProcess::find_running(&self.db().pool).await?;
-        for process in running_processes {
-            // This shouldn't find any now since we just marked them all failed,
-            // but handle any edge cases
-            tracing::info!(
-                "Found orphaned execution process {} for task attempt {}",
+        Ok(())
+    }
+
+    /// Mark an execution process as failed and update the parent task status to InReview.
+    async fn mark_process_failed_with_task_update(
+        &self,
+        pool: &sqlx::SqlitePool,
+        process: &ExecutionProcess,
+        task_attempt: &TaskAttempt,
+    ) {
+        if let Err(e) = ExecutionProcess::update_completion(
+            pool,
+            process.id,
+            ExecutionProcessStatus::Failed,
+            None,
+            Some("eof"),
+            None,
+        )
+        .await
+        {
+            tracing::error!(
+                "Failed to update orphaned execution process {} status: {}",
                 process.id,
-                process.task_attempt_id
+                e
             );
-            // Update the execution process status first
-            if let Err(e) = ExecutionProcess::update_completion(
-                &self.db().pool,
-                process.id,
-                ExecutionProcessStatus::Failed,
-                None,        // No exit code for orphaned processes
-                Some("eof"), // Orphaned processes ended without proper completion
-                None,        // No message
-            )
-            .await
-            {
-                tracing::error!(
-                    "Failed to update orphaned execution process {} status: {}",
-                    process.id,
-                    e
-                );
-                continue;
-            }
-            // Capture after-head commit OID (best-effort)
-            if let Ok(Some(task_attempt)) =
-                TaskAttempt::find_by_id(&self.db().pool, process.task_attempt_id).await
-                && let Some(container_ref) = task_attempt.container_ref
-            {
-                let wt = std::path::PathBuf::from(container_ref);
-                if let Ok(head) = self.git().get_head_info(&wt) {
-                    let _ = ExecutionProcess::update_after_head_commit(
-                        &self.db().pool,
-                        process.id,
-                        &head.oid,
-                    )
+            return;
+        }
+
+        // Capture after-head commit (best-effort)
+        if let Some(container_ref) = &task_attempt.container_ref {
+            let wt = std::path::PathBuf::from(container_ref);
+            if let Ok(head) = self.git().get_head_info(&wt) {
+                let _ = ExecutionProcess::update_after_head_commit(pool, process.id, &head.oid)
                     .await;
-                }
             }
-            // Process marked as failed
-            tracing::info!("Marked orphaned execution process {} as failed", process.id);
-            // Update task status to InReview for coding agent and setup script failures
-            if matches!(
-                process.run_reason,
-                ExecutionProcessRunReason::CodingAgent
-                    | ExecutionProcessRunReason::SetupScript
-                    | ExecutionProcessRunReason::CleanupScript
-            ) && let Ok(Some(task_attempt)) =
-                TaskAttempt::find_by_id(&self.db().pool, process.task_attempt_id).await
-                && let Ok(Some(task)) = task_attempt.parent_task(&self.db().pool).await
-            {
-                match Task::update_status(&self.db().pool, task.id, TaskStatus::InReview).await {
-                    Ok(_) => {
-                        if let Some(publisher) = self.share_publisher()
-                            && let Err(err) = publisher.update_shared_task_by_id(task.id).await
-                        {
-                            tracing::warn!(
-                                ?err,
-                                "Failed to propagate shared task update for {}",
-                                task.id
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to update task status to InReview for orphaned attempt: {}",
-                            e
+        }
+
+        // Update task status to InReview for coding agent failures
+        if matches!(
+            process.run_reason,
+            ExecutionProcessRunReason::CodingAgent
+                | ExecutionProcessRunReason::SetupScript
+                | ExecutionProcessRunReason::CleanupScript
+        ) && let Ok(Some(task)) = task_attempt.parent_task(pool).await
+        {
+            match Task::update_status(pool, task.id, TaskStatus::InReview).await {
+                Ok(_) => {
+                    if let Some(publisher) = self.share_publisher()
+                        && let Err(err) = publisher.update_shared_task_by_id(task.id).await
+                    {
+                        tracing::warn!(
+                            ?err,
+                            "Failed to propagate shared task update for {}",
+                            task.id
                         );
                     }
                 }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to update task status to InReview: {}",
+                        e
+                    );
+                }
             }
         }
-        Ok(())
+
+        tracing::info!("Marked orphaned process {} as failed", process.id);
+    }
+
+    /// Resume a coding-agent execution from a previous session.
+    ///
+    /// This method takes a stored executor action (typically from a previous execution),
+    /// builds a resume action with the new session ID and prompt, and starts the execution.
+    ///
+    /// # Arguments
+    /// * `task_attempt` - The task attempt to resume execution for
+    /// * `execution_process` - The execution process record to track this run
+    /// * `stored_action` - The previously stored executor action to resume from
+    /// * `session_id` - The session ID for the follow-up conversation
+    /// * `prompt` - The prompt text to send as a follow-up
+    ///
+    /// # Returns
+    /// * `Ok(())` if the execution starts successfully
+    /// * `Err(ContainerError::Other)` if the stored action is not a resumable coding-agent action
+    async fn resume_execution(
+        &self,
+        task_attempt: &TaskAttempt,
+        execution_process: &ExecutionProcess,
+        stored_action: &ExecutorAction,
+        session_id: String,
+        prompt: String,
+    ) -> Result<(), ContainerError> {
+        // Build the resume action from the stored action
+        let action = build_resume_action(stored_action, session_id, prompt).ok_or_else(|| {
+            ContainerError::Other(anyhow!(
+                "stored action is not a resumable coding-agent action"
+            ))
+        })?;
+
+        // Start the execution with the built resume action
+        self.start_execution_inner(task_attempt, execution_process, &action)
+            .await
     }
 
     /// Backfill before_head_commit for legacy execution processes.
@@ -1283,8 +1520,118 @@ pub trait ContainerService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use db::models::execution_process::{ExecutionProcess, ExecutionProcessStatus};
+    use executors::executors::BaseCodingAgent;
     use executors::logs::utils::ConversationPatch;
     use executors::logs::{NormalizedEntry, NormalizedEntryType};
+
+    /// Helper: Create a sample ExecutorAction with a Claude Code profile
+    fn sample_coding_agent_action_claude() -> ExecutorAction {
+        let initial = CodingAgentInitialRequest {
+            prompt: "Initial prompt".to_string(),
+            executor_profile_id: ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+        };
+        ExecutorAction::new(ExecutorActionType::CodingAgentInitialRequest(initial), None)
+    }
+
+    #[test]
+    fn test_build_resume_action_preserves_profile_and_session() {
+        let stored = sample_coding_agent_action_claude();
+        let action = build_resume_action(&stored, "sess-abc".to_string(), "continue".to_string())
+            .expect("resumable");
+
+        // Verify the action type is a follow-up request
+        match action.typ {
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => {
+                assert_eq!(req.session_id, "sess-abc");
+                assert_eq!(req.prompt, "continue");
+                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
+            }
+            _ => panic!("expected a follow-up resume action"),
+        }
+    }
+
+    #[test]
+    fn test_build_resume_action_follow_up_preserves_profile_and_updates_session() {
+        // A crash during a multi-turn follow-up must be resumable (SC1 coverage gap fix).
+        let initial_req = CodingAgentInitialRequest {
+            prompt: "Initial".to_string(),
+            executor_profile_id: ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+        };
+        let first_follow_up = CodingAgentFollowUpRequest {
+            prompt: "Turn 2".to_string(),
+            session_id: "old-sess-111".to_string(),
+            executor_profile_id: ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+        };
+        // Simulate a stored action that is already a follow-up (mid-conversation crash)
+        let stored = ExecutorAction::new(
+            ExecutorActionType::CodingAgentFollowUpRequest(first_follow_up),
+            Some(Box::new(ExecutorAction::new(
+                ExecutorActionType::CodingAgentInitialRequest(initial_req),
+                None,
+            ))),
+        );
+
+        let action =
+            build_resume_action(&stored, "new-sess-999".to_string(), "resume turn 2".to_string())
+                .expect("follow-up crash must be resumable");
+
+        match action.typ {
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => {
+                // New session_id (stale stored session must not be reused)
+                assert_eq!(req.session_id, "new-sess-999");
+                assert_eq!(req.prompt, "resume turn 2");
+                // Profile preserved from stored follow-up
+                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
+            }
+            _ => panic!("expected a follow-up resume action"),
+        }
+    }
+
+    #[test]
+    fn test_build_resume_action_initial_request_preserves_variant() {
+        // Regression test: before the fix, InitialRequest used
+        // ExecutorProfileId::new(req.base_executor()), which dropped the variant.
+        let initial = CodingAgentInitialRequest {
+            prompt: "Task".to_string(),
+            executor_profile_id: ExecutorProfileId::with_variant(
+                BaseCodingAgent::ClaudeCode,
+                "PLAN".to_string(),
+            ),
+        };
+        let stored =
+            ExecutorAction::new(ExecutorActionType::CodingAgentInitialRequest(initial), None);
+        let action =
+            build_resume_action(&stored, "sess-xyz".to_string(), "continue".to_string())
+                .expect("resumable");
+
+        match action.typ {
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => {
+                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
+                assert_eq!(
+                    req.executor_profile_id.variant.as_deref(),
+                    Some("PLAN"),
+                    "variant must be preserved across initial-request resume"
+                );
+            }
+            _ => panic!("expected follow-up"),
+        }
+    }
+
+    #[test]
+    fn test_build_resume_action_non_coding_agent_returns_none() {
+        // Create a ScriptRequest action (not resumable)
+        let script = ScriptRequest {
+            language: ScriptRequestLanguage::Bash,
+            script: "echo hello".to_string(),
+            context: ScriptContext::SetupScript,
+        };
+        let stored = ExecutorAction::new(ExecutorActionType::ScriptRequest(script), None);
+
+        // Should return None for non-coding-agent actions
+        let result = build_resume_action(&stored, "sess-abc".to_string(), "prompt".to_string());
+        assert!(result.is_none(), "ScriptRequest should not be resumable");
+    }
 
     #[tokio::test]
     async fn test_stream_normalized_logs_no_duplicates() {
@@ -1432,6 +1779,81 @@ mod tests {
             history1.len(),
             history2.len(),
             "Both calls should produce same number of messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_orphan_executions_accessor_set_and_get_resume_state() {
+        use db::test_utils::create_test_pool;
+
+        let (pool, _tmp) = create_test_pool().await;
+
+        // Seed a project
+        let project_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO projects (id, name, git_repo_path) VALUES ($1, 'test-project', '/tmp/test')"#,
+        )
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Seed a task
+        let task_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO tasks (id, project_id, title, status) VALUES ($1, $2, 'test', 'todo')"#,
+        )
+        .bind(task_id)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Seed a task attempt
+        let attempt_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref)
+               VALUES ($1, $2, 'CLAUDE_CODE', 'test-branch', 'main', '/tmp/test-wt')"#,
+        )
+        .bind(attempt_id)
+        .bind(task_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Seed an execution process
+        let process_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO execution_processes (id, task_attempt_id, run_reason, executor_action, status, started_at)
+               VALUES ($1, $2, 'codingagent', '{}', 'running', datetime('now'))"#,
+        )
+        .bind(process_id)
+        .bind(attempt_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Verify initial state
+        let initial = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+        assert_eq!(initial, None);
+
+        // Set resume_state to 'pending'
+        ExecutionProcess::set_resume_state(&pool, process_id, "pending").await.unwrap();
+        let after_pending = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+        assert_eq!(after_pending, Some("pending".to_string()));
+
+        // Set resume_state to 'resumed'
+        ExecutionProcess::set_resume_state(&pool, process_id, "resumed").await.unwrap();
+        let after_resumed = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+        assert_eq!(after_resumed, Some("resumed".to_string()));
+
+        // Verify mark_orphaned_as_failed does NOT touch resumed rows (SC8 safety)
+        ExecutionProcess::mark_orphaned_as_failed(&pool, "other-instance").await.unwrap();
+        let after_mark = ExecutionProcess::find_by_id(&pool, process_id).await.unwrap().unwrap();
+        assert_eq!(
+            after_mark.status,
+            ExecutionProcessStatus::Running,
+            "resumed process must not be marked failed by blanket mark_orphaned"
         );
     }
 }

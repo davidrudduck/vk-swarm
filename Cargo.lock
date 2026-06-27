@@ -1238,6 +1238,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "executors",
+ "futures",
  "rusqlite",
  "serde",
  "serde_json",

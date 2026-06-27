@@ -19,6 +19,7 @@ strum = "0.27.2"
 strum_macros = "0.27.2"
 tokio = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+futures = "0.3.31"
 
 [features]
 default = []

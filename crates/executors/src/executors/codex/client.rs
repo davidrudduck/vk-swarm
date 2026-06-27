@@ -111,7 +111,6 @@ impl AppServerClient {
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api: true,
-                    ..Default::default()
                 }),
             },
         };

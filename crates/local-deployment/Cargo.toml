@@ -33,4 +33,5 @@ ts-rs = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
+db = { path = "../db", features = ["test-utils"] }
 serial_test = "3.0"

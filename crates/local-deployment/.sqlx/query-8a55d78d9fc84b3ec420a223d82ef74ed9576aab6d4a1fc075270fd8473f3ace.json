@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE queued_messages SET position = position - 1 WHERE task_attempt_id = ? AND position > ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8a55d78d9fc84b3ec420a223d82ef74ed9576aab6d4a1fc075270fd8473f3ace"
+}

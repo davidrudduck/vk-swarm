@@ -91,6 +91,10 @@ FROM tasks t
 LEFT JOIN projects p ON p.id = t.project_id
 WHERE t.project_id = $1
   AND (t.archived_at IS NULL OR $2)
+  AND (
+    t.remote_last_synced_at IS NULL
+    OR EXISTS (SELECT 1 FROM task_attempts ta WHERE ta.task_id = t.id)
+  )
 ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
             project_id,
             include_archived

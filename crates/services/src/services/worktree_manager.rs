@@ -754,11 +754,13 @@ mod env_override_tests {
     #[test]
     #[serial]
     fn test_worktree_dir_env_override() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let custom_path = tmp.path().join("custom/worktrees");
         // SAFETY: Tests run serially via #[serial] attribute
-        unsafe { env::set_var("VK_WORKTREE_DIR", "/custom/worktrees") };
+        unsafe { env::set_var("VK_WORKTREE_DIR", custom_path.to_str().unwrap()) };
         let path = WorktreeManager::get_worktree_base_dir();
         unsafe { env::remove_var("VK_WORKTREE_DIR") };
-        assert_eq!(path, std::path::PathBuf::from("/custom/worktrees"));
+        assert_eq!(path, custom_path);
     }
 
     #[test]
