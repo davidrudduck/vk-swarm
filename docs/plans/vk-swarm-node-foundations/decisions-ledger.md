@@ -259,8 +259,9 @@ prechecked / decomposed separately and sequenced AFTER node-foundations.
   - Droid: fork_session + --session-id (droid.rs:171-178)
 - **Variants classified cold-respawn:** 0
 - **Variants classified mark-failed:** 0
-- **Resume-prompt default chosen:** Re-send original prompt from executor_sessions.prompt
-  - **Rationale:** All executors preserve conversation state via session recovery. Sending original prompt provides task context for intelligent resumption. Minimal continuation prompt rejected as context-losing.
+- **Resume-prompt default chosen:** ~~Re-send original prompt from executor_sessions.prompt~~ **SUPERSEDED by R3 (adversarial review 2026-06-26)**
+  - ~~**Rationale:** All executors preserve conversation state via session recovery. Sending original prompt provides task context for intelligent resumption. Minimal continuation prompt rejected as context-losing.~~
+  - **R3 decision (final):** Minimal continuation prompt adopted — `"Your previous session was interrupted. Please continue the task from where you left off."` Re-sending the original task prompt reads as "redo the task", not "continue". See post-ship adversarial review findings, R3.
 - **Spot-check citations verified:**
   1. claude.rs:264 — `command_builder.build_follow_up(&["--fork-session".to_string(), "--resume".to_string(), session_id.to_string()])?`
   2. acp/harness.rs:136 — `existing_session: Option<String>` passed to `bootstrap_acp_connection` for Gemini/QwenCode

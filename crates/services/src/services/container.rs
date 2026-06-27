@@ -93,11 +93,12 @@ pub fn build_resume_action(
 ) -> Option<ExecutorAction> {
     match &stored.typ {
         ExecutorActionType::CodingAgentInitialRequest(req) => {
-            let executor_profile_id = req.base_executor();
+            // Clone the full ExecutorProfileId (including variant) so that a profile like
+            // "ClaudeCode:PLAN" is preserved across the resume — not downgraded to DEFAULT.
             let follow_up = CodingAgentFollowUpRequest {
                 prompt,
                 session_id,
-                executor_profile_id: ExecutorProfileId::new(executor_profile_id),
+                executor_profile_id: req.executor_profile_id.clone(),
             };
             let action = ExecutorAction::new(
                 ExecutorActionType::CodingAgentFollowUpRequest(follow_up),
@@ -329,7 +330,17 @@ pub trait ContainerService {
                 }
             };
 
-            let container_ref = task_attempt.container_ref.clone().unwrap_or_default();
+            let Some(container_ref) = task_attempt.container_ref.clone().filter(|s| !s.is_empty()) else {
+                // No worktree path recorded — cannot safely identify the process by cwd.
+                // An empty marker would match every process on the system, defeating the
+                // PID-reuse guard.  Treat as not-ours and skip recovery.
+                tracing::warn!(
+                    process_id = %process.id,
+                    pid = pid_raw,
+                    "No container_ref; cannot safely fence — skipping recovery"
+                );
+                continue;
+            };
             let fence_result = process_fence::fence(&inspector, pid_raw, &container_ref).await;
 
             match fence_result {
@@ -353,6 +364,11 @@ pub trait ContainerService {
                 FenceOutcome::CouldNotKill => {
                     // Process survived SIGKILL (D-state / uninterruptible sleep).
                     // Resuming into a potentially live writer violates SC1; skip this process.
+                    // Set resume_state='pending' so the blanket mark_orphaned_as_failed guard
+                    // (which excludes 'pending' and 'resumed') does NOT mark this row failed —
+                    // the process is still alive and will be fenced again on next restart.
+                    let _ =
+                        ExecutionProcess::set_resume_state(pool, process.id, "pending").await;
                     tracing::warn!(
                         process_id = %process.id,
                         pid = pid_raw,
@@ -1564,6 +1580,36 @@ mod tests {
                 assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
             }
             _ => panic!("expected a follow-up resume action"),
+        }
+    }
+
+    #[test]
+    fn test_build_resume_action_initial_request_preserves_variant() {
+        // Regression test: before the fix, InitialRequest used
+        // ExecutorProfileId::new(req.base_executor()), which dropped the variant.
+        let initial = CodingAgentInitialRequest {
+            prompt: "Task".to_string(),
+            executor_profile_id: ExecutorProfileId::with_variant(
+                BaseCodingAgent::ClaudeCode,
+                "PLAN".to_string(),
+            ),
+        };
+        let stored =
+            ExecutorAction::new(ExecutorActionType::CodingAgentInitialRequest(initial), None);
+        let action =
+            build_resume_action(&stored, "sess-xyz".to_string(), "continue".to_string())
+                .expect("resumable");
+
+        match action.typ {
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => {
+                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
+                assert_eq!(
+                    req.executor_profile_id.variant.as_deref(),
+                    Some("PLAN"),
+                    "variant must be preserved across initial-request resume"
+                );
+            }
+            _ => panic!("expected follow-up"),
         }
     }
 

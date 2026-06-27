@@ -103,6 +103,27 @@ async fn remote_mirrored_task_without_local_attempt_is_hidden() {
     );
 }
 
+/// Verifies the EXISTS branch of the discriminator: a task that has been echoed back from
+/// the hive (remote_last_synced_at is non-NULL) is still visible when there is a local attempt.
+/// Without this test the EXISTS clause could be dropped and all other tests would still pass.
+#[tokio::test]
+async fn remote_mirrored_task_with_local_attempt_is_visible_via_exists_branch() {
+    let (pool, _tmp) = create_test_pool().await;
+    let project = make_project(&pool).await;
+    // Insert as a fully-mirrored remote row (remote_last_synced_at set).
+    let task_id = insert_mirrored_remote_task(&pool, project.id).await;
+    // Attach a local attempt — this must make it visible via the EXISTS branch.
+    insert_local_attempt(&pool, task_id).await;
+
+    let rows = Task::find_by_project_id_with_attempt_status(&pool, project.id, false)
+        .await
+        .expect("query");
+    assert!(
+        rows.iter().any(|r| r.task.id == task_id),
+        "remote-mirrored task WITH a local attempt must be visible (EXISTS branch)"
+    );
+}
+
 #[tokio::test]
 async fn locally_created_then_shared_task_is_visible() {
     let (pool, _tmp) = create_test_pool().await;
