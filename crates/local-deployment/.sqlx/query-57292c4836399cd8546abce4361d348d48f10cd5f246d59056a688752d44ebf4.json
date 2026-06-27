@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT position FROM queued_messages WHERE id = ? AND task_attempt_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "position",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "57292c4836399cd8546abce4361d348d48f10cd5f246d59056a688752d44ebf4"
+}

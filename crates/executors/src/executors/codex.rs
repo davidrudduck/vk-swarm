@@ -639,6 +639,7 @@ impl Codex {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn launch_codex_review(
         client: Arc<AppServerClient>,
         thread_params: ThreadStartParams,
@@ -887,10 +888,7 @@ fn build_turn_collaboration_mode(
     reasoning_effort: Option<ReasoningEffort>,
     developer_instructions: Option<String>,
 ) -> Option<ProtocolCollaborationMode> {
-    let mode = match mode {
-        Some(mode) => mode,
-        None => return None,
-    };
+    let mode = mode?;
 
     let available_modes = available_modes?;
 

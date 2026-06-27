@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT resume_state FROM execution_processes WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "resume_state",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "d5f404c586f1a618cf7bb35873f468576ccdd2c5943c0a54a3e6562196f86144"
+}

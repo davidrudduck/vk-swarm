@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE queued_messages SET content = ? WHERE id = ? AND task_attempt_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "76ceaf52feb7bad00a7f1ef2704bbd000faf12bebd9ba134c70f5b01c44cd72f"
+}

@@ -39,19 +39,17 @@ fn ensure_configured_dirs() -> Result<(), VibeKanbanError> {
 
     // database_path() creates its parent dir when VK_DATABASE_PATH is set.
     let db = database_path();
-    if let Some(parent) = db.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                std::io::Error::new(
-                    e.kind(),
-                    format!(
-                        "Failed to create database directory '{}': {}",
-                        parent.display(),
-                        e
-                    ),
-                )
-            })?;
-        }
+    if let Some(parent) = db.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!(
+                    "Failed to create database directory '{}': {}",
+                    parent.display(),
+                    e
+                ),
+            )
+        })?;
     }
 
     // backup_dir() creates itself when VK_BACKUP_DIR is set; also ensure the
@@ -134,6 +132,16 @@ async fn main() -> Result<(), VibeKanbanError> {
             .await
         {
             tracing::warn!("Failed to cleanup orphan executions: {}", e);
+        }
+        // Drain persisted queued messages for idle attempts AFTER cleanup completes.
+        // Sequenced in the same spawn (not a sibling spawn) so cleanup_orphan_executions
+        // finishes first, preventing 304's resume path from racing with the drain.
+        if let Err(e) = deployment_for_orphan_cleanup
+            .container()
+            .drain_queued_messages_on_boot()
+            .await
+        {
+            tracing::warn!("Failed to drain queued messages on boot: {}", e);
         }
     });
 

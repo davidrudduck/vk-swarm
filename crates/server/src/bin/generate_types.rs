@@ -175,6 +175,7 @@ fn generate_types_content() -> String {
         executors::executors::opencode::Opencode::decl(),
         executors::executors::qwen::QwenCode::decl(),
         executors::executors::droid::Droid::decl(),
+        executors::executors::qa_mock::QaMock::decl(),
         executors::executors::droid::Autonomy::decl(),
         executors::executors::droid::ReasoningEffortLevel::decl(),
         executors::executors::AppendPrompt::decl(),

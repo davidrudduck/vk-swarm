@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO queued_messages (id, task_attempt_id, content, variant, position, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "4691bbbe9af2fe634594948601c1e17baf801ca37fe90339aa0b59a3588a6a3d"
+}

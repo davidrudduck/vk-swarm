@@ -272,6 +272,13 @@
           "autonomy": "skip-permissions-unsafe"
         }
       }
+    },
+    "QA_MOCK": {
+      "DEFAULT": {
+        "QA_MOCK": {
+          "append_prompt": "\n\n=== TASK COMPLETION REQUIREMENTS ===\n1. Work on ONE feature at a time\n2. For web apps: TEST IN BROWSER\n3. Create/update .vk_progress.md with status\n4. Commit before ending, document incomplete work"
+        }
+      }
     }
   }
 }

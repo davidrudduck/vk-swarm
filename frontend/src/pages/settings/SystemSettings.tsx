@@ -40,6 +40,7 @@ import { useDatabaseStats } from '@/hooks/useDatabaseStats';
 import { useDatabaseMaintenance } from '@/hooks/useDatabaseMaintenance';
 import { DiskUsageIndicator } from '@/components/dashboard/DiskUsageIndicator';
 import { BackupsSection } from '@/components/settings';
+import { HiveSyncStatusCard } from '@/components/settings/HiveSyncStatusCard';
 import { useFeedback } from '@/hooks/useFeedback';
 import { ConfirmDialog } from '@/components/dialogs';
 import type { Task } from 'shared/types';
@@ -690,6 +691,9 @@ export function SystemSettings() {
 
       {/* Section 4: Backups */}
       <BackupsSection onSuccess={showSuccess} onError={showError} />
+
+      {/* Section 5: Hive Sync Status */}
+      <HiveSyncStatusCard />
     </div>
   );
 }

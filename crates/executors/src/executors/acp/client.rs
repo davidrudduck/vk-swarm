@@ -7,12 +7,12 @@ use crate::executors::acp::AcpEvent;
 
 /// ACP client that handles agent-client protocol communication
 pub struct AcpClient {
-    event_tx: mpsc::UnboundedSender<AcpEvent>,
+    event_tx: mpsc::Sender<AcpEvent>,
 }
 
 impl AcpClient {
     /// Create a new ACP client
-    pub fn new(event_tx: mpsc::UnboundedSender<AcpEvent>) -> Self {
+    pub fn new(event_tx: mpsc::Sender<AcpEvent>) -> Self {
         Self { event_tx }
     }
 
@@ -22,8 +22,14 @@ impl AcpClient {
 
     /// Send an event to the event channel
     fn send_event(&self, event: AcpEvent) {
-        if let Err(e) = self.event_tx.send(event) {
-            warn!("Failed to send ACP event: {}", e);
+        match self.event_tx.try_send(event) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!("ACP event channel full; dropping transcript event");
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                // Receiver dropped — happens during shutdown. Quiet.
+            }
         }
     }
 }
@@ -141,5 +147,29 @@ impl acp::Client for AcpClient {
 
     async fn ext_notification(&self, _args: acp::ExtNotification) -> Result<(), acp::Error> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn transcript_event_drops_when_channel_full_instead_of_blocking() {
+        let (tx, mut rx) = mpsc::channel::<AcpEvent>(2);
+        let client = AcpClient::new(tx);
+
+        client.record_user_prompt_event("a");
+        client.record_user_prompt_event("b");
+        client.record_user_prompt_event("c");
+
+        let mut count = 0;
+        while rx.try_recv().is_ok() {
+            count += 1;
+        }
+        assert_eq!(
+            count, 2,
+            "exactly two transcript events should reach the receiver; the rest are dropped"
+        );
     }
 }
