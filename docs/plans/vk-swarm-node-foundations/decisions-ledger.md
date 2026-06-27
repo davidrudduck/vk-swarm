@@ -576,3 +576,25 @@ Three independent reviewers (Gemini, Opus, Codex) performed an adversarial revie
 **D5 — pop_next in message_queue.rs is a lossy primitive (Opus):** `message_queue.rs:pop_next` deletes a message before delivering it (delete-before-deliver). It is used only in tests, not wired to any production code path. If ever adopted in production, a delivery failure would silently lose the message (SC2 violation). Documented as known latent risk; the safe production path is `peek_next` + delete-after-deliver.
 
 **D6 — SC2 real-seam test gap (documented above in reachability section):** The SQL predicate for `drain_queued_messages_on_boot` is tested via `query_drainable`. `start_queued_message_for_attempt` is not exercised by any boot-drain test. Accepted gap: this would require a full `LocalContainerService` integration harness. The function's start path is the same one used by `try_consume_queued_message` (which is exercised in normal operation).
+
+## Post-review known issues (pre-graduation code-review, 2026-06-27)
+
+These were surfaced and adjudicated during the `/wai:close` pre-graduation code-review gate
+(Round 1). Items marked REMEDIATED were fixed before graduation; items marked ACCEPTED are
+recorded here so they do not resurface as fresh blockers in future review passes.
+
+**CR-1 — REMEDIATED — NotOurProcess arm left parent task stuck in InProgress:**
+The `NotOurProcess` fence arm was setting `resume_state='abandoned'` and doing `continue`, relying
+on the blanket `mark_orphaned_as_failed` to set `execution_processes.status='failed'`. That sweep
+correctly sets the execution status but never calls `mark_process_failed_with_task_update`, so the
+parent task remained in InProgress indefinitely. All other terminal paths (no session_id, resume
+failure) explicitly called `mark_process_failed_with_task_update`. Fixed: added
+`mark_process_failed_with_task_update` call in the NotOurProcess arm before `continue`.
+
+**CR-2 — REMEDIATED — Inaccurate comment on executor_action parse-failure fallback:**
+Comment said "resume_execution will fail gracefully" but `build_resume_action` always returns
+`Some` for `CodingAgentInitialRequest`, so execution proceeded with a `ClaudeCode:DEFAULT` profile
+(silently dropping any variant like PLAN). The continuation prompt was still correct. Fixed: comment
+now accurately describes the behavior (falls back to ClaudeCode:DEFAULT, original variant lost;
+if `start_execution_inner` then fails, the error path marks the process abandoned). Related gap D3
+above documents this as an accepted limitation for the extraordinary case of JSON corruption.

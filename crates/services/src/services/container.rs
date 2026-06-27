@@ -346,16 +346,17 @@ pub trait ContainerService {
             match fence_result {
                 FenceOutcome::NotOurProcess => {
                     // PID was reused by another process; do not kill, skip recovery.
-                    // Mark abandoned so mark_orphaned_as_failed can clean up this row —
-                    // without this, a row with resume_state='resumed' is excluded from the
-                    // blanket cleanup guard and stays status='running' indefinitely (zombie).
+                    // Mark abandoned and update task status to InReview — the execution
+                    // is gone (the process is not ours), so treat it as a failure.
                     let _ =
                         ExecutionProcess::set_resume_state(pool, process.id, "abandoned").await;
                     tracing::warn!(
                         process_id = %process.id,
                         pid = pid_raw,
-                        "PID reused by another process; skipping fence-resume"
+                        "PID reused by another process; marking execution as failed"
                     );
+                    self.mark_process_failed_with_task_update(pool, process, &task_attempt)
+                        .await;
                     continue;
                 }
                 FenceOutcome::AlreadyGone | FenceOutcome::Fenced => {
@@ -392,7 +393,11 @@ pub trait ContainerService {
                 let stored_action = match process.executor_action() {
                     Ok(action) => action.clone(),
                     Err(_) => {
-                        // Fallback: create a minimal action; resume_execution will fail gracefully
+                        // executor_action JSON is unparseable (database corruption or schema
+                        // mismatch). Fall back to ClaudeCode:DEFAULT — the original executor
+                        // variant is lost, but the minimal continuation prompt still gives
+                        // the session a chance to recover. If start_execution_inner then fails,
+                        // the error path below marks the process abandoned.
                         ExecutorAction::new(
                             ExecutorActionType::CodingAgentInitialRequest(
                                 CodingAgentInitialRequest {
