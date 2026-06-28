@@ -10,11 +10,11 @@ import { cn } from '@/lib/utils';
  * Status color mapping for the left strip indicator.
  */
 const statusStripColors: Record<TaskStatus, string> = {
-  todo: 'before:bg-neutral-400 dark:before:bg-neutral-500',
-  inprogress: 'before:bg-blue-500',
-  inreview: 'before:bg-amber-500',
-  done: 'before:bg-green-500',
-  cancelled: 'before:bg-red-500',
+  todo: 'before:bg-[hsl(var(--status-todo))]',
+  inprogress: 'before:bg-[hsl(var(--status-inprogress))]',
+  inreview: 'before:bg-[hsl(var(--status-inreview))]',
+  done: 'before:bg-[hsl(var(--status-done))]',
+  cancelled: 'before:bg-[hsl(var(--status-cancelled))]',
 };
 
 /**
