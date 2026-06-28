@@ -153,3 +153,12 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - TypeScript: `cd frontend && npx tsc --noEmit` passes.
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 002` → CONFORMS (all deterministic gates passed).
 - No undictated choices made; task specification fully followed.
+
+### Task 010 — Complete (no decisions)
+- Anchor 1 (selected-card ring): `grep -n "isOpen && 'ring-2 ring-secondary-foreground ring-inset'" frontend/src/components/ui/shadcn-io/kanban/index.tsx` → line 118 confirmed. Changed to `ring-2 ring-primary`.
+- Anchor 2 (add-button size): `grep -n 'className="m-0 p-0 h-0 text-foreground/50 hover:text-foreground"' frontend/src/components/ui/shadcn-io/kanban/index.tsx` → line 244 confirmed. Changed `h-0` to `h-6 w-6`.
+- Anchor 3 (status dot): `grep -n 'className="h-2.5 w-2.5 rounded-full shrink-0"' frontend/src/components/ui/shadcn-io/kanban/index.tsx` → line 220 confirmed. Changed to `h-[9px] w-[9px]`.
+- Anchor 4 (count badge bg): `grep -n 'className="ml-0.5 px-1.5 py-0.5 rounded text-xs bg-muted text-muted-foreground font-normal tabular-nums"' frontend/src/components/ui/shadcn-io/kanban/index.tsx` → line 228 confirmed. Changed `bg-muted` to `bg-[hsl(var(--surface-card))]`.
+- Manual verification (post-edit): all four greps from spec lines 85–89 passed.
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- No undictated choices made; task specification fully followed.
