@@ -115,7 +115,7 @@ export const KanbanCard = ({
       className={cn(
         'p-3 outline-none border-b flex-col space-y-2',
         isDragging && 'cursor-grabbing',
-        isOpen && 'ring-2 ring-secondary-foreground ring-inset',
+        isOpen && 'ring-2 ring-primary',
         className
       )}
       {...listeners}
@@ -217,7 +217,7 @@ export const KanbanHeader = (props: KanbanHeaderProps) => {
         }
       >
         <div
-          className="h-2.5 w-2.5 rounded-full shrink-0"
+          className="h-[9px] w-[9px] rounded-full shrink-0"
           style={{ backgroundColor: `hsl(var(${props.color}))` }}
         />
 
@@ -225,7 +225,7 @@ export const KanbanHeader = (props: KanbanHeaderProps) => {
 
         {'count' in props && props.count !== undefined && props.count > 0 && (
           <span
-            className="ml-0.5 px-1.5 py-0.5 rounded text-xs bg-muted text-muted-foreground font-normal tabular-nums"
+            className="ml-0.5 px-1.5 py-0.5 rounded text-xs bg-[hsl(var(--surface-card))] text-muted-foreground font-normal tabular-nums"
             aria-label={t('column.taskCount', { count: props.count, defaultValue_one: '1 task', defaultValue_other: '{{count}} tasks' })}
           >
             {props.count}
@@ -241,7 +241,7 @@ export const KanbanHeader = (props: KanbanHeaderProps) => {
           <TooltipTrigger asChild>
             <Button
               variant="ghost"
-              className="m-0 p-0 h-0 text-foreground/50 hover:text-foreground"
+              className="m-0 p-0 h-6 w-6 text-foreground/50 hover:text-foreground"
               onClick={props.onAddTask}
               aria-label={t('actions.addTask')}
             >
