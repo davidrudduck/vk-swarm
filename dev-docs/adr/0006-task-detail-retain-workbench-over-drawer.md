@@ -42,8 +42,10 @@ detail.** Apply the design spec to the *internals* of the existing right-hand wo
 - Header: `StatusBadge` dot + task title (`text-lg weight-semibold`) + close affordance.
 - Badges row beneath the header: status (outline+dot), node (secondary), labels (outline).
 - Labeled `Tabs` (Diff / Logs / Attempts) replacing the current icon-only `ToggleGroup`.
-- Footer action bar styling: Merge (`primary sm flex-1`) · Rebase (`outline sm`) ·
-  Open in IDE (`ghost sm`).
+  Tab → `LayoutMode` mapping: Diff = `'diffs'`, Logs = `'terminal'`, Attempts = reset `mode`
+  to `null` (no new union value — attempt-history list already renders at `mode=null`).
+- Footer action bar styling: Merge (`variant="default" size="sm" flex-1`) ·
+  Rebase (`variant="outline" size="sm"`) · Open in IDE (`variant="ghost" size="sm"`).
 
 **Dropped from the drawer spec (geometry/behaviour — explicitly NOT in scope):**
 - 460px fixed width / `min(460px, 90vw)` sizing — the panel stays resizable.
