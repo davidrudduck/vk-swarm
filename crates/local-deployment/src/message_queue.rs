@@ -2,8 +2,8 @@
 //! Messages persist across restarts and are ordered by position within each task attempt.
 
 use serde::{Deserialize, Serialize};
-use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
+use sqlx::types::chrono::{DateTime, Utc};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -93,9 +93,12 @@ impl MessageQueueStore {
         variant: Option<String>,
     ) -> QueuedMessage {
         // Compute position as count of existing messages
-        let position = match sqlx::query!("SELECT COUNT(*) as count FROM queued_messages WHERE task_attempt_id = ?", task_attempt_id)
-            .fetch_one(&self.pool)
-            .await
+        let position = match sqlx::query!(
+            "SELECT COUNT(*) as count FROM queued_messages WHERE task_attempt_id = ?",
+            task_attempt_id
+        )
+        .fetch_one(&self.pool)
+        .await
         {
             Ok(row) => row.count as usize,
             Err(e) => {
@@ -307,7 +310,8 @@ impl MessageQueueStore {
 
         // Validate that the IDs match (as sets)
         let id_set: std::collections::HashSet<Uuid> = message_ids.iter().copied().collect();
-        let current_ids: std::collections::HashSet<Uuid> = current_messages.iter().map(|m| m.id).collect();
+        let current_ids: std::collections::HashSet<Uuid> =
+            current_messages.iter().map(|m| m.id).collect();
         if id_set != current_ids {
             return None;
         }
@@ -425,12 +429,9 @@ impl MessageQueueStore {
         };
 
         // Delete the message
-        if let Err(e) = sqlx::query!(
-            "DELETE FROM queued_messages WHERE id = ?",
-            message_id
-        )
-        .execute(&self.pool)
-        .await
+        if let Err(e) = sqlx::query!("DELETE FROM queued_messages WHERE id = ?", message_id)
+            .execute(&self.pool)
+            .await
         {
             tracing::error!(error = ?e, message_id = ?message_id, "Failed to delete popped message");
             return Some(popped_message); // Still return the message even if delete fails
@@ -451,9 +452,12 @@ impl MessageQueueStore {
     }
 
     pub async fn clear(&self, task_attempt_id: Uuid) {
-        if let Err(e) = sqlx::query!("DELETE FROM queued_messages WHERE task_attempt_id = ?", task_attempt_id)
-            .execute(&self.pool)
-            .await
+        if let Err(e) = sqlx::query!(
+            "DELETE FROM queued_messages WHERE task_attempt_id = ?",
+            task_attempt_id
+        )
+        .execute(&self.pool)
+        .await
         {
             tracing::error!(error = ?e, task_attempt_id = ?task_attempt_id, "Failed to clear queued messages");
         }

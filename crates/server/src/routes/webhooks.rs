@@ -129,7 +129,9 @@ pub async fn update_webhook(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateWebhook>,
 ) -> Result<ResponseJson<ApiResponse<WebhookResponse>>, ApiError> {
-    if let Some(events) = &payload.events && events.is_empty() {
+    if let Some(events) = &payload.events
+        && events.is_empty()
+    {
         return Err(ApiError::BadRequest(
             "At least one event type must be selected.".into(),
         ));

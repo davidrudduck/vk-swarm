@@ -60,7 +60,10 @@ pub async fn fence<I: ProcessInspector + ?Sized>(
     }
 
     // Step 2: PID-reuse guard — verify process cwd is under our worktree
-    let matching = match inspector.find_processes_by_cwd_prefix(worktree_marker).await {
+    let matching = match inspector
+        .find_processes_by_cwd_prefix(worktree_marker)
+        .await
+    {
         Ok(procs) => procs,
         Err(_) => {
             // If we can't query processes, assume it's not ours to be safe

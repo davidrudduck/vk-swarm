@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE execution_processes SET fence_attempt_count = fence_attempt_count + 1 WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4729619cee9f84638804d363497d32212626da330c504409d87d7da5727d32d6"
+}
