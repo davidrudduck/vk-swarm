@@ -169,14 +169,26 @@ impl LocalContainerService {
         // Calls the real constructor, which spawns spawn_worktree_cleanup() as a background task.
         // That task exits early (base dir absent) in test environments and is dropped when the
         // short-lived Tokio runtime ends. Harmless but intentional — we need a real instance.
-        let db = DBService { pool: pool.clone(), metrics: db::DbMetrics::new() };
+        let db = DBService {
+            pool: pool.clone(),
+            metrics: db::DbMetrics::new(),
+        };
         let msg_stores = Arc::new(RwLock::new(HashMap::new()));
         let config = Arc::new(RwLock::new(Config::default()));
         let git = GitService::new();
         let image_service = ImageService::new(pool.clone()).expect("image service for test");
         let approvals = Approvals::new(msg_stores.clone());
         let publisher = Err(RemoteClientNotConfigured);
-        Self::new(db, msg_stores, config, git, image_service, approvals, publisher).await
+        Self::new(
+            db,
+            msg_stores,
+            config,
+            git,
+            image_service,
+            approvals,
+            publisher,
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -1302,7 +1314,11 @@ impl LocalContainerService {
             )
             .await?;
 
-        if !self.message_queue.remove(task_attempt.id, queued_msg.id).await {
+        if !self
+            .message_queue
+            .remove(task_attempt.id, queued_msg.id)
+            .await
+        {
             tracing::warn!(
                 task_attempt_id = %task_attempt.id,
                 message_id = %queued_msg.id,
@@ -2433,14 +2449,16 @@ mod tests {
         let now = chrono::Utc::now().to_rfc3339();
 
         // Use sqlx::query() (not query!()) to avoid needing a compile-time cache entry.
-        sqlx::query("INSERT INTO projects (id, name, git_repo_path, created_at) VALUES (?, ?, ?, ?)")
-            .bind(project_id.to_string())
-            .bind("p")
-            .bind("/tmp/r")
-            .bind(&now)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO projects (id, name, git_repo_path, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(project_id.to_string())
+        .bind("p")
+        .bind("/tmp/r")
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
 
         sqlx::query("INSERT INTO tasks (id, project_id, title, created_at) VALUES (?, ?, ?, ?)")
             .bind(task_id.to_string())
@@ -2560,8 +2578,7 @@ mod tests {
     #[tokio::test]
     async fn test_boot_drain_skips_attempt_with_running_processes() {
         let (pool, _tmp) = db::test_utils::create_test_pool().await;
-        let (_, _, attempt_id, _) =
-            seed_attempt_with_process(&pool, "running", None).await;
+        let (_, _, attempt_id, _) = seed_attempt_with_process(&pool, "running", None).await;
 
         let drainable = query_drainable(&pool).await;
         assert!(
@@ -2612,8 +2629,7 @@ mod tests {
     #[tokio::test]
     async fn test_boot_drain_skips_attempt_with_failed_latest_process() {
         let (pool, _tmp) = db::test_utils::create_test_pool().await;
-        let (_, _, attempt_id, _) =
-            seed_attempt_with_process(&pool, "failed", None).await;
+        let (_, _, attempt_id, _) = seed_attempt_with_process(&pool, "failed", None).await;
 
         let drainable = query_drainable(&pool).await;
         assert!(
@@ -2625,8 +2641,7 @@ mod tests {
     #[tokio::test]
     async fn test_boot_drain_includes_completed_idle_attempt() {
         let (pool, _tmp) = db::test_utils::create_test_pool().await;
-        let (_, _, attempt_id, _) =
-            seed_attempt_with_process(&pool, "completed", None).await;
+        let (_, _, attempt_id, _) = seed_attempt_with_process(&pool, "completed", None).await;
 
         let drainable = query_drainable(&pool).await;
         assert!(
@@ -2640,7 +2655,10 @@ mod tests {
         let (pool, _tmp) = db::test_utils::create_test_pool().await;
         // No data seeded — table is empty
         let drainable = query_drainable(&pool).await;
-        assert!(drainable.is_empty(), "Empty queue should yield no drainable attempts");
+        assert!(
+            drainable.is_empty(),
+            "Empty queue should yield no drainable attempts"
+        );
     }
 
     #[tokio::test]
@@ -2654,12 +2672,24 @@ mod tests {
         let msg_id = uuid::Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
 
-        sqlx::query("INSERT INTO projects (id, name, git_repo_path, created_at) VALUES (?, ?, ?, ?)")
-            .bind(project_id).bind("p").bind("/tmp/r").bind(&now)
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO projects (id, name, git_repo_path, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(project_id)
+        .bind("p")
+        .bind("/tmp/r")
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO tasks (id, project_id, title, created_at) VALUES (?, ?, ?, ?)")
-            .bind(task_id).bind(project_id).bind("t").bind(&now)
-            .execute(&pool).await.unwrap();
+            .bind(task_id)
+            .bind(project_id)
+            .bind("t")
+            .bind(&now)
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, created_at) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(attempt_id).bind(task_id).bind("CLAUDE_CODE").bind("b").bind("main").bind(&now)
             .execute(&pool).await.unwrap();
@@ -2682,6 +2712,9 @@ mod tests {
             .try_recv()
             .expect("drain must reach the start path for the eligible attempt");
         assert_eq!(received, attempt_id);
-        assert!(spy_rx.try_recv().is_err(), "exactly one attempt should be drained");
+        assert!(
+            spy_rx.try_recv().is_err(),
+            "exactly one attempt should be drained"
+        );
     }
 }

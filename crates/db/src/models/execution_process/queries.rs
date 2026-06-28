@@ -725,10 +725,19 @@ mod tests {
 
         let project_id = uuid::Uuid::new_v4();
         sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES ($1, 'p', '/tmp/p')")
-            .bind(project_id).execute(&pool).await.unwrap();
+            .bind(project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
         let task_id = uuid::Uuid::new_v4();
-        sqlx::query("INSERT INTO tasks (id, project_id, title, status) VALUES ($1, $2, 't', 'todo')")
-            .bind(task_id).bind(project_id).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO tasks (id, project_id, title, status) VALUES ($1, $2, 't', 'todo')",
+        )
+        .bind(task_id)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
         let attempt_id = uuid::Uuid::new_v4();
         sqlx::query("INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref) VALUES ($1, $2, 'QA_MOCK', 'b', 'main', '/tmp/wt')")
             .bind(attempt_id).bind(task_id).execute(&pool).await.unwrap();
@@ -736,11 +745,23 @@ mod tests {
         sqlx::query("INSERT INTO execution_processes (id, task_attempt_id, run_reason, executor_action, status, started_at) VALUES ($1, $2, 'codingagent', '{}', 'running', datetime('now'))")
             .bind(process_id).bind(attempt_id).execute(&pool).await.unwrap();
 
-        assert_eq!(ExecutionProcess::get_fence_attempt_count(&pool, process_id).await.unwrap(), 0);
+        assert_eq!(
+            ExecutionProcess::get_fence_attempt_count(&pool, process_id)
+                .await
+                .unwrap(),
+            0
+        );
 
         for expected in 1_i64..=5 {
-            ExecutionProcess::increment_fence_attempt_count(&pool, process_id).await.unwrap();
-            assert_eq!(ExecutionProcess::get_fence_attempt_count(&pool, process_id).await.unwrap(), expected);
+            ExecutionProcess::increment_fence_attempt_count(&pool, process_id)
+                .await
+                .unwrap();
+            assert_eq!(
+                ExecutionProcess::get_fence_attempt_count(&pool, process_id)
+                    .await
+                    .unwrap(),
+                expected
+            );
         }
     }
 }
