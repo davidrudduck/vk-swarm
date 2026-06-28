@@ -248,3 +248,21 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 014` → CONFORMS (all deterministic gates passed).
 - No undictated choices made; task specification fully followed.
+
+### Task 006 — Complete (sub-edit 5 decision)
+
+Sub-edits 1–4 applied without undictated choice: title font-medium text-base; description text-sm; node-tag font-mono; CheckCircle text-success.
+
+**Sub-edit 5 divergence (documented as required):**
+- **TaskCard.tsx (5a):** `truncateDescription` → `cleanDescription` (renamed for clarity). Kept markdown header stripping + whitespace collapse (cleaning is valuable). Dropped maxLength parameter and length-based truncation cap. Raw cleaned string flows to `<p className="... truncate">` where CSS handles visual cap.
+- **AllProjectsTaskCard.tsx (5b):** Deleted pure length-cap helper entirely (no markdown cleaning lost). Call site binds raw `task.description` to `truncatedDesc` (guarded on null); `<p className="... truncate">` does visual cap via CSS.
+
+Handling diverges per spec's intent: TaskCard retains cleaning logic; AllProjects drops a simple length cap. Both now rely on CSS truncate for visual bound instead of JS substring.
+
+Sub-edit 6: Appended `hover:border-[hsl(var(--border-strong))]` to KanbanCard hover classes, consuming `--border-strong` token (SC7's "defined and consumed" requirement satisfied). Token recolours existing `border-b` edge on hover.
+
+- Manual verification: all six greps from spec lines 221–226 passed.
+- Manual verification: truncateDescription removed from AllProjectsTaskCard (grep -c = 0).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes (no unused-parameter error).
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 006` → CONFORMS (all deterministic gates passed).
+- Noted (out of scope per spec): AllProjectsTaskCard carries same text-xs description and text-green-500 CheckCircle unmodified; asymmetry flagged as required by spec (sub-edits 2 & 4 scoped to TaskCard.tsx only).
