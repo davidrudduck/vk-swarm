@@ -2,7 +2,7 @@
 id: "301"
 phase: 3
 title: Drain spy + new_for_drain_test + boot-drain call-path test
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

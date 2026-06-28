@@ -2,7 +2,7 @@
 id: "201"
 phase: 2
 title: Add make_process_inspector hook + TestContainerService + SC1 resume test
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: ["202"]
