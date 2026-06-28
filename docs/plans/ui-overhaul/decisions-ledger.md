@@ -162,3 +162,13 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - Manual verification (post-edit): all four greps from spec lines 85–89 passed.
 - TypeScript: `cd frontend && npx tsc --noEmit` passes.
 - No undictated choices made; task specification fully followed.
+
+### Task 011 — Complete (no decisions)
+- Anchor confirmed: `grep -n 'font-code font-bold tracking-tight select-none' frontend/src/components/VKSLogo.tsx` → lines 22, 50 (both occurrences present).
+- No other `font-code` occurrences found: `grep -n 'font-code' frontend/src/components/VKSLogo.tsx` → only the two brand mark lines.
+- No existing `font-wordmark`: `grep -n 'font-wordmark' frontend/src/components/VKSLogo.tsx` → no match (pre-change).
+- Replacement applied: `font-code` → `font-wordmark` in both lines using `replace_all`.
+- Manual verification (post-edit): `grep 'font-wordmark' frontend/src/components/VKSLogo.tsx` → 2 matches (lines 22, 50).
+- Manual verification (post-edit): `grep 'font-code' frontend/src/components/VKSLogo.tsx` → no match (confirmed removal).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- No undictated choices made; task specification fully followed.
