@@ -124,6 +124,10 @@ pub fn build_resume_action(
     }
 }
 
+/// Number of consecutive CouldNotKill fence cycles after which crash-recovery emits an
+/// operator-facing escalation warning for a process stuck in D-state. See ADR-0005.
+const FENCE_ESCALATION_THRESHOLD: i64 = 5;
+
 #[async_trait]
 pub trait ContainerService {
     fn msg_stores(&self) -> &Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>;
@@ -377,11 +381,38 @@ pub trait ContainerService {
                     // the process is still alive and will be fenced again on next restart.
                     let _ =
                         ExecutionProcess::set_resume_state(pool, process.id, "pending").await;
-                    tracing::warn!(
-                        process_id = %process.id,
-                        pid = pid_raw,
-                        "Process survived SIGKILL (D-state); skipping recovery to avoid concurrent writer"
-                    );
+                    let count = match ExecutionProcess::increment_fence_attempt_count(
+                        pool, process.id,
+                    )
+                    .await
+                    {
+                        Ok(()) => ExecutionProcess::get_fence_attempt_count(pool, process.id)
+                            .await
+                            .unwrap_or(0),
+                        Err(e) => {
+                            tracing::error!(
+                                process_id = %process.id,
+                                error = ?e,
+                                "Failed to increment fence_attempt_count; cannot escalate"
+                            );
+                            continue;
+                        }
+                    };
+                    if count >= FENCE_ESCALATION_THRESHOLD {
+                        tracing::warn!(
+                            process_id = %process.id,
+                            pid = pid_raw,
+                            fence_attempt_count = count,
+                            "Process stuck in D-state after {} restart attempts — manual intervention may be required",
+                            count
+                        );
+                    } else {
+                        tracing::warn!(
+                            process_id = %process.id,
+                            pid = pid_raw,
+                            "Process survived SIGKILL (D-state); skipping recovery to avoid concurrent writer"
+                        );
+                    }
                     continue;
                 }
             }
@@ -1533,6 +1564,7 @@ mod tests {
     use executors::logs::utils::ConversationPatch;
     use executors::logs::{NormalizedEntry, NormalizedEntryType};
     use std::sync::Mutex;
+    use tracing_test::traced_test;
 
     struct TestContainerService {
         db: DBService,
@@ -1974,5 +2006,67 @@ mod tests {
 
         let state = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
         assert_eq!(state, Some("resumed".to_string()));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_cleanup_orphan_executions_stubborn_pid_escalation() {
+        use db::test_utils::create_test_pool;
+        use db::DbMetrics;
+        use crate::services::process_inspector::RawProcessInfo;
+        use std::sync::Mutex;
+
+        let (pool, _tmp) = create_test_pool().await;
+
+        let project_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES ($1, 'p', '/tmp/p')")
+            .bind(project_id).execute(&pool).await.unwrap();
+        let task_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO tasks (id, project_id, title, status) VALUES ($1, $2, 't', 'todo')")
+            .bind(task_id).bind(project_id).execute(&pool).await.unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref) VALUES ($1, $2, 'QA_MOCK', 'b', 'main', '/tmp/wt-stuck')")
+            .bind(attempt_id).bind(task_id).execute(&pool).await.unwrap();
+        let process_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO execution_processes (id, task_attempt_id, run_reason, executor_action, status, pid, started_at) VALUES ($1, $2, 'codingagent', '{}', 'running', 4242, datetime('now'))")
+            .bind(process_id).bind(attempt_id).execute(&pool).await.unwrap();
+
+        let inspector = MockProcessInspector::new();
+        inspector.add_process(RawProcessInfo {
+            pid: 4242,
+            parent_pid: None,
+            name: "qa".to_string(),
+            command: vec![],
+            working_directory: Some("/tmp/wt-stuck".to_string()),
+            memory_bytes: 0,
+            cpu_percent: 0.0,
+        });
+        inspector.set_unkillable(4242);
+
+        let service = TestContainerService {
+            db: DBService { pool: pool.clone(), metrics: DbMetrics::new() },
+            instance_id: "test-instance".to_string(),
+            inspector,
+            captured_action: Arc::new(Mutex::new(None)),
+        };
+
+        for cycle in 1..=FENCE_ESCALATION_THRESHOLD {
+            service.cleanup_orphan_executions().await.unwrap();
+            let state = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+            assert_eq!(state, Some("pending".to_string()), "cycle {cycle}: must stay pending");
+            let count = ExecutionProcess::get_fence_attempt_count(&pool, process_id).await.unwrap();
+            assert_eq!(count, cycle, "cycle {cycle}: fence_attempt_count");
+            if cycle < FENCE_ESCALATION_THRESHOLD {
+                assert!(
+                    !logs_contain("manual intervention"),
+                    "cycle {cycle}: escalation warn must not fire before threshold"
+                );
+            }
+        }
+
+        assert!(service.captured_action.lock().unwrap().is_none());
+        assert!(logs_contain("manual intervention"), "escalation warn must fire at threshold");
+        let proc = ExecutionProcess::find_by_id(&pool, process_id).await.unwrap().unwrap();
+        assert_eq!(proc.status, ExecutionProcessStatus::Running);
     }
 }
