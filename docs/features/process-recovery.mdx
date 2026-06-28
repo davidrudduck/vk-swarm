@@ -1,0 +1,112 @@
+---
+title: "Process Recovery"
+description: "How Vibe Kanban automatically recovers crashed execution processes, and what to do when an operator warning appears"
+sidebarTitle: "Process Recovery"
+---
+
+Vibe Kanban automatically detects and resumes execution processes that were interrupted by a server
+crash. Most recoveries are invisible — the server restarts, finds the interrupted process, and
+picks up where it left off. This page covers the cases that require operator attention.
+
+## How Recovery Works
+
+On every server startup, Vibe Kanban runs a **crash-recovery sweep** before accepting any user
+requests:
+
+1. All execution processes left in `status='running'` from the previous run are identified.
+2. For each one, the server checks whether the OS process is still alive:
+   - **Gone:** The OS process has exited. The server prepares a follow-up prompt and resumes
+     the agent from its last known session.
+   - **Alive (D-state):** The OS process survived `SIGKILL`. The server marks the row as
+     `pending` and increments an attempt counter. See [D-state warnings](#d-state-process-warnings) below.
+
+This sweep runs on every restart, so an interrupted task automatically recovers without any
+user action.
+
+## D-state Process Warnings
+
+A process in **D-state** (uninterruptible sleep) cannot be killed — even by `SIGKILL`. This is
+a kernel-level condition, not a Vibe Kanban bug. Common causes:
+
+- Hung NFS or CIFS network filesystem mount
+- Blocked kernel driver call (USB, block device, etc.)
+- Kernel bug on high-load systems
+
+### The Warning
+
+When a process has survived `SIGKILL` across five server restart cycles, Vibe Kanban emits:
+
+```bash
+WARN process stuck in D-state after N restart attempts — manual intervention may be required
+     process_id=<uuid> pid=<pid> fence_attempt_count=<n>
+```
+
+This warning appears in the server log (`RUST_LOG=warn` or higher). It re-fires on every
+subsequent restart while the process remains stuck.
+
+### Diagnosing the Stuck Process
+
+The `pid` field in the warning is the OS process ID. Run:
+
+```bash
+# Check process state (look for 'D' in the STAT column)
+ps aux | grep <pid>
+
+# Full process state with stack trace (Linux, requires root)
+cat /proc/<pid>/wchan    # kernel function the process is blocked in
+cat /proc/<pid>/stack    # kernel stack trace
+```
+
+A `STAT` of `D` confirms the process is in uninterruptible sleep. The `wchan` output names the
+kernel function it is blocked in — this points to the underlying cause (e.g., `nfs4_wait_clnt_recover`
+for an NFS issue).
+
+### Resolution Steps
+
+The resolution depends on the root cause:
+
+| Cause | Resolution |
+|-------|------------|
+| NFS/CIFS mount hung | Unmount or force-unmount the filesystem; if needed, reboot the NFS server |
+| USB/block device hung | Unplug and re-plug the device, or reboot |
+| Kernel bug | Reboot the machine |
+
+After resolving the kernel issue, restart Vibe Kanban. The stuck process will be successfully
+killed during the next startup sweep, and recovery will proceed normally.
+
+### If the Task Cannot Be Recovered
+
+If the underlying process can never be killed (e.g., the filesystem is permanently gone), delete
+the task attempt in the Vibe Kanban UI. This removes the execution process row and clears the
+warning on next restart.
+
+### Clearing the Counter Manually
+
+The `fence_attempt_count` column on the `execution_processes` table accumulates across restarts.
+If you resolve the D-state issue but want to suppress the warning before restarting:
+
+```sql
+-- Stop the Vibe Kanban server before running this
+UPDATE execution_processes SET fence_attempt_count = 0 WHERE id = '<process_uuid>';
+```
+
+The process UUID is in the `process_id` field of the warning log.
+
+<Warning>
+Always stop the server before running raw SQL against the SQLite database. Running queries while
+the server is active can corrupt the WAL.
+</Warning>
+
+## Queued Message Drain
+
+If a task had a queued message (e.g., a follow-up instruction entered while an agent was running)
+at the time of a crash, that message is preserved and delivered automatically on the next startup
+— before the crash-recovery sweep and before any new user actions are accepted. No operator
+action is needed.
+
+## Related Documentation
+
+- [Process Recovery Architecture](/architecture/process-management) — Technical details for developers
+- [Execution Process Functions](/architecture/db/functions/sqlite-execution-process) — Database functions reference
+- [Database Maintenance](/features/database-maintenance) — Backup and WAL management
+- [Monitoring Task Execution](/core-features/monitoring-task-execution) — Real-time monitoring in the UI

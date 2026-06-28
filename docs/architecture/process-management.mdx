@@ -143,6 +143,94 @@ All processes terminated ✓
 
 **Mitigation**: Track dev_root_pid, kill it after backend exits, fallback to port-based cleanup.
 
+## Crash Recovery (Orphan Cleanup)
+
+On every server startup, `cleanup_orphan_executions` sweeps for execution processes that were
+left in `status='running'` by a previous crash. The sweep runs before any new executions start.
+
+### Resume State Machine
+
+Each execution process carries a `resume_state` column (NULL by default) that tracks where the
+process is in the crash-recovery lifecycle:
+
+| State | Set by | Meaning |
+|---|---|---|
+| `NULL` | (initial) | Not yet seen by crash-recovery logic |
+| `pending` | `cleanup_orphan_executions` | Fence complete; crash-resume being prepared, or process is in D-state |
+| `resumed` | `resume_execution` | Crash-resume dispatched to the executor |
+| `abandoned` | `cleanup_orphan_executions` | Recovery skipped (PID reuse or resume failed) |
+
+Processes with `resume_state IN ('pending', 'resumed')` are excluded from the blanket
+`mark_orphaned_as_failed` sweep — they are under active recovery and must not be pre-empted.
+
+### Fence Outcomes
+
+For each running process, the cleanup calls `process_fence::fence()` to determine what happened
+to the OS process since the previous server run:
+
+| Outcome | Meaning | Action |
+|---|---|---|
+| `AlreadyGone` | OS process has exited | Set `resume_state='pending'`, classify, resume |
+| `CouldNotKill` | Process survived SIGKILL (D-state) | Set `resume_state='pending'`, increment `fence_attempt_count`, emit warning |
+
+### D-state Escalation
+
+When an execution process survives SIGKILL on repeated restart cycles (uninterruptible sleep,
+commonly caused by a hung network filesystem or kernel driver), the system:
+
+1. Sets `resume_state='pending'` to protect the row from the blanket sweep.
+2. Increments the `fence_attempt_count` column on `execution_processes` (persists across restarts).
+3. Emits a `tracing::warn!` each cycle once the count reaches the escalation threshold.
+
+**Threshold:** `FENCE_ESCALATION_THRESHOLD = 5` (compile-time constant in `container.rs`).
+
+**Log signal (emitted when `fence_attempt_count >= 5`):**
+```bash
+WARN process stuck in D-state after N restart attempts — manual intervention may be required
+     process_id=<uuid> pid=<pid> fence_attempt_count=<n>
+```
+
+The warning re-fires on every subsequent restart cycle while the process remains stuck. This is
+intentional — the signal continues until an operator intervenes. To clear the counter after
+resolving the underlying kernel issue, the row must be manually updated or the task attempt deleted.
+
+**Why `fence_attempt_count` is in the database (not in-memory):** D-state processes occur
+precisely when the system is crashing or being restarted. An in-memory counter would reset on
+every restart, making it impossible to detect accumulation across cycles.
+
+### ProcessInspector Seam
+
+`cleanup_orphan_executions` obtains its view of the OS process table via a `ProcessInspector`
+trait object returned by `ContainerService::make_process_inspector()`. The default implementation
+uses `SysinfoProcessInspector` (real sysinfo). Tests override this via `TestContainerService`
+to inject `MockProcessInspector` — enabling the full fence → classify → resume call path to be
+exercised without spawning real OS processes.
+
+---
+
+## Boot-Drain Ordering
+
+Before the crash-recovery sweep runs, any `queued_messages` rows that accumulated while the
+server was offline are drained by `drain_queued_messages_on_boot`. The drain identifies eligible
+task attempts — those with a queued message and whose most recent execution process is
+idle/completed — and calls `start_queued_message_for_attempt` for each.
+
+**Order guarantee:** Drain runs before new user-initiated executions can be accepted. The
+startup sequence is:
+
+```text
+1. Apply pending migrations
+2. Register instance (write /tmp/vibe-kanban/instances/{hash}.json)
+3. drain_queued_messages_on_boot  ← queued messages delivered first
+4. cleanup_orphan_executions      ← crash-recovery sweep
+5. Begin serving HTTP/WebSocket requests
+```
+
+This prevents a race where a user action starts a new execution for an attempt that had an
+undelivered queued message from before the crash.
+
+---
+
 ## Edge Cases
 
 ### Backend Hangs During Cleanup
