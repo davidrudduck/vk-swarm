@@ -103,6 +103,71 @@ Phase 2a `cleanup_orphan_executions_accessor_*` test).
 
 ## Per-task decisions (executor appends below)
 
+## Reachability gate
+
+`change_kind: behaviour`. Gate is mandatory. Evidence recorded below (a)–(c).
+
+### (a) Call-path traces (production code → changed code, cited file:line)
+
+**GAP 1 — make_process_inspector + SC1 resume (task 201)**
+- Entry: `LocalContainerService::cleanup_orphan_executions()` (inherited from `ContainerService` trait;
+  called at server boot via the startup sequence that calls `cleanup_orphan_executions` on the
+  deployed `LocalContainerService` instance).
+- Path: line 316 `let inspector = self.make_process_inspector()` [changed from
+  `SysinfoProcessInspector::new()`]; line 351 `process_fence::fence(inspector.as_ref(), …)` [changed
+  from `fence(&inspector, …)`]; `FenceOutcome::AlreadyGone` branch → `build_resume_action(…)` →
+  `start_execution_inner(…)`.
+- Confirmed: `grep -n "make_process_inspector\|inspector.as_ref" crates/services/src/services/container.rs`
+  → lines 172 (default method), 316 (call site), 351 (fence call). All three changed lines are on
+  the production code path.
+
+**GAP 2 — CouldNotKill counter + warn (task 202)**
+- Entry: same `cleanup_orphan_executions()`.
+- Path: `FenceOutcome::CouldNotKill` arm at ~line 382 [rewritten]: sets `resume_state='pending'`,
+  calls `ExecutionProcess::increment_fence_attempt_count(pool, process.id)` and
+  `get_fence_attempt_count(pool, process.id)`, emits `tracing::warn!` with "manual intervention"
+  at threshold.
+- Confirmed: `grep -n "FENCE_ESCALATION_THRESHOLD\|increment_fence_attempt_count\|manual intervention" crates/services/src/services/container.rs`
+  → lines 129 (const), 384 (increment call), 401 (warn). All on the production CouldNotKill path.
+
+**GAP 3 — boot-drain call path (task 301)**
+- Entry: `LocalContainerService::drain_queued_messages_on_boot()` (~line 1396 in
+  `crates/local-deployment/src/container.rs`); called at server boot.
+- Path: real SQL predicate selects drainable attempts → per-attempt loop → spy block at line 1422
+  `#[cfg(test)] if let Some(tx) = &self.drain_spy_tx { tx.send(task_attempt.id); continue; }`
+  BEFORE line 1428 `if let Err(e) = self.start_queued_message_for_attempt(…)`.
+- Confirmed: `grep -n "drain_spy_tx\|start_queued_message_for_attempt" crates/local-deployment/src/container.rs`
+  → spy at line 1422, start call at line 1428. Spy fires first; intercept is at the real call boundary.
+
+### (b) Real-seam tests (drive real entry points, not mocks past them)
+
+- **SC1 test** (`test_cleanup_orphan_executions_resumes_with_qa_mock_session`): calls the REAL
+  `cleanup_orphan_executions()` method via `TestContainerService` (which inherits the method from
+  the trait — no stub override). The real method runs the real SQL, the real fence, and the real
+  resume logic. `start_execution_inner` is the only stub (captures the action). Entry point is
+  the trait method, not a helper.
+- **SC2 test** (`test_cleanup_orphan_executions_stubborn_pid_escalation`): same entry point via
+  `TestContainerService`. `MockProcessInspector::set_unkillable` forces `CouldNotKill` on the real
+  fence path. DB counter is real (`increment_fence_attempt_count` + `get_fence_attempt_count` hit
+  the real SQLite DB).
+- **SC3 test** (`test_drain_queued_messages_on_boot_calls_start_for_eligible_attempt`): calls the
+  REAL `LocalContainerService::drain_queued_messages_on_boot()` (not a mock). Uses a real
+  SQLite DB (created by `create_test_pool`), real SQL drain predicate, and a real spy channel.
+  The spy fires when the code reaches `start_queued_message_for_attempt` — the precise production
+  call boundary.
+
+### (c) Behavioural assertions (spec is test-gap closure, no historical incident)
+
+This spec is `change_kind: behaviour` (closing Phase 2a test-coverage gaps, not fixing a
+production incident). Assertions map to the SPECIFIED BEHAVIOUR that was previously untested:
+- SC1: `assert_eq!(req.session_id, "sess-qa-abc")` + `assert_eq!(req.prompt, "Your previous session was interrupted…")` + `resume_state == "resumed"` — proves the end-to-end QaMock resume path (fence→classify→resume→start) works correctly.
+- SC2: `assert_eq!(count, cycle)` for all cycles 1..=5 + `assert!(logs_contain("manual intervention"))` — proves the persistent D-state counter increments correctly and the escalation warn fires exactly at threshold.
+- SC3: `assert_eq!(received, attempt_id)` + `spy_rx.try_recv().is_err()` — proves the drain selects the correct attempt (exactly one) and dispatches it to the start boundary.
+
+All three (a)–(c) are satisfied. The run may close.
+
+---
+
 ### Task 102 — gate WAI_TEST_CMD correction
 Pre-existing repo issue: `cargo test -p db` (without `--lib --features test-utils`) fails to
 compile the integration test `crates/db/tests/task_visibility_discriminator.rs`, which uses
