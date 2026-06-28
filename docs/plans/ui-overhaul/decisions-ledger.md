@@ -236,3 +236,15 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - Reconciliation note: Task spec mentions shorthand `before:bg-[var(--status-done)]` quoted in plan.md contracts but correctly applied as `before:bg-[hsl(var(--status-done))]` (HSL wrapper required for bare triplet tokens; satisfies SC5b's `var(--status-` grep).
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 005` → CONFORMS (all deterministic gates passed).
 - No undictated choices made; task specification fully followed.
+
+### Task 014 — Complete (no decisions)
+- Pre-flight: `frontend/src/components/common/StatusBadge.tsx` did not exist (DOES_NOT_EXIST confirmed).
+- Pre-flight: TaskStatus verified as `"todo" | "inprogress" | "inreview" | "done" | "cancelled"` in `shared/types.ts` line 352.
+- Pre-flight: Status tokens verified in `frontend/src/styles/index.css`: all five tokens present in both `.dark {}` and `.light {}` blocks (task 002 applied).
+- File created: `frontend/src/components/common/StatusBadge.tsx` with full spec contents (lines 1–49).
+- Sibling pattern verified: static `Record<TaskStatus, { dotClass: string; label: string }>` map per `ConnectionStatusBadge` pattern; named export `export function StatusBadge`; `cn()` merge for className; literals vs template-literal confirmed.
+- Manual verification: `grep -E 'export function StatusBadge|export const StatusBadge' frontend/src/components/common/StatusBadge.tsx` → "export function StatusBadge({" match (line 34).
+- Manual verification: `grep 'bg-\[hsl(var(--status-' frontend/src/components/common/StatusBadge.tsx` → 5 literal matches (todo, inprogress, inreview, done, cancelled); confirms no template-literal interpolation.
+- TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 014` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.
