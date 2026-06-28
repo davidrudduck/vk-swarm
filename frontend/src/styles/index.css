@@ -96,6 +96,17 @@
     --_neutral: 217.2 32.6% 17.5%;
     --_neutral-foreground: 210 40% 98%;
 
+    /* Status colours (dark) */
+    --status-todo: 240 5% 63%;
+    --status-inprogress: 217 91% 60%;
+    --status-inreview: 43 100% 50%;
+    --status-done: 152 100% 50%;
+    --status-cancelled: 0 100% 71%;
+    /* Semantic surface/border aliases */
+    --surface-card: var(--vks-surface);
+    --surface-raised: var(--vks-surface-bright);
+    --border-strong: 240 10% 16%;
+
     /* Console (dark) */
     --_console-background: 0 0% 0%;
     --_console-foreground: 210 40% 98%;
@@ -109,6 +120,14 @@
     color-scheme: light;
     --_primary: 192 100% 35%;
     --_primary-foreground: 0 0% 100%;
+    --status-todo: 220 9% 46%;
+    --status-inprogress: 221 83% 53%;
+    --status-inreview: 38 100% 34%;
+    --status-done: 153 83% 30%;
+    --status-cancelled: 0 62% 52%;
+    --surface-card: 0 0% 100%;
+    --surface-raised: 210 40% 96%;
+    --border-strong: 214 20% 80%;
   }
 
   /* VK-Swarm "Midnight Terminal" Theme */
