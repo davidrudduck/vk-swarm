@@ -170,10 +170,7 @@ pub trait ContainerService {
     /// instance-scoped cleanup on shutdown.
     fn instance_id(&self) -> &str;
 
-    /// Create a process inspector for this service.
-    /// Returns a boxed ProcessInspector trait object.
-    /// Default implementation creates a SysinfoProcessInspector.
-    fn make_process_inspector(&self) -> Box<dyn ProcessInspector> {
+    fn make_process_inspector(&self) -> Box<dyn ProcessInspector + Send + Sync> {
         Box::new(SysinfoProcessInspector::new())
     }
 
@@ -1577,7 +1574,7 @@ mod tests {
     impl ContainerService for TestContainerService {
         fn db(&self) -> &DBService { &self.db }
         fn instance_id(&self) -> &str { &self.instance_id }
-        fn make_process_inspector(&self) -> Box<dyn ProcessInspector> {
+        fn make_process_inspector(&self) -> Box<dyn ProcessInspector + Send + Sync> {
             Box::new(self.inspector.clone())
         }
         async fn start_execution_inner(
@@ -2050,7 +2047,7 @@ mod tests {
             captured_action: Arc::new(Mutex::new(None)),
         };
 
-        for cycle in 1..=FENCE_ESCALATION_THRESHOLD {
+        for cycle in 1_i64..=FENCE_ESCALATION_THRESHOLD {
             service.cleanup_orphan_executions().await.unwrap();
             let state = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
             assert_eq!(state, Some("pending".to_string()), "cycle {cycle}: must stay pending");

@@ -738,7 +738,7 @@ mod tests {
 
         assert_eq!(ExecutionProcess::get_fence_attempt_count(&pool, process_id).await.unwrap(), 0);
 
-        for expected in 1..=3 {
+        for expected in 1_i64..=5 {
             ExecutionProcess::increment_fence_attempt_count(&pool, process_id).await.unwrap();
             assert_eq!(ExecutionProcess::get_fence_attempt_count(&pool, process_id).await.unwrap(), expected);
         }

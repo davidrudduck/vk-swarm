@@ -166,6 +166,9 @@ impl LocalContainerService {
 
     #[cfg(test)]
     pub(crate) async fn new_for_drain_test(pool: sqlx::SqlitePool) -> Self {
+        // Calls the real constructor, which spawns spawn_worktree_cleanup() as a background task.
+        // That task exits early (base dir absent) in test environments and is dropped when the
+        // short-lived Tokio runtime ends. Harmless but intentional — we need a real instance.
         let db = DBService { pool: pool.clone(), metrics: db::DbMetrics::new() };
         let msg_stores = Arc::new(RwLock::new(HashMap::new()));
         let config = Arc::new(RwLock::new(Config::default()));
