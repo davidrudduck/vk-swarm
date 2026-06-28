@@ -132,3 +132,13 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - SC5a check: `grep -nE 'bg-amber-500|bg-blue-500|bg-green-500|bg-red-500' frontend/src/components/projects/TaskCountPills.tsx` → no matches (exit 1).
 - TypeScript: `cd frontend && npx tsc --noEmit` passes.
 - No undictated choices made; task specification fully followed.
+
+### Task 008 — Complete (no decisions)
+- Removed `getDaysStyle` function from `frontend/src/utils/daysInColumn.ts` (only consumers were `DaysInColumnBadge.tsx` and test file; both in `files:` and updated).
+- Removed `7d+` cap from `formatDaysInColumn`, returns literal `{n}d` for any day count >= 1.
+- Flattened `DaysInColumnBadge` to use `bg-secondary text-secondary-foreground` style (no age-graduated colours).
+- Updated test expectations: `7d+` → `7d`, `14d`, `100d`.
+- Manual verification: `grep -rn 'getDaysStyle' frontend/src` → no matches; `grep -n 'bg-secondary text-secondary-foreground' frontend/src/components/tasks/DaysInColumnBadge.tsx` → match at line 30.
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- Test: `cd frontend && npx vitest run src/utils/__tests__/daysInColumn.test.ts` — 17 tests pass.
+- No undictated choices made; task specification fully followed.
