@@ -126,3 +126,9 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - TypeScript: `cd frontend && npx tsc --noEmit` passes.
 - Test: `cd frontend && npx vitest run src/__tests__/DesignSystem.test.tsx` — 14 tests pass.
 - No undictated choices made; task specification fully followed.
+
+### Task 007 — Complete (no decisions)
+- Manual verification: `inprogress` uses `text-blue-600 dark:text-blue-400` + `bg-blue-50/50 …`; `inreview` uses `text-amber-600 dark:text-amber-400` + `bg-amber-50/50 …`.
+- SC5a check: `grep -nE 'bg-amber-500|bg-blue-500|bg-green-500|bg-red-500' frontend/src/components/projects/TaskCountPills.tsx` → no matches (exit 1).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- No undictated choices made; task specification fully followed.

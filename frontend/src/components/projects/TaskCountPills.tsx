@@ -41,18 +41,18 @@ export function TaskCountPills({ counts, projectId, compact = false }: Props) {
       label: t('status.inProgress'),
       compactLabel: 'WIP',
       count: counts.in_progress,
-      colorClass: 'text-amber-600 dark:text-amber-400',
+      colorClass: 'text-blue-600 dark:text-blue-400',
       bgClass:
-        'bg-amber-50/50 hover:bg-amber-50 dark:bg-amber-900/20 dark:hover:bg-amber-900/30',
+        'bg-blue-50/50 hover:bg-blue-50 dark:bg-blue-900/20 dark:hover:bg-blue-900/30',
     },
     {
       key: 'inreview',
       label: t('status.review'),
       compactLabel: 'Rev',
       count: counts.in_review,
-      colorClass: 'text-blue-600 dark:text-blue-400',
+      colorClass: 'text-amber-600 dark:text-amber-400',
       bgClass:
-        'bg-blue-50/50 hover:bg-blue-50 dark:bg-blue-900/20 dark:hover:bg-blue-900/30',
+        'bg-amber-50/50 hover:bg-amber-50 dark:bg-amber-900/20 dark:hover:bg-amber-900/30',
     },
     {
       key: 'done',
