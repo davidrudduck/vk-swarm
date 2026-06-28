@@ -39,6 +39,8 @@ Functions for managing execution processes in the local SQLite database. Executi
 | `mark_orphaned_as_failed` | Orphan sweep on startup | `u64` (rows updated) |
 | `set_resume_state` | Track crash-recovery state | `()` |
 | `get_resume_state` | Read crash-recovery state | `Option<String>` |
+| `increment_fence_attempt_count` | Increment D-state retry counter | `()` |
+| `get_fence_attempt_count` | Read D-state retry counter | `i64` |
 
 ---
 
@@ -591,3 +593,67 @@ async fn get_resume_state(
 
 **Used By:**
 - Tests — verify resume lifecycle transitions
+
+---
+
+### increment_fence_attempt_count
+
+Increment the D-state retry counter for an execution process. Called each time
+`process_fence::fence()` returns `CouldNotKill` (process survived SIGKILL).
+
+**Signature:**
+```rust
+async fn increment_fence_attempt_count(
+    pool: &SqlitePool,
+    id: Uuid,
+) -> Result<(), sqlx::Error>
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `pool` | `&SqlitePool` | Database connection pool |
+| `id` | `Uuid` | Process ID |
+
+**Returns:** `Ok(())` on success.
+
+**Notes:**
+- Implemented as `SET fence_attempt_count = fence_attempt_count + 1` — atomic increment
+  without a read-modify-write cycle.
+- The counter persists across server restarts (unlike an in-memory counter), which is required
+  because D-state processes are only encountered during crash/restart cycles.
+
+**Used By:**
+- `services/container.rs` — `cleanup_orphan_executions`, `CouldNotKill` arm
+
+---
+
+### get_fence_attempt_count
+
+Read the current D-state retry counter for an execution process.
+
+**Signature:**
+```rust
+async fn get_fence_attempt_count(
+    pool: &SqlitePool,
+    id: Uuid,
+) -> Result<i64, sqlx::Error>
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `pool` | `&SqlitePool` | Database connection pool |
+| `id` | `Uuid` | Process ID |
+
+**Returns:** Current value of `fence_attempt_count` (0 by default on new rows).
+
+**Notes:**
+- Called immediately after a successful `increment_fence_attempt_count` to check whether the
+  escalation threshold (`FENCE_ESCALATION_THRESHOLD = 5`) has been reached.
+- On DB read failure after a successful increment, `cleanup_orphan_executions` logs an error
+  and skips the threshold check for that cycle — the next restart will retry with the
+  correctly incremented value already in the DB.
+
+**Used By:**
+- `services/container.rs` — `cleanup_orphan_executions`, escalation warn check

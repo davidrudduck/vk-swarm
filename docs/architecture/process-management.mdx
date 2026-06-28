@@ -143,6 +143,106 @@ All processes terminated ✓
 
 **Mitigation**: Track dev_root_pid, kill it after backend exits, fallback to port-based cleanup.
 
+## Crash Recovery (Orphan Cleanup)
+
+On every server startup, `cleanup_orphan_executions` sweeps for execution processes that were
+left in `status='running'` by a previous crash. The sweep runs in a background `tokio::spawn`
+task started during `main()` (concurrent with HTTP serving, not a blocking pre-flight step).
+
+### Resume State Machine
+
+Each execution process carries a `resume_state` column (NULL by default) that tracks where the
+process is in the crash-recovery lifecycle:
+
+| State | Set by | Meaning |
+|---|---|---|
+| `NULL` | (initial) | Not yet seen by crash-recovery logic |
+| `pending` | `cleanup_orphan_executions` | Fence complete; crash-resume being prepared, or process is in D-state |
+| `resumed` | `resume_execution` | Crash-resume dispatched to the executor |
+| `abandoned` | `cleanup_orphan_executions` | Recovery skipped (PID reuse or resume failed) |
+
+Processes with `resume_state IN ('pending', 'resumed')` are excluded from the blanket
+`mark_orphaned_as_failed` sweep — they are under active recovery and must not be pre-empted.
+
+### Fence Outcomes
+
+For each running process, the cleanup calls `process_fence::fence()` to determine what happened
+to the OS process since the previous server run:
+
+| Outcome | Meaning | Action |
+|---|---|---|
+| `AlreadyGone` | OS process has exited | Set `resume_state='pending'`, classify, resume |
+| `CouldNotKill` | Process survived SIGKILL (D-state) | Set `resume_state='pending'`, increment `fence_attempt_count`, emit warning |
+
+### D-state Escalation
+
+When an execution process survives SIGKILL on repeated restart cycles (uninterruptible sleep,
+commonly caused by a hung network filesystem or kernel driver), the system:
+
+1. Sets `resume_state='pending'` to protect the row from the blanket sweep.
+2. Increments the `fence_attempt_count` column on `execution_processes` (persists across restarts).
+3. Emits a `tracing::warn!` each cycle once the count reaches the escalation threshold.
+
+**Threshold:** `FENCE_ESCALATION_THRESHOLD = 5` (compile-time constant in `container.rs`).
+
+**Log signal (emitted when `fence_attempt_count >= 5`):**
+```bash
+WARN process stuck in D-state after N restart attempts — manual intervention may be required
+     process_id=<uuid> pid=<pid> fence_attempt_count=<n>
+```
+
+The warning re-fires on every subsequent restart cycle while the process remains stuck. This is
+intentional — the signal continues until an operator intervenes. To clear the counter after
+resolving the underlying kernel issue, the row must be manually updated or the task attempt deleted.
+
+**Why `fence_attempt_count` is in the database (not in-memory):** D-state processes occur
+precisely when the system is crashing or being restarted. An in-memory counter would reset on
+every restart, making it impossible to detect accumulation across cycles.
+
+### ProcessInspector Seam
+
+`cleanup_orphan_executions` obtains its view of the OS process table via a `ProcessInspector`
+trait object returned by `ContainerService::make_process_inspector()`. The default implementation
+uses `SysinfoProcessInspector` (real sysinfo). Tests override this via `TestContainerService`
+to inject `MockProcessInspector` — enabling the full fence → classify → resume call path to be
+exercised without spawning real OS processes.
+
+---
+
+## Boot-Drain Ordering
+
+Any `queued_messages` rows that accumulated while the server was offline are drained by
+`drain_queued_messages_on_boot`. The drain identifies eligible task attempts — those with a
+queued message and whose most recent execution process is idle/completed — and calls
+`start_queued_message_for_attempt` for each.
+
+**Order guarantee:** The drain is sequenced to run **after** `cleanup_orphan_executions`
+completes, within the **same** `tokio::spawn` task (`main.rs`):
+
+```rust
+tokio::spawn(async move {
+    container.cleanup_orphan_executions().await; // 1. crash-recovery sweep first
+    container.drain_queued_messages_on_boot().await; // 2. then drain queued messages
+});
+```
+
+Running them in one sequential task (rather than two sibling spawns) ensures cleanup's resume
+path finishes before the drain begins — otherwise a crashed coding-agent process being resumed
+by `cleanup_orphan_executions` could race the drain's `start_queued_message_for_attempt` for the
+same attempt, starting two executions at once.
+
+Both run concurrently with HTTP serving — they are background tasks, not a blocking pre-flight
+gate. The full startup order is:
+
+```text
+1. Apply pending migrations (in DeploymentImpl::new)
+2. Clean up stale instance registry entries
+3. Spawn background task: cleanup_orphan_executions → drain_queued_messages_on_boot
+4. Begin serving HTTP/WebSocket requests (concurrent with step 3)
+```
+
+---
+
 ## Edge Cases
 
 ### Backend Hangs During Cleanup

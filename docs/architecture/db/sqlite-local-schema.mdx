@@ -167,6 +167,8 @@ Records each execution process (setup script, coding agent, etc.) within a task 
 | `pid` | INTEGER | System process ID |
 | `started_at` | DATETIME | Process start time |
 | `completed_at` | DATETIME | Process completion time |
+| `resume_state` | TEXT | Crash-recovery state: `pending`, `resumed`, `abandoned`, or NULL |
+| `fence_attempt_count` | INTEGER | Count of times SIGKILL bounced (D-state tracking); default 0 |
 | `created_at` | DATETIME | Creation timestamp |
 | `updated_at` | DATETIME | Last update timestamp |
 

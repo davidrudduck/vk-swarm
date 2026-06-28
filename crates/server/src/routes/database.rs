@@ -332,15 +332,18 @@ async fn sync_status(
     let node_name = std::env::var("VK_NODE_NAME").ok();
 
     // Get most recent successful sync timestamp
-    let last_synced_at: Option<String> = sqlx::query_scalar(
-        "SELECT MAX(hive_synced_at) FROM execution_processes"
-    )
-    .fetch_one(pool)
-    .await
-    .ok()
-    .flatten();
+    let last_synced_at: Option<String> =
+        sqlx::query_scalar("SELECT MAX(hive_synced_at) FROM execution_processes")
+            .fetch_one(pool)
+            .await
+            .ok()
+            .flatten();
 
-    let last_synced_at = last_synced_at.and_then(|ts| chrono::DateTime::parse_from_rfc3339(&ts).ok().map(|dt| dt.with_timezone(&chrono::Utc)));
+    let last_synced_at = last_synced_at.and_then(|ts| {
+        chrono::DateTime::parse_from_rfc3339(&ts)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    });
 
     Ok(ResponseJson(ApiResponse::success(SyncStatusResponse {
         unsynced_tasks,
@@ -426,15 +429,13 @@ async fn get_hive_attempt(
     // Fall back to remote_client (OAuth) for non-node deployments
     let remote_client = match deployment.node_auth_client().cloned() {
         Some(c) => c,
-        None => deployment
-            .remote_client()
-            .inspect_err(|e| {
-                tracing::warn!(
-                    assignment_id = %assignment_id,
-                    error = %e,
-                    "No client available for Hive attempt fetch"
-                );
-            })?,
+        None => deployment.remote_client().inspect_err(|e| {
+            tracing::warn!(
+                assignment_id = %assignment_id,
+                error = %e,
+                "No client available for Hive attempt fetch"
+            );
+        })?,
     };
 
     // Fetch the attempt data from the Hive using the remote client
