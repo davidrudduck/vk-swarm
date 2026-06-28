@@ -142,6 +142,7 @@ module.exports = {
         prose: 'var(--font-prose)',
         mono: 'var(--font-code)', // Alias for backwards compatibility
         'chivo-mono': ['Chivo Mono', 'Noto Emoji', 'monospace'], // Keep for direct usage
+        wordmark: ["'Chivo Mono'", 'monospace'],
         heading: 'var(--font-heading, var(--font-ui))', // VKS heading font with fallback
         serif: ['"Source Serif 4"', 'Georgia', 'serif'], // Direct serif usage
       },
