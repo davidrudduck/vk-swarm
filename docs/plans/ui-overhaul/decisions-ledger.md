@@ -278,3 +278,16 @@ Sub-edit 6: Appended `hover:border-[hsl(var(--border-strong))]` to KanbanCard ho
 - TypeScript: `cd frontend && npx tsc --noEmit` passes.
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 013` → CONFORMS (all deterministic gates passed).
 - No undictated choices made; task specification fully followed.
+
+### Task 018 — Complete (no decisions)
+- Pre-flight: `frontend/src/components/swarm/NodeCard.tsx` does not exist (FILE_DOES_NOT_EXIST confirmed).
+- Pre-flight: `Node` type in `@/types/nodes` verified: exposes `name: string` and `status: NodeStatus` (both required fields present).
+- Pre-flight: `vks-pulse` keyframe verified: `grep 'vks-pulse' frontend/src/styles/index.css` → match (task 003 applied).
+- Pre-flight: CSS tokens verified: `grep -E '(--surface-raised|--surface-card|--status-done)' frontend/src/styles/index.css` → 6 matches (task 002 applied).
+- File created: `frontend/src/components/swarm/NodeCard.tsx` with full spec contents (lines 1–68). Exports named `NodeCard` function and type `export type NodeForCard = Node`.
+- Decision recorded: `NodeForCard = Node` per task spec analysis. No global agent-count field exists on `Node` type; org-scoped source only. Right slot degrades to offline badge or muted status label (no fabricated agent-count).
+- Manual verification: `grep -E 'export function NodeCard|export const NodeCard' frontend/src/components/swarm/NodeCard.tsx` → "export function NodeCard" match (SC14).
+- Manual verification: `grep 'vks-pulse' frontend/src/components/swarm/NodeCard.tsx` → match (SC15 application in animate class).
+- Manual verification: `grep -F 'export type NodeForCard = Node' frontend/src/components/swarm/NodeCard.tsx` → match (type for task 017 import).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
+- No undictated choices made; task specification fully followed.
