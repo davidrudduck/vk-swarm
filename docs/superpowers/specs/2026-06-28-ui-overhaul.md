@@ -56,35 +56,34 @@ This workstream aligns the product UI to the design spec so that:
 
 Testable definitions of "done":
 
-1. `cargo clippy --all --all-targets --all-features -- -D warnings` passes.
-2. `cargo test --workspace` passes.
-3. `cd frontend && npm run lint` passes (zero ESLint errors).
-4. `cd frontend && npx tsc --noEmit` passes.
-5. Hardcoded-colour audit:
-   - **Removal:** `grep -r 'bg-green-500\|bg-red-500\|bg-amber-500\|bg-blue-500' frontend/src/components/tasks/ frontend/src/components/projects/TaskCountPills.tsx` → zero matches.
-   - **Presence:** `grep -r 'var(--status-' frontend/src/components/tasks/TaskCard.tsx frontend/src/components/tasks/AllProjectsTaskCard.tsx` → at least one match per file (confirms token replacement, not just class removal).
-6. `--status-todo`, `--status-inprogress`, `--status-inreview`, `--status-done`, `--status-cancelled`
-   are defined under the `.dark { }` selector in `frontend/src/styles/index.css` (not `.vks-theme`),
-   with light overrides under `.light { }`. TaskCard status strips consume them via `var(--status-*)`.
-7. `--border-strong`, `--surface-card`, `--surface-raised` are defined under `.dark { }` in
-   `index.css` and consumed (referenced by at least one component).
-8. `TaskCountPills` (`frontend/src/components/projects/TaskCountPills.tsx`) — inprogress colour →
-   blue (`#3b82f6`), inreview → amber (`#ffb800`). Was swapped — A-class bug.
-9. Kanban column min-width: `minmax(264px, 1fr)` in
-   `frontend/src/components/ui/shadcn-io/kanban/index.tsx` (was `minmax(200px,400px)`).
-10. Empty column renders a `.vks-ansi-dither.vks-scanlines` block containing `░▒ no tasks ▒░`
-    centered text in `font-mono text-xs text-muted` (not blank).
-11. Navbar second row has Board / Nodes / Processes tabs; active tab has 2px cyan bottom border.
-12. `<VKSLogo` rendered in `frontend/src/components/layout/Navbar.tsx` (not SVG `<Logo>`).
-13. `+ Task` button in Navbar: `variant="default" size="sm"` with text label.
-14. `NodeCard` component exists at `frontend/src/components/swarm/NodeCard.tsx`; `/nodes` route
-    exists in `frontend/src/App.tsx`; navigating to `/nodes` renders `NodeCard` components.
-15. `@keyframes vks-pulse` defined in `index.css` with: animated property `opacity` and/or
-    `box-shadow`, easing `ease-in-out`, iteration-count `infinite`. Applied to the online NodeCard
-    status dot. Does not reference the undefined token `--vks-emerald-hsl` — use `--status-done`
-    or its literal HSL value `152 100% 50%` instead.
-16. A theme toggle (sun/moon icon) is present in the Navbar.
-17. Manual browser smoke-test checklist (all items pass, zero console errors in DevTools):
+- SC1: `cargo clippy --all --all-targets --all-features -- -D warnings` passes.
+- SC2: `cargo test --workspace` passes.
+- SC3: `cd frontend && npm run lint` passes (zero ESLint errors).
+- SC4: `cd frontend && npx tsc --noEmit` passes.
+- SC5a: Hardcoded-colour **removal** — `grep -r 'bg-green-500\|bg-red-500\|bg-amber-500\|bg-blue-500' frontend/src/components/tasks/ frontend/src/components/projects/TaskCountPills.tsx` → zero matches.
+- SC5b: Hardcoded-colour **replacement** — `grep -r 'var(--status-' frontend/src/components/tasks/TaskCard.tsx frontend/src/components/tasks/AllProjectsTaskCard.tsx` → at least one match per file (confirms token replacement, not just class removal).
+- SC6: `--status-todo`, `--status-inprogress`, `--status-inreview`, `--status-done`, `--status-cancelled`
+  are defined under the `.dark { }` selector in `frontend/src/styles/index.css` (not `.vks-theme`),
+  with light overrides under `.light { }`. TaskCard status strips consume them via `var(--status-*)`.
+- SC7: `--border-strong`, `--surface-card`, `--surface-raised` are defined under `.dark { }` in
+  `index.css` and consumed (referenced by at least one component).
+- SC8: `TaskCountPills` (`frontend/src/components/projects/TaskCountPills.tsx`) — inprogress colour →
+  blue (`#3b82f6`), inreview → amber (`#ffb800`). Was swapped — A-class bug.
+- SC9: Kanban column min-width: `minmax(264px, 1fr)` in
+  `frontend/src/components/ui/shadcn-io/kanban/index.tsx` (was `minmax(200px,400px)`).
+- SC10: Empty column renders a `.vks-ansi-dither.vks-scanlines` block containing `░▒ no tasks ▒░`
+  centered text in `font-mono text-xs text-muted` (not blank).
+- SC11: Navbar second row has Board / Nodes / Processes tabs; active tab has 2px cyan bottom border.
+- SC12: `<VKSLogo` rendered in `frontend/src/components/layout/Navbar.tsx` (not SVG `<Logo>`).
+- SC13: `+ Task` button in Navbar: `variant="default" size="sm"` with text label.
+- SC14: `NodeCard` component exists at `frontend/src/components/swarm/NodeCard.tsx`; `/nodes` route
+  exists in `frontend/src/App.tsx`; navigating to `/nodes` renders `NodeCard` components.
+- SC15: `@keyframes vks-pulse` defined in `index.css` with: animated property `opacity` and/or
+  `box-shadow`, easing `ease-in-out`, iteration-count `infinite`. Applied to the online NodeCard
+  status dot. Does not reference the undefined token `--vks-emerald-hsl` — use `--status-done`
+  or its literal HSL value `152 100% 50%` instead.
+- SC16: A theme toggle (sun/moon icon) is present in the Navbar.
+- SC17: Manual browser smoke-test checklist (all items pass, zero console errors in DevTools):
     - [ ] Projects page renders
     - [ ] Tasks kanban renders; status strips show correct colours (not hardcoded green/red/amber)
     - [ ] Task detail panel opens; header shows StatusBadge dot + task title + close button
@@ -94,18 +93,18 @@ Testable definitions of "done":
     - [ ] Board / Nodes / Processes tab row switches between views
     - [ ] Theme toggle flips dark ↔ light; token colours update correctly
     - [ ] Hard-reload after theme toggle: persists (confirms `updateAndSaveConfig` write path)
-18. Task-detail panel chrome aligned to ADR-0006: header renders `StatusBadge` dot + task title
-    + close affordance; badges row (status outline+dot, node secondary, labels outline) below
-    header; view switcher is labeled `Tabs` (Diff / Logs / Attempts), not an icon-only
-    `ToggleGroup`; footer: Merge `variant="default" size="sm" className="flex-1"`,
-    Rebase `size="sm"`, Open in IDE `variant="ghost" size="sm"`. Panel remains resizable —
-    no 460px-fixed drawer, no overlay scrim.
-19. WCAG AA contrast: all text/background pairs introduced or changed meet 4.5:1 (normal text)
-    and 3:1 (large text / UI components). Spot-check with browser DevTools accessibility panel
-    on Projects, Tasks kanban, and Nodes pages for both dark and light themes.
-20. Theme persists across reload: after toggling to light, hard-reload of `/projects` still shows
-    light theme (confirms the `updateAndSaveConfig` write, not just in-memory state).
-21. `/nodes` route exists in `frontend/src/App.tsx` inside `NormalLayout`, alongside `/processes`.
+- SC18: Task-detail panel chrome aligned to ADR-0006: header renders `StatusBadge` dot + task title
+  + close affordance; badges row (status outline+dot, node secondary, labels outline) below
+  header; view switcher is labeled `Tabs` (Diff / Logs / Attempts), not an icon-only
+  `ToggleGroup`; footer: Merge `variant="default" size="sm" className="flex-1"`,
+  Rebase `size="sm"`, Open in IDE `variant="ghost" size="sm"`. Panel remains resizable —
+  no 460px-fixed drawer, no overlay scrim.
+- SC19: WCAG AA contrast: all text/background pairs introduced or changed meet 4.5:1 (normal text)
+  and 3:1 (large text / UI components). Spot-check with browser DevTools accessibility panel
+  on Projects, Tasks kanban, and Nodes pages for both dark and light themes.
+- SC20: Theme persists across reload: after toggling to light, hard-reload of `/projects` still shows
+  light theme (confirms the `updateAndSaveConfig` write, not just in-memory state).
+- SC21: `/nodes` route exists in `frontend/src/App.tsx` inside `NormalLayout`, alongside `/processes`.
 
 ## Constraints
 
