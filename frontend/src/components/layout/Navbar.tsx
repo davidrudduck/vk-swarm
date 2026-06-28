@@ -14,14 +14,13 @@ import {
   BookOpen,
   MessageCircleQuestion,
   Menu,
-  Plus,
   LogOut,
   LogIn,
   Archive,
   Activity,
   Search,
 } from 'lucide-react';
-import { Logo } from '@/components/Logo';
+import { VKSLogo } from '@/components/VKSLogo';
 import { SearchBar } from '@/components/SearchBar';
 import { ActivityFeed } from '@/components/activity';
 import {
@@ -47,6 +46,7 @@ import { OAuthDialog } from '@/components/dialogs/global/OAuthDialog';
 import { useUserSystem } from '@/components/ConfigProvider';
 import { oauthApi } from '@/lib/api';
 import { ProjectSwitcher } from './ProjectSwitcher';
+import ThemeToggle from '@/components/ThemeToggle';
 
 const INTERNAL_NAV = [
   { label: 'Projects', icon: FolderOpen, to: '/projects' },
@@ -139,7 +139,7 @@ export function Navbar() {
         <div className="flex items-center h-12 py-2">
           <div className="flex-1 flex items-center">
             <Link to="/projects" className="shrink-0">
-              <Logo className="h-4 sm:h-6 w-auto" />
+              <VKSLogo className="text-sm sm:text-base" />
             </Link>
             <ProjectSwitcher className="ml-2 hidden sm:inline-flex" />
           </div>
@@ -199,21 +199,22 @@ export function Navbar() {
                   onClick={handleOpenInIDE}
                   className="h-9 w-9 hidden sm:inline-flex"
                 />
-                {/* Plus button - always visible for quick task creation */}
+                {/* Task creation button - text label for discoverability */}
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9"
+                  variant="default"
+                  size="sm"
                   onClick={handleCreateTask}
                   aria-label="Create new task"
                 >
-                  <Plus className="h-4 w-4" />
+                  {/* TODO(i18n): vk-swarm-node-ui-localize */}
+                  + Task
                 </Button>
                 <NavDivider />
               </>
             ) : null}
 
             <div className="flex items-center gap-1">
+              <ThemeToggle />
               <ActivityFeed />
 
               <Button

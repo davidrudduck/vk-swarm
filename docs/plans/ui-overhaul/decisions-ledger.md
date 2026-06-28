@@ -291,3 +291,29 @@ Sub-edit 6: Appended `hover:border-[hsl(var(--border-strong))]` to KanbanCard ho
 - Manual verification: `grep -F 'export type NodeForCard = Node' frontend/src/components/swarm/NodeCard.tsx` → match (type for task 017 import).
 - TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
 - No undictated choices made; task specification fully followed.
+
+### Task 015 — Complete (no decisions)
+- Pre-flight: All six anchors confirmed byte-for-byte match before edits.
+  - Anchor 1 (line 24): `import { Logo } from '@/components/Logo';` confirmed.
+  - Anchor 2 (line 142): `<Logo className="h-4 sm:h-6 w-auto" />` confirmed.
+  - Anchor 3 (lines 202-211): Plus button block with variant="ghost" size="icon" and `<Plus className="h-4 w-4" />` confirmed.
+  - Anchor 4 (lines 11-23): lucide-react import with `Plus` in list confirmed.
+  - Anchor 5 (line 49): `import { ProjectSwitcher } from './ProjectSwitcher';` confirmed.
+  - Anchor 6 (lines 216-217): `<div className="flex items-center gap-1">` and `<ActivityFeed />` confirmed.
+- Pre-flight: Producer files verified:
+  - `frontend/src/components/VKSLogo.tsx` exports `VKSLogo` named export (line 18) and default export (line 60).
+  - `frontend/src/components/ThemeToggle.tsx` exports `default ThemeToggle` (line 49).
+- Edit 1: Line 24 — swapped `Logo` import for `VKSLogo` import: `import { VKSLogo } from '@/components/VKSLogo';`.
+- Edit 2: Line 142 — swapped component: `<VKSLogo className="text-sm sm:text-base" />` (responsive font-size classes per spec note on wordmark legibility).
+- Edit 3: Lines 202-211 — Plus icon button converted to text button: `variant="default"` `size="sm"`, text content `+ Task`, removed size="icon" and `h-9 w-9` classes, added TODO(i18n) comment.
+- Edit 4: Lines 11-23 — removed `Plus` from lucide-react import (now unused after button change).
+- Edit 5: Line 49 — added import: `import ThemeToggle from '@/components/ThemeToggle';` (default export).
+- Edit 6: Lines 216-217 — rendered `<ThemeToggle />` in action cluster immediately before `<ActivityFeed />`.
+- Manual verification (SC12): `grep '<VKSLogo' frontend/src/components/layout/Navbar.tsx` → match found.
+- Manual verification (forbid_after): `grep -c '@/components/Logo' frontend/src/components/layout/Navbar.tsx` → 0 (Logo import removed).
+- Manual verification (SC13): `grep '+ Task' frontend/src/components/layout/Navbar.tsx` → match found.
+- Manual verification: `grep -c 'Plus' frontend/src/components/layout/Navbar.tsx` → 0 (Plus import removed, satisfies noUnusedLocals).
+- Manual verification (SC16): `grep '<ThemeToggle' frontend/src/components/layout/Navbar.tsx` → match found (positioned before ActivityFeed).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors, confirms no unused imports).
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 015` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.
