@@ -2,7 +2,7 @@
 id: "202"
 phase: 2
 title: CouldNotKill escalation (counter + warn) + stubborn-PID escalation test
-status: ready
+status: passed
 depends_on: ["102", "201"]
 parallel: false
 conflicts_with: ["201"]
