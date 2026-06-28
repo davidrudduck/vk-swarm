@@ -334,3 +334,22 @@ Sub-edit 6: Appended `hover:border-[hsl(var(--border-strong))]` to KanbanCard ho
 - TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors, confirms no unused imports).
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 015` → CONFORMS (all deterministic gates passed).
 - No undictated choices made; task specification fully followed.
+
+### Task 016 — Complete (no decisions)
+- Pre-flight: All three anchors confirmed byte-for-byte match before edits.
+  - Anchor 1 (line 2): `import { useCallback, useState } from 'react';` confirmed.
+  - Anchor 2 (line 134): `const isOAuthLoggedIn = loginStatus?.status === 'loggedin';` followed by blank line and `return (` confirmed.
+  - Anchor 3 (lines 317–322): closing divs `</div></div></div></div>` before `{/* Mobile search dialog */}` comment confirmed.
+- Pre-flight: STOP triggers verified:
+  - `grep '<VKSLogo' frontend/src/components/layout/Navbar.tsx` → match found (task 015 applied).
+  - `grep "const { projectId, project } = useProject();" frontend/src/components/layout/Navbar.tsx` → match found (projectId available).
+  - Close sequence matches Before text exactly (row structure unchanged).
+- Edit 1 (line 2): Added `useEffect` to react import: `import { useCallback, useEffect, useState } from 'react';`.
+- Edit 2 (after line 134): Added persistence effect with `useEffect`, `localStorage.setItem`, and `boardTo` computation.
+- Edit 3 (after line 317): Inserted second nav row with three tabs (Board/Nodes/Processes), active-state classes with `border-b-2 border-primary`, and TODO(i18n) comments.
+- Manual verification (Nodes tab): `grep -i 'Nodes' frontend/src/components/layout/Navbar.tsx` → 3 matches (route, pathname check, label).
+- Manual verification (active underline): `grep 'border-b-2 border-primary' frontend/src/components/layout/Navbar.tsx` → 3 matches (one per tab).
+- Manual verification (localStorage tracking): `grep "localStorage.setItem('lastVisitedProjectId'" frontend/src/components/layout/Navbar.tsx` → match found.
+- TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 016` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.
