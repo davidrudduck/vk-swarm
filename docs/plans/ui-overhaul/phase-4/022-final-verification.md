@@ -21,8 +21,8 @@ recording the results in the decisions-ledger.
 
 ## Change
 None to source code. This task commits no source change (only the decisions-ledger is written). It is a manual verification gate over the
-work landed by Phases 1–3. The gate's "no file outside `files:`" check passes trivially because no
-file is modified.
+work landed by Phases 1–3. The gate's "no file outside `files:`" check passes because the only modified
+file is `docs/plans/ui-overhaul/decisions-ledger.md`, which is listed in `files:`.
 
 ## Allowed moves
 - NONE (no code change). Only running commands and recording results in the decisions-ledger.

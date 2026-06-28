@@ -112,6 +112,13 @@ the 12 category-error findings.) Verified findings + fixes:
 - **Spec residual bare shorthand (Gemini):** `bg-[var(--surface-card)]` (spec:286) → `bg-[hsl(var(--surface-card))]`.
   Swept the whole spec — no bare `(bg|text|border)-[var(--…)]` references remain. Re-frozen (3rd precheck).
 
+## Adversarial breakdown review — round 3 → APPROVE
+
+Opus APPROVE, Gemini APPROVE. Codex raised one prose nit (task 022 said both "no file is modified" and
+"only the ledger is written" — a leftover from the files:[]→ledger change); fixed (the sentence now
+states the only modified file is the ledger, listed in `files:`). Non-substantive; not re-paneled.
+Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `reviews/breakdown-3.md`.
+
 ## Appended during execute
 
 <!-- executor appends below -->
