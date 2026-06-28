@@ -46,9 +46,8 @@ function getShortNodeName(nodeName: string | null | undefined): string | null {
  * Strips leading markdown headers (# ## ###) and blank lines so the preview
  * shows actual prose rather than the document structure.
  */
-function truncateDescription(
-  description: string | null | undefined,
-  maxLength: number = 80
+function cleanDescription(
+  description: string | null | undefined
 ): string | null {
   if (!description) return null;
   // Strip leading markdown headers and empty lines to show meaningful content
@@ -59,8 +58,7 @@ function truncateDescription(
     .replace(/\s+/g, ' ')           // collapse internal newlines to spaces
     .trim();
   if (!cleaned) return null;
-  if (cleaned.length <= maxLength) return cleaned;
-  return `${cleaned.substring(0, maxLength)}...`;
+  return cleaned;
 }
 
 type Task = TaskWithAttemptStatus;
@@ -193,7 +191,7 @@ export function TaskCard({
     statusStripColors[task.status as TaskStatus] || statusStripColors['todo'];
 
   // Truncated description for compact view
-  const truncatedDesc = useMemo(() => truncateDescription(task.description), [task.description]);
+  const truncatedDesc = useMemo(() => cleanDescription(task.description), [task.description]);
 
   return (
     <KanbanCard
@@ -209,7 +207,7 @@ export function TaskCard({
         // Status strip indicator (left border)
         'relative overflow-hidden pl-5',
         'before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[4px] before:content-[""]',
-        'transition-shadow duration-150 hover:shadow-md',
+        'transition-shadow duration-150 hover:shadow-md hover:border-[hsl(var(--border-strong))]',
         statusStripClass,
         isArchived && 'opacity-60'
       )}
@@ -242,7 +240,7 @@ export function TaskCard({
                 <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
               )}
               {task.has_merged_attempt && (
-                <CheckCircle className="h-4 w-4 text-green-500" />
+                <CheckCircle className="h-4 w-4 text-success" />
               )}
               {task.last_attempt_failed && !task.has_merged_attempt && (
                 <XCircle className="h-4 w-4 text-destructive" />
@@ -265,7 +263,7 @@ export function TaskCard({
         {/* Truncated description - single line */}
         {truncatedDesc && (
           <p
-            className="text-xs text-muted-foreground truncate"
+            className="text-sm text-muted-foreground truncate"
             title={task.description ?? undefined}
           >
             {truncatedDesc}
@@ -275,7 +273,7 @@ export function TaskCard({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0 overflow-hidden">
             {shortNodeName && (
-              <span className="text-xs text-muted-foreground shrink-0">
+              <span className="text-xs font-mono text-muted-foreground shrink-0">
                 {shortNodeName}
               </span>
             )}

@@ -20,15 +20,6 @@ const statusStripColors: Record<TaskStatus, string> = {
 /**
  * Truncate description to a maximum length, adding ellipsis if needed.
  */
-function truncateDescription(
-  description: string | null | undefined,
-  maxLength: number = 40
-): string | null {
-  if (!description) return null;
-  if (description.length <= maxLength) return description;
-  return `${description.substring(0, maxLength)}...`;
-}
-
 /**
  * Get short node name from full hostname (e.g., "justX" from "justX.raverx.net")
  */
@@ -71,8 +62,8 @@ export function AllProjectsTaskCard({
   const statusStripClass =
     statusStripColors[task.status as TaskStatus] || statusStripColors['todo'];
 
-  // Truncated description for compact view
-  const truncatedDesc = truncateDescription(task.description, 40);
+  // Description for compact view (CSS truncate handles the visual cap)
+  const truncatedDesc = task.description ?? null;
 
   return (
     <KanbanCard

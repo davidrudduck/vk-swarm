@@ -49,7 +49,7 @@ export function TaskCardHeader({
   return (
     <div className={`flex items-start gap-3 min-w-0 ${className ?? ''}`}>
       <h4
-        className={`flex-1 min-w-0 line-clamp-2 font-light text-sm ${titleClassName ?? ''}`}
+        className={`flex-1 min-w-0 line-clamp-2 font-medium text-base ${titleClassName ?? ''}`}
       >
         {showTooltip ? (
           <TooltipProvider>
