@@ -113,31 +113,31 @@ Phase 2a `cleanup_orphan_executions_accessor_*` test).
 - Entry: `LocalContainerService::cleanup_orphan_executions()` (inherited from `ContainerService` trait;
   called at server boot via the startup sequence that calls `cleanup_orphan_executions` on the
   deployed `LocalContainerService` instance).
-- Path: line 316 `let inspector = self.make_process_inspector()` [changed from
-  `SysinfoProcessInspector::new()`]; line 351 `process_fence::fence(inspector.as_ref(), …)` [changed
+- Path: line 317 `let inspector = self.make_process_inspector()` [changed from
+  `SysinfoProcessInspector::new()`]; line 354 `process_fence::fence(inspector.as_ref(), …)` [changed
   from `fence(&inspector, …)`]; `FenceOutcome::AlreadyGone` branch → `build_resume_action(…)` →
   `start_execution_inner(…)`.
 - Confirmed: `grep -n "make_process_inspector\|inspector.as_ref" crates/services/src/services/container.rs`
-  → lines 172 (default method), 316 (call site), 351 (fence call). All three changed lines are on
+  → lines 173 (default method), 317 (call site), 354 (fence call). All three changed lines are on
   the production code path.
 
 **GAP 2 — CouldNotKill counter + warn (task 202)**
 - Entry: same `cleanup_orphan_executions()`.
-- Path: `FenceOutcome::CouldNotKill` arm at ~line 382 [rewritten]: sets `resume_state='pending'`,
-  calls `ExecutionProcess::increment_fence_attempt_count(pool, process.id)` and
+- Path: `FenceOutcome::CouldNotKill` arm at line 374 [rewritten]: sets `resume_state='pending'`,
+  calls `ExecutionProcess::increment_fence_attempt_count(pool, process.id)` (line 381) and
   `get_fence_attempt_count(pool, process.id)`, emits `tracing::warn!` with "manual intervention"
-  at threshold.
+  at threshold (line 414).
 - Confirmed: `grep -n "FENCE_ESCALATION_THRESHOLD\|increment_fence_attempt_count\|manual intervention" crates/services/src/services/container.rs`
-  → lines 129 (const), 384 (increment call), 401 (warn). All on the production CouldNotKill path.
+  → lines 129 (const), 381 (increment call), 414 (warn). All on the production CouldNotKill path.
 
 **GAP 3 — boot-drain call path (task 301)**
-- Entry: `LocalContainerService::drain_queued_messages_on_boot()` (~line 1396 in
+- Entry: `LocalContainerService::drain_queued_messages_on_boot()` (in
   `crates/local-deployment/src/container.rs`); called at server boot.
-- Path: real SQL predicate selects drainable attempts → per-attempt loop → spy block at line 1422
+- Path: real SQL predicate selects drainable attempts → per-attempt loop → spy block at line 1442
   `#[cfg(test)] if let Some(tx) = &self.drain_spy_tx { tx.send(task_attempt.id); continue; }`
-  BEFORE line 1428 `if let Err(e) = self.start_queued_message_for_attempt(…)`.
+  BEFORE line 1448 `if let Err(e) = self.start_queued_message_for_attempt(…)`.
 - Confirmed: `grep -n "drain_spy_tx\|start_queued_message_for_attempt" crates/local-deployment/src/container.rs`
-  → spy at line 1422, start call at line 1428. Spy fires first; intercept is at the real call boundary.
+  → spy at line 1442, start call at line 1448. Spy fires first; intercept is at the real call boundary.
 
 ### (b) Real-seam tests (drive real entry points, not mocks past them)
 
@@ -226,3 +226,32 @@ The following undeclared adaptations were made during in-session adversarial rev
 **Why needed:** The in-session Gemini review revealed a concrete process gap: code-review findings were being fixed in the current session (correct) but without any policy mandating it. Without an explicit rule, a future session seeing an adversarial-review finding might defer the fix as "minor" and carry it forward. The policy was added to close that gap proactively. It is meta-work motivated by this workstream's own review process.
 **Scope justification:** Out-of-spec but within the spirit of the workstream (which is entirely about closing gaps to prevent future debt accumulation). The same principle that drove the SC1/SC2/SC3 test additions — "close the gap now" — applies here. Recorded explicitly because the irony of a "no deferred remediation" commit itself not recording its own decisions is a self-inconsistency that all three adversarial reviewers (Codex, Gemini, Opus) independently flagged.
 **Risk:** None — documentation only. No production or test logic changed.
+
+---
+
+## Adversarial-review decisions (Codex + Gemini + Opus panel — commit to follow)
+
+Three-model adversarial review run via `/dr:adversarial-review`. All SHOULD-FIX items fixed in-session.
+
+### Missing `Cargo.lock` + `crates/services/Cargo.toml` commit (task 202 — BLOCKING)
+
+Task 202 listed `Cargo.lock` in `files:` (Trap 8) because adding `tracing-test = "0.2"` causes cargo to regenerate the lock. These files were present in the working tree but never committed — the branch would not compile from a clean checkout because `#[traced_test]` requires the crate. Fixed: committed in `caed109d` before the review dispatch.
+
+### `get_fence_attempt_count` error path — log-and-continue instead of `.unwrap_or(0)`
+
+**Finding (Codex [SHOULD-FIX], Gemini [INFO]):** If `increment_fence_attempt_count` succeeds but `get_fence_attempt_count` subsequently fails (transient DB error), the original `.unwrap_or(0)` produced `count=0`, silently suppressing the escalation warn for that restart cycle. The persisted count IS correctly incremented (the prior write succeeded), but the threshold check never fires on this restart, and the error is invisible in logs.
+**Fix:** Replaced `.unwrap_or(0)` with an explicit `match` that logs `tracing::error!` and `continue`s on read failure — same error-handling shape as the `increment` failure path directly above it. The escalation will fire on the NEXT restart (when the DB is healthy and the persisted count ≥ 5 is read correctly).
+**Why not `.unwrap_or(0)` with a log?** `continue` is strictly safer: it skips the threshold check rather than producing a misleading `count=0` that could suppress the warn for many restart cycles if the read error is persistent. The spec (Implementation section, ~line 315) prescribed `.unwrap_or(0)` — this is a deliberate departure from the spec's implementation suggestion because the alternative silently hides errors. Recorded here per the no-deferred-remediation contract.
+
+### SC2c "configurable threshold" — spec self-contradiction resolved
+
+**Finding (Opus [SHOULD-FIX]):** SC2c used the word "configurable" but the spec's own Implementation section prescribed `const FENCE_ESCALATION_THRESHOLD: i64 = 5`. The code correctly followed the Implementation section.
+**Resolution:** SC2c amended in the spec to remove "configurable" and add an implementation note explaining why a compile-time const is correct (D-state processes require a server restart to re-fence; the threshold is an operational constant, not a per-run parameter). A future workstream can expose `VK_FENCE_ESCALATION_THRESHOLD` if operational needs arise.
+
+### Escalation warn re-fires on every cycle ≥ threshold (INFO — accepted)
+
+**Finding (Gemini [INFO]):** The CouldNotKill arm uses `count >= FENCE_ESCALATION_THRESHOLD` (not `==`), so the escalation warn fires on cycles 5, 6, 7, … every server restart until the stuck process is resolved by manual intervention. This is the **intended behavior** — a D-state process persists until an operator reboots the host or forces the kernel to kill it; repeated warnings on each server restart are the correct signal to keep operator attention on the issue. The SC2d test verifies the warn fires at cycle 5 but does not verify it fires at cycle 6+ (not required by the spec). Accepted as-is; no code change.
+
+### Stale reachability-gate line numbers (INFO — corrected)
+
+Line numbers in the `## Reachability gate` section above drifted from the original cites because `cargo fmt` and subsequent edits shifted lines. Corrected to reflect actual line numbers as of the adversarial review: services lines 173/317/354/381/414; local-deployment lines 1442/1448.

@@ -81,10 +81,17 @@ Processes in this set return "alive" on every `kill_process` call (SIGTERM and S
 or equivalent) in `crates/db/src/models/execution_process/queries.rs` increments and reads it.
 
 **SC2c:** `cleanup_orphan_executions` increments `fence_attempt_count` each time `CouldNotKill`
-is returned for a process. After reaching a configurable threshold (default: 5 attempts), it emits
-a structured `tracing::warn!` including `process_id`, `fence_attempt_count`, and a human-readable
-message suitable for surfacing to an operator (e.g., "process stuck in D-state after N restart
-attempts — manual intervention may be required").
+is returned for a process. After reaching a threshold of 5 attempts, it emits a structured
+`tracing::warn!` including `process_id`, `fence_attempt_count`, and a human-readable message
+suitable for surfacing to an operator (e.g., "process stuck in D-state after N restart attempts —
+manual intervention may be required").
+
+> **Implementation note (decided during execution):** The threshold is a compile-time
+> `const FENCE_ESCALATION_THRESHOLD: i64 = 5` rather than a runtime-configurable env var.
+> D-state processes require a server restart to attempt fencing again, so the threshold is an
+> operational constant that does not need to vary between runs. A future workstream can expose it
+> as a `VK_FENCE_ESCALATION_THRESHOLD` env var if operational needs arise. Recorded in the
+> decisions-ledger under "Post-execution review decisions".
 
 **SC2d:** `cargo test -p services` includes a test using stubborn-PID mode that:
 - Verifies `resume_state` stays `'pending'` across multiple `CouldNotKill` cycles.
