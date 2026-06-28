@@ -160,6 +160,33 @@ impl ExecutionProcess {
         Ok(row.flatten())
     }
 
+    /// Increment the fence-attempt counter for a process stuck in D-state (CouldNotKill path
+    /// of crash recovery). Persisted so the count survives the server restarts that D-state
+    /// forces. See ADR-0005.
+    pub async fn increment_fence_attempt_count(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "UPDATE execution_processes SET fence_attempt_count = fence_attempt_count + 1 WHERE id = ?",
+            id
+        )
+        .execute(pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Read the current fence-attempt counter for a process. Returns 0 for rows that have
+    /// never hit the CouldNotKill path (column default).
+    pub async fn get_fence_attempt_count(pool: &SqlitePool, id: Uuid) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar!(
+            r#"SELECT fence_attempt_count FROM execution_processes WHERE id = ?"#,
+            id
+        )
+        .fetch_one(pool)
+        .await
+    }
+
     /// Find running dev servers for a specific project
     pub async fn find_running_dev_servers_by_project(
         pool: &SqlitePool,
@@ -689,5 +716,31 @@ mod tests {
             .expect("query should succeed");
 
         assert_eq!(result, Some("session-one".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fence_attempt_count_increments_and_reads_back() {
+        use crate::test_utils::create_test_pool;
+        let (pool, _tmp) = create_test_pool().await;
+
+        let project_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES ($1, 'p', '/tmp/p')")
+            .bind(project_id).execute(&pool).await.unwrap();
+        let task_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO tasks (id, project_id, title, status) VALUES ($1, $2, 't', 'todo')")
+            .bind(task_id).bind(project_id).execute(&pool).await.unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref) VALUES ($1, $2, 'QA_MOCK', 'b', 'main', '/tmp/wt')")
+            .bind(attempt_id).bind(task_id).execute(&pool).await.unwrap();
+        let process_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO execution_processes (id, task_attempt_id, run_reason, executor_action, status, started_at) VALUES ($1, $2, 'codingagent', '{}', 'running', datetime('now'))")
+            .bind(process_id).bind(attempt_id).execute(&pool).await.unwrap();
+
+        assert_eq!(ExecutionProcess::get_fence_attempt_count(&pool, process_id).await.unwrap(), 0);
+
+        for expected in 1..=3 {
+            ExecutionProcess::increment_fence_attempt_count(&pool, process_id).await.unwrap();
+            assert_eq!(ExecutionProcess::get_fence_attempt_count(&pool, process_id).await.unwrap(), expected);
+        }
     }
 }

@@ -102,3 +102,13 @@ Phase 2a `cleanup_orphan_executions_accessor_*` test).
   no `files:` addition needed (same disposition as Phase 2a's migration acknowledgements).
 
 ## Per-task decisions (executor appends below)
+
+### Task 102 — gate WAI_TEST_CMD correction
+Pre-existing repo issue: `cargo test -p db` (without `--lib --features test-utils`) fails to
+compile the integration test `crates/db/tests/task_visibility_discriminator.rs`, which uses
+`db::test_utils::create_test_pool` — a module gated by `#[cfg(any(test, feature = "test-utils"))]`.
+Integration tests compile `db` as an external crate, so `#[cfg(test)]` on the library does not
+apply; they need the `test-utils` feature. This failure exists BEFORE task 102 (verified by
+git stash to pre-102 state). The gate was run with the corrected override:
+  `WAI_TEST_CMD="cargo test -p db --lib --features test-utils fence_attempt_count_increments_and_reads_back"`
+Future tasks targeting `crates/db --lib` tests should use this form.

@@ -2,7 +2,7 @@
 id: "102"
 phase: 1
 title: Add increment/get fence_attempt_count scalar accessors + test
-status: ready
+status: passed
 depends_on: ["101"]
 parallel: false
 conflicts_with: []
