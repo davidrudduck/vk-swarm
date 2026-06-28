@@ -18,7 +18,7 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
-import { type ReactNode, type Ref, type KeyboardEvent } from 'react';
+import { Children, type ReactNode, type Ref, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Plus, ArrowUp, ArrowDown } from 'lucide-react';
@@ -142,7 +142,17 @@ export type KanbanCardsProps = {
 };
 
 export const KanbanCards = ({ children, className }: KanbanCardsProps) => (
-  <div className={cn('flex flex-1 flex-col', className)}>{children}</div>
+  <div className={cn('flex flex-1 flex-col', className)}>
+    {Children.count(children) === 0 ? (
+      <div className="vks-ansi-dither vks-scanlines rounded-md border min-h-[80px] flex items-center justify-center">
+        <span className="font-mono text-xs text-muted-foreground">
+          ░▒ no tasks ▒░
+        </span>
+      </div>
+    ) : (
+      children
+    )}
+  </div>
 );
 
 export type KanbanHeaderProps =
@@ -340,7 +350,7 @@ export const KanbanProvider = ({
     >
       <div
         className={cn(
-          'inline-grid grid-flow-col auto-cols-[minmax(200px,400px)] divide-x border-x items-stretch min-h-full',
+          'inline-grid grid-flow-col auto-cols-[minmax(264px,1fr)] divide-x border-x items-stretch min-h-full',
           className
         )}
       >
