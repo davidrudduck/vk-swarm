@@ -10,8 +10,8 @@ picks up where it left off. This page covers the cases that require operator att
 
 ## How Recovery Works
 
-On every server startup, Vibe Kanban runs a **crash-recovery sweep** before accepting any user
-requests:
+On every server startup, Vibe Kanban runs a **crash-recovery sweep** as a background task
+(concurrent with normal serving):
 
 1. All execution processes left in `status='running'` from the previous run are identified.
 2. For each one, the server checks whether the OS process is still alive:
@@ -41,8 +41,8 @@ WARN process stuck in D-state after N restart attempts — manual intervention m
      process_id=<uuid> pid=<pid> fence_attempt_count=<n>
 ```
 
-This warning appears in the server log (`RUST_LOG=warn` or higher). It re-fires on every
-subsequent restart while the process remains stuck.
+This warning appears in the server log at the default log level (`RUST_LOG=info` shows `warn`
+events). It re-fires on every subsequent restart while the process remains stuck.
 
 ### Diagnosing the Stuck Process
 
@@ -100,9 +100,10 @@ the server is active can corrupt the WAL.
 ## Queued Message Drain
 
 If a task had a queued message (e.g., a follow-up instruction entered while an agent was running)
-at the time of a crash, that message is preserved and delivered automatically on the next startup
-— before the crash-recovery sweep and before any new user actions are accepted. No operator
-action is needed.
+at the time of a crash, that message is preserved and delivered automatically on the next startup.
+The drain runs in the background just after the crash-recovery sweep completes (the two are
+sequenced so a resumed process never races a queued-message start for the same attempt). No
+operator action is needed.
 
 ## Related Documentation
 

@@ -146,7 +146,8 @@ All processes terminated ✓
 ## Crash Recovery (Orphan Cleanup)
 
 On every server startup, `cleanup_orphan_executions` sweeps for execution processes that were
-left in `status='running'` by a previous crash. The sweep runs before any new executions start.
+left in `status='running'` by a previous crash. The sweep runs in a background `tokio::spawn`
+task started during `main()` (concurrent with HTTP serving, not a blocking pre-flight step).
 
 ### Resume State Machine
 
@@ -210,24 +211,35 @@ exercised without spawning real OS processes.
 
 ## Boot-Drain Ordering
 
-Before the crash-recovery sweep runs, any `queued_messages` rows that accumulated while the
-server was offline are drained by `drain_queued_messages_on_boot`. The drain identifies eligible
-task attempts — those with a queued message and whose most recent execution process is
-idle/completed — and calls `start_queued_message_for_attempt` for each.
+Any `queued_messages` rows that accumulated while the server was offline are drained by
+`drain_queued_messages_on_boot`. The drain identifies eligible task attempts — those with a
+queued message and whose most recent execution process is idle/completed — and calls
+`start_queued_message_for_attempt` for each.
 
-**Order guarantee:** Drain runs before new user-initiated executions can be accepted. The
-startup sequence is:
+**Order guarantee:** The drain is sequenced to run **after** `cleanup_orphan_executions`
+completes, within the **same** `tokio::spawn` task (`main.rs`):
 
-```text
-1. Apply pending migrations
-2. Register instance (write /tmp/vibe-kanban/instances/{hash}.json)
-3. drain_queued_messages_on_boot  ← queued messages delivered first
-4. cleanup_orphan_executions      ← crash-recovery sweep
-5. Begin serving HTTP/WebSocket requests
+```rust
+tokio::spawn(async move {
+    container.cleanup_orphan_executions().await; // 1. crash-recovery sweep first
+    container.drain_queued_messages_on_boot().await; // 2. then drain queued messages
+});
 ```
 
-This prevents a race where a user action starts a new execution for an attempt that had an
-undelivered queued message from before the crash.
+Running them in one sequential task (rather than two sibling spawns) ensures cleanup's resume
+path finishes before the drain begins — otherwise a crashed coding-agent process being resumed
+by `cleanup_orphan_executions` could race the drain's `start_queued_message_for_attempt` for the
+same attempt, starting two executions at once.
+
+Both run concurrently with HTTP serving — they are background tasks, not a blocking pre-flight
+gate. The full startup order is:
+
+```text
+1. Apply pending migrations (in DeploymentImpl::new)
+2. Clean up stale instance registry entries
+3. Spawn background task: cleanup_orphan_executions → drain_queued_messages_on_boot
+4. Begin serving HTTP/WebSocket requests (concurrent with step 3)
+```
 
 ---
 
