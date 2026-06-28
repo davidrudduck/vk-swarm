@@ -142,3 +142,14 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - TypeScript: `cd frontend && npx tsc --noEmit` passes.
 - Test: `cd frontend && npx vitest run src/utils/__tests__/daysInColumn.test.ts` — 17 tests pass.
 - No undictated choices made; task specification fully followed.
+
+### Task 002 — Complete (no decisions)
+- Added five status tokens to `.dark {}` block: `--status-todo: 240 5% 63%`, `--status-inprogress: 217 91% 60%`, `--status-inreview: 43 100% 50%`, `--status-done: 152 100% 50%`, `--status-cancelled: 0 100% 71%`.
+- Added three semantic surface/border aliases to `.dark {}` block: `--surface-card: var(--vks-surface)`, `--surface-raised: var(--vks-surface-bright)`, `--border-strong: 240 10% 16%`.
+- Added light status overrides to `.light {}` block: all five status tokens with light palette values + three aliases with light values.
+- Manual verification (SC6): `grep -A 100 '\.dark {' frontend/src/styles/index.css | grep -- '--status-todo'` → match.
+- Manual verification (SC7): `grep -E '\-\-(border-strong|surface-card|surface-raised)' frontend/src/styles/index.css` → 6 matches (3 dark, 3 light).
+- Light overrides present: `grep -A 60 '\.light {' frontend/src/styles/index.css | grep -- '--status-done: 153 83% 30%'` → match.
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 002` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.
