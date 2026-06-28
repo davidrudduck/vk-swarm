@@ -1440,7 +1440,8 @@ impl LocalContainerService {
             // Test-only: report the dispatch and skip the real start (intercept-at-boundary, SC3c).
             #[cfg(test)]
             if let Some(tx) = &self.drain_spy_tx {
-                let _ = tx.send(task_attempt.id);
+                tx.send(task_attempt.id)
+                    .expect("boot-drain spy receiver dropped before dispatch");
                 continue;
             }
 

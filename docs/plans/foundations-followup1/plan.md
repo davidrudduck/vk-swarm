@@ -26,9 +26,9 @@ in-test and observes the boot-drain call path via a `#[cfg(test)]` spy channel.
 Every task is Rust. This repo is a Cargo workspace, so the WAI gate's TypeScript type-check is
 skipped and its `scope_test` runner has no native `cargo test` path — every task carries explicit
 `WAI_TYPECHECK_CMD`/`WAI_TEST_CMD` overrides in its `## Done when` line (decisions-ledger Trap 1).
-Tasks 102 adds `query!` macros and 101 adds a migration: both require `DATABASE_URL` pointed at a
-live migrated dev DB at compile time, and a single `cargo sqlx prepare` regeneration at `/wai:close`
-(decisions-ledger Trap 2). Anchors were authored against current `main` and re-verified by reading
+Task 102 adds `query!` macros and therefore requires `DATABASE_URL` pointed at a live migrated dev
+DB at compile time, and a single `cargo sqlx prepare` regeneration at `/wai:close` (decisions-ledger
+Trap 2). Task 101 is migration-only; its verification is the migration run plus the db test gate. Anchors were authored against current `main` and re-verified by reading
 the live tree during decompose.
 
 Phase dependency spine: **P1 (DB) → P2 (services tests)**; within P2, **201 → 202** (202 reuses

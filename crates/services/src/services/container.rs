@@ -377,7 +377,7 @@ pub trait ContainerService {
                     // Set resume_state='pending' so the blanket mark_orphaned_as_failed guard
                     // (which excludes 'pending' and 'resumed') does NOT mark this row failed —
                     // the process is still alive and will be fenced again on next restart.
-                    let _ = ExecutionProcess::set_resume_state(pool, process.id, "pending").await;
+                    ExecutionProcess::set_resume_state(pool, process.id, "pending").await?;
                     let count = match ExecutionProcess::increment_fence_attempt_count(
                         pool, process.id,
                     )
@@ -426,12 +426,22 @@ pub trait ContainerService {
             }
 
             // Step 2: Classify — resume if session_id exists, mark-failed otherwise
-            let session_id = ExecutionProcess::find_latest_session_id_by_task_attempt(
+            let session_id = match ExecutionProcess::find_latest_session_id_by_task_attempt(
                 pool,
                 process.task_attempt_id,
             )
             .await
-            .unwrap_or(None);
+            {
+                Ok(sid) => sid,
+                Err(e) => {
+                    tracing::error!(
+                        process_id = %process.id,
+                        error = ?e,
+                        "Failed to load session_id during crash recovery; skipping this process"
+                    );
+                    continue;
+                }
+            };
 
             if let Some(session_id) = session_id {
                 // Resume: executor supports session recovery (task 301 audit: all 9 executors do)
