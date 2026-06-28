@@ -1,5 +1,5 @@
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -132,6 +132,22 @@ export function Navbar() {
   };
 
   const isOAuthLoggedIn = loginStatus?.status === 'loggedin';
+
+  // Persist the active project so the Board tab can route back to it.
+  useEffect(() => {
+    if (projectId) {
+      localStorage.setItem('lastVisitedProjectId', projectId);
+    }
+  }, [projectId]);
+
+  // Board tab target: last-visited project's task board, else the projects list.
+  const lastVisitedProjectId =
+    typeof window !== 'undefined'
+      ? localStorage.getItem('lastVisitedProjectId')
+      : null;
+  const boardTo = lastVisitedProjectId
+    ? `/projects/${lastVisitedProjectId}/tasks`
+    : '/projects';
 
   return (
     <div className="border-b bg-background">
@@ -317,6 +333,44 @@ export function Navbar() {
             </div>
           </div>
         </div>
+
+        {/* Second nav row: primary section tabs */}
+        <nav className="flex items-center gap-4 h-9 border-t text-sm">
+          {/* TODO(i18n): vk-swarm-node-ui-localize */}
+          <Link
+            to={boardTo}
+            className={
+              location.pathname.startsWith('/projects/')
+                ? 'mb-[-1px] border-b-2 border-primary py-2 text-foreground'
+                : 'mb-[-1px] py-2 text-muted-foreground hover:text-foreground'
+            }
+          >
+            {/* TODO(i18n): vk-swarm-node-ui-localize */}
+            Board
+          </Link>
+          <Link
+            to="/nodes"
+            className={
+              location.pathname === '/nodes'
+                ? 'mb-[-1px] border-b-2 border-primary py-2 text-foreground'
+                : 'mb-[-1px] py-2 text-muted-foreground hover:text-foreground'
+            }
+          >
+            {/* TODO(i18n): vk-swarm-node-ui-localize */}
+            Nodes
+          </Link>
+          <Link
+            to="/processes"
+            className={
+              location.pathname === '/processes'
+                ? 'mb-[-1px] border-b-2 border-primary py-2 text-foreground'
+                : 'mb-[-1px] py-2 text-muted-foreground hover:text-foreground'
+            }
+          >
+            {/* TODO(i18n): vk-swarm-node-ui-localize */}
+            Processes
+          </Link>
+        </nav>
       </div>
 
       {/* Mobile search dialog */}
