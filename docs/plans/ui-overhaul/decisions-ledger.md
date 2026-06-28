@@ -181,3 +181,15 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - Manual verification: `grep -E 'export default ThemeToggle|export function ThemeToggle' frontend/src/components/ThemeToggle.tsx` → both exports present.
 - TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
 - No undictated choices made; task specification fully followed.
+
+### Task 019 — Complete (no decisions)
+- Anchor 1 (lucide import, line 3): `grep -n "import { Check, ChevronsUpDown } from 'lucide-react';" frontend/src/components/layout/ProjectSwitcher.tsx` → confirmed.
+- Anchor 2 (trigger button, lines 104–116): `sed -n '104,116p' frontend/src/components/layout/ProjectSwitcher.tsx` → confirmed exact match to Before text.
+- Anchor 3 (SearchBar width, line 23): `grep -n "w-64 sm:w-72" frontend/src/components/SearchBar.tsx` → confirmed present.
+- Edit 1: Added `FolderOpen` to lucide-react import (line 3); `grep 'FolderOpen' frontend/src/components/layout/ProjectSwitcher.tsx` → 2 matches (import + JSX).
+- Edit 2: Added `<FolderOpen className="mr-2 h-4 w-4 shrink-0 opacity-70" />` before `<span className="truncate">{displayValue}</span>` in trigger.
+- Edit 3: Changed width from `w-64 sm:w-72` to `w-[260px]` in SearchBar wrapper div.
+- Manual verification: `grep -c 'w-64 sm:w-72' frontend/src/components/SearchBar.tsx` → 0 (old width removed); `grep 'w-\[260px\]' frontend/src/components/SearchBar.tsx` → match.
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 019` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.
