@@ -1,6 +1,16 @@
 /* Default fonts: Inter (UI/Prose), JetBrains Mono (Code), Chivo Mono (legacy), Noto Emoji, Source Serif 4 (heading) */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Chivo+Mono:ital,wght@0,100..900;1,100..900&family=Noto+Emoji:wght@300..700&family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&display=swap');
 
+@keyframes vks-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 hsl(152 100% 50% / 0.6); }
+  50%      { opacity: 0.7; box-shadow: 0 0 0 4px hsl(152 100% 50% / 0); }
+}
+
+.vks-ansi-dither { background-color: hsl(var(--background)); background-image: radial-gradient(hsl(var(--border)) 1.1px, transparent 1.4px); background-size: 6px 6px; }
+.vks-ansi-dither-dense { background-color: hsl(var(--background)); background-image: radial-gradient(hsl(var(--border)) 1.2px, transparent 1.5px); background-size: 4px 4px; }
+.vks-scanlines { position: relative; }
+.vks-scanlines::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, rgb(0 0 0 / 0.16) 0 1px, transparent 1px 4px), radial-gradient(120% 120% at 50% 0%, transparent 62%, rgb(0 0 0 / 0.4) 100%); }
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -102,6 +112,14 @@
     --status-inreview: 43 100% 50%;
     --status-done: 152 100% 50%;
     --status-cancelled: 0 100% 71%;
+
+    /* Shadows + glows (dark) */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+    --shadow-md: 0 2px 8px -1px rgb(0 0 0 / 0.5);
+    --shadow-lg: 0 8px 24px -4px rgb(0 0 0 / 0.6);
+    --glow-cyan: 0 0 0 1px hsl(var(--vks-cyan) / 0.4), 0 0 16px -2px hsl(var(--vks-cyan) / 0.35);
+    --glow-emerald: 0 0 12px -2px hsl(var(--vks-emerald) / 0.5);
+
     /* Semantic surface/border aliases */
     --surface-card: var(--vks-surface);
     --surface-raised: var(--vks-surface-bright);

@@ -194,6 +194,17 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 019` → CONFORMS (all deterministic gates passed).
 - No undictated choices made; task specification fully followed.
 
+### Task 003 — Complete (no decisions)
+- Added shadow/glow token block inside `.dark {}` block (after status tokens, before semantic aliases): `--shadow-sm`, `--shadow-md`, `--shadow-lg`, `--glow-cyan`, `--glow-emerald`.
+- Added `vks-pulse` keyframe at file top level (after @import, before @tailwind base). Keyframe defines 0%/100% and 50% states with opacity + box-shadow variants.
+- Added four ANSI texture utility classes at file top level: `.vks-ansi-dither`, `.vks-ansi-dither-dense`, `.vks-scanlines`, `.vks-scanlines::after`. Colour tokens (`--background`, `--border`) wrapped in `hsl(...)` (product tokens are bare HSL triplets); `.vks-scanlines::after` rgb() body copied as-is from design-source.
+- Manual verification: `grep 'vks-pulse' frontend/src/styles/index.css` → match (SC15).
+- Manual verification: `grep 'vks-ansi-dither' frontend/src/styles/index.css` → 2 matches (dither + dither-dense).
+- Manual verification: `grep 'glow-cyan' frontend/src/styles/index.css` → match.
+- Manual verification: `grep 'vks-ansi-dither {' frontend/src/styles/index.css | grep -q 'hsl(var(--background))'` → match (token wrapper applied).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- No undictated choices made; task specification fully followed.
+
 ### Task 021 — Complete (no decisions)
 - Anchor 1 (Merge button outline styling): `grep -n "border-success text-success hover:bg-success" frontend/src/components/tasks/Toolbar/GitOperations.tsx` → line 415 (pre-change).
 - Edit 1: Merge button changed from `variant="outline" size="xs" className="border-success text-success hover:bg-success gap-1 shrink-0"` to `variant="default" size="sm" className="flex-1 gap-1 shrink-0"`.
