@@ -2,7 +2,7 @@
 id: "001"
 phase: 1
 title: Promote --vks-* primitives to :root, merge brand remap into .dark, create .light block
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: ["002", "003"]

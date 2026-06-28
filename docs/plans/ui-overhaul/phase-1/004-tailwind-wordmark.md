@@ -2,7 +2,7 @@
 id: "004"
 phase: 1
 title: Add a wordmark key to the tailwind fontFamily map
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "008"
 phase: 2
 title: "DaysInColumnBadge flat variant + literal {n}d (no 7d+ cap)"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
@@ -10,8 +10,9 @@ files:
   - frontend/src/components/tasks/DaysInColumnBadge.tsx
   - frontend/src/utils/daysInColumn.ts
   - frontend/src/utils/__tests__/daysInColumn.test.ts
+  - frontend/src/components/tasks/__tests__/DaysInColumnBadge.test.tsx
 irreversible: false
-scope_test: "frontend/src/utils/__tests__/daysInColumn.test.ts"
+scope_test: "frontend/src/utils/__tests__"
 allowed_change: edit
 covers_criteria: []
 ---
@@ -308,4 +309,4 @@ export function DaysInColumnBadge({
 - `cd frontend && npx vitest run src/utils/__tests__/daysInColumn.test.ts` → passes.
 
 ## Done when
-`WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="cd frontend && npx vitest run src/utils/__tests__/daysInColumn.test.ts" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 008` exits 0
+`WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 008` exits 0 (scope_test is now a directory; gate auto-detects vitest)

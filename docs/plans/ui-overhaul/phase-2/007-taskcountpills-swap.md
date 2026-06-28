@@ -2,7 +2,7 @@
 id: "007"
 phase: 2
 title: TaskCountPills inprogress/inreview colour swap
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
