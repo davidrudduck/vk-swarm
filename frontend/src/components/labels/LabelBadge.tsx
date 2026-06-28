@@ -6,6 +6,9 @@ import type { Label } from 'shared/types';
 interface LabelBadgeProps {
   label: Label;
   size?: 'sm' | 'md';
+  /** 'solid' (default) fills with the label colour; 'outline' uses a transparent
+   *  background with a coloured border + text (task-card context). */
+  variant?: 'solid' | 'outline';
   onClick?: () => void;
   onRemove?: () => void;
   className?: string;
@@ -31,6 +34,7 @@ function getContrastColor(hexColor: string): string {
 export function LabelBadge({
   label,
   size = 'md',
+  variant = 'solid',
   onClick,
   onRemove,
   className,
@@ -53,13 +57,22 @@ export function LabelBadge({
       className={cn(
         'inline-flex items-center rounded-full font-medium transition-opacity',
         sizeClasses[size],
+        variant === 'outline' && 'border',
         onClick && 'cursor-pointer hover:opacity-80',
         className
       )}
-      style={{
-        backgroundColor: label.color,
-        color: textColor,
-      }}
+      style={
+        variant === 'outline'
+          ? {
+              backgroundColor: 'transparent',
+              color: label.color,
+              borderColor: label.color,
+            }
+          : {
+              backgroundColor: label.color,
+              color: textColor,
+            }
+      }
       onClick={onClick}
     >
       {IconComponent && <IconComponent className={iconSizes[size]} />}
