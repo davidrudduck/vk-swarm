@@ -3,7 +3,7 @@ id: "006"
 phase: 2
 title: TaskCard typography/meta fidelity + TaskCardHeader title
 status: ready
-depends_on: ["005"]
+depends_on: ["002", "005"]
 parallel: false
 conflicts_with: ["005"]
 files:
@@ -21,7 +21,12 @@ N/A — typography/meta fidelity; covered by manual verification (greppable clas
 
 ## Change
 
-Five sub-edits. READ each file and confirm the Before text before editing.
+Six sub-edits. READ each file and confirm the Before text before editing.
+
+> **SC7 "consumed" clause:** task 002 defines the `--border-strong` token but, per the gap analysis,
+> no component consumes it. Sub-edit 6 below adds a strong hover border to the `TaskCard` root so the
+> token is consumed (satisfying SC7's "defined **and** consumed" requirement). This is why `002` is
+> now in `depends_on` — the token must exist before this card can reference it.
 
 ### Sub-edit 1 — `frontend/src/components/tasks/TaskCardHeader.tsx` (title className, ~line 52)
 
@@ -170,8 +175,37 @@ function truncateDescription(
 (Divergence-in-handling between 5a and 5b — TaskCard keeps the markdown cleaner, AllProjects drops a
 pure length-cap helper — MUST be recorded in the decisions ledger.)
 
+### Sub-edit 6 — `frontend/src/components/tasks/TaskCard.tsx` (card root hover border, ~line 212) — consumes `--border-strong` (SC7)
+
+The card root is the `KanbanCard` element (`~lines 199–216`); its `className` is built with `cn(...)`
+and flows down to the underlying `<Card>` (confirmed: `KanbanCard` passes `className` to `<Card>` in
+`frontend/src/components/ui/shadcn-io/kanban/index.tsx`). Add a strong hover border by appending
+`hover:border-[hsl(var(--border-strong))]` to the `transition-shadow duration-150 hover:shadow-md`
+line in that `cn(...)` block. The token is a **bare HSL channel triplet** (task 002 —
+`--border-strong: 240 10% 16%;` dark / `214 20% 80%;` light), so it MUST be wrapped in `hsl(...)`,
+and the literal class string must appear verbatim in source (no template-literal interpolation) for
+Tailwind's content scan to emit it.
+
+- Before (~line 212, inside the `KanbanCard` `className={cn(` call):
+```typescript
+        'transition-shadow duration-150 hover:shadow-md',
+```
+- After:
+```typescript
+        'transition-shadow duration-150 hover:shadow-md hover:border-[hsl(var(--border-strong))]',
+```
+
+**Rendered-extent note (document in ledger, NOT a regression):** the base `<Card>` primitive has no
+full border; `KanbanCard` adds only `border-b` (`'p-3 outline-none border-b flex-col space-y-2'`).
+So `hover:border-[hsl(var(--border-strong))]` recolours the **bottom edge** on hover (the only bordered
+edge), not a full box border. This still *consumes* `--border-strong` (satisfying SC7) and gives the
+card a stronger hover affordance; do not add `border` / change `border-b` to chase a full-box border —
+that is out of this task's scope.
+
 ## Allowed moves
-- ONLY the five sub-edits above. No status-strip change (that is task 005). No new component.
+- ONLY the six sub-edits above. No status-strip change (that is task 005). No new component. Do not
+  add a full `border` class to the card root (sub-edit 6 only recolours the existing `border-b` on
+  hover — see its rendered-extent note).
 - Note (out of scope, do NOT change here): `AllProjectsTaskCard.tsx` carries the same
   `text-green-500` CheckCircle (~line 132) and `text-xs` description (~line 143) that this task changes
   only in `TaskCard.tsx`. The spec scopes sub-edits 2 and 4 to `TaskCard.tsx`; leave the
@@ -188,6 +222,8 @@ pure length-cap helper — MUST be recorded in the decisions ledger.)
 - `grep -- 'text-sm text-muted-foreground truncate' frontend/src/components/tasks/TaskCard.tsx` → match.
 - `grep -- 'font-mono' frontend/src/components/tasks/TaskCard.tsx` → match on the node-tag span.
 - `grep -- 'CheckCircle className="h-4 w-4 text-success"' frontend/src/components/tasks/TaskCard.tsx` → match.
+- `grep 'hsl(var(--border-strong))' frontend/src/components/tasks/TaskCard.tsx` → match (sub-edit 6
+  consumes `--border-strong`, satisfying SC7's defined-and-consumed clause).
 - `grep -c 'truncateDescription' frontend/src/components/tasks/AllProjectsTaskCard.tsx` → 0 (function removed).
 - `cd frontend && npx tsc --noEmit` → passes (no unused-parameter / unused-symbol error).
 - Manual browser check: task descriptions still render in both card variants and visually truncate via

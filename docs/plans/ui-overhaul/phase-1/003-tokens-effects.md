@@ -53,18 +53,22 @@ Duration/easing/iteration are NOT declared here — they are applied at the call
 `animation:` shorthand.
 
 **Anchor 3 — file top level (the ANSI texture utility classes).** Add the four ANSI texture utility
-classes at file top level (alongside the keyframe, outside any `@layer`/selector). Copy the four
-class BODIES VERBATIM from design-source
-`dev-docs/designs/2026-06-28-ui-overhaul/design-source/project/tokens/base.css` (the
-`.vks-ansi-dither`, `.vks-ansi-dither-dense`, `.vks-scanlines`, and `.vks-scanlines::after` rules,
-≈ lines 65–105). Do NOT add the design-source file to `files:` — it is read-only; only `index.css`
-is editable here. For reference, the expected result is:
+classes at file top level (alongside the keyframe, outside any `@layer`/selector). The design-source
+`dev-docs/designs/2026-06-28-ui-overhaul/design-source/project/tokens/base.css` (≈ lines 65–105) is
+the structural reference, BUT it must be **token-translated, not copied verbatim**: in the design
+source, `--background`/`--border` are full `hsl()` colours, whereas in THIS product they are bare HSL
+triplets (`240 20% 5%`), so a raw `background-color: var(--background)` is **invalid CSS and renders
+nothing**. Wrap the colour tokens in `hsl(...)` (the same wrapper applied to the glow tokens in
+Anchor 1). Do NOT add the design-source file to `files:` — it is read-only; only `index.css` is
+editable. The required result is:
 ```css
-.vks-ansi-dither { background-color: var(--background); background-image: radial-gradient(var(--border) 1.1px, transparent 1.4px); background-size: 6px 6px; }
-.vks-ansi-dither-dense { background-color: var(--background); background-image: radial-gradient(var(--border) 1.2px, transparent 1.5px); background-size: 4px 4px; }
+.vks-ansi-dither { background-color: hsl(var(--background)); background-image: radial-gradient(hsl(var(--border)) 1.1px, transparent 1.4px); background-size: 6px 6px; }
+.vks-ansi-dither-dense { background-color: hsl(var(--background)); background-image: radial-gradient(hsl(var(--border)) 1.2px, transparent 1.5px); background-size: 4px 4px; }
 .vks-scanlines { position: relative; }
 .vks-scanlines::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, rgb(0 0 0 / 0.16) 0 1px, transparent 1px 4px), radial-gradient(120% 120% at 50% 0%, transparent 62%, rgb(0 0 0 / 0.4) 100%); }
 ```
+(The `.vks-scanlines::after` body uses literal `rgb(...)` values and is copied as-is. Only the
+dither `--background`/`--border` references need the `hsl()` wrapper.)
 
 ## Allowed moves
 - ONLY: add the shadow/glow token block inside the existing `.dark {}` block; add the `vks-pulse`
@@ -76,10 +80,9 @@ is editable here. For reference, the expected result is:
 1. Confirm the 002 status tokens are present in `.dark {}` (`grep -- '--status-todo' frontend/src/styles/index.css`).
 2. Add the shadow/glow token block inside `.dark {}` (Anchor 1).
 3. Add the `vks-pulse` keyframe at file top level (Anchor 2).
-4. Read design-source base.css and copy the four class bodies exactly:
-   `dev-docs/designs/2026-06-28-ui-overhaul/design-source/project/tokens/base.css` —
-   copy the `.vks-ansi-dither`, `.vks-ansi-dither-dense`, `.vks-scanlines`, and
-   `.vks-scanlines::after` rule bodies VERBATIM into `index.css` at file top level (Anchor 3).
+4. Read design-source base.css for structure, then add the four ANSI classes at file top level
+   with the `--background`/`--border` references wrapped in `hsl(...)` (Anchor 3 — NOT verbatim;
+   the product tokens are bare triplets). The `.vks-scanlines::after` rgb() body is copied as-is.
 
 ## STOP triggers
 - The 002 tokens are absent (`grep -- '--status-todo' frontend/src/styles/index.css` → no match; halt — 002 not applied).
@@ -89,6 +92,9 @@ is editable here. For reference, the expected result is:
 - `grep 'vks-pulse' frontend/src/styles/index.css` → match (SC15).
 - `grep 'vks-ansi-dither' frontend/src/styles/index.css` → match.
 - `grep 'glow-cyan' frontend/src/styles/index.css` → match.
+- Dither uses wrapped colour tokens (NOT bare triplets):
+  `grep 'vks-ansi-dither {' frontend/src/styles/index.css | grep -q 'hsl(var(--background))'` → match
+  (a bare `var(--background)` here renders nothing — invalid CSS colour).
 - `cd frontend && npx tsc --noEmit` → passes (no TS impact, sanity).
 
 ## Done when

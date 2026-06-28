@@ -72,7 +72,7 @@ Testable definitions of "done":
 - SC9: Kanban column min-width: `minmax(264px, 1fr)` in
   `frontend/src/components/ui/shadcn-io/kanban/index.tsx` (was `minmax(200px,400px)`).
 - SC10: Empty column renders a `.vks-ansi-dither.vks-scanlines` block containing `░▒ no tasks ▒░`
-  centered text in `font-mono text-xs text-muted` (not blank).
+  centered text in `font-mono text-xs text-muted-foreground` (not blank).
 - SC11: Navbar second row has Board / Nodes / Processes tabs; active tab has 2px cyan bottom border.
 - SC12: `<VKSLogo` rendered in `frontend/src/components/layout/Navbar.tsx` (not SVG `<Logo>`).
 - SC13: `+ Task` button in Navbar: `variant="default" size="sm"` with text label.
@@ -268,7 +268,7 @@ the new tokens; correct typography/geometry per `design-spec.md`. A-class bugs s
 Component changes:
 
 - **`TaskCard.tsx` + `AllProjectsTaskCard.tsx`**: Replace the `statusStripColors` map
-  (`bg-green-500`, `bg-red-500`, `bg-amber-500`, `bg-blue-500`) with `bg-[var(--status-done)]`
+  (`bg-green-500`, `bg-red-500`, `bg-amber-500`, `bg-blue-500`) with `bg-[hsl(var(--status-done))]`
   etc. (or a map to `var(--status-*)` string values). Title → `font-medium text-base` (currently
   `font-light text-sm` in `TaskCardHeader.tsx`). Description → `text-sm` (was `text-xs`). Remove
   JS pre-truncation in `truncateDescription` utility — rely on CSS `line-clamp`/`truncate`.
@@ -296,7 +296,7 @@ Component changes:
 
 - **`frontend/src/components/ui/shadcn-io/kanban/index.tsx`**:
   - Column grid: `auto-cols-[minmax(264px,1fr)]` (was `auto-cols-[minmax(200px,400px)]`)
-  - Empty-state: add a `div` with classes `vks-ansi-dither vks-scanlines rounded-md border min-h-[80px] flex items-center justify-center` containing text `░▒ no tasks ▒░` in `font-mono text-xs text-muted`.
+  - Empty-state: add a `div` with classes `vks-ansi-dither vks-scanlines rounded-md border min-h-[80px] flex items-center justify-center` containing text `░▒ no tasks ▒░` in `font-mono text-xs text-muted-foreground`.
 - **`frontend/src/components/layout/Navbar.tsx`**:
   - Swap `<Logo>` SVG → `<VKSLogo>` component.
   - `+ Task` → `<Button variant="default" size="sm">+ Task</Button>`; add
@@ -323,8 +323,8 @@ Component changes:
   - `frontend/src/components/swarm/NodeCard.tsx` — new presentational component. Props:
     `{ node: SwarmNode; className?: string }`. Row layout: OS-glyph container (36×36px, raised
     surface background, `rounded-md`), `font-mono` node name, online pulse dot (8×8px,
-    `bg-[var(--status-done)]`, `animate-[vks-pulse_2s_ease-in-out_infinite]`) or offline dim
-    dot (`bg-[var(--text-dim)]`, no animation), right slot for agent-count badge or offline badge.
+    `bg-[hsl(var(--status-done))]`, `animate-[vks-pulse_2s_ease-in-out_infinite]`) or offline dim
+    dot (`bg-[hsl(var(--vks-text-dim))]`, no animation), right slot for agent-count badge or offline badge.
   - `frontend/src/App.tsx`: add `<Route path="/nodes" element={<Nodes />} />` inside
     `NormalLayout`, alongside the existing `<Route path="/processes" element={<Processes />} />`.
 - **Task-detail panel chrome** (`AttemptHeaderActions.tsx`, `GitOperations.tsx`):
@@ -368,7 +368,8 @@ with one **critical correction from the panel review**: all new definitions must
 selector is **dead code** — `ThemeProvider` never sets that class — and must not receive new
 tokens. Light overrides go under `.light { }`, not `[data-theme="light"]`.
 
-Components reference tokens via Tailwind arbitrary values (`bg-[var(--status-done)]`) or a
+Components reference tokens via Tailwind arbitrary values (`bg-[hsl(var(--status-done))]`, since the
+token is a bare HSL triplet) or a
 `statusStripColors` map keyed by status, so the five status colours resolve through one source
 of truth per theme.
 
@@ -488,9 +489,12 @@ grep -r 'var(--status-' \
 grep -A 100 '\.dark {' frontend/src/styles/index.css | grep 'status-todo'
 # expected: match
 
-# SC7 — semantic tokens defined
+# SC7 — semantic tokens defined (dark + light overrides → 6 declarations)
 grep -E '\-\-(border-strong|surface-card|surface-raised)' frontend/src/styles/index.css
-# expected: 3 matches
+# expected: ≥3 matches (6 with the .light overrides)
+# SC7 — and consumed by a component (border-strong via TaskCard hover; surface-card via kanban/NodeCard)
+grep -rE 'hsl\(var\(--(border-strong|surface-card|surface-raised)\)\)' frontend/src/components
+# expected: ≥1 match per token
 
 # SC9 — kanban column min-width
 grep 'minmax(264px' frontend/src/components/ui/shadcn-io/kanban/index.tsx

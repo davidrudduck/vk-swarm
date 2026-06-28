@@ -69,7 +69,7 @@ These names are FIXED. A consumer task must use exactly these; a producer task m
 | 003 | 1 | Add shadow/glow tokens, vks-pulse keyframe, ANSI texture classes | dep: 002 | conflicts: 001,002 | SC15 |
 | 004 | 1 | Add `wordmark` fontFamily key to tailwind.config.js | dep: - | conflicts: none | - |
 | 005 | 2 | TaskCard + AllProjectsTaskCard status strips → --status-* tokens | dep: 002 | conflicts: 006 | SC5a,SC5b |
-| 006 | 2 | TaskCard typography/meta fidelity + TaskCardHeader title | dep: 005 | conflicts: 005 | - |
+| 006 | 2 | TaskCard typography/meta fidelity + TaskCardHeader title + border-strong hover (SC7 consumer) | dep: 002,005 | conflicts: 005 | - |
 | 007 | 2 | TaskCountPills inprogress/inreview colour swap | dep: - | conflicts: none | SC8 |
 | 008 | 2 | DaysInColumnBadge flat variant + literal {n}d (no 7d+ cap) | dep: - | conflicts: none | - |
 | 009 | 2 | LabelBadge outline variant | dep: - | conflicts: none | - |
@@ -83,7 +83,7 @@ These names are FIXED. A consumer task must use exactly these; a producer task m
 | 017 | 3 | Nodes page + /nodes route | dep: 018 | conflicts: none | SC14,SC21 |
 | 018 | 3 | Create NodeCard component | dep: 002,003 | conflicts: none | SC14 |
 | 019 | 3 | ProjectSwitcher folder icon + SearchBar width | dep: - | conflicts: none | - |
-| 020 | 3 | Task-detail header+tabs (AttemptHeaderActions: Tabs, StatusBadge, badges) | dep: 014 | conflicts: none | SC18 |
+| 020 | 3 | Task-detail header+tabs (AttemptHeaderActions: Tabs, StatusBadge, node+labels badges) | dep: 009,014 | conflicts: none | SC18 |
 | 021 | 3 | Task-detail footer (GitOperations: Merge/Rebase/Open-in-IDE) | dep: - | conflicts: none | SC18 |
 | 022 | 4 | Final manual verification + static CI gates | dep: 005,006,007,008,009,013,015,016,017,019,020,021 | conflicts: none | SC1,SC2,SC3,SC4,SC17,SC19,SC20 |
 

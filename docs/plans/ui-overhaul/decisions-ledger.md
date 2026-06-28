@@ -67,6 +67,34 @@ for `TaskCard.tsx`; `AllProjectsTaskCard.tsx` carries identical lines. 006's `fi
 AllProjectsTaskCard (for the truncation removal) — parity edits there are in-scope; flagged for the
 breakdown review to confirm whether visual parity across both card variants is required.
 
+## Adversarial breakdown review — round 1 (Opus + Codex + Gemini, all REVISE) → remediated
+
+3-model review of the breakdown (verdicts in `reviews/`). Verified findings + fixes:
+- **SC18 fully implemented (user decision).** 020 expanded: literal English tab labels (Diff/Logs/
+  Attempts + TODO(i18n), not the mismatched existing keys "Diffs"/"Terminal"); StatusBadge dot;
+  badges cluster = `StatusBadge showLabel` + secondary node badge (`task.source_node_name`) + outline
+  `LabelBadge`s sourced via `useTaskLabels(task.id)` (the hook TaskCard uses). 021 expanded: ghost-sm
+  "Open in IDE" wired to `useOpenInEditor(selectedAttempt.id)` (same hook as `ActionsDropdown`).
+  - **Placement nuance:** `NewCardHeader` renders its `actions` slot as a top-right inline flex row,
+    so the badges render as an inline cluster in the header actions area, NOT a literal separate band
+    "below header" (a literal band would require editing `new-card.tsx`/`ProjectTasks.tsx`, outside
+    020's `files:`). All three badge types are present — accepted as faithful-enough; a literal band
+    is cosmetic follow-up if ever wanted.
+  - **021 IDE button** inherits the footer's `branchStatus &&` gate (hidden while branchStatus is
+    null), unlike the dropdown which gates only on attempt id — accepted (footer is a git-ops surface).
+- **Task 003 ANSI dither (Opus):** design-source `var(--background)`/`var(--border)` are bare triplets
+  in this product → invalid as raw CSS colours. Fixed: wrap in `hsl(...)` (scanlines rgb() body stays).
+- **SC7 "consumed" clause (Gemini):** `--border-strong` was defined (002) but consumed by no component.
+  Fixed: task 006 adds `hover:border-[hsl(var(--border-strong))]` to the TaskCard root. 022 now greps
+  the consumption side too.
+- **Spec corrections (re-frozen via 2nd precheck):** SC10/Approach `text-muted`→`text-muted-foreground`
+  (bare `text-muted` paints the muted *background* colour); status-token shorthand `bg-[var(--status-*)]`
+  → `bg-[hsl(var(--status-*))]` throughout (bare var() of a triplet renders nothing); NodeCard offline
+  dot `var(--text-dim)`→`hsl(var(--vks-text-dim))`; SC7 grep "expected 3"→"≥3 (6 with light)" + a
+  consumption grep added.
+- **Minor (Opus/Codex):** 001 Before-range relabelled ~57–79 with a note that `--_neutral`/
+  `--_neutral-foreground` stay in place; 022 `files:` now lists the decisions-ledger (it records results).
+
 ## Appended during execute
 
 <!-- executor appends below -->

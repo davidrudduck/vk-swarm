@@ -6,19 +6,21 @@ status: ready
 depends_on: ["005", "006", "007", "008", "009", "013", "015", "016", "017", "019", "020", "021"]
 parallel: false
 conflicts_with: []
-files: []
+files:
+  - docs/plans/ui-overhaul/decisions-ledger.md
 irreversible: false
 scope_test: "N/A"
 allowed_change: edit
 covers_criteria: [SC1, SC2, SC3, SC4, SC17, SC19, SC20]
 ---
 ## Failing test (write first)
-N/A — verification-only task. No code change (`files: []`); nothing to test-drive. The work here is
+N/A — verification-only task. No source-code change (the only `files:` entry is the decisions-ledger,
+where results are recorded); nothing to test-drive. The work here is
 running the static gates, the greppable assertions, and the manual browser smoke-test, then
 recording the results in the decisions-ledger.
 
 ## Change
-None. This task commits no source code (`files: []`). It is a manual verification gate over the
+None to source code. This task commits no source change (only the decisions-ledger is written). It is a manual verification gate over the
 work landed by Phases 1–3. The gate's "no file outside `files:`" check passes trivially because no
 file is modified.
 
@@ -59,8 +61,11 @@ grep -r 'var(--status-' \
 # SC6 — status tokens defined under .dark (not .vks-theme) (expected: match)
 grep -A 100 '\.dark {' frontend/src/styles/index.css | grep 'status-todo'
 
-# SC7 — semantic tokens defined (expected: 3 matches)
+# SC7 — semantic tokens defined (expected: ≥3 matches; 6 with the .light overrides)
 grep -E '\-\-(border-strong|surface-card|surface-raised)' frontend/src/styles/index.css
+# SC7 — and CONSUMED by a component (border-strong via TaskCard hover [006]; surface-card via kanban [010]/NodeCard [018])
+grep -rE 'hsl\(var\(--(border-strong|surface-card|surface-raised)\)\)' frontend/src/components
+# expected: ≥1 match per token (border-strong in TaskCard.tsx, surface-card in kanban/NodeCard, surface-raised in NodeCard)
 
 # SC9 — kanban column min-width (expected: match)
 grep 'minmax(264px' frontend/src/components/ui/shadcn-io/kanban/index.tsx
@@ -122,7 +127,7 @@ All static gates green, all greppable assertions match their expected results, t
 is complete with zero console errors, and SC19/SC20/SC22 checks pass — with results recorded in the
 decisions-ledger.
 
-Because this task changes no files (`files: []`), the task-gate runs as a manual sign-off:
+Because this task changes no source files (only the decisions-ledger), the task-gate runs as a manual sign-off:
 ```bash
 echo "manual verification recorded in decisions-ledger" # all SC checks above pass
 ```

@@ -50,7 +50,9 @@ they resolve in every applied selector. Insert, immediately BEFORE the closing `
 **Anchor 2 — `.dark {` block (opens at line ~55).** Replace the muted `--_*` mappings with the
 brand remap (mirroring the existing `.vks-theme` body). Replace the CURRENT body:
 
-- Before (the muted mappings, lines ~57–81):
+- Before (the muted mappings, lines ~57–79; the two `--_neutral`/`--_neutral-foreground` lines at
+  ~80–81 are NOT part of this replacement — leave them in place, the public `--neutral` token still
+  resolves them):
 ```css
     --_background: 48 4% 16%;
     --_foreground: 48 7% 85%;
