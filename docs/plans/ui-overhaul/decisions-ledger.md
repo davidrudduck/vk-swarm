@@ -121,4 +121,8 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 
 ## Appended during execute
 
-<!-- executor appends below -->
+### Task 001 — Complete (no decisions)
+- Manual verification: all four manual checks passed (SC22 grep, --vks-void anchor, .light block, DesignSystem.test.tsx).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- Test: `cd frontend && npx vitest run src/__tests__/DesignSystem.test.tsx` — 14 tests pass.
+- No undictated choices made; task specification fully followed.
