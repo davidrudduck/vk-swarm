@@ -266,3 +266,15 @@ Sub-edit 6: Appended `hover:border-[hsl(var(--border-strong))]` to KanbanCard ho
 - TypeScript: `cd frontend && npx tsc --noEmit` passes (no unused-parameter error).
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 006` → CONFORMS (all deterministic gates passed).
 - Noted (out of scope per spec): AllProjectsTaskCard carries same text-xs description and text-green-500 CheckCircle unmodified; asymmetry flagged as required by spec (sub-edits 2 & 4 scoped to TaskCard.tsx only).
+
+### Task 013 — Complete (no decisions)
+- Anchor 1 (line 21): `grep -n "import { type ReactNode, type Ref, type KeyboardEvent } from 'react'" frontend/src/components/ui/shadcn-io/kanban/index.tsx` → confirmed.
+- Anchor 2 (line 343): `grep -n "minmax(200px,400px)" frontend/src/components/ui/shadcn-io/kanban/index.tsx` → confirmed.
+- Anchor 3 (lines 144–146): `sed -n '144,146p' frontend/src/components/ui/shadcn-io/kanban/index.tsx` → `KanbanCards` renders `{children}` in single `<div>` — confirmed.
+- Edit 1: Added `Children` value import (line 21); `grep -- 'import { Children,' frontend/src/components/ui/shadcn-io/kanban/index.tsx` → match.
+- Edit 2: Changed grid minmax from `minmax(200px,400px)` to `minmax(264px,1fr)` (line 343); `grep 'minmax(264px' frontend/src/components/ui/shadcn-io/kanban/index.tsx` → match (SC9).
+- Edit 3: Added empty-state block to KanbanCards with `Children.count(children) === 0` check; renders ANSI dither/scanlines block with "░▒ no tasks ▒░" text on empty; `grep 'no tasks' frontend/src/components/ui/shadcn-io/kanban/index.tsx` → match (SC10).
+- Manual verification: `grep 'vks-ansi-dither vks-scanlines' frontend/src/components/ui/shadcn-io/kanban/index.tsx` → match.
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 013` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.
