@@ -88,10 +88,7 @@ impl WorkstreamState {
 mod tests {
     use super::*;
 
-    async fn seed_running_attempt_with_session(
-        pool: &SqlitePool,
-        session_id: &str,
-    ) -> Uuid {
+    async fn seed_running_attempt_with_session(pool: &SqlitePool, session_id: &str) -> Uuid {
         let now = Utc::now();
         let project_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();

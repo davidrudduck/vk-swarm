@@ -50,7 +50,7 @@ use crate::services::{
     normalization_metrics::NormalizationMetrics,
     notification::NotificationService,
     process_fence::{self, FenceOutcome},
-    process_inspector::SysinfoProcessInspector,
+    process_inspector::{ProcessInspector, SysinfoProcessInspector},
     share::SharePublisher,
     variable_expander,
     worktree_manager::WorktreeError,
@@ -124,6 +124,10 @@ pub fn build_resume_action(
     }
 }
 
+/// Number of consecutive CouldNotKill fence cycles after which crash-recovery emits an
+/// operator-facing escalation warning for a process stuck in D-state. See ADR-0005.
+const FENCE_ESCALATION_THRESHOLD: i64 = 5;
+
 #[async_trait]
 pub trait ContainerService {
     fn msg_stores(&self) -> &Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>;
@@ -165,6 +169,10 @@ pub trait ContainerService {
     /// Get the server instance ID. Used to tag execution processes for
     /// instance-scoped cleanup on shutdown.
     fn instance_id(&self) -> &str;
+
+    fn make_process_inspector(&self) -> Box<dyn ProcessInspector + Send + Sync> {
+        Box::new(SysinfoProcessInspector::new())
+    }
 
     fn task_attempt_to_current_dir(&self, task_attempt: &TaskAttempt) -> PathBuf;
 
@@ -306,7 +314,7 @@ pub trait ContainerService {
         let candidates = ExecutionProcess::find_running_with_pids(pool).await?;
 
         // Build a single inspector for all fence calls (avoids per-call sysinfo refresh)
-        let inspector = SysinfoProcessInspector::new();
+        let inspector = self.make_process_inspector();
 
         for process in &candidates {
             // Only recover coding-agent runs (SC8 target: resume, not script runs)
@@ -330,7 +338,8 @@ pub trait ContainerService {
                 }
             };
 
-            let Some(container_ref) = task_attempt.container_ref.clone().filter(|s| !s.is_empty()) else {
+            let Some(container_ref) = task_attempt.container_ref.clone().filter(|s| !s.is_empty())
+            else {
                 // No worktree path recorded — cannot safely identify the process by cwd.
                 // An empty marker would match every process on the system, defeating the
                 // PID-reuse guard.  Treat as not-ours and skip recovery.
@@ -341,15 +350,15 @@ pub trait ContainerService {
                 );
                 continue;
             };
-            let fence_result = process_fence::fence(&inspector, pid_raw, &container_ref).await;
+            let fence_result =
+                process_fence::fence(inspector.as_ref(), pid_raw, &container_ref).await;
 
             match fence_result {
                 FenceOutcome::NotOurProcess => {
                     // PID was reused by another process; do not kill, skip recovery.
                     // Mark abandoned and update task status to InReview — the execution
                     // is gone (the process is not ours), so treat it as a failure.
-                    let _ =
-                        ExecutionProcess::set_resume_state(pool, process.id, "abandoned").await;
+                    let _ = ExecutionProcess::set_resume_state(pool, process.id, "abandoned").await;
                     tracing::warn!(
                         process_id = %process.id,
                         pid = pid_raw,
@@ -368,22 +377,71 @@ pub trait ContainerService {
                     // Set resume_state='pending' so the blanket mark_orphaned_as_failed guard
                     // (which excludes 'pending' and 'resumed') does NOT mark this row failed —
                     // the process is still alive and will be fenced again on next restart.
-                    let _ =
-                        ExecutionProcess::set_resume_state(pool, process.id, "pending").await;
-                    tracing::warn!(
-                        process_id = %process.id,
-                        pid = pid_raw,
-                        "Process survived SIGKILL (D-state); skipping recovery to avoid concurrent writer"
-                    );
+                    ExecutionProcess::set_resume_state(pool, process.id, "pending").await?;
+                    let count = match ExecutionProcess::increment_fence_attempt_count(
+                        pool, process.id,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            match ExecutionProcess::get_fence_attempt_count(pool, process.id).await
+                            {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    tracing::error!(
+                                        process_id = %process.id,
+                                        error = ?e,
+                                        "Failed to read fence_attempt_count after increment; skipping threshold check"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                process_id = %process.id,
+                                error = ?e,
+                                "Failed to increment fence_attempt_count; cannot escalate"
+                            );
+                            continue;
+                        }
+                    };
+                    if count >= FENCE_ESCALATION_THRESHOLD {
+                        tracing::warn!(
+                            process_id = %process.id,
+                            pid = pid_raw,
+                            fence_attempt_count = count,
+                            "Process stuck in D-state after {} restart attempts — manual intervention may be required",
+                            count
+                        );
+                    } else {
+                        tracing::warn!(
+                            process_id = %process.id,
+                            pid = pid_raw,
+                            "Process survived SIGKILL (D-state); skipping recovery to avoid concurrent writer"
+                        );
+                    }
                     continue;
                 }
             }
 
             // Step 2: Classify — resume if session_id exists, mark-failed otherwise
-            let session_id =
-                ExecutionProcess::find_latest_session_id_by_task_attempt(pool, process.task_attempt_id)
-                    .await
-                    .unwrap_or(None);
+            let session_id = match ExecutionProcess::find_latest_session_id_by_task_attempt(
+                pool,
+                process.task_attempt_id,
+            )
+            .await
+            {
+                Ok(sid) => sid,
+                Err(e) => {
+                    tracing::error!(
+                        process_id = %process.id,
+                        error = ?e,
+                        "Failed to load session_id during crash recovery; skipping this process"
+                    );
+                    continue;
+                }
+            };
 
             if let Some(session_id) = session_id {
                 // Resume: executor supports session recovery (task 301 audit: all 9 executors do)
@@ -501,8 +559,8 @@ pub trait ContainerService {
         if let Some(container_ref) = &task_attempt.container_ref {
             let wt = std::path::PathBuf::from(container_ref);
             if let Ok(head) = self.git().get_head_info(&wt) {
-                let _ = ExecutionProcess::update_after_head_commit(pool, process.id, &head.oid)
-                    .await;
+                let _ =
+                    ExecutionProcess::update_after_head_commit(pool, process.id, &head.oid).await;
             }
         }
 
@@ -527,10 +585,7 @@ pub trait ContainerService {
                     }
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to update task status to InReview: {}",
-                        e
-                    );
+                    tracing::error!("Failed to update task status to InReview: {}", e);
                 }
             }
         }
@@ -1520,10 +1575,138 @@ pub trait ContainerService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::process_inspector::MockProcessInspector;
     use db::models::execution_process::{ExecutionProcess, ExecutionProcessStatus};
     use executors::executors::BaseCodingAgent;
     use executors::logs::utils::ConversationPatch;
     use executors::logs::{NormalizedEntry, NormalizedEntryType};
+    use std::sync::Mutex;
+    use tracing_test::traced_test;
+
+    struct TestContainerService {
+        db: DBService,
+        instance_id: String,
+        inspector: MockProcessInspector,
+        captured_action: Arc<Mutex<Option<ExecutorAction>>>,
+    }
+
+    #[async_trait]
+    impl ContainerService for TestContainerService {
+        fn db(&self) -> &DBService {
+            &self.db
+        }
+        fn instance_id(&self) -> &str {
+            &self.instance_id
+        }
+        fn make_process_inspector(&self) -> Box<dyn ProcessInspector + Send + Sync> {
+            Box::new(self.inspector.clone())
+        }
+        async fn start_execution_inner(
+            &self,
+            _task_attempt: &TaskAttempt,
+            _execution_process: &ExecutionProcess,
+            executor_action: &ExecutorAction,
+        ) -> Result<(), ContainerError> {
+            *self.captured_action.lock().unwrap() = Some(executor_action.clone());
+            Ok(())
+        }
+
+        fn msg_stores(&self) -> &Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>> {
+            unimplemented!()
+        }
+        fn git(&self) -> &GitService {
+            unimplemented!()
+        }
+        fn share_publisher(&self) -> Option<&SharePublisher> {
+            None
+        }
+        fn log_batcher(&self) -> Option<&LogBatcherHandle> {
+            None
+        }
+        fn normalization_metrics(&self) -> &NormalizationMetrics {
+            unimplemented!()
+        }
+        async fn store_normalization_handle(&self, _exec_id: Uuid, _handle: JoinHandle<()>) {
+            unimplemented!()
+        }
+        async fn take_normalization_handle(&self, _exec_id: &Uuid) -> Option<JoinHandle<()>> {
+            unimplemented!()
+        }
+        async fn get_entry_index_provider(
+            &self,
+            _exec_id: &Uuid,
+        ) -> Option<executors::logs::utils::EntryIndexProvider> {
+            unimplemented!()
+        }
+        async fn store_entry_index_provider(
+            &self,
+            _exec_id: Uuid,
+            _provider: executors::logs::utils::EntryIndexProvider,
+        ) {
+            unimplemented!()
+        }
+        fn task_attempt_to_current_dir(&self, _task_attempt: &TaskAttempt) -> PathBuf {
+            unimplemented!()
+        }
+        async fn create(
+            &self,
+            _task_attempt: &TaskAttempt,
+        ) -> Result<ContainerRef, ContainerError> {
+            unimplemented!()
+        }
+        async fn kill_all_running_processes(&self) -> Result<(), ContainerError> {
+            unimplemented!()
+        }
+        async fn delete_inner(&self, _task_attempt: &TaskAttempt) -> Result<(), ContainerError> {
+            unimplemented!()
+        }
+        async fn ensure_container_exists(
+            &self,
+            _task_attempt: &TaskAttempt,
+        ) -> Result<ContainerRef, ContainerError> {
+            unimplemented!()
+        }
+        async fn is_container_clean(
+            &self,
+            _task_attempt: &TaskAttempt,
+        ) -> Result<bool, ContainerError> {
+            unimplemented!()
+        }
+        async fn stop_execution(
+            &self,
+            _execution_process: &ExecutionProcess,
+            _status: ExecutionProcessStatus,
+        ) -> Result<(), ContainerError> {
+            unimplemented!()
+        }
+        async fn try_commit_changes(
+            &self,
+            _ctx: &ExecutionContext,
+        ) -> Result<bool, ContainerError> {
+            unimplemented!()
+        }
+        async fn copy_project_files(
+            &self,
+            _source_dir: &Path,
+            _target_dir: &Path,
+            _copy_files: &str,
+        ) -> Result<(), ContainerError> {
+            unimplemented!()
+        }
+        async fn stream_diff(
+            &self,
+            _task_attempt: &TaskAttempt,
+            _stats_only: bool,
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<LogMsg, std::io::Error>>,
+            ContainerError,
+        > {
+            unimplemented!()
+        }
+        async fn git_branch_prefix(&self) -> String {
+            unimplemented!()
+        }
+    }
 
     /// Helper: Create a sample ExecutorAction with a Claude Code profile
     fn sample_coding_agent_action_claude() -> ExecutorAction {
@@ -1545,7 +1728,10 @@ mod tests {
             ExecutorActionType::CodingAgentFollowUpRequest(req) => {
                 assert_eq!(req.session_id, "sess-abc");
                 assert_eq!(req.prompt, "continue");
-                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
+                assert_eq!(
+                    req.executor_profile_id.executor,
+                    BaseCodingAgent::ClaudeCode
+                );
             }
             _ => panic!("expected a follow-up resume action"),
         }
@@ -1572,9 +1758,12 @@ mod tests {
             ))),
         );
 
-        let action =
-            build_resume_action(&stored, "new-sess-999".to_string(), "resume turn 2".to_string())
-                .expect("follow-up crash must be resumable");
+        let action = build_resume_action(
+            &stored,
+            "new-sess-999".to_string(),
+            "resume turn 2".to_string(),
+        )
+        .expect("follow-up crash must be resumable");
 
         match action.typ {
             ExecutorActionType::CodingAgentFollowUpRequest(req) => {
@@ -1582,7 +1771,10 @@ mod tests {
                 assert_eq!(req.session_id, "new-sess-999");
                 assert_eq!(req.prompt, "resume turn 2");
                 // Profile preserved from stored follow-up
-                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
+                assert_eq!(
+                    req.executor_profile_id.executor,
+                    BaseCodingAgent::ClaudeCode
+                );
             }
             _ => panic!("expected a follow-up resume action"),
         }
@@ -1601,13 +1793,15 @@ mod tests {
         };
         let stored =
             ExecutorAction::new(ExecutorActionType::CodingAgentInitialRequest(initial), None);
-        let action =
-            build_resume_action(&stored, "sess-xyz".to_string(), "continue".to_string())
-                .expect("resumable");
+        let action = build_resume_action(&stored, "sess-xyz".to_string(), "continue".to_string())
+            .expect("resumable");
 
         match action.typ {
             ExecutorActionType::CodingAgentFollowUpRequest(req) => {
-                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::ClaudeCode);
+                assert_eq!(
+                    req.executor_profile_id.executor,
+                    BaseCodingAgent::ClaudeCode
+                );
                 assert_eq!(
                     req.executor_profile_id.variant.as_deref(),
                     Some("PLAN"),
@@ -1834,26 +2028,211 @@ mod tests {
         .unwrap();
 
         // Verify initial state
-        let initial = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+        let initial = ExecutionProcess::get_resume_state(&pool, process_id)
+            .await
+            .unwrap();
         assert_eq!(initial, None);
 
         // Set resume_state to 'pending'
-        ExecutionProcess::set_resume_state(&pool, process_id, "pending").await.unwrap();
-        let after_pending = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+        ExecutionProcess::set_resume_state(&pool, process_id, "pending")
+            .await
+            .unwrap();
+        let after_pending = ExecutionProcess::get_resume_state(&pool, process_id)
+            .await
+            .unwrap();
         assert_eq!(after_pending, Some("pending".to_string()));
 
         // Set resume_state to 'resumed'
-        ExecutionProcess::set_resume_state(&pool, process_id, "resumed").await.unwrap();
-        let after_resumed = ExecutionProcess::get_resume_state(&pool, process_id).await.unwrap();
+        ExecutionProcess::set_resume_state(&pool, process_id, "resumed")
+            .await
+            .unwrap();
+        let after_resumed = ExecutionProcess::get_resume_state(&pool, process_id)
+            .await
+            .unwrap();
         assert_eq!(after_resumed, Some("resumed".to_string()));
 
         // Verify mark_orphaned_as_failed does NOT touch resumed rows (SC8 safety)
-        ExecutionProcess::mark_orphaned_as_failed(&pool, "other-instance").await.unwrap();
-        let after_mark = ExecutionProcess::find_by_id(&pool, process_id).await.unwrap().unwrap();
+        ExecutionProcess::mark_orphaned_as_failed(&pool, "other-instance")
+            .await
+            .unwrap();
+        let after_mark = ExecutionProcess::find_by_id(&pool, process_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             after_mark.status,
             ExecutionProcessStatus::Running,
             "resumed process must not be marked failed by blanket mark_orphaned"
         );
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_orphan_executions_resumes_with_qa_mock_session() {
+        use db::DbMetrics;
+        use db::test_utils::create_test_pool;
+        use executors::executors::BaseCodingAgent;
+
+        let (pool, _tmp) = create_test_pool().await;
+
+        let project_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES ($1, 'p', '/tmp/p')")
+            .bind(project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let task_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO tasks (id, project_id, title, status) VALUES ($1, $2, 't', 'todo')",
+        )
+        .bind(task_id)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref) VALUES ($1, $2, 'QA_MOCK', 'b', 'main', '/tmp/wt-qa')")
+            .bind(attempt_id).bind(task_id).execute(&pool).await.unwrap();
+
+        let stored = ExecutorAction::new(
+            ExecutorActionType::CodingAgentInitialRequest(CodingAgentInitialRequest {
+                prompt: "do the task".to_string(),
+                executor_profile_id: ExecutorProfileId::new(BaseCodingAgent::QaMock),
+            }),
+            None,
+        );
+        let action_json = serde_json::to_string(&stored).unwrap();
+
+        let process_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO execution_processes (id, task_attempt_id, run_reason, executor_action, status, pid, started_at) VALUES ($1, $2, 'codingagent', $3, 'running', 99999, datetime('now'))")
+            .bind(process_id).bind(attempt_id).bind(&action_json)
+            .execute(&pool).await.unwrap();
+
+        let session_row_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO executor_sessions (id, task_attempt_id, execution_process_id, session_id) VALUES ($1, $2, $3, 'sess-qa-abc')")
+            .bind(session_row_id).bind(attempt_id).bind(process_id)
+            .execute(&pool).await.unwrap();
+
+        let service = TestContainerService {
+            db: DBService {
+                pool: pool.clone(),
+                metrics: DbMetrics::new(),
+            },
+            instance_id: "test-instance".to_string(),
+            inspector: MockProcessInspector::new(),
+            captured_action: Arc::new(Mutex::new(None)),
+        };
+
+        service.cleanup_orphan_executions().await.unwrap();
+
+        let action = service
+            .captured_action
+            .lock()
+            .unwrap()
+            .take()
+            .expect("start_execution_inner must have been called (resume path)");
+        match action.typ {
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => {
+                assert_eq!(req.session_id, "sess-qa-abc");
+                assert_eq!(req.executor_profile_id.executor, BaseCodingAgent::QaMock);
+                assert_eq!(
+                    req.prompt,
+                    "Your previous session was interrupted. Please continue the task from where you left off."
+                );
+            }
+            other => panic!("expected CodingAgentFollowUpRequest, got {:?}", other),
+        }
+
+        let state = ExecutionProcess::get_resume_state(&pool, process_id)
+            .await
+            .unwrap();
+        assert_eq!(state, Some("resumed".to_string()));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_cleanup_orphan_executions_stubborn_pid_escalation() {
+        use crate::services::process_inspector::RawProcessInfo;
+        use db::DbMetrics;
+        use db::test_utils::create_test_pool;
+        use std::sync::Mutex;
+
+        let (pool, _tmp) = create_test_pool().await;
+
+        let project_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES ($1, 'p', '/tmp/p')")
+            .bind(project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let task_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO tasks (id, project_id, title, status) VALUES ($1, $2, 't', 'todo')",
+        )
+        .bind(task_id)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref) VALUES ($1, $2, 'QA_MOCK', 'b', 'main', '/tmp/wt-stuck')")
+            .bind(attempt_id).bind(task_id).execute(&pool).await.unwrap();
+        let process_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO execution_processes (id, task_attempt_id, run_reason, executor_action, status, pid, started_at) VALUES ($1, $2, 'codingagent', '{}', 'running', 4242, datetime('now'))")
+            .bind(process_id).bind(attempt_id).execute(&pool).await.unwrap();
+
+        let inspector = MockProcessInspector::new();
+        inspector.add_process(RawProcessInfo {
+            pid: 4242,
+            parent_pid: None,
+            name: "qa".to_string(),
+            command: vec![],
+            working_directory: Some("/tmp/wt-stuck".to_string()),
+            memory_bytes: 0,
+            cpu_percent: 0.0,
+        });
+        inspector.set_unkillable(4242);
+
+        let service = TestContainerService {
+            db: DBService {
+                pool: pool.clone(),
+                metrics: DbMetrics::new(),
+            },
+            instance_id: "test-instance".to_string(),
+            inspector,
+            captured_action: Arc::new(Mutex::new(None)),
+        };
+
+        for cycle in 1_i64..=FENCE_ESCALATION_THRESHOLD {
+            service.cleanup_orphan_executions().await.unwrap();
+            let state = ExecutionProcess::get_resume_state(&pool, process_id)
+                .await
+                .unwrap();
+            assert_eq!(
+                state,
+                Some("pending".to_string()),
+                "cycle {cycle}: must stay pending"
+            );
+            let count = ExecutionProcess::get_fence_attempt_count(&pool, process_id)
+                .await
+                .unwrap();
+            assert_eq!(count, cycle, "cycle {cycle}: fence_attempt_count");
+            if cycle < FENCE_ESCALATION_THRESHOLD {
+                assert!(
+                    !logs_contain("manual intervention"),
+                    "cycle {cycle}: escalation warn must not fire before threshold"
+                );
+            }
+        }
+
+        assert!(service.captured_action.lock().unwrap().is_none());
+        assert!(
+            logs_contain("manual intervention"),
+            "escalation warn must fire at threshold"
+        );
+        let proc = ExecutionProcess::find_by_id(&pool, process_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(proc.status, ExecutionProcessStatus::Running);
     }
 }

@@ -998,7 +998,11 @@ impl ClaudeLogProcessor {
                         }
                     }
                     Some("local_command_output") => {
-                        if let ClaudeJson::System { content: Some(text), .. } = claude_json {
+                        if let ClaudeJson::System {
+                            content: Some(text),
+                            ..
+                        } = claude_json
+                        {
                             let entry = NormalizedEntry {
                                 timestamp: None,
                                 entry_type: NormalizedEntryType::SystemMessage,

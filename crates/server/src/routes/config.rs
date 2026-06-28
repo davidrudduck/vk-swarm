@@ -362,7 +362,11 @@ mod tests {
         });
 
         assert_eq!(
-            mapped.models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            mapped
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["a-model", "z-model"]
         );
         assert_eq!(

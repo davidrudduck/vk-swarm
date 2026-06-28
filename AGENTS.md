@@ -21,6 +21,16 @@ No CI-breaking or half-implemented code is deferred to the next session.
 2. Have a tracked follow-up workstream (`dev-docs/workstreams/<name>/README.md`)
 3. Be documented in the decisions-ledger before the PR is submitted
 
+## No Deferred Remediation (mandatory)
+
+Code review findings — from adversarial panels, Gemini review, `/dr:pr`, the WAI reachability gate, or any other review step — must be fixed **in the same session** before the PR is pushed or merged.
+
+- **False positive?** Document why in the decisions-ledger. Include the specific evidence (grep output, file:line) that disproves the finding.
+- **Real finding?** Fix it now. "Fix in the next session" is not permitted.
+- **Ambiguous?** Escalate to the user. Do not silently carry it forward.
+
+This rule exists because deferred findings compound: the next session inherits stale context, the fix is harder without the original reasoning, and PR review history becomes misleading.
+
 ## Safe Process Management
 
 When running in a worktree spawned by vibe-kanban, NEVER use `pkill`, `killall`, or

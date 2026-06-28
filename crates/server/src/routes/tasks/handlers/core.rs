@@ -49,7 +49,9 @@ pub async fn get_tasks(
     };
 
     let Some(project) = project else {
-        return Err(ApiError::NotFound(format!("Project {project_id} not found")));
+        return Err(ApiError::NotFound(format!(
+            "Project {project_id} not found"
+        )));
     };
 
     let tasks =

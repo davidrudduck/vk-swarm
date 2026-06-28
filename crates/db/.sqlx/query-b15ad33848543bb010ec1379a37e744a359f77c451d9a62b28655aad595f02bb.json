@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT fence_attempt_count FROM execution_processes WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "fence_attempt_count",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b15ad33848543bb010ec1379a37e744a359f77c451d9a62b28655aad595f02bb"
+}

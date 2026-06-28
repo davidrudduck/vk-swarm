@@ -60,12 +60,17 @@ async fn locally_created_task_is_visible() {
     let project = make_project(&pool).await;
     let local = CreateTask::from_title_description(project.id, "local".into(), None);
     let local_id = Uuid::new_v4();
-    Task::create(&pool, &local, local_id).await.expect("local task");
+    Task::create(&pool, &local, local_id)
+        .await
+        .expect("local task");
 
     let rows = Task::find_by_project_id_with_attempt_status(&pool, project.id, false)
         .await
         .expect("query");
-    assert!(rows.iter().any(|r| r.task.id == local_id), "local task must be visible");
+    assert!(
+        rows.iter().any(|r| r.task.id == local_id),
+        "local task must be visible"
+    );
 }
 
 #[tokio::test]
@@ -73,10 +78,16 @@ async fn hive_assigned_task_with_local_attempt_is_visible() {
     let (pool, _tmp) = create_test_pool().await;
     let project = make_project(&pool).await;
     let assigned = CreateTask::from_shared_task(
-        project.id, "assigned".into(), None, TaskStatus::InProgress, Uuid::new_v4(),
+        project.id,
+        "assigned".into(),
+        None,
+        TaskStatus::InProgress,
+        Uuid::new_v4(),
     );
     let assigned_id = Uuid::new_v4();
-    Task::create(&pool, &assigned, assigned_id).await.expect("assigned task");
+    Task::create(&pool, &assigned, assigned_id)
+        .await
+        .expect("assigned task");
     insert_local_attempt(&pool, assigned_id).await;
 
     let rows = Task::find_by_project_id_with_attempt_status(&pool, project.id, false)
