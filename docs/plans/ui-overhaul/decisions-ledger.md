@@ -193,3 +193,20 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - TypeScript: `cd frontend && npx tsc --noEmit` passes.
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 019` → CONFORMS (all deterministic gates passed).
 - No undictated choices made; task specification fully followed.
+
+### Task 021 — Complete (no decisions)
+- Anchor 1 (Merge button outline styling): `grep -n "border-success text-success hover:bg-success" frontend/src/components/tasks/Toolbar/GitOperations.tsx` → line 415 (pre-change).
+- Edit 1: Merge button changed from `variant="outline" size="xs" className="border-success text-success hover:bg-success gap-1 shrink-0"` to `variant="default" size="sm" className="flex-1 gap-1 shrink-0"`.
+- Edit 2: Rebase button changed `size="xs"` to `size="sm"`; `variant="outline"` and classes unchanged.
+- Edit 3: Added `import { useOpenInEditor } from '@/hooks/useOpenInEditor';` (line 31).
+- Edit 3: Added hook call `const openInEditor = useOpenInEditor(selectedAttempt.id);` (line 59).
+- Edit 3: Added Open-in-IDE ghost-`sm` button after Rebase button (lines 466–476) with `onClick={() => openInEditor()}`, `ExternalLink` icon, literal "Open in IDE" label, and TODO(i18n) comment.
+- Manual verification: `grep -n 'variant="default"' frontend/src/components/tasks/Toolbar/GitOperations.tsx` → line 415 (Merge button filled).
+- Manual verification: `grep -n 'flex-1' frontend/src/components/tasks/Toolbar/GitOperations.tsx` → line 417 (Merge button full-width).
+- Manual verification: `grep -c 'size="sm"' frontend/src/components/tasks/Toolbar/GitOperations.tsx` → 3 (Merge + Rebase + Open-in-IDE).
+- Manual verification: `grep -n 'variant="ghost"' frontend/src/components/tasks/Toolbar/GitOperations.tsx` → lines 294, 469 (Settings button + new IDE button).
+- Manual verification: `grep -n 'useOpenInEditor' frontend/src/components/tasks/Toolbar/GitOperations.tsx` → lines 31 (import), 59 (call).
+- Manual verification: `grep -n 'aria-label="Open in IDE"' frontend/src/components/tasks/Toolbar/GitOperations.tsx` → line 472 (Open-in-IDE button).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 021` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.
