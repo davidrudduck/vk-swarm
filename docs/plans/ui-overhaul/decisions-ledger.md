@@ -172,3 +172,12 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - Manual verification (post-edit): `grep 'font-code' frontend/src/components/VKSLogo.tsx` → no match (confirmed removal).
 - TypeScript: `cd frontend && npx tsc --noEmit` passes.
 - No undictated choices made; task specification fully followed.
+
+### Task 012 — Complete (no decisions)
+- `useTheme()` verified: exports `{ theme, setTheme }` from `ThemeProvider.tsx` (lines 11, 51).
+- `useUserSystem()` verified: exports `updateAndSaveConfig: (updates: Partial<Config>) => Promise<boolean>` from `ConfigProvider.tsx` (lines 38, 191–210).
+- `ThemeMode` verified: enum exported from `shared/types.ts` line 617 with `LIGHT`, `DARK`, `SYSTEM` variants.
+- File created: `frontend/src/components/ThemeToggle.tsx` with full spec contents (lines 1–103).
+- Manual verification: `grep -E 'export default ThemeToggle|export function ThemeToggle' frontend/src/components/ThemeToggle.tsx` → both exports present.
+- TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
+- No undictated choices made; task specification fully followed.
