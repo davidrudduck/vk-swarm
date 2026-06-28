@@ -8,6 +8,7 @@ import { ProjectTasks } from '@/pages/ProjectTasks';
 import { AllProjectsTasks } from '@/pages/AllProjectsTasks';
 import { FullAttemptLogsPage } from '@/pages/FullAttemptLogs';
 import { Processes } from '@/pages/Processes';
+import { Nodes } from '@/pages/Nodes';
 import { NormalLayout } from '@/components/layout/NormalLayout';
 import { useAuth } from '@/hooks';
 
@@ -152,6 +153,7 @@ function AppContent() {
                     <Route path="/projects" element={<Projects />} />
                     <Route path="/projects/:projectId" element={<Projects />} />
                     <Route path="/processes" element={<Processes />} />
+                    <Route path="/nodes" element={<Nodes />} />
                     <Route path="/tasks/all" element={<AllProjectsTasks />} />
                     <Route
                       path="/projects/:projectId/tasks"
