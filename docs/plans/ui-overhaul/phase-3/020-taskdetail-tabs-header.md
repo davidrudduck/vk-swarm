@@ -203,9 +203,12 @@ available as `task.status` (`TaskWithAttemptStatus` extends `Task`, which has `s
 (`@/components/ui/badge`, variant `secondary` — confirmed present at `badge.tsx`), shown only when
 `task.source_node_name` is present.
 
-Insert a badges cluster at the **start of the returned fragment**, before the connection badge. (A
-single `<StatusBadge>` here is the canonical status indicator — there is NO separate bare dot elsewhere
-in this component; status renders exactly once.)
+Insert a badges cluster at the **start of the returned fragment**, before the connection badge. SC18
+specifies TWO status renderings (spec:96 "header renders `StatusBadge` dot" + spec:97 badges-row
+"status outline+dot"), so render BOTH: a leading bare dot (`<StatusBadge status={...} />`, no label)
+and the row outline status badge (`<StatusBadge status={...} showLabel className="…border…" />`). Both
+live in the actions-slot cluster (the breadcrumb title is in `ProjectTasks.tsx`, out of scope — the
+"header dot" therefore renders in this cluster, same placement constraint as the rest — see ledger).
 
 - Before (the opening of the returned fragment, ~lines 48–56):
 ```tsx
@@ -218,11 +221,19 @@ in this component; status renders exactly once.)
 ```tsx
   return (
     <>
-      {/* SC18 badges cluster: status + node + labels. NewCardHeader renders the
-          actions slot as a top-right inline row (new-card.tsx), so this is an
-          inline cluster, not a literal below-header band — see ledger. */}
+      {/* SC18 chrome: header status dot + badges cluster (status outline+dot, node,
+          labels). NewCardHeader renders the actions slot as a top-right inline row
+          (new-card.tsx), so this is an inline cluster, not a literal below-header
+          band, and the header dot sits here too — see ledger. */}
       <div className="flex items-center gap-1.5">
-        <StatusBadge status={task.status} showLabel />
+        {/* SC18:96 — header status dot (no label) */}
+        <StatusBadge status={task.status} />
+        {/* SC18:97 — row status badge: outline + dot + label */}
+        <StatusBadge
+          status={task.status}
+          showLabel
+          className="rounded-full border border-border px-2 py-0.5"
+        />
         {task.source_node_name && (
           <Badge variant="secondary">{task.source_node_name}</Badge>
         )}
@@ -323,7 +334,8 @@ Add `import { useTaskLabels } from '@/hooks/useTaskLabels';` alongside the other
   → the three literal tab labels (Diff / Logs / Attempts) present.
 - `grep -n 'TODO(i18n): vk-swarm-node-ui-localize' frontend/src/components/panels/AttemptHeaderActions.tsx`
   → match (literal tab labels flagged for localization).
-- `grep -n '<StatusBadge' frontend/src/components/panels/AttemptHeaderActions.tsx` → exactly one match.
+- `grep -c '<StatusBadge' frontend/src/components/panels/AttemptHeaderActions.tsx` → 2 (SC18:96 header
+  dot + SC18:97 row outline badge).
 - `grep -n 'variant="outline"' frontend/src/components/panels/AttemptHeaderActions.tsx` → label badges present.
 - `grep -n 'source_node_name' frontend/src/components/panels/AttemptHeaderActions.tsx` → node badge present.
 - `grep -n 'useTaskLabels' frontend/src/components/panels/AttemptHeaderActions.tsx` → labels hook wired.

@@ -100,9 +100,9 @@ pnpm run dev   # from worktree root; open http://localhost:3000 (or the port fro
 - [ ] Theme toggle flips dark ↔ light; token colours update correctly
 - [ ] Hard-reload after theme toggle: persists (confirms `updateAndSaveConfig` write path)
 
-> Note on the "Open in IDE (ghost)" checklist item: per task 021, no Open-in-IDE button exists in
-> the `GitOperations` footer — it lives in `ActionsDropdown`. Verify the affordance is present and
-> ghost-styled wherever it actually renders, or record that it is intentionally in the dropdown.
+> Note on the "Open in IDE (ghost)" checklist item: task 021 ADDS a ghost-sm "Open in IDE" button to
+> the `GitOperations` footer (wired to `useOpenInEditor`, the same hook `ActionsDropdown` uses). Verify
+> it renders in the footer action row alongside Merge/Rebase and is ghost-styled.
 
 ### SC19 — WCAG AA spot-check (browser DevTools accessibility panel)
 On Projects, Tasks kanban, and Nodes pages, in **both** dark and light themes, spot-check that

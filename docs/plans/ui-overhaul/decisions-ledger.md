@@ -95,6 +95,23 @@ breakdown review to confirm whether visual parity across both card variants is r
 - **Minor (Opus/Codex):** 001 Before-range relabelled ~57–79 with a note that `--_neutral`/
   `--_neutral-foreground` stay in place; 022 `files:` now lists the decisions-ledger (it records results).
 
+## Adversarial breakdown review — round 2 (re-review) → remediated
+
+Opus + Gemini re-reviewed; both REVISE on real findings. (Codex's round-2 pass was a review-type
+error — it checked the *source files* for the changes and reported them "missing"; but no code is
+written at decompose time, so all 13 were invalid except its #13, which Gemini also raised. Discarded
+the 12 category-error findings.) Verified findings + fixes:
+- **SC18 status collapsed (Opus, blocking):** frozen SC18 requires TWO status renderings — a header
+  `StatusBadge` dot (spec:96) AND a row "status outline+dot" badge (spec:97). Task 020 had collapsed
+  to one labeled badge and asserted "exactly one." Fixed: 020 now renders a leading bare
+  `<StatusBadge status={task.status} />` (header dot) PLUS an outline `<StatusBadge … showLabel
+  className="…border…" />` (row badge); grep assertion → 2. Both sit in the actions-slot cluster (the
+  title lives in `ProjectTasks.tsx`, out of 020's scope — same placement constraint as the rest).
+- **Task 022 stale Open-in-IDE note (Gemini/Codex#13):** note said "no Open-in-IDE in footer" but 021
+  now adds it. Fixed: note + SC17 item now say the ghost button is in the footer (task 021).
+- **Spec residual bare shorthand (Gemini):** `bg-[var(--surface-card)]` (spec:286) → `bg-[hsl(var(--surface-card))]`.
+  Swept the whole spec — no bare `(bg|text|border)-[var(--…)]` references remain. Re-frozen (3rd precheck).
+
 ## Appended during execute
 
 <!-- executor appends below -->

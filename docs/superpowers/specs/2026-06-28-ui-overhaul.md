@@ -283,7 +283,7 @@ Component changes:
   - Selected ring: `ring-2 ring-primary` (drop `ring-inset ring-secondary-foreground`, ~line 118)
   - Column add button **(A-class bug)**: `h-0` → `h-6 w-6` ghost icon button (~lines 243–250)
   - Status dot: `h-[9px] w-[9px]` (was `h-2.5`, ~line 220)
-  - Count badge background: `bg-[var(--surface-card)]` (was `bg-muted`, ~lines 226–232)
+  - Count badge background: `bg-[hsl(var(--surface-card))]` (was `bg-muted`, ~lines 226–232)
 - **`VKSLogo.tsx`**: Apply `font-wordmark` Tailwind class to the wordmark text (`className="font-wordmark"`).
   Remove any `font-code`/`font-mono` currently applied to it.
 - **`ThemeToggle` (new component)**: Ghost icon button (sun ↔ moon, 28–32px). Calls
