@@ -353,3 +353,32 @@ Sub-edit 6: Appended `hover:border-[hsl(var(--border-strong))]` to KanbanCard ho
 - TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 016` → CONFORMS (all deterministic gates passed).
 - No undictated choices made; task specification fully followed.
+
+### Task 020 — Complete (no decisions)
+- Pre-flight: Anchor `value={mode ?? ''}` at line 61 confirmed (ToggleGroup pre-change structure intact).
+- Pre-flight: Dependency verification:
+  - `frontend/src/components/ui/tabs.tsx` exports `Tabs, TabsList, TabsTrigger` (line 53) ✓
+  - `frontend/src/components/common/StatusBadge.tsx` exists (task 014 applied) ✓
+  - `LabelBadge` accepts `variant="outline"` (task 009 applied) ✓
+  - `Badge` component has `secondary` variant ✓
+  - `useTaskLabels` available from `@/hooks/useTaskLabels` ✓
+- Edit 1: Removed imports: `useTranslation`, `Eye, FileDiff, FolderTree, Terminal, Cog`, `ToggleGroup, ToggleGroupItem`, `Tooltip*`. Added imports: `Tabs, TabsList, TabsTrigger`, `StatusBadge`, `Badge`, `LabelBadge`, `useTaskLabels`, `Label` type.
+- Edit 2: Replaced ToggleGroup block (lines 57–149) with labeled Tabs block (three tabs: Diff/Logs/Attempts; value mapping: diffs→diff, terminal→logs, null→attempts; onValueChange cycles back).
+- Edit 3: Added badges cluster at fragment start (before connection badge): `<div className="flex items-center gap-1.5">` with two `StatusBadge` renders (bare dot + outline showLabel), node `Badge` (secondary variant, conditional on `source_node_name`), and outline `LabelBadge` map.
+- Edit 4: Added useTaskLabels hook call with label data sourcing.
+- Manual verification checks (all passed):
+  - `grep -n '<Tabs'` → line 84 confirmed.
+  - `grep -nE '<TabsTrigger value="(diff|logs|attempts)">'` → 3 matches (lines 94–96, Diff/Logs/Attempts labels present).
+  - `grep -n 'TODO(i18n): vk-swarm-node-ui-localize'` → line 81 confirmed (literal tab labels flagged).
+  - `grep -c '<StatusBadge'` → 2 (SC18:96 header dot + SC18:97 row badge).
+  - `grep -n 'variant="outline"'` → line 68 (label badges).
+  - `grep -n 'source_node_name'` → lines 61–62 (node badge).
+  - `grep -n 'useTaskLabels'` → lines 8, 38 (import + call).
+  - `grep -nE '\bt\('` → no match (t() removed).
+  - `grep -n 'useTranslation'` → no match (import removed).
+  - `grep -n 'ToggleGroup'` → no match (old icon switcher removed).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors; imports resolved, label parameter typed).
+- Placement note: badges cluster renders inline in the top-right actions row of `NewCardHeader` (new-card.tsx renders actions as `flex items-center gap-4`). SC18 describes "badges row below the header," but `NewCardHeader` architecture constrains the actions slot to a top-right row. The cluster achieves all three badge types (status dot + status outline+dot + node + labels) as an inline grouping. A literal separate band below the header would require editing `new-card.tsx`/`ProjectTasks.tsx` (outside 020's `files:`).
+- **Processes mode coverage:** The new 3-tab interface covers only diffs/terminal/null. `processes` mode has no explicit desktop affordance in this header after 020 is merged. Confirmed via re-grep: `mode === 'processes'` appears in TasksLayout (scrollbar styling), ProjectTasks (ProcessesPanel render), but NOT in any interactive tab/toggle after 020. The mode is still reachable programmatically (nothing prohibits it) and can be invoked via other means if needed, but the desktop UI no longer exposes an entry point. Keyboard cycle in ProjectTasks (line 558: `const order: LayoutMode[] = [null, 'preview', 'diffs', 'files']`) does not include `processes`; user would need to navigate to a prior state or use browser dev tools to reach it. This is an intentional scope reduction per SC18 (spec names only Diff/Logs/Attempts tabs); no undictated deletion of the rendering branch in ProjectTasks.
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 020` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.

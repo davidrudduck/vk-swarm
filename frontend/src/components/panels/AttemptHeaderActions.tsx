@@ -1,18 +1,15 @@
-import { useTranslation } from 'react-i18next';
-import { Eye, FileDiff, FolderTree, Terminal, Cog, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { Button } from '../ui/button';
-import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '../ui/tooltip';
+import { Tabs, TabsList, TabsTrigger } from '../ui/tabs';
 import type { LayoutMode } from '../layout/TasksLayout';
-import type { TaskAttempt, TaskWithAttemptStatus } from 'shared/types';
+import type { TaskAttempt, TaskWithAttemptStatus, Label } from 'shared/types';
 import { ActionsDropdown } from '../ui/actions-dropdown';
 import { useIsOrgAdmin, useRemoteConnectionStatus } from '@/hooks';
+import { useTaskLabels } from '@/hooks/useTaskLabels';
 import { ConnectionStatusBadge } from '@/components/common/ConnectionStatusBadge';
+import { StatusBadge } from '@/components/common/StatusBadge';
+import { Badge } from '@/components/ui/badge';
+import { LabelBadge } from '@/components/labels/LabelBadge';
 
 interface AttemptHeaderActionsProps {
   onClose: () => void;
@@ -31,13 +28,14 @@ export const AttemptHeaderActions = ({
   attempt,
   isMobile,
 }: AttemptHeaderActionsProps) => {
-  const { t } = useTranslation('tasks');
   const isOrgAdmin = useIsOrgAdmin();
   // Only fetch connection status for tasks with an in-progress attempt
   // Tasks without active assignments return 404 from Hive, showing confusing "Disconnected" status
   const { status: connectionStatus } = useRemoteConnectionStatus(task, {
     enabled: Boolean(attempt) && task?.has_in_progress_attempt === true,
   });
+  // Labels for the SC18 badges row (same hook TaskCard uses — keyed by task.id).
+  const { data: labels } = useTaskLabels(task.id, true);
 
   // Only show connection badge for remote tasks with running attempts
   const showConnectionBadge =
@@ -47,6 +45,31 @@ export const AttemptHeaderActions = ({
 
   return (
     <>
+      {/* SC18 chrome: header status dot + badges cluster (status outline+dot, node,
+          labels). NewCardHeader renders the actions slot as a top-right inline row
+          (new-card.tsx), so this is an inline cluster, not a literal below-header
+          band, and the header dot sits here too — see ledger. */}
+      <div className="flex items-center gap-1.5">
+        {/* SC18:96 — header status dot (no label) */}
+        <StatusBadge status={task.status} />
+        {/* SC18:97 — row status badge: outline + dot + label */}
+        <StatusBadge
+          status={task.status}
+          showLabel
+          className="rounded-full border border-border px-2 py-0.5"
+        />
+        {task.source_node_name && (
+          <Badge variant="secondary">{task.source_node_name}</Badge>
+        )}
+        {labels?.map((label: Label) => (
+          <LabelBadge
+            key={label.id}
+            label={label}
+            variant="outline"
+            size="sm"
+          />
+        ))}
+      </div>
       {/* Connection status badge for remote tasks */}
       {showConnectionBadge && (
         <>
@@ -55,100 +78,24 @@ export const AttemptHeaderActions = ({
         </>
       )}
       {!isMobile && typeof mode !== 'undefined' && onModeChange && (
-        <TooltipProvider>
-          <ToggleGroup
-            type="single"
-            value={mode ?? ''}
-            onValueChange={(v) => {
-              const newMode = (v as LayoutMode) || null;
-              onModeChange(newMode);
-            }}
-            className="inline-flex gap-4"
-            aria-label="Layout mode"
-          >
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <ToggleGroupItem
-                  value="preview"
-                  aria-label="Preview"
-                  active={mode === 'preview'}
-                >
-                  <Eye className="h-4 w-4" />
-                </ToggleGroupItem>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {t('attemptHeaderActions.preview')}
-              </TooltipContent>
-            </Tooltip>
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <ToggleGroupItem
-                  value="diffs"
-                  aria-label="Diffs"
-                  active={mode === 'diffs'}
-                >
-                  <FileDiff className="h-4 w-4" />
-                </ToggleGroupItem>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {t('attemptHeaderActions.diffs')}
-              </TooltipContent>
-            </Tooltip>
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <ToggleGroupItem
-                  value="files"
-                  aria-label="Files"
-                  active={mode === 'files'}
-                >
-                  <FolderTree className="h-4 w-4" />
-                </ToggleGroupItem>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {t('attemptHeaderActions.files', { defaultValue: 'Files' })}
-              </TooltipContent>
-            </Tooltip>
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <ToggleGroupItem
-                  value="terminal"
-                  aria-label="Terminal"
-                  active={mode === 'terminal'}
-                >
-                  <Terminal className="h-4 w-4" />
-                </ToggleGroupItem>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {t('attemptHeaderActions.terminal', {
-                  defaultValue: 'Terminal',
-                })}
-              </TooltipContent>
-            </Tooltip>
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <ToggleGroupItem
-                  value="processes"
-                  aria-label="Processes"
-                  active={mode === 'processes'}
-                >
-                  <Cog className="h-4 w-4" />
-                </ToggleGroupItem>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {t('attemptHeaderActions.processes', {
-                  defaultValue: 'Processes',
-                })}
-              </TooltipContent>
-            </Tooltip>
-          </ToggleGroup>
-        </TooltipProvider>
-      )}
-      {!isMobile && typeof mode !== 'undefined' && onModeChange && (
-        <div className="h-4 w-px bg-border" />
+        // TODO(i18n): vk-swarm-node-ui-localize — Diff / Logs / Attempts are
+        // literal English (the existing attemptHeaderActions.* keys render
+        // "Diffs"/"Terminal", not the SC18 labels).
+        <Tabs
+          value={
+            mode === 'diffs' ? 'diff' : mode === 'terminal' ? 'logs' : 'attempts'
+          }
+          onValueChange={(v) => {
+            onModeChange(v === 'diff' ? 'diffs' : v === 'logs' ? 'terminal' : null);
+          }}
+          aria-label="Layout mode"
+        >
+          <TabsList>
+            <TabsTrigger value="diff">Diff</TabsTrigger>
+            <TabsTrigger value="logs">Logs</TabsTrigger>
+            <TabsTrigger value="attempts">Attempts</TabsTrigger>
+          </TabsList>
+        </Tabs>
       )}
       <ActionsDropdown task={task} attempt={attempt} isOrgAdmin={isOrgAdmin} />
       <Button variant="icon" aria-label="Close" onClick={onClose}>
