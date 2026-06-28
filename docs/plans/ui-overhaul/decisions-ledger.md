@@ -292,6 +292,23 @@ Sub-edit 6: Appended `hover:border-[hsl(var(--border-strong))]` to KanbanCard ho
 - TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
 - No undictated choices made; task specification fully followed.
 
+### Task 017 — Complete (no decisions)
+- Pre-flight: `frontend/src/pages/Nodes.tsx` does not exist (FILE_DOES_NOT_EXIST confirmed).
+- Pre-flight: `nodesApi.list(organizationId)` verified in `frontend/src/lib/api/nodes.ts` line 17; returns `Promise<Node[]>`.
+- Pre-flight: `Node` type verified in `frontend/src/types/nodes.ts` line 18: exposes `id: string`, `name: string`, `status: NodeStatus` (all required fields present).
+- Pre-flight: `NodeCard` named export verified: `grep 'export function NodeCard' frontend/src/components/swarm/NodeCard.tsx` → match (018 applied).
+- Pre-flight: `Processes` is named export: `grep 'export function Processes' frontend/src/pages/Processes.tsx` → match (line 21).
+- File created: `frontend/src/pages/Nodes.tsx` with full spec contents (lines 1–41). Exports named `Nodes` function.
+- Edit 1 (App.tsx): Added import `import { Nodes } from '@/pages/Nodes';` after Processes import (line 11).
+- Edit 2 (App.tsx): Added route `<Route path="/nodes" element={<Nodes />} />` after `/processes` route (line 155).
+- Manual verification (SC21): `grep -F 'path="/nodes"' frontend/src/App.tsx` → match (line 155).
+- Manual verification: `grep -F "import { Nodes } from '@/pages/Nodes'" frontend/src/App.tsx` → match (line 11).
+- Manual verification (SC14 named export): `grep -E 'export function Nodes' frontend/src/pages/Nodes.tsx` → match (line 6).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 017` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.
+- **Decision (data source):** Org-scoped node list used; default org selected per `useOrganizationSelection` logic (first non-personal org, fallback first org). No global cross-org endpoint needed (out of scope per D4).
+
 ### Task 015 — Complete (no decisions)
 - Pre-flight: All six anchors confirmed byte-for-byte match before edits.
   - Anchor 1 (line 24): `import { Logo } from '@/components/Logo';` confirmed.
