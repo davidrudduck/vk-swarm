@@ -221,3 +221,18 @@ Gate reached: breakdown APPROVED. Ready for `/wai:execute ui-overhaul`. See `rev
 - TypeScript: `cd frontend && npx tsc --noEmit` passes (no errors).
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 021` → CONFORMS (all deterministic gates passed).
 - No undictated choices made; task specification fully followed.
+
+### Task 005 — Complete (no decisions)
+- Anchor 1 (TaskCard.tsx statusStripColors): `grep -n "done: 'before:bg-green-500'" frontend/src/components/tasks/TaskCard.tsx` → line 31 (pre-change).
+- Anchor 2 (AllProjectsTaskCard.tsx statusStripColors): `grep -n "done: 'before:bg-green-500'" frontend/src/components/tasks/AllProjectsTaskCard.tsx` → line 16 (pre-change).
+- Both maps verified identical (Before text matched exactly).
+- Edit 1 (TaskCard.tsx): Replaced statusStripColors map lines 27–33 with token-based hsl(var(--status-*)) values.
+- Edit 2 (AllProjectsTaskCard.tsx): Replaced statusStripColors map lines 12–18 with identical token-based values.
+- Sibling alignment: Maps are identical by spec (no divergence to justify).
+- Width difference (4px vs 3px) noted; outside scope.
+- Manual verification (SC5a): `grep -rE 'bg-green-500|bg-red-500|bg-amber-500|bg-blue-500' frontend/src/components/tasks/TaskCard.tsx frontend/src/components/tasks/AllProjectsTaskCard.tsx` → zero matches (old classes removed).
+- Manual verification (SC5b): `grep 'var(--status-' frontend/src/components/tasks/TaskCard.tsx frontend/src/components/tasks/AllProjectsTaskCard.tsx` → 10 matches (5 per file, all status tokens present).
+- TypeScript: `cd frontend && npx tsc --noEmit` passes.
+- Reconciliation note: Task spec mentions shorthand `before:bg-[var(--status-done)]` quoted in plan.md contracts but correctly applied as `before:bg-[hsl(var(--status-done))]` (HSL wrapper required for bare triplet tokens; satisfies SC5b's `var(--status-` grep).
+- Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 005` → CONFORMS (all deterministic gates passed).
+- No undictated choices made; task specification fully followed.
