@@ -255,3 +255,26 @@ Task 202 listed `Cargo.lock` in `files:` (Trap 8) because adding `tracing-test =
 ### Stale reachability-gate line numbers (INFO — corrected)
 
 Line numbers in the `## Reachability gate` section above drifted from the original cites because `cargo fmt` and subsequent edits shifted lines. Corrected to reflect actual line numbers as of the adversarial review: services lines 173/317/354/381/414; local-deployment lines 1442/1448.
+
+---
+
+## Post-review known issues
+
+*(Populated by /wai:close Round 3 code-review pass — 2026-06-28)*
+
+### R3-N1 — `await?` vs `continue` asymmetry in CouldNotKill arm (`services/container.rs:380`)
+
+Not a defect. The `await?` on `set_resume_state('pending')` is intentionally stricter than the
+`continue` pattern used for counter reads below it. Reason: `set_resume_state('pending')` is a
+safety guard for the blanket `mark_orphaned_as_failed` call at line 519 (runs AFTER the loop). If
+the write fails and we `continue`, the blanket sweep marks a live D-state process as `failed` —
+data corruption. With `await?`, the function exits before line 519; the stuck process stays
+`running` and is retried next boot. The `continue` pattern for counter reads is safe because `pending`
+is already written by that point. Adjudicated in code-review-round-3.md.
+
+### R3-N2 — `let _ = set_resume_state('abandoned')` in NotOurProcess arm (`services/container.rs:361`)
+
+Not a defect. Pre-existing behavior; `NotOurProcess` means the PID is already gone. The
+`abandoned` write is best-effort bookkeeping — `mark_process_failed_with_task_update` at line 367
+still runs regardless of whether the state write succeeded. `let _ =` is correct here. Out of scope
+for this diff.
