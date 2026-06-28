@@ -105,6 +105,13 @@ Testable definitions of "done":
 - SC20: Theme persists across reload: after toggling to light, hard-reload of `/projects` still shows
   light theme (confirms the `updateAndSaveConfig` write, not just in-memory state).
 - SC21: `/nodes` route exists in `frontend/src/App.tsx` inside `NormalLayout`, alongside `/processes`.
+- SC22: Brand palette is live under `.dark` (scope decision C). In `frontend/src/styles/index.css`,
+  the `.dark { }` block remaps the core theme tokens to the brand palette — at minimum
+  `--_primary: var(--vks-cyan)` and `--_background: var(--vks-void)` — and the `--vks-*` primitives
+  (`--vks-void`, `--vks-cyan`, `--vks-surface`, `--vks-surface-bright`, `--vks-emerald`,
+  `--vks-amber`, `--vks-coral`) are defined under `:root` so they resolve in the applied cascade.
+  Verify: `grep -A 40 '\.dark {' frontend/src/styles/index.css | grep -- '--_primary: var(--vks-cyan)'`
+  → match. Runtime check (SC17): the VKSLogo "VK" (rendered with `text-primary`) appears cyan, not gray.
 
 ## Constraints
 
@@ -149,17 +156,44 @@ The 5 A-class bugs are folded in as early wins where they touch a layer already 
 
 **Phase 1 — Token foundation** (`frontend/src/styles/index.css`, `frontend/tailwind.config.js`).
 
-Add missing semantic, status, shadow/glow, and typography tokens. **Critical:** all new token
-definitions belong under the `.dark { }` selector (the class `ThemeProvider.tsx` applies via
-`root.classList.add('dark')`). **Do not add to `.vks-theme { }`** — that selector is never set
-on any DOM element at runtime and is dead code. Light-theme overrides go under `.light { }`.
-All values must be HSL channel triplets (not hex).
+> **Runtime-cascade correction (verified against `index.css`, scope decision C).** The `--vks-*`
+> brand primitives and the `--_*`→brand remap currently live **only** in the `.vks-theme { }`
+> block, which `ThemeProvider.tsx` **never applies to the DOM** (it only ever calls
+> `root.classList.add('light'|'dark')`). The Midnight Terminal palette therefore renders
+> **nowhere** today — the app runs the muted `--_*` values defined in `.dark { }`. To make the
+> design system actually render (the workstream's intent), Phase 1 must **bring the brand palette
+> into the live cascade**, not merely correct its dead values. New semantic/status/glow tokens
+> that reference `var(--vks-*)` only resolve once those primitives exist in a selector that is
+> actually applied (`:root` or `.dark`).
 
-- **Fix wrong values** (in existing `:root` or `.dark` block):
-  - `--vks-void`: `240 33% 5%` → `240 20% 5%`
-  - `--vks-surface-bright`: saturation `14%` → `16%`
-  - `--vks-cyan`: hue `193` → `190`
-  - Light `.light` `--_primary` (or equivalent): `192 100% 35%` (#0091b5, teal for AA contrast)
+Steps:
+
+- **Promote the `--vks-*` primitives to `:root` (live, both themes), with corrected values.**
+  Define under `:root { }` so every theme can reference them (`.vks-theme` may keep its copies —
+  it is exercised by `DesignSystem.test.tsx`; do not delete it, just stop relying on it):
+  - `--vks-void`: `240 20% 5%` (was `240 33% 5%`)
+  - `--vks-surface`: `240 18% 9%`
+  - `--vks-surface-bright`: `240 16% 12%` (saturation `14%` → `16%`)
+  - `--vks-cyan`: `190 100% 50%` (hue `193` → `190`)
+  - `--vks-amber`: `43 100% 50%`, `--vks-emerald`: `152 100% 50%`,
+    `--vks-coral`: `0 100% 71%`, `--vks-violet`: `270 91% 65%`
+  - `--vks-text`: `240 6% 90%`, `--vks-text-muted`: `240 4% 46%`, `--vks-text-dim`: `240 3% 26%`
+- **Merge the `.vks-theme` `--_*`→brand remap into the live `.dark { }` block** so dark mode = Midnight
+  Terminal. Replace `.dark`'s muted `--_*` mappings with the brand references (mirroring the
+  existing `.vks-theme` body): `--_background: var(--vks-void)`, `--_foreground: var(--vks-text)`,
+  `--_muted: var(--vks-surface)`, `--_muted-foreground: var(--vks-text-muted)`,
+  `--_primary: var(--vks-cyan)`, `--_primary-foreground: var(--vks-void)`,
+  `--_secondary: var(--vks-surface-bright)`, `--_secondary-foreground: var(--vks-text)`,
+  `--_accent: var(--vks-violet)`, `--_destructive: var(--vks-coral)`,
+  `--_border: var(--vks-surface-bright)`, `--_input: var(--vks-surface)`, `--_ring: var(--vks-cyan)`,
+  `--_success: var(--vks-emerald)`, `--_warning: var(--vks-amber)`, `--_info: var(--vks-cyan)`.
+  Also set `--font-heading: 'Source Serif 4', Georgia, serif` under `.dark`. This is the (C)
+  scope amendment — the whole dark chrome becomes cyan/void, so WCAG (SC19) is app-wide.
+- **Create a `.light { }` block** (it does not exist today — light theme is the `:root` default).
+  ThemeProvider applies `.light` via `classList.add('light')`, so a `.light { }` block WILL take
+  effect. Put light-theme `--status-*` overrides here, plus a light primary tuned for AA contrast:
+  `--_primary: 192 100% 35%` (#0091b5 teal). Light `--_background`/`--_foreground` stay at the
+  `:root` defaults unless an override is needed for contrast.
 - **Add semantic aliases** under `.dark { }`:
   - `--surface-card: var(--vks-surface)` (card/panel fill ≈ `#12121a`)
   - `--surface-raised: var(--vks-surface-bright)` (elevated surface ≈ `#1a1a24`)
@@ -174,14 +208,20 @@ All values must be HSL channel triplets (not hex).
   | `--status-done` | `152 100% 50%` | `153 83% 30%` |
   | `--status-cancelled` | `0 100% 71%` | `0 62% 52%` |
 
-- **Add shadow/glow tokens** under `.dark { }` (values from `design-spec.md` §Shadows & glow):
-  - `--shadow-sm`, `--shadow-md`, `--shadow-lg`, `--glow-cyan`, `--glow-emerald`
+- **Add shadow/glow tokens** under `.dark { }` (values from `design-source/project/tokens/spacing.css`):
+  - `--shadow-sm`, `--shadow-md`, `--shadow-lg`, `--glow-cyan`, `--glow-emerald`.
+  - **Translation note:** the design-source glow tokens reference `hsl(var(--vks-cyan-hsl) ...)`
+    and `hsl(var(--vks-emerald-hsl) ...)`. The product's primitive tokens are named `--vks-cyan`
+    and `--vks-emerald` (no `-hsl` suffix). Rewrite the references to `hsl(var(--vks-cyan) / 0.4)`
+    etc. (now resolvable because the primitives are promoted to `:root`).
 - **Add `--strip-width: 4px`** (global scope, not inside a theme selector)
-- **Add `font-wordmark`** to `tailwind.config.js` `theme.fontFamily`:
+- **Add `font-wordmark`** to `tailwind.config.js` `theme.fontFamily` (note: a `'chivo-mono'` key
+  already exists — add `wordmark` as the spec'd alias VKSLogo will consume via `font-wordmark`):
   ```js
   wordmark: ["'Chivo Mono'", 'monospace'],
   ```
-  Verify `mono`/`code` already maps to JetBrains Mono; verify `display` maps to Source Serif 4.
+  `code`/`mono` already map to JetBrains Mono (`var(--font-code)`); `serif`/`heading` already
+  map to Source Serif 4 — verify, do not re-add.
 - **Add ANSI texture utility classes** to `index.css` (used by empty-states):
   ```css
   .vks-ansi-dither { /* radial-gradient dot field — copy from design-source specimens */ }
@@ -215,9 +255,15 @@ the new tokens; correct typography/geometry per `design-spec.md`. A-class bugs s
 > | `kanban/index.tsx` | `frontend/src/components/ui/shadcn-io/kanban/index.tsx` |
 > | `DaysInColumnBadge.tsx` | `frontend/src/components/tasks/DaysInColumnBadge.tsx` |
 > | `LabelBadge.tsx` | `frontend/src/components/tasks/LabelBadge.tsx` |
-> | `VKSLogo.tsx` | `frontend/src/components/ui/VKSLogo.tsx` |
+> | `VKSLogo.tsx` | `frontend/src/components/VKSLogo.tsx` (**not** `ui/`) |
+> | `Logo.tsx` (current, to be replaced in Navbar) | `frontend/src/components/Logo.tsx` |
 > | `AttemptHeaderActions.tsx` | `frontend/src/components/panels/AttemptHeaderActions.tsx` |
-> | `GitOperations.tsx` | `frontend/src/components/panels/GitOperations.tsx` (verify sub-path) |
+> | `GitOperations.tsx` | `frontend/src/components/tasks/Toolbar/GitOperations.tsx` |
+> | `SearchBar.tsx` | `frontend/src/components/SearchBar.tsx` |
+> | `LabelBadge.tsx` | `frontend/src/components/labels/LabelBadge.tsx` (**not** `tasks/`) |
+> | `daysInColumn.ts` | `frontend/src/utils/daysInColumn.ts` |
+> | `NodeProjectsSection.tsx` | `frontend/src/components/swarm/NodeProjectsSection.tsx` |
+> | existing nodes hook | `frontend/src/hooks/useAvailableNodes.ts` (returns `ListProjectNodesResponse`) |
 
 Component changes:
 
@@ -401,6 +447,17 @@ one. No backend or type changes — UI only.
   No Playwright config, `e2e/` directory, or base-URL spec exists for this workstream. Existing
   Playwright tests must not break (constraint). New Playwright tests are out of scope. SC17
   manual checklist is the acceptance gate. Reversible; no ADR.
+- **D10 — Scope (C): make the Midnight Terminal brand palette live under `.dark`.** Decompose
+  discovered the `--vks-*` palette + `--_*`→brand remap live only in the `.vks-theme { }` block,
+  which `ThemeProvider` never applies — so the design system renders nowhere today (the app is
+  muted gray). The user chose to deliver the full design (not the SC-minimal token-only pass).
+  Phase 1 therefore promotes the `--vks-*` primitives to `:root` and merges the remap into the
+  live `.dark` block; SC22 gates it. Blast radius is app-wide (every dark surface re-colours),
+  so SC19 (WCAG AA) is evaluated app-wide. `.vks-theme` is retained (not deleted) because
+  `DesignSystem.test.tsx` references the class. *Irreversible? No — reversible via git; nothing is
+  deleted, the remap mirrors the already-present `.vks-theme` body.* No ADR (reversible, and the
+  decision is recorded here + in the decisions-ledger). This amendment re-froze the spec via a
+  second `/wai:precheck` run.
 
 ## Test strategy
 
