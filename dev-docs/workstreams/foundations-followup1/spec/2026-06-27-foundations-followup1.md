@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: foundations-followup1
 change_kind: behaviour
 ---
