@@ -41,7 +41,7 @@ Source: `design-source/project/` — read that tree, not this doc, when in doubt
 | `--surface-card` | `#ffffff` |
 | `--surface-raised` | `#eceef3` |
 | `--foreground` | `#15171c` |
-| `--primary` | `#0091b5` | (deepened teal for AA contrast on white) |
+| `--primary` | `#0091b5` (deepened teal for AA contrast on white) |
 | `--border` | `#e2e5ea` |
 | `--border-strong` | `#ccd1da` |
 | `--success` | `#0a8f57` |

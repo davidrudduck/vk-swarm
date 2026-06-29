@@ -22,10 +22,14 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
 
   const isDark = theme === ThemeMode.DARK;
 
-  const handleToggle = () => {
+  const handleToggle = async () => {
     const next = isDark ? ThemeMode.LIGHT : ThemeMode.DARK;
-    void updateAndSaveConfig({ theme: next });
-    setTheme(next);
+    try {
+      await updateAndSaveConfig({ theme: next });
+      setTheme(next);
+    } catch (error) {
+      console.error('Failed to persist theme preference', error);
+    }
   };
 
   return (

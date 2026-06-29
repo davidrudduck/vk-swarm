@@ -143,7 +143,7 @@ export type KanbanCardsProps = {
 
 export const KanbanCards = ({ children, className }: KanbanCardsProps) => (
   <div className={cn('flex flex-1 flex-col', className)}>
-    {Children.count(children) === 0 ? (
+    {Children.toArray(children).length === 0 ? (
       <div className="vks-ansi-dither vks-scanlines rounded-md border min-h-[80px] flex items-center justify-center">
         <span className="font-mono text-xs text-muted-foreground">
           ░▒ no tasks ▒░

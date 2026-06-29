@@ -254,7 +254,7 @@ the new tokens; correct typography/geometry per `design-spec.md`. A-class bugs s
 > | `TaskCountPills.tsx` | `frontend/src/components/projects/TaskCountPills.tsx` (**not** `tasks/`) |
 > | `kanban/index.tsx` | `frontend/src/components/ui/shadcn-io/kanban/index.tsx` |
 > | `DaysInColumnBadge.tsx` | `frontend/src/components/tasks/DaysInColumnBadge.tsx` |
-> | `LabelBadge.tsx` | `frontend/src/components/tasks/LabelBadge.tsx` |
+> | `LabelBadge.tsx` | `frontend/src/components/labels/LabelBadge.tsx` (**not** `tasks/`) |
 > | `VKSLogo.tsx` | `frontend/src/components/VKSLogo.tsx` (**not** `ui/`) |
 > | `Logo.tsx` (current, to be replaced in Navbar) | `frontend/src/components/Logo.tsx` |
 > | `AttemptHeaderActions.tsx` | `frontend/src/components/panels/AttemptHeaderActions.tsx` |
@@ -406,7 +406,7 @@ state where the attempt-history list already renders. D4 (no generated-type chan
 | `TaskCountPills.tsx` | `frontend/src/components/projects/TaskCountPills.tsx` | **Not** in `tasks/` |
 | `AllProjectsTaskCard.tsx` | `frontend/src/components/tasks/AllProjectsTaskCard.tsx` | Has same status-strip bug as TaskCard |
 | `AttemptHeaderActions.tsx` | `frontend/src/components/panels/AttemptHeaderActions.tsx` | |
-| `GitOperations.tsx` | `frontend/src/components/panels/GitOperations.tsx` | Verify sub-path before editing |
+| `GitOperations.tsx` | `frontend/src/components/tasks/Toolbar/GitOperations.tsx` | |
 | `TasksLayout.tsx` | `frontend/src/components/layout/TasksLayout.tsx` | |
 | `ThemeProvider.tsx` | `frontend/src/components/ThemeProvider.tsx` | Only ever sets `.light`/`.dark` — never `.vks-theme` |
 

@@ -145,8 +145,9 @@ export function Navbar() {
     typeof window !== 'undefined'
       ? localStorage.getItem('lastVisitedProjectId')
       : null;
-  const boardTo = lastVisitedProjectId
-    ? `/projects/${lastVisitedProjectId}/tasks`
+  const boardProjectId = projectId ?? lastVisitedProjectId;
+  const boardTo = boardProjectId
+    ? `/projects/${boardProjectId}/tasks`
     : '/projects';
 
   return (
@@ -340,7 +341,7 @@ export function Navbar() {
           <Link
             to={boardTo}
             className={
-              location.pathname.startsWith('/projects/')
+              location.pathname.startsWith('/projects')
                 ? 'mb-[-1px] border-b-2 border-primary py-2 text-foreground'
                 : 'mb-[-1px] py-2 text-muted-foreground hover:text-foreground'
             }

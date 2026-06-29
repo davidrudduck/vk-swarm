@@ -5,7 +5,7 @@ import { nodesApi } from '@/lib/api';
 import { useUserOrganizations } from '@/hooks';
 
 export function Nodes() {
-  const { data: orgData } = useUserOrganizations();
+  const { data: orgData, isLoading: orgsLoading } = useUserOrganizations();
   const organizations = orgData?.organizations ?? [];
   // Same default as useOrganizationSelection: first non-personal, else first.
   const orgId =
@@ -13,7 +13,8 @@ export function Nodes() {
 
   const {
     data: nodes = [],
-    isLoading,
+    isLoading: nodesLoading,
+    isError,
   } = useQuery({
     queryKey: ['nodes', orgId],
     queryFn: () => nodesApi.list(orgId!),
@@ -21,14 +22,22 @@ export function Nodes() {
     staleTime: 30_000,
   });
 
+  const isLoading = orgsLoading || (!!orgId && nodesLoading);
+
   return (
     <div className="space-y-6 p-8 pb-16 md:pb-8 h-full overflow-auto">
       <h2 className="font-serif text-2xl font-semibold">Nodes</h2>
 
-      {!orgId || isLoading ? (
+      {isLoading ? (
         <div className="flex items-center justify-center py-8">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
+      ) : !orgId ? (
+        <p className="text-muted-foreground">
+          Nodes are a swarm feature. Connect a hive server to get started.
+        </p>
+      ) : isError ? (
+        <p className="text-muted-foreground">Failed to load nodes.</p>
       ) : nodes.length === 0 ? (
         <p className="text-muted-foreground">No nodes connected yet.</p>
       ) : (

@@ -3,7 +3,7 @@ id: "010"
 phase: 2
 title: Kanban card-state fixes (selected ring, add-button size, status dot, count badge bg)
 status: ready
-depends_on: []
+depends_on: ["002"]
 parallel: false
 conflicts_with: ["013"]
 files:
