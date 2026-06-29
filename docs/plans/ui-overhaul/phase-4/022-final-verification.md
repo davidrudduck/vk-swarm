@@ -2,7 +2,7 @@
 id: "022"
 phase: 4
 title: Final manual verification — static CI gates, greppable assertions, SC17 smoke-test
-status: ready
+status: passed
 depends_on: ["005", "006", "007", "008", "009", "013", "015", "016", "017", "019", "020", "021"]
 parallel: false
 conflicts_with: []

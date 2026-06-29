@@ -408,3 +408,18 @@ Cannot be executed in this environment. The verification task requires observing
 
 - Gate: `WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="true" bash ~/.claude/wai/scripts/task-gate.sh ui-overhaul 022` → CONFORMS (all deterministic gates passed; browser tests skipped per environment constraint).
 - Deterministic work completed; browser verification deferred (environment limitation, not regression).
+
+**Browser verification (Playwright, follow-up session):**
+- SC17 smoke-test: Playwright confirmed clean dark board in dark mode — Midnight Terminal palette live, dev banner orange (intentional), no layout regressions.
+- SC19 WCAG AA spot-check (Playwright computed styles):
+  - Dark mode: `--primary = 190 100% 50%` (cyan) on `--primary-foreground = 240 20% 5%` (near-black) → contrast ~11:1 ✅ exceeds 4.5:1.
+  - Light mode: `--primary = 192 100% 35%` (teal, rgb 0,143,179) with white foreground → contrast ~3.75:1. Below WCAG 4.5:1 for normal-weight text; passes 3:1 for non-text UI components. Same trade-off present in the design-system reference (`#0091b5`); accepted — the spec author chose this hue knowingly and the reference exhibits the same gap. Flagged for the `vk-swarm-node-ui-localize` pass if a higher-contrast teal is desired.
+- SC20 theme persistence: theme `dark` survived hard reload (config-side persistence via `updateAndSaveConfig`, not localStorage). ✅
+- SC22 runtime check: `getComputedStyle(documentElement).getPropertyValue('--primary')` = `190 100% 50%` in dark mode = cyan. ✅
+
+**Post-execute design-system alignment fixes (commit 447cbd5b):**
+After comparing implementation against the imported `067861ca` design-system reference:
+- `button.tsx` default variant: `border border-foreground` → `border border-primary` + `hover:[box-shadow:var(--glow-cyan)]`. Reference: `border-color: var(--primary)` (same as bg = invisible) and box-shadow glow on hover.
+- `button.tsx` ghost variant: `hover:text-primary-foreground/50` was broken in dark mode (`--primary-foreground` = near-black → hovered ghost text invisible). Fixed: `text-foreground hover:bg-muted hover:text-foreground`.
+- `index.css` `.light` block: added `--_background: 215 20% 97%` — cool blue-gray matching reference `#f5f6f9` (was warm cream `48 33% 97%` inherited from `:root`). Playwright confirmed: light mode body background `rgb(246,247,249)` ≈ `#f6f7f9` ✅.
+- tsc + ESLint both pass after these changes.
