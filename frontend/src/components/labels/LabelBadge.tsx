@@ -16,19 +16,34 @@ interface LabelBadgeProps {
 
 // Calculate contrasting text color based on background
 function getContrastColor(hexColor: string): string {
-  // Remove # if present
   const hex = hexColor.replace('#', '');
-
-  // Convert to RGB
   const r = parseInt(hex.substring(0, 2), 16);
   const g = parseInt(hex.substring(2, 4), 16);
   const b = parseInt(hex.substring(4, 6), 16);
-
-  // Calculate luminance
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-
-  // Return black or white based on luminance
   return luminance > 0.5 ? '#000000' : '#ffffff';
+}
+
+// Derive a text colour for the outline variant on a white/light surface.
+// Uses WCAG relative luminance to darken colours that would fail 4.5:1 vs white.
+function getOutlineTextColor(hexColor: string): string {
+  const hex = hexColor.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  const lin = (c: number) => {
+    const n = c / 255;
+    return n <= 0.03928 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+  };
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  // Target: contrast >= 4.5:1 vs white (L=1.0); max L for text = 0.183
+  if (L <= 0.183) return hexColor;
+  const scale = Math.sqrt(0.18 / Math.max(L, 0.001));
+  const ch = (v: number) =>
+    Math.round(Math.min(255, v * scale))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${ch(r)}${ch(g)}${ch(b)}`;
 }
 
 export function LabelBadge({
@@ -65,7 +80,7 @@ export function LabelBadge({
         variant === 'outline'
           ? {
               backgroundColor: 'transparent',
-              color: label.color,
+              color: getOutlineTextColor(label.color),
               borderColor: label.color,
             }
           : {

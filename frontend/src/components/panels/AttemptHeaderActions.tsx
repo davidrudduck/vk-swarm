@@ -83,7 +83,13 @@ export const AttemptHeaderActions = ({
         // "Diffs"/"Terminal", not the SC18 labels).
         <Tabs
           value={
-            mode === 'diffs' ? 'diff' : mode === 'terminal' ? 'logs' : 'attempts'
+            mode === 'diffs'
+              ? 'diff'
+              : mode === 'terminal'
+                ? 'logs'
+                : mode === null
+                  ? 'attempts'
+                  : '_none'
           }
           onValueChange={(v) => {
             onModeChange(v === 'diff' ? 'diffs' : v === 'logs' ? 'terminal' : null);
