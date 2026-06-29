@@ -32,9 +32,9 @@ export function DevBanner() {
     <div
       className="text-center py-2 px-4 text-sm font-medium border-b"
       style={{
-        backgroundColor: bgColor || 'hsl(var(--warning))',
-        color: fgColor || 'hsl(var(--warning-foreground))',
-        borderColor: bgColor ? undefined : 'hsl(var(--warning) / 0.7)',
+        backgroundColor: bgColor || '#f97316', // orange-500
+        color: fgColor || 'white',
+        borderColor: bgColor ? undefined : '#ea580c', // orange-600
       }}
     >
       <div className="flex items-center justify-center gap-2">
