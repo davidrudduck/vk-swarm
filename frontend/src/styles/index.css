@@ -136,6 +136,7 @@
      Inherits :root defaults; overrides primary for AA contrast + status tokens (added in 002). */
   .light {
     color-scheme: light;
+    --_background: 215 20% 97%;
     --_primary: 192 100% 35%;
     --_primary-foreground: 0 0% 100%;
     --status-todo: 220 9% 46%;
