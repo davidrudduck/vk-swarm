@@ -37,9 +37,12 @@ migration with no Rust code; its correctness is proven when 104's persistence te
 -- and adding non-task op types is a LATER increment.
 CREATE TABLE IF NOT EXISTS node_outbox (
     id              BLOB PRIMARY KEY,
-    -- Per-node monotonic sequence, assigned explicitly on INSERT as MAX(seq)+1 (see 104). Not a rowid
-    -- alias (the PK is `id`), so 104 must compute it; this column gives the node→hive total order.
-    seq             INTEGER NOT NULL,
+    -- Per-node monotonic sequence giving the node→hive total order. Assigned on INSERT via a SINGLE
+    -- scalar-subquery statement `(SELECT COALESCE(MAX(seq),0)+1 FROM node_outbox)` (see 104), which is
+    -- atomic under SQLite's single-writer lock. `UNIQUE` is the belt-and-suspenders guard: a duplicate
+    -- seq from any concurrent two-step MAX(seq)+1 path fails loudly instead of corrupting the order
+    -- (tournament R1/F4). Not a rowid alias (the PK is `id`).
+    seq             INTEGER NOT NULL UNIQUE,
     op_type         TEXT NOT NULL,
     entity_type     TEXT NOT NULL,
     entity_id       BLOB NOT NULL,

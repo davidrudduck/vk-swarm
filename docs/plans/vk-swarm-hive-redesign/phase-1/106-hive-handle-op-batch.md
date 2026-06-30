@@ -77,6 +77,30 @@ mod op_batch_tests {
         // to 1 (the op is acked/skipped, NOT parked) and node_op_log records it — so a non-swarm task
         // at the outbox head does NOT wedge the cursor forever.
     }
+
+    #[tokio::test]
+    async fn op_batch_maps_node_lowercase_status_explicitly() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        // seed org+node+swarm-linked project. Apply an op whose payload was produced by the node:
+        //   payload.status = "inprogress"  (node TaskStatus #[serde(rename_all="lowercase")])
+        // Assert the resulting shared_tasks row status == 'in-progress' (the hive's InProgress), NOT the
+        // wrong fallback status. Repeat with "inreview" -> 'in-review'. This is the tournament R1/F5
+        // guard: the default handle_task_sync parse would silently coerce the node's lowercase forms to
+        // the wrong fallback (the InProgress/InReview hyphenation mismatch).
+    }
+
+    #[tokio::test]
+    async fn op_batch_does_not_lose_apply_when_upsert_fails_then_retried() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        // tournament R1/F1: prove apply-then-record. Drive an op whose first upsert_from_node fails
+        // (e.g. a transiently-violating fixture), assert NO node_op_log row was written and NO ack
+        // advanced; then on the clean retry assert the shared_task IS applied and the dedup row appears.
+        // (If injecting an upsert failure is impractical at this seam, assert the weaker invariant: a
+        // node_op_log row exists ONLY for ops whose shared_tasks apply is present — never a dedup row
+        // without its task.)
+    }
 }
 ```
 > The third test is the wedge guard. Without the park-vs-skip split (below), a single non-swarm task at
@@ -113,10 +137,15 @@ mod op_batch_tests {
         }
 ```
 - **Add `handle_op_batch`** (new fn beside `handle_task_sync`). EXACT contract:
-  - Signature mirrors `handle_task_sync` PLUS the `ops` vec:
-    `async fn handle_op_batch(node_id: Uuid, organization_id: Uuid, node_name: &str, ops: Vec<OutboxOp>,
+  - Signature mirrors `handle_task_sync` PLUS the `ops` slice. **`ops` is borrowed, NOT owned**
+    (tournament R1/F3): `handle_node_message(msg: &NodeMessage, …)` (`session.rs:501`) matches on a
+    `&NodeMessage`, so the `NodeMessage::OpBatch { ops }` arm binds `ops: &Vec<OutboxOp>` — it CANNOT be
+    moved into an owned `Vec` param. Take a slice:
+    `async fn handle_op_batch(node_id: Uuid, organization_id: Uuid, node_name: &str, ops: &[OutboxOp],
     pool: &PgPool, ws_sender: &mut SplitSink<WebSocket, Message>) -> Result<(), HandleError>`
-    (`OutboxOp` = `crate::nodes::ws::message::OutboxOp` from 103).
+    (`OutboxOp` = `crate::nodes::ws::message::OutboxOp` from 103). The call arm is
+    `handle_op_batch(node_id, organization_id, node_name, ops, pool, ws_sender).await` (the `&Vec` coerces
+    to `&[OutboxOp]`). Iterate `for op in ops` (yields `&OutboxOp`; `op.seq` is `Copy`, use `&op.idempotency_key`/`&op.op_type` for binds).
   - `applied_through_seq` starts at the node's current high-water:
     `SELECT COALESCE(MAX(seq),0) FROM node_op_log WHERE node_id = $1`.
   - Iterate `ops` IN ORDER. For each op:
@@ -129,16 +158,31 @@ mod op_batch_tests {
         ADVANCE**: `applied_through_seq = op.seq`; record it in node_op_log (so the high-water reflects
         it); do NOT call `upsert_from_node`. PERMANENT (not swarm-linked) — must NOT wedge the cursor.
         Continue.
-    - **(c) Idempotent apply (context present + swarm-linked):**
-      `INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id) VALUES (..)
-       ON CONFLICT (node_id, idempotency_key) DO NOTHING` → `rows_affected`.
-      - `rows_affected == 1` (first time): `SharedTaskRepository::upsert_from_node(UpsertTaskFromNodeData
-        { swarm_project_id, project_id: swarm_project_id, organization_id: org_id, origin_node_id:
-        node_id, local_task_id: payload.id, title, description, status, version: 1, owner_node_id:
-        Some(node_id), owner_name: Some(node_name.to_string()), assignee_user_id: None })` (construction
-        identical to `handle_task_sync` @1675).
-      - `rows_affected == 0` (already applied): skip the upsert (idempotent).
-      - Either branch: `applied_through_seq = op.seq`.
+    - **(c) Idempotent apply — APPLY FIRST, RECORD SECOND (tournament R1/F1):** the dedup row must NOT be
+      persisted independently of a successful apply. If `INSERT node_op_log` commits but `upsert_from_node`
+      then fails, a retry sees the dedup row (`rows_affected==0`), SKIPS the apply, advances the ack →
+      **silent loss**. So order it:
+      1. `let seen: bool = SELECT EXISTS(SELECT 1 FROM node_op_log WHERE node_id=$1 AND idempotency_key=$2)`.
+      2. `seen == true` → already applied in a prior committed pass: SKIP the upsert; `applied_through_seq =
+         op.seq`; continue.
+      3. `seen == false` → `SharedTaskRepository::upsert_from_node(UpsertTaskFromNodeData { swarm_project_id,
+         project_id: swarm_project_id, organization_id: org_id, origin_node_id: node_id, local_task_id:
+         payload.id, title, description, status: <mapped per (d)>, version: 1, owner_node_id: Some(node_id),
+         owner_name: Some(node_name.to_string()), assignee_user_id: None })` (construction as
+         `handle_task_sync` @1675). `upsert_from_node` is itself idempotent (`ON CONFLICT (source_node_id,
+         source_task_id) DO UPDATE`, `tasks.rs:585`). **ONLY AFTER it returns `Ok`** →
+         `INSERT INTO node_op_log (..) ON CONFLICT (node_id, idempotency_key) DO NOTHING`; then
+         `applied_through_seq = op.seq`.
+      If `upsert_from_node` returns `Err`, propagate (`?`) → **no dedup row, no ack** → the node re-sends and
+      re-applies; no silent loss. (Apply-then-record avoids threading a transaction through
+      `upsert_from_node`, which lives in `tasks.rs` outside this task's `files:`.)
+    - **(d) Status value mapping (tournament R1/F5):** the op payload is `serde_json::to_value(&Task)` (105)
+      and the node `TaskStatus` serializes `#[serde(rename_all="lowercase")]` → `todo`/`inprogress`/
+      `inreview`/`done`/`cancelled` (`crates/db/src/models/task/mod.rs:24`). The hive's `handle_task_sync`
+      status parse accepts `in_progress`/`in-progress` and DEFAULTS unknown → `Todo` (`session.rs:1559`),
+      which would silently corrupt `inprogress`/`inreview` → `Todo`. `handle_op_batch` MUST map the node's
+      lowercase forms EXPLICITLY (`todo`→Todo, `inprogress`→InProgress, `inreview`→InReview, `done`→Done,
+      `cancelled`→Cancelled) and on an UNKNOWN value return `Err`/log+skip — do NOT default-to-`Todo`.
   - After the loop: `send_message(ws_sender, &HiveMessage::OpAck { applied_through_seq }).await
     .map_err(|_| HandleError::Send)?;` (always send). Return `Ok(())`.
   > For the SKIP+ADVANCE permanent cases (b), recording the op in node_op_log keeps the cursor and the
@@ -172,5 +216,7 @@ node side, or any migration. Tracer scope: `task.upsert` ONLY.
   ws-free while preserving the ack path).
 
 ## Done when
-`WAI_TYPECHECK_CMD="cargo check -p remote" WAI_TEST_CMD="cargo test -p remote op_batch" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-redesign 106` exits 0
-(run with `DATABASE_URL=postgres://…` pointed at a migrated Postgres — Trap 2b; a skipped test is a hollow pass.)
+`WAI_TYPECHECK_CMD="cargo check -p remote" WAI_TEST_CMD='test -n "$DATABASE_URL" && cargo test -p remote op_batch' bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-redesign 106` exits 0
+(run with `DATABASE_URL=postgres://…` pointed at a migrated Postgres — Trap 2b. **The `test -n "$DATABASE_URL" &&`
+prefix makes the gate FAIL-CLOSED** (tournament R1/F2): `task-gate.sh` runs `WAI_TEST_CMD` via `bash -c`, so
+without `DATABASE_URL` the gate fails instead of `skip_without_db!` reporting a hollow green.)

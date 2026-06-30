@@ -110,11 +110,15 @@ mod tests {
     ```
   - **`OutboxRepository`** (stateless; methods take `&SqlitePool`):
     - `enqueue_op(pool, op: NewOutboxOp) -> Result<OutboxOp, sqlx::Error>`:
-      `seq = SELECT COALESCE(MAX(seq), 0) + 1 FROM node_outbox` (per-node monotonic — single-node DB so
-      MAX+1 is the per-node counter); `id = Uuid::new_v4()`; serialize `payload` with
-      `serde_json::to_string`; `INSERT … RETURNING …`; map back to `OutboxOp` (parse `payload` TEXT with
-      `serde_json::from_str`). The `UNIQUE(idempotency_key)` constraint surfaces as `sqlx::Error` on a
-      duplicate (test 2 asserts this) — do NOT swallow it.
+      `id = Uuid::new_v4()`; serialize `payload` with `serde_json::to_string`. **Allocate `seq` INLINE in
+      ONE statement** — `INSERT INTO node_outbox (id, seq, op_type, entity_type, entity_id, payload,
+      idempotency_key, fencing_token) VALUES (?, (SELECT COALESCE(MAX(seq),0)+1 FROM node_outbox), ?, ?,
+      ?, ?, ?, ?) RETURNING …`. Computing `seq` as a **scalar subquery WITHIN the INSERT** is atomic under
+      SQLite's single-writer lock, so two concurrent `Task::create`/`update` enqueues cannot read the same
+      `MAX(seq)` and duplicate it (tournament R1/F4 — do NOT split into a separate `SELECT MAX(seq)` then
+      `INSERT`). The `UNIQUE(seq)` constraint (101) is the backstop. Map the returned row back to
+      `OutboxOp` (parse `payload` TEXT with `serde_json::from_str`). The `UNIQUE(idempotency_key)`
+      constraint surfaces as `sqlx::Error` on a duplicate (test 2 asserts this) — do NOT swallow it.
     - `peek_unacked(pool, limit: i64) -> Result<Vec<OutboxOp>, sqlx::Error>`:
       `SELECT … FROM node_outbox WHERE acked_at IS NULL ORDER BY seq ASC LIMIT ?` (uses the
       `idx_node_outbox_unacked_seq` partial index).

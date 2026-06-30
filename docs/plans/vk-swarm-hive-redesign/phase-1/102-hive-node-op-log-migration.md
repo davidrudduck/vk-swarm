@@ -112,5 +112,8 @@ Do NOT add a Rust db-model module, edit `crates/remote/src/db/`, or touch the WS
   a live `DATABASE_URL`, not the offline cache.
 
 ## Done when
-`WAI_TYPECHECK_CMD="cargo check -p remote" WAI_TEST_CMD="cargo test -p remote --test node_op_log_migration" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-redesign 102` exits 0
-(run with `DATABASE_URL=postgres://…` pointed at a Postgres that has had `./migrations` applied — Trap 2b)
+`WAI_TYPECHECK_CMD="cargo check -p remote" WAI_TEST_CMD='test -n "$DATABASE_URL" && cargo test -p remote --test node_op_log_migration' bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-redesign 102` exits 0
+(run with `DATABASE_URL=postgres://…` pointed at a Postgres that has had `./migrations` applied — Trap 2b.
+**The `test -n "$DATABASE_URL" &&` prefix makes the gate FAIL-CLOSED** (tournament R1/F2): `task-gate.sh`
+runs `WAI_TEST_CMD` via `bash -c`, so with no `DATABASE_URL` the `test -n` fails, the `&&` short-circuits,
+and the gate fails — instead of `skip_without_db!` reporting a skipped test as a hollow green.)
