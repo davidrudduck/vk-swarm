@@ -48,12 +48,19 @@ exists for P2 to populate).
 - Lease-expiry sweep: a hive timer (analog of `crates/remote/src/services/stale_cleanup.rs`) reclaims
   assignments whose `lease_expires_at < now()`, bumping `fencing_token = nextval(...)`.
 
-## D. Status state machine (P3, ADR-0010)
+## D. Status state machine (P3, ADR-0010) — RECONCILED to the real enum (ratified 2026-06-30)
 
-Single-author transition matrix. Hive-authored: `todo→assigned`, `assigned→in-progress`,
-`*→cancelled`. Node-reported (only with a valid lease + current fencing token): `in-progress→done`,
-`in-progress→failed`. One canonical wire value (resolve node lowercase `inprogress`/`inreview` vs hive
-`in-progress`/`in-review` — the mapping P1/106-F5 already pins).
+`task.status` ∈ `{Todo, InProgress, InReview, Done, Cancelled}` (both crates) — there is **no
+`Assigned`/`Failed` variant**. SC4's `assigned`/`failed` are authority LABELS, not status values:
+`assigned` = an active `node_task_assignments` row (hive, assignment layer); `failed` = an
+`execution_status` outcome (node, execution layer). The **`task.status` single-author matrix**:
+- **Hive-authored:** `todo→in-progress` (assign+start), `in-review→done`/`in-review→in-progress`
+  (operator review), `*→cancelled`.
+- **Node-reported** (only with a valid lease + current fencing token, CONTRACT §C):
+  `in-progress→in-review`, `in-progress→done`.
+
+One canonical wire value (node lowercase `inprogress`/`inreview` ↔ hive `in-progress`/`in-review` — the
+mapping P1/106-F5 pins). See ADR-0010 for the full reconciliation rationale.
 
 ## E. Inbound single channel (P4, ADR-0007)
 

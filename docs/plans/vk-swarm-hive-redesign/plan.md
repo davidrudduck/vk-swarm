@@ -90,7 +90,157 @@ each prior ships (user-approved phase-by-phase, decisions-ledger).
 > with the task write, so true SC2c no-loss needs a transactional enqueue; (ii) only `task.upsert`
 > flows; (iii) the five legacy push paths are NOT retired. Those are the next Phase-1 increment.
 
-### Phases 2–7 — authored later (structure fixed; see Phases section + SC map)
+### Phase 2 — lease / atomic-checkout + fencing (SC3; ADR-0009; discharges node-foundations D7)
+
+Atomic conditional checkout (`try_claim`) + real lease (`lease_expires_at`) + monotonic `fencing_token`
+(per-hive `node_fencing_token_seq`). The node renews via `LeaseHeartbeat`; the hive replies `LeaseGrant`
+(token+expiry). The node stamps `OutboxOp.fencing_token` for hive-assigned tasks **at op-stream time** from
+its lease state (the `db`-crate enqueue cannot know leases — ledger), and the hive **rejects** any op whose
+token is older than the assignment's current token (the at-most-once commit effect). A node that loses its
+lease **self-fences** (reuses the ADR-0001 `stop_execution` kill via `AssignmentHandler::handle_cancellation`).
+A background sweep (`stale_cleanup.rs` analog) reclaims expired leases with a bumped token. Variant shapes
+are FIXED by CONTRACT §A; schema by §B; fencing semantics by §C.
+
+| id  | title | dep | conflicts | SC |
+|-----|-------|-----|-----------|----|
+| 201 | Add `lease_expires_at`+`fencing_token` cols + `node_fencing_token_seq` (Postgres) | dep: - | conflicts: none | SC3 |
+| 202 | Add `LeaseHeartbeat`/`LeaseGrant`/`LeaseRevoked` WS variants to both crates + stub arms | dep: - | conflicts: 204 205 206 | SC3 |
+| 203 | Hive `TaskAssignmentRepository::try_claim` (atomic CAS) + `renew_lease` | dep: 201 | conflicts: 209 | SC3 |
+| 204 | Hive `handle_lease_heartbeat` — renew leases, reply `LeaseGrant` per assignment | dep: 202 203 | conflicts: 202 205 | SC3 |
+| 205 | Hive fencing enforcement in `handle_op_batch` — reject stale-token, emit `LeaseRevoked` | dep: 106 202 203 | conflicts: 202 204 | SC3 |
+| 206 | Node lease state — `HiveEvent` lease variants, token+expiry on `ActiveAssignment`, send `LeaseHeartbeat` | dep: 202 | conflicts: 202 207 208 | SC3 |
+| 207 | Node — stamp `OutboxOp.fencing_token` from the lease at stream time (hive-assigned tasks only) | dep: 107 206 | conflicts: 206 208 | SC3 |
+| 208 | Node self-fence watchdog — halt the agent on lease-revoke / renew-deadline miss | dep: 206 | conflicts: 206 207 | SC3 |
+| 209 | Hive lease-expiry sweep — reclaim expired leases with a bumped token (timer, analog stale_cleanup) | dep: 201 203 | conflicts: 203 | SC3 |
+| 210 | SC3 acceptance test — partition cannot double-execute (stale-token reject + self-fence) | dep: 203 205 208 209 | conflicts: none | SC3 |
+
+> **Phase-2 honesty:** SC3's guarantee is "at-most-once commit *effect* (stale-token rejection, 205) +
+> bounded-overlap execution (node self-fence, 208)" — NOT "we have leases" (ADR-0009). 210 claims TS2 and
+> proves the hive reject leg end-to-end; the node self-fence leg is proven by 206/208's hermetic unit tests
+> (a true cross-process WS round-trip is out of hermetic scope — recorded in the ledger). The lease state
+> lives on `ActiveAssignment` (one structure serves 206/207/208) — a reconciled design decision (ledger).
+> **Cross-phase shared files:** 205 EDITS `handle_op_batch` (authored by P1/106) — `depends_on: 106`. The
+> WS enum files (`message.rs`, `hive_client.rs`), `session.rs`, and `node_runner.rs` are touched in BOTH
+> P1 and P2 (and later phases); the orchestrator reconciles cross-phase conflicts on them.
+
+### Phase 5 — anti-entropy reconciliation digest (SC5; rides P1's op-log, TS4 self-heal)
+
+Riding the P1 op-log (ADR-0008): the node periodically (and on the first sync cycle after reconnect)
+emits a per-entity **version digest** of its swarm-linked tasks; the hive compares it against
+`shared_tasks`/`node_op_log` and replies a **DigestResult** that directs the heal —
+`resend_from_seq` re-streams the node's op-log (node-has/hive-lacks, including acked-but-lost ops via the
+new `peek_from_seq`) and `pull_entities` triggers the bulk-snapshot reconcile leg (hive-has/node-lacks).
+This **replaces the manual `reset_*` repair migrations**; convergence is the protocol path only, no
+out-of-band SQL. The `Digest`/`DigestResult` variant shapes are FIXED by CONTRACT §A.
+
+| id  | title | dep | conflicts | SC |
+|-----|-------|-----|-----------|----|
+| 501 | Add `Digest`/`DigestEntry`/`DigestResult` WS variants to both crates + exhaustive stub arms | dep: - | conflicts: 503 504 | SC5 |
+| 502 | Node digest builder — emit `NodeMessage::Digest` of swarm-linked tasks each sync cycle | dep: 501 | conflicts: none | SC5 |
+| 503 | Hive `handle_digest` — compare vs `shared_tasks`/`node_op_log`, reply `DigestResult` (TS4 self-heal) | dep: 501 | conflicts: 501 | SC5 |
+| 504 | Node acts on `DigestResult` — re-stream from `resend_from_seq` + pull via reconcile leg | dep: 501 502 | conflicts: 501 | SC5 |
+
+> **Cross-phase shared-file collision (CONTRACT §A, recorded in the ledger).** 501 hand-duplicates the
+> `Digest`/`DigestResult` variants into `crates/services/src/services/hive_client.rs` AND
+> `crates/remote/src/nodes/ws/message.rs` (+ exhaustive arms in `session.rs`) — the SAME two enum files
+> P2's lease-protocol task edits (`LeaseHeartbeat`/`LeaseGrant`/`LeaseRevoked`). The two protocol tasks
+> `conflicts_with` each other; P2 is **not yet authored as ids**, so 501's frontmatter carries only the
+> intra-P5 conflicts. When P2 lands, its protocol task MUST add 501 to its `conflicts_with` (and 501 is
+> updated symmetrically) and be `depends_on`-sequenced so the two never edit the enum tails at once.
+> 503 also edits `crates/remote/src/nodes/ws/session.rs` and `crates/remote/src/db/tasks.rs`; 504 also
+> edits `crates/db/src/models/node_outbox.rs` and `crates/services/src/services/node_runner.rs`.
+
+### Phase 6 — no fan-out (SC1 data-plane half; VERIFY + GUARD, not a removal)
+
+Verified in code (decisions-ledger): the node-facing channel already carries only
+`ProjectSync`/`NodeRemoved` (+ per-node control/own-assignment/own-backfill), NOT shared-task state.
+Phase-6 asserts and fences that invariant against regression; it is NOT a large fan-out removal.
+
+| id  | title | dep | conflicts | SC |
+|-----|-------|-----|-----------|----|
+| 601 | No-fanout invariant guard — exhaustive `HiveMessage` classification + topology assertion (hermetic, no DB) | dep: 103 | conflicts: none | SC1 |
+| 602 | No-fanout send-site comment fence — document the SC1 invariant at `connection.rs` | dep: 601 | conflicts: none | SC1 |
+
+> **601 `depends_on: 103` (the enum-drift fence).** Phase-6 is sequenced after P1/P2/P5, which ADD
+> hive→node `HiveMessage` variants (`OpAck`@P1-task-103, `LeaseGrant`/`LeaseRevoked`@P2,
+> `DigestResult`@P5 — CONTRACT §A). 601's classification `match` is exhaustive over `HiveMessage`, so it
+> must see the GROWN enum, not main's. The dep on the authored variant-adding task **103** makes the
+> ordering explicit; the P2/P5 variants (whose tasks are not yet authored as ids) are **decision-locked**
+> in 601's body (a fixed `variant → Delivery` table the executor applies — none is fan-out), so the guard
+> never devolves to executor judgment when those variants land.
+
+### Phase 7 — hive-only-state cutover (SC6 / TS6; ADR-0011 migrate / regenerate / discard)
+
+**In-place rebuild — judgment call ratified at authoring (NEEDS ORCHESTRATOR/USER RATIFICATION).** No
+task in this workstream rebuilds the hive schema; every REGENERABLE/DISCARDABLE table still has surviving
+`query!` refs in `crates/remote/src` (code removal is P4/P5, out of scope here), and the node re-ingest
+path `INSERT`s into the existing table (`node_task_attempts.rs:52`). So the cutover is a **DATA operation
+(TRUNCATE/DELETE), NOT a schema DROP**: MUST-MIGRATE tables (incl. the `source_task_id`/`source_node_id`
+id bridge) stay in place, and the hive `task_status` enum is already canonical kebab-case (the
+`inprogress`→`in-progress` remap is at the node→hive ingest boundary, not at rest). The destructive
+alternative (copy MUST-MIGRATE into a fresh empty schema) is NOT authored; each task STOPs if it is
+mandated instead.
+
+| id  | title | dep | conflicts | SC |
+|-----|-------|-----|-----------|----|
+| 701 | Cutover migration — data-clear REGENERABLE + DISCARDABLE hive-only state (in-place) | dep: - | conflicts: none | SC6 |
+| 702 | Cutover guard — MUST-MIGRATE round-trip: id bridge intact + status canonical | dep: 701 | conflicts: none | SC6 |
+| 703 | Cutover guard — REGENERABLE tables repopulate from a simulated node re-ingest | dep: 701 | conflicts: none | SC6 |
+
+> **701 is `irreversible: true`** (data loss; gated behind a pre-cutover backup, ADR-0011) — needs a
+> `reviews/701.approved` token before its gate runs. All three are Postgres + fail-closed (Trap 2b): the
+> `## Done when` carries `test -n "$DATABASE_URL" && cargo test …` so a no-DB run fails instead of a
+> hollow skipped green. 701's test is **seed → run the cutover SQL → assert** (not connect-and-count) so
+> it is non-hollow even though the migration ran at `migrate!` time on an empty DB. 703 carries a
+> ratified FIDELITY limitation: it drives the EXISTING `NodeTaskAttemptRepository::upsert` re-ingest path
+> (the new ADR-0008 op-log re-ingest for attempts does not exist yet — P1 shipped only `task.upsert`),
+> proving the schema is refillable post-cutover, not the op-log mechanism.
+>
+> **FROZEN-SPEC COLLISION (NEEDS RATIFICATION):** spec TS6 says "discardable tables are **absent**"; the
+> in-place reading keeps them present-but-emptied (their code refs are removed only in P4/P5, and P7
+> depends on P1–P3). Ratify keep-but-empty (option a, authored) OR sequence a follow-up DROP after the
+> P4/P5 code-removal (option b). See the decisions-ledger Phase-7 item 2b.
+
+### Phase 4 — inbound collapse (SC7 / TS5; authored this pass — ADR-0007)
+
+| id  | title | dep | conflicts | SC |
+|-----|-------|-----|-----------|----|
+| 401 | TS5 acceptance — single inbound channel, one delete, one conflict + topology guard | dep: 402 403 404 | conflicts: 402 403 | SC7 |
+| 402 | One delete semantic — both inbound legs soft-unlink via a single shared helper | dep: - | conflicts: 401 403 404 | SC7 |
+| 403 | Dirty-guard in `upsert_remote_task` — inbound never clobbers an unacked local edit | dep: 104 | conflicts: 401 402 | SC7 |
+| 404 | Handle `task.reassigned` in the activity processor — no dropped event types | dep: - | conflicts: 402 | SC7 |
+| 405 | Remove the dead `ElectricTaskSyncService` task-shape path (IRREVERSIBLE) | dep: - | conflicts: none | SC7 |
+
+> **Phase-4 authoring notes (recorded in the ledger):** (i) the bulk-snapshot reconcile is ALREADY
+> connect-gated (its only caller is the `HiveEvent::Connected` arm; no periodic task re-sync exists), so
+> "demote to cold-start/gap-fill" is a **verify + guard** (401's comment fence + topology STOP-trigger),
+> NOT a removal — mirrors the SC1 no-fanout "already satisfied" finding. (ii) A LATENT prod bug surfaced:
+> the WS leg's `set_shared_task_id(.., None)` is a **no-op for a linked row** (SQLite `= NULL`
+> three-valued logic, verified empirically), so 402 routes BOTH legs through one working
+> `unlink_by_shared_task_id` and expands to touch `processor.rs`. (iii) Dirty-guard is **entity-level**
+> (skip the whole apply when an unacked outbox op exists for the entity, predicate `acked_at IS NULL`) —
+> strictly more conservative than the ADR's field-level wording; ratified judgment call. (iv)
+> `task.reassigned` carries the identical `SharedTaskActivityPayload` as `task.updated`, so it routes
+> through the same handler. **Shared files:** `sync.rs` (402+403), `processor.rs` (402+404),
+> `node_runner.rs` (401+402) — encoded as `conflicts_with`. 403 has a cross-phase `depends_on: 104`
+> (the P1 `OutboxRepository` file it extends with `has_unacked_for_entity`).
+
+### Phase 3 — status machine (SC4; ADR-0010 reconciled, ratified matrix)
+
+Explicit `task.status` single-author transition matrix over the REAL enum
+(`Todo/InProgress/InReview/Done/Cancelled` — no `Assigned`/`Failed`; ADR-0010 §Decision, ratified
+2026-06-30). Hive authors `Todo→InProgress` (assign+start), `InReview→Done`/`InReview→InProgress`
+(operator review), `*→Cancelled`; the node authors `InProgress→InReview`/`InProgress→Done`, accepted
+only with a valid lease + current fencing token. 303 enforces this in `handle_op_batch` (rides P2's
+fencing seam — tasks 201/203/205 — as a prose+STOP precondition, not a `depends_on` edge). 304 closes the
+SECOND node-status write site (legacy `handle_task_status`).
+
+| id  | title | dep | conflicts | SC |
+|-----|-------|-----|-----------|----|
+| 301 | Status transition matrix module — single-author guard table (ADR-0010) | dep: - | conflicts: 302 | SC4 |
+| 302 | One canonical status wire value — node→hive mapping boundary helper | dep: 301 | conflicts: 301 303 304 | SC4 |
+| 303 | Enforce single-author status transitions at `handle_op_batch` (node gated on lease+token) | dep: 301 302 | conflicts: 302 304 | SC4 |
+| 304 | Route the legacy `handle_task_status` write through the transition guard | dep: 301 303 | conflicts: 302 303 | SC4 |
 
 ## Execution preconditions & closeout (READ — affects whether the gate passes)
 

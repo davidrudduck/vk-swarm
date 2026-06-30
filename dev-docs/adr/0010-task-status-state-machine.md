@@ -26,15 +26,31 @@ Two concrete hazards confirmed in code:
 ## Decision
 
 Define `task.status` as an **explicit guarded transition matrix** where **every transition has exactly
-one authoritative author** (SC4):
+one authoritative author** (SC4).
+
+**Reconciliation with the real enum (ratified 2026-06-30).** `task.status` is exactly
+`{Todo, InProgress, InReview, Done, Cancelled}` in both crates (`crates/db/src/models/task/mod.rs:27`,
+`crates/remote/src/db/tasks.rs:25`) — there is **no `Assigned` and no `Failed` variant**. SC4's
+parenthetical `assigned`/`failed` are **authority labels for lifecycle concepts, not `task.status`
+values**, and map to other columns:
+- **`assigned`** = the existence of an **active `node_task_assignments` row** (hive-authored, the
+  assignment layer — ADR-0009), NOT a `task.status` value.
+- **`failed`** = an **`execution_status`** outcome on the assignment / execution process (node-reported,
+  the execution layer), NOT a `task.status` value.
+
+The `task.status` matrix over the real enum:
 
 | Transition | Author |
 |---|---|
-| `todo → assigned` | **hive** (assigns the task to a node) |
-| `assigned → in-progress` | **hive** (on the node's claim-ack) |
-| `in-progress → done` | **node** (reported up the outbox) |
-| `in-progress → failed` | **node** (reported up the outbox) |
-| `* → cancelled`, `assigned → todo` (unassign) | **hive** (operator action) |
+| `todo → in-progress` | **hive** (on assignment + node start) |
+| `in-progress → in-review` | **node** (run completed, awaiting review) |
+| `in-progress → done` | **node** (terminal) |
+| `in-review → done` / `in-review → in-progress` (reopen) | **hive** (operator review) |
+| `* → cancelled` | **hive** (operator action) |
+
+(The "assigned" milestone is the `node_task_assignments` row created by the hive's atomic checkout,
+ADR-0009; the "failed" outcome is the assignment/execution `execution_status`. Both are single-author
+in their own layer, so the no-field-level-conflict guarantee holds across all three surfaces.)
 
 - A **node-reported** transition is accepted by the hive only when carried by a valid lease + current
   fencing token ([ADR-0009](./0009-lease-checkout-fencing.md)); illegal transitions are rejected, not
