@@ -10,7 +10,6 @@ import { FullAttemptLogsPage } from '@/pages/FullAttemptLogs';
 import { Processes } from '@/pages/Processes';
 import { Nodes } from '@/pages/Nodes';
 import { NormalLayout } from '@/components/layout/NormalLayout';
-import { useAuth } from '@/hooks';
 
 // Keep SettingsLayout as static import (small, needed for route structure)
 import { SettingsLayout } from '@/pages/settings/';
@@ -84,8 +83,6 @@ function SettingsLoadingFallback() {
 
 function AppContent() {
   const { config, updateAndSaveConfig } = useUserSystem();
-  const { isSignedIn } = useAuth();
-
   useEffect(() => {
     if (!config) return;
     let cancelled = false;
@@ -131,7 +128,7 @@ function AppContent() {
     return () => {
       cancelled = true;
     };
-  }, [config, isSignedIn, updateAndSaveConfig]);
+  }, [config, updateAndSaveConfig]);
 
   return (
     <I18nextProvider i18n={i18n}>

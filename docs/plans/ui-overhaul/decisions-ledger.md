@@ -423,3 +423,21 @@ After comparing implementation against the imported `067861ca` design-system ref
 - `button.tsx` ghost variant: `hover:text-primary-foreground/50` was broken in dark mode (`--primary-foreground` = near-black → hovered ghost text invisible). Fixed: `text-foreground hover:bg-muted hover:text-foreground`.
 - `index.css` `.light` block: added `--_background: 215 20% 97%` — cool blue-gray matching reference `#f5f6f9` (was warm cream `48 33% 97%` inherited from `:root`). Playwright confirmed: light mode body background `rgb(246,247,249)` ≈ `#f6f7f9` ✅.
 - tsc + ESLint both pass after these changes.
+
+## Post-review known issues
+
+Non-actionable findings from `code-review-round-1.md` — adjudicated as out-of-scope or pre-existing:
+
+- **#6 — `getContrastColor` duplication** (`LabelBadge.tsx:18` + `SwarmLabelDialog.tsx:213`): Identical helper in two files. `SwarmLabelDialog.tsx` is outside this diff's scope; duplication pre-dates the overhaul. Deferred to a dedicated cleanup session.
+- **#7 — `CreatePRDialog.show()` not awaited** (`GitOperations.tsx:226`): Pre-existing call site not touched by Task 021. `show()` on an imperative dialog controller is fire-and-forget by design in this codebase.
+- **#8 — `:root` `--_secondary-foreground` low contrast** (`index.css:35`): Shadcn/ui shipped default value (215.4 16.3% 70.9% ≈ 2.1:1 on white). Active only when no theme class is applied (system-light without an explicit toggle). The `.light` block regression (finding #5) was the actionable item and is fixed in code-review-round-1.
+
+Non-actionable findings from `code-review-round-2.md`:
+
+- **R2#2 — LabelBadge nested interactive (latent)**: `<button>` (onRemove) inside `role="button"` span (onClick) violates ARIA, but no caller currently passes both props together. Log if onClick+onRemove are ever wired simultaneously.
+- **R2#3-4 — `--shadow-sm/md/lg` + `--glow-emerald` dead tokens**: Intentional design-system vocabulary scaffolding added by Task 003 per spec. Forward-compatible; not to be deleted.
+- **R2#5 — `--strip-width` dead token**: Pre-existing; not introduced by this diff.
+- **R2#6 — `status.*` Tailwind group unused**: Pre-existing pattern; all consumers use `bg-[hsl(var(--status-*))]` arbitrary values. The group provides a forward-compatible API.
+- **R2#7 — Pre-hydration FOUC (`.dark`/`.light` tokens not in `:root`)**: Pre-existing architectural pattern. Transient; ThemeProvider resolves on mount.
+- **R2#8 — ThemeToggle SYSTEM-mode icon**: Documented limitation ("Toggles binary DARK↔LIGHT only, never SYSTEM"). Pre-existing and intentional.
+- **R2#9 — Keyboard cycle / Tabs sync (AttemptHeaderActions)**: Intentional SC18 scope reduction documented in task 020 processes-mode note. Content panels render correctly.

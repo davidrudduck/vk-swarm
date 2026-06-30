@@ -237,7 +237,7 @@ export function TaskCard({
           right={
             <>
               {task.has_in_progress_attempt && (
-                <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                <Loader2 className="h-4 w-4 animate-spin text-status-inprogress" />
               )}
               {task.has_merged_attempt && (
                 <CheckCircle className="h-4 w-4 text-success" />

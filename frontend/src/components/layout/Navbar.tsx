@@ -376,12 +376,12 @@ export function Navbar() {
 
       {/* Mobile search dialog */}
       <Dialog open={mobileSearchOpen} onOpenChange={setMobileSearchOpen}>
-        <DialogHeader>
-          <DialogTitle className="sr-only">
-            {t('common:search', 'Search')}
-          </DialogTitle>
-        </DialogHeader>
         <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="sr-only">
+              {t('common:search', 'Search')}
+            </DialogTitle>
+          </DialogHeader>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
