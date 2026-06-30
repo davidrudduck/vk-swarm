@@ -424,6 +424,45 @@ After comparing implementation against the imported `067861ca` design-system ref
 - `index.css` `.light` block: added `--_background: 215 20% 97%` — cool blue-gray matching reference `#f5f6f9` (was warm cream `48 33% 97%` inherited from `:root`). Playwright confirmed: light mode body background `rgb(246,247,249)` ≈ `#f6f7f9` ✅.
 - tsc + ESLint both pass after these changes.
 
+## Reachability gate
+
+Call-path trace confirming the token cascade and UI changes are live end-to-end:
+
+```bash
+User action: toggle dark → light (ThemeToggle.tsx)
+  → updateAndSaveConfig({ theme: ThemeMode.LIGHT })   [persists to config]
+  → setTheme(ThemeMode.LIGHT)                         [local state]
+  → ThemeProvider.tsx: document.documentElement.classList.add('light')
+  → index.css .light { --_background: 215 20% 97%; --_secondary: 210 20% 93%; … }
+  → --secondary: var(--_secondary) → hsl(210 20% 93%)   [DaysInColumnBadge bg]
+  → --secondary-foreground: var(--_secondary-foreground) → hsl(222.2 47.4% 11.2%)  [legible text]
+  → DaysInColumnBadge renders flat badge at all day counts (≥1d)
+
+User action: open /nodes route
+  → App.tsx Route path="/nodes" → Nodes.tsx
+  → nodesApi.list(orgId) → Node[]
+  → NodeCard.tsx: bg-[hsl(var(--surface-card))] / animate-[vks-pulse_2s_…] on online dot
+  → @keyframes vks-pulse references --status-done → adapts to active theme ✅
+
+User action: task card header shows execution status
+  → TaskCard.tsx / AllProjectsTaskCard.tsx
+  → has_in_progress_attempt → Loader2 className text-status-inprogress
+     = hsl(var(--status-inprogress)) → 217 91% 60% (dark) / 221 83% 53% (light) ✅
+  → has_merged_attempt → CheckCircle className text-success ✅
+  → statusStripColors → before:bg-[hsl(var(--status-*))] ✅
+```
+
+Real-seam verification (Playwright, follow-up session — commit dc05c126):
+
+| Check | Result |
+|-------|--------|
+| SC17 dark board smoke-test | Playwright confirmed Midnight Terminal palette live; dev banner intentional orange; no layout regressions |
+| SC19 dark-mode primary contrast | `--primary = 190 100% 50%` on `--primary-foreground = 240 20% 5%` → ~11:1 ✅ |
+| SC19 light-mode primary contrast | `192 100% 35%` teal → 3.75:1 (accepted trade-off; matches design-system reference) |
+| SC20 theme persistence | `dark` survived hard reload via config-side `updateAndSaveConfig` ✅ |
+| SC22 runtime token | `getComputedStyle(html).getPropertyValue('--primary')` = `190 100% 50%` in dark ✅ |
+| Light bg | Playwright: `rgb(246,247,249)` ≈ `#f6f7f9` matches reference ✅ |
+
 ## Post-review known issues
 
 Non-actionable findings from `code-review-round-1.md` — adjudicated as out-of-scope or pre-existing:
