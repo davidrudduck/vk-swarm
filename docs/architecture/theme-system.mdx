@@ -1,0 +1,161 @@
+---
+title: Theme System Architecture
+description: CSS custom property token architecture, theme classes, and component integration
+---
+
+Vibe Kanban's theme system is built on a two-layer CSS custom property architecture: **VKS primitive tokens** hold raw HSL triplets, and **semantic alias tokens** map those primitives to named roles (background, primary, status, surface). Theme classes (`.dark`, `.light`, `.vks-theme`) override the primitives, making the entire colour palette switch atomically. Tailwind consumes the same tokens via `hsl(var(--token))` values in `tailwind.config.js`.
+
+## Token Layers
+
+### Layer 1 — VKS Primitive Tokens
+
+Defined in `frontend/src/styles/index.css` inside the first `:root` block (fallback defaults) and overridden per theme class:
+
+| Token | Role |
+|-------|------|
+| `--vks-void` | Deepest background |
+| `--vks-surface` | Default surface |
+| `--vks-surface-bright` | Elevated surface |
+| `--vks-cyan` | Primary accent (hue 193) |
+| `--vks-amber` | Warning accent |
+| `--vks-emerald` | Success accent |
+| `--vks-coral` | Destructive accent |
+| `--vks-violet` | Secondary accent |
+| `--vks-text` | Primary text |
+| `--vks-text-muted` | Muted text |
+| `--vks-text-dim` | Dim text |
+
+Tokens are bare HSL triplets (e.g. `193 100% 50%`) — always wrap in `hsl()` when used directly: `hsl(var(--vks-cyan))`.
+
+### Layer 2 — Semantic Alias Tokens
+
+The `--_*` prefixed tokens (e.g. `--_background`, `--_primary`) map VKS primitives to shadcn/ui semantic roles. The `.vks-theme` class writes these into the standard shadcn `--background`, `--primary`, etc. variables that Tailwind's utility classes (`bg-background`, `text-primary`, …) consume.
+
+### Status Tokens
+
+Task status colours are theme-aware through `--status-*` tokens:
+
+| Token | Dark value | Light value |
+|-------|-----------|------------|
+| `--status-todo` | `240 5% 63%` | `220 9% 46%` |
+| `--status-inprogress` | `217 91% 60%` | `221 83% 53%` |
+| `--status-inreview` | `43 100% 50%` | `38 100% 34%` |
+| `--status-done` | `152 100% 50%` | `153 83% 30%` |
+| `--status-cancelled` | `0 100% 71%` | `0 62% 52%` |
+
+Components consume these via Tailwind's extended `status.*` colour scale (`bg-status-done`) or directly (`bg-[hsl(var(--status-done))]`).
+
+### Surface Tokens
+
+| Token | Purpose |
+|-------|---------|
+| `--surface-card` | Card background (used by `NodeCard`, kanban cards) |
+| `--surface-raised` | Raised surface above card level (icon tiles, badges) |
+
+### Glow Tokens
+
+Pre-composed `box-shadow` values for hover glows:
+
+| Token | Effect |
+|-------|--------|
+| `--glow-cyan` | Cyan accent glow (primary button hover) |
+| `--glow-emerald` | Emerald glow (success state) |
+
+## Theme Classes
+
+| Class | Applied when |
+|-------|-------------|
+| `.light` | Light mode — semantic tokens resolve to bright backgrounds with muted colours |
+| `.dark` | Standard dark mode — neutral dark palette |
+| `.vks-theme` | Midnight Terminal — deep indigo/void backgrounds, cyan primary accent, `Source Serif 4` heading font |
+
+The `.vks-theme` class overrides both the VKS primitive tokens and the semantic aliases in one pass, so no additional specificity hacks are needed.
+
+## Animations
+
+`@keyframes vks-pulse` is defined globally and references `--status-done` so the pulse colour tracks the active theme:
+
+```css
+@keyframes vks-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 hsl(var(--status-done, 152 100% 50%) / 0.6); }
+  50%      { opacity: 0.7; box-shadow: 0 0 0 4px hsl(var(--status-done, 152 100% 50%) / 0); }
+}
+```
+
+Used by `NodeCard` to pulse online-node dots: `animate-[vks-pulse_2s_ease-in-out_infinite]`.
+
+## Texture Utilities
+
+Three utility classes are available for ANSI-terminal aesthetic surfaces:
+
+| Class | Effect |
+|-------|--------|
+| `.vks-ansi-dither` | Dot-matrix dither (6px grid) |
+| `.vks-ansi-dither-dense` | Denser dot-matrix dither (4px grid) |
+| `.vks-scanlines` | Scanline overlay with vignette via `::after` pseudo-element |
+
+## Tailwind Integration
+
+`frontend/tailwind.config.js` extends the Tailwind theme with VKS-aware colour scales so utility classes resolve through the token system:
+
+```js
+// tailwind.config.js (excerpt)
+colors: {
+  status: {
+    todo:       "hsl(var(--status-todo))",
+    inprogress: "hsl(var(--status-inprogress))",
+    inreview:   "hsl(var(--status-inreview))",
+    done:       "hsl(var(--status-done))",
+    cancelled:  "hsl(var(--status-cancelled))",
+  },
+  vks: {
+    void:           "hsl(var(--vks-void, 240 33% 5%))",
+    surface:        "hsl(var(--vks-surface, 240 18% 9%))",
+    "surface-bright":"hsl(var(--vks-surface-bright, 240 14% 12%))",
+    cyan:           "hsl(var(--vks-cyan, 193 100% 50%))",
+    // … amber, emerald, coral, violet, text, text-muted, text-dim
+  },
+}
+```
+
+Fallback values are included so classes degrade gracefully if a token is somehow undefined.
+
+## ThemeToggle Component
+
+`frontend/src/components/ThemeToggle.tsx` provides a ghost icon button in the navbar:
+
+- Toggles binary **DARK ↔ LIGHT** only (never SYSTEM).
+- Calls `updateAndSaveConfig({ theme: next })` to persist the choice before updating local React state (`setTheme`), so a failed network write does not flip the UI.
+- If persistence fails, the error is logged and the theme is left unchanged.
+
+## StatusBadge Component
+
+`frontend/src/components/common/StatusBadge.tsx` renders an 8px coloured dot driven by `--status-*` tokens:
+
+```tsx
+<StatusBadge status="inprogress" />               // dot only
+<StatusBadge status="done" showLabel />            // dot + "Done" label
+```
+
+Because the dot colour is expressed as `bg-[hsl(var(--status-*))]`, it switches automatically with the active theme class — no separate dark-mode variant needed.
+
+## Adding a New Theme
+
+1. Add a new CSS class (e.g. `.high-contrast`) in `frontend/src/styles/index.css`.
+2. Inside it, override any subset of the VKS primitive and/or semantic alias tokens.
+3. Add the class name to the `ThemeMode` enum in `shared/types` and to `ThemeProvider`'s application logic.
+4. If the new theme needs Tailwind utilities, add it to the `tailwind.config.js` colour scale with appropriate fallback values.
+
+## File Locations
+
+```text
+frontend/src/
+├── styles/
+│   └── index.css          ← token definitions, theme classes, animations, texture utilities
+├── tailwind.config.js     ← Tailwind colour-scale extensions
+└── components/
+    ├── ThemeToggle.tsx    ← binary dark/light toggle button
+    ├── ThemeProvider.tsx  ← React context for theme state
+    └── common/
+        └── StatusBadge.tsx ← --status-* token consumer
+```

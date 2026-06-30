@@ -10,25 +10,16 @@ import { cn } from '@/lib/utils';
  * Status color mapping for the left strip indicator.
  */
 const statusStripColors: Record<TaskStatus, string> = {
-  todo: 'before:bg-neutral-400 dark:before:bg-neutral-500',
-  inprogress: 'before:bg-blue-500',
-  inreview: 'before:bg-amber-500',
-  done: 'before:bg-green-500',
-  cancelled: 'before:bg-red-500',
+  todo: 'before:bg-[hsl(var(--status-todo))]',
+  inprogress: 'before:bg-[hsl(var(--status-inprogress))]',
+  inreview: 'before:bg-[hsl(var(--status-inreview))]',
+  done: 'before:bg-[hsl(var(--status-done))]',
+  cancelled: 'before:bg-[hsl(var(--status-cancelled))]',
 };
 
 /**
  * Truncate description to a maximum length, adding ellipsis if needed.
  */
-function truncateDescription(
-  description: string | null | undefined,
-  maxLength: number = 40
-): string | null {
-  if (!description) return null;
-  if (description.length <= maxLength) return description;
-  return `${description.substring(0, maxLength)}...`;
-}
-
 /**
  * Get short node name from full hostname (e.g., "justX" from "justX.raverx.net")
  */
@@ -71,8 +62,8 @@ export function AllProjectsTaskCard({
   const statusStripClass =
     statusStripColors[task.status as TaskStatus] || statusStripColors['todo'];
 
-  // Truncated description for compact view
-  const truncatedDesc = truncateDescription(task.description, 40);
+  // Description for compact view (CSS truncate handles the visual cap)
+  const truncatedDesc = task.description ?? null;
 
   return (
     <KanbanCard
@@ -126,10 +117,10 @@ export function AllProjectsTaskCard({
           right={
             <>
               {task.has_in_progress_attempt && (
-                <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                <Loader2 className="h-4 w-4 animate-spin text-status-inprogress" />
               )}
               {task.has_merged_attempt && (
-                <CheckCircle className="h-4 w-4 text-green-500" />
+                <CheckCircle className="h-4 w-4 text-success" />
               )}
               {task.last_attempt_failed && !task.has_merged_attempt && (
                 <XCircle className="h-4 w-4 text-destructive" />

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Check, ChevronsUpDown } from 'lucide-react';
+import { Check, ChevronsUpDown, FolderOpen } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
@@ -111,6 +111,7 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
             className
           )}
         >
+          <FolderOpen className="mr-2 h-4 w-4 shrink-0 opacity-70" />
           <span className="truncate">{displayValue}</span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>

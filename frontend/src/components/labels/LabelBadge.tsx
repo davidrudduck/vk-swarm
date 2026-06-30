@@ -6,6 +6,9 @@ import type { Label } from 'shared/types';
 interface LabelBadgeProps {
   label: Label;
   size?: 'sm' | 'md';
+  /** 'solid' (default) fills with the label colour; 'outline' uses a transparent
+   *  background with a coloured border + text (task-card context). */
+  variant?: 'solid' | 'outline';
   onClick?: () => void;
   onRemove?: () => void;
   className?: string;
@@ -13,24 +16,40 @@ interface LabelBadgeProps {
 
 // Calculate contrasting text color based on background
 function getContrastColor(hexColor: string): string {
-  // Remove # if present
   const hex = hexColor.replace('#', '');
-
-  // Convert to RGB
   const r = parseInt(hex.substring(0, 2), 16);
   const g = parseInt(hex.substring(2, 4), 16);
   const b = parseInt(hex.substring(4, 6), 16);
-
-  // Calculate luminance
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-
-  // Return black or white based on luminance
   return luminance > 0.5 ? '#000000' : '#ffffff';
+}
+
+// Derive a text colour for the outline variant on a white/light surface.
+// Uses WCAG relative luminance to darken colours that would fail 4.5:1 vs white.
+function getOutlineTextColor(hexColor: string): string {
+  const hex = hexColor.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  const lin = (c: number) => {
+    const n = c / 255;
+    return n <= 0.03928 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+  };
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  // Target: contrast >= 4.5:1 vs white (L=1.0); max L for text = 0.183
+  if (L <= 0.183) return hexColor;
+  const scale = Math.sqrt(0.18 / Math.max(L, 0.001));
+  const ch = (v: number) =>
+    Math.round(Math.min(255, v * scale))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${ch(r)}${ch(g)}${ch(b)}`;
 }
 
 export function LabelBadge({
   label,
   size = 'md',
+  variant = 'solid',
   onClick,
   onRemove,
   className,
@@ -53,14 +72,35 @@ export function LabelBadge({
       className={cn(
         'inline-flex items-center rounded-full font-medium transition-opacity',
         sizeClasses[size],
+        variant === 'outline' && 'border',
         onClick && 'cursor-pointer hover:opacity-80',
         className
       )}
-      style={{
-        backgroundColor: label.color,
-        color: textColor,
-      }}
+      style={
+        variant === 'outline'
+          ? {
+              backgroundColor: 'transparent',
+              color: getOutlineTextColor(label.color),
+              borderColor: label.color,
+            }
+          : {
+              backgroundColor: label.color,
+              color: textColor,
+            }
+      }
       onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
     >
       {IconComponent && <IconComponent className={iconSizes[size]} />}
       <span>{label.name}</span>

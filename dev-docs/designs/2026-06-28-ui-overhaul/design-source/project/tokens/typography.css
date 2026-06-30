@@ -1,0 +1,49 @@
+/* ==========================================================================
+   VK-Swarm — typography tokens
+   Inter (UI/prose) · JetBrains Mono (code/terminal) · Source Serif 4 (display)
+   Chivo Mono powers the wordmark for its terminal feel.
+   Note: vk-swarm downshifts Tailwind's default font scale by one step — base
+   body text is 14px, not 16px. We preserve that here.
+   ========================================================================== */
+
+:root {
+  /* Families */
+  --font-ui: 'Inter', 'Noto Emoji', system-ui, sans-serif;
+  --font-code: 'JetBrains Mono', 'Chivo Mono', ui-monospace, monospace;
+  --font-display: 'Source Serif 4', Georgia, serif;
+  --font-wordmark: 'Chivo Mono', 'JetBrains Mono', monospace;
+  --font-prose: 'Inter', 'Noto Emoji', system-ui, sans-serif;
+
+  /* Type scale (downshifted — base = 14px) */
+  --text-xs: 0.625rem;   /* 10px */
+  --text-sm: 0.75rem;    /* 12px */
+  --text-base: 0.875rem; /* 14px — default body */
+  --text-lg: 1rem;       /* 16px */
+  --text-xl: 1.125rem;   /* 18px */
+  --text-2xl: 1.5rem;    /* 24px */
+  --text-3xl: 1.875rem;  /* 30px */
+  --text-4xl: 2.5rem;    /* 40px */
+  --text-5xl: 3.5rem;    /* 56px display */
+
+  /* Line heights paired with the scale */
+  --leading-xs: 0.875rem;
+  --leading-sm: 1rem;
+  --leading-base: 1.25rem;
+  --leading-lg: 1.5rem;
+  --leading-xl: 1.75rem;
+  --leading-tight: 1.1;
+  --leading-snug: 1.35;
+  --leading-relaxed: 1.6;
+
+  /* Weights */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Tracking */
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+  --tracking-wider: 0.12em; /* uppercase labels / wordmark */
+}

@@ -26,6 +26,7 @@ reviews:
     - "!**/migrations/*.sql"
     - "!.omc/**"
     - "!.claude/**"
+    - "!dev-docs/designs/*/design-source/**"
   # Auto-review on PR open and updates
   auto_review:
     enabled: true

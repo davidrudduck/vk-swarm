@@ -1,0 +1,116 @@
+<!-- @dsCard group="Type" viewport="700x260" name="Code — JetBrains Mono" subtitle="Log viewer skins: Light · Dark · System · ANSI/BBS" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 18px; background: var(--vks-void); font-family: var(--font-ui); }
+
+  /* ---- skin switcher (segmented control) ---- */
+  .switch { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-card);
+    border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 12px; }
+  .switch button { appearance: none; border: 0; background: transparent; color: var(--text-muted);
+    font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 500; padding: 5px 12px;
+    border-radius: var(--radius-sm); cursor: pointer; transition: background-color .15s, color .15s; }
+  .switch button:hover { color: var(--foreground); }
+  .switch button[aria-pressed="true"] { background: var(--surface-raised); color: var(--foreground); }
+  .switch button[data-skin="bbs"][aria-pressed="true"] { background: var(--vks-cyan); color: #07070c; }
+
+  /* ---- the log viewer, re-skinned via [data-skin] ---- */
+  .viewer {
+    position: relative; overflow: hidden; border-radius: var(--radius-md);
+    font-family: var(--font-code); font-size: var(--text-sm); line-height: 1.7;
+    background: var(--c-bg); border: 1px solid var(--c-border); color: var(--c-fg);
+    box-shadow: var(--c-glow, none);
+  }
+  .titlebar { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    padding: 5px 12px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    background: var(--c-bar-bg); color: var(--c-bar-fg); border-bottom: 1px solid var(--c-border);
+    white-space: nowrap; }
+  .titlebar .deco { display: none; }
+  .body { padding: 12px 16px; }
+  .muted { color: var(--c-muted); }
+  .ok { color: var(--c-ok); }
+  .err { color: var(--c-err); }
+  .cy { color: var(--c-accent); }
+  .cursor { display: inline-block; width: 8px; height: 14px; background: var(--c-accent);
+    vertical-align: -2px; margin-left: 4px; }
+
+  /* Normal Dark */
+  .viewer[data-skin="dark"] {
+    --c-bg: #0a0a0f; --c-fg: #e4e4e7; --c-muted: #71717a; --c-ok: #00ff88; --c-err: #ff6b6b;
+    --c-accent: #00d4ff; --c-border: #1f1f29; --c-bar-bg: #12121a; --c-bar-fg: #71717a; }
+
+  /* Normal Light */
+  .viewer[data-skin="light"] {
+    --c-bg: #ffffff; --c-fg: #15171c; --c-muted: #5b6271; --c-ok: #0a8f57; --c-err: #d23b3b;
+    --c-accent: #0091b5; --c-border: #e2e5ea; --c-bar-bg: #f1f3f6; --c-bar-fg: #5b6271; }
+
+  /* ANSI / BBS — the special terminal skin */
+  .viewer[data-skin="bbs"] {
+    --c-bg: #07070c; --c-fg: #e4e4e7; --c-muted: #71717a; --c-ok: #00ff88; --c-err: #ff6b6b;
+    --c-accent: #00d4ff; --c-border: hsl(var(--vks-cyan-hsl) / 0.4);
+    --c-bar-bg: var(--vks-cyan); --c-bar-fg: #07070c;
+    --c-glow: 0 0 16px -8px hsl(var(--vks-cyan-hsl) / 0.6); }
+  .viewer[data-skin="bbs"] .titlebar { font-weight: 700; letter-spacing: 0.12em; }
+  .viewer[data-skin="bbs"] .titlebar .deco { display: inline; }
+  .viewer[data-skin="bbs"] .cursor { box-shadow: 0 0 8px -1px var(--c-accent);
+    animation: blink 1.05s steps(1) infinite; }
+  .viewer[data-skin="bbs"]::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      repeating-linear-gradient(0deg, rgb(0 0 0 / 0.16) 0 1px, transparent 1px 4px),
+      radial-gradient(120% 120% at 50% 0%, transparent 62%, rgb(0 0 0 / 0.4) 100%); }
+
+  @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .cursor { animation: none !important; } }
+</style>
+</head>
+<body>
+  <div class="switch" role="group" aria-label="Log viewer skin">
+    <button data-skin="light">Light</button>
+    <button data-skin="dark">Dark</button>
+    <button data-skin="system">System</button>
+    <button data-skin="bbs">ANSI / BBS</button>
+  </div>
+
+  <div class="viewer" id="viewer" data-skin="bbs">
+    <div class="titlebar">
+      <span><span class="deco">▚ </span>swarm@hive — log stream</span>
+      <span>node: justX<span class="deco"> ▞</span></span>
+    </div>
+    <div class="body">
+      <div><span class="muted">$</span> <span class="cy">vk-swarm</span> run --agent claude-code</div>
+      <div class="ok">✓ worktree created · branch feat/auth</div>
+      <div class="muted">→ streaming logs from node <span class="cy">justX</span></div>
+      <div class="err">✗ test failed: 2 assertions</div>
+      <div class="muted">$<span class="cursor"></span></div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var viewer = document.getElementById('viewer');
+      var btns = document.querySelectorAll('.switch button');
+      var mq = window.matchMedia('(prefers-color-scheme: light)');
+      var choice = 'bbs';
+      try { choice = localStorage.getItem('vks-code-skin') || 'bbs'; } catch (e) {}
+
+      function effective(c) { return c === 'system' ? (mq.matches ? 'light' : 'dark') : c; }
+      function apply() {
+        viewer.setAttribute('data-skin', effective(choice));
+        btns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.skin === choice)); });
+      }
+      btns.forEach(function (b) {
+        b.addEventListener('click', function () {
+          choice = b.dataset.skin;
+          try { localStorage.setItem('vks-code-skin', choice); } catch (e) {}
+          apply();
+        });
+      });
+      mq.addEventListener('change', function () { if (choice === 'system') apply(); });
+      apply();
+    })();
+  </script>
+</body>
+</html>

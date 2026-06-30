@@ -1,0 +1,26 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Task status palette" subtitle="Kanban column + card-strip colors" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 20px; }
+  .row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .col { padding-left: 12px; position: relative; }
+  .col::before { content:""; position:absolute; left:0; top:2px; bottom:2px; width:4px; border-radius:2px; background:var(--c); }
+  .name { font-size: var(--text-sm); font-weight: 600; display:flex; align-items:center; gap:6px; }
+  .name .d { width:9px; height:9px; border-radius:50%; background:var(--c); }
+  .hex { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-muted); margin-top:4px; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="col" style="--c:var(--status-todo)"><div class="name"><span class="d"></span>To Do</div><div class="hex">neutral</div></div>
+    <div class="col" style="--c:var(--status-inprogress)"><div class="name"><span class="d"></span>In Progress</div><div class="hex">blue</div></div>
+    <div class="col" style="--c:var(--status-inreview)"><div class="name"><span class="d"></span>In Review</div><div class="hex">amber</div></div>
+    <div class="col" style="--c:var(--status-done)"><div class="name"><span class="d"></span>Done</div><div class="hex">emerald</div></div>
+    <div class="col" style="--c:var(--status-cancelled)"><div class="name"><span class="d"></span>Cancelled</div><div class="hex">coral</div></div>
+  </div>
+</body>
+</html>
