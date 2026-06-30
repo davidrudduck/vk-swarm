@@ -24,12 +24,21 @@ Tasks adding a migration + new query export `DATABASE_URL=sqlite://<repo>/dev_as
 a migrated dev DB. **Never run `cargo sqlx prepare` in a gated task** (it rewrites tracked `.sqlx/*.json`
 the gate's file-allow-list rejects). Regenerate once at `/wai:close`.
 
-### Trap 2b — Hive (Postgres / `crates/remote`) query validation
-The hive crate's `query!`/`query_as!` against Postgres need a reachable `DATABASE_URL` (Postgres) or its
-own offline cache at build time. Decompose MUST confirm at authoring (from the remote-side investigation)
-whether `crates/remote` uses a committed offline cache or a live Postgres for compile-time checks, and
-record the exact precondition each hive schema/query task needs. Do not assume the SQLite recipe applies
-to the Postgres side.
+### Trap 2b — Hive (Postgres / `crates/remote`) query validation + tests need a LIVE Postgres (confirmed)
+Confirmed in code: the remote crate's `query!`/`query_as!` validate against the **shared root `.sqlx`
+offline cache** (same cache as the node side). Adding/changing a Postgres query therefore needs a live
+`DATABASE_URL`/`SERVER_DATABASE_URL` pointed at a **migrated Postgres** (`crates/remote/src/config.rs:45`)
+OR a cache regen — it will NOT validate against the SQLite dev DB. **And hive integration tests SKIP
+without a DB:** `crates/remote/tests/backfill_e2e.rs` uses `skip_without_db!` (returns early if
+`DATABASE_URL` unset); the hermetic SQLite `db::test_utils::create_test_pool()` does **not** apply to
+the hive. **Consequence for every hive-side task (102, 107, and all of P2/P3/P6/P7 hive work):** its
+`scope_test` is a `#[tokio::test]` that REQUIRES `DATABASE_URL=postgres://…` against a migrated PG, or
+the WAI gate runs a SKIPPED test and reports a **hollow pass**. The executor MUST stand up a Postgres
+(migrated via `sqlx::migrate!("./migrations")`, `crates/remote/src/db/mod.rs:51`) and export
+`DATABASE_URL` before running any hive task. A hive task with no Postgres precondition + a skip-guarded
+test is NOT verifiable — flag such tasks. (This is genuinely harder than node-foundations, which never
+touched the remote crate. If a CI Postgres is not readily available, raise it before executing P-hive
+tasks.)
 
 ### Trap 3 — `enum_dispatch` / WS-message exhaustiveness on BOTH ends
 Adding a `NodeMessage` or `ServerMessage` variant (op-log op, durable ack, heartbeat, lease grant)
