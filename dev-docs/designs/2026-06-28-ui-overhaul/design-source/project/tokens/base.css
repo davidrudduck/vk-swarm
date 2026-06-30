@@ -1,0 +1,134 @@
+/* ==========================================================================
+   VK-Swarm — base element styling & utility helpers
+   Applies the Midnight Terminal aesthetic to bare HTML so specimen cards and
+   prototypes inherit the right defaults.
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text-body);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: hsl(var(--vks-cyan-hsl) / 0.3);
+  color: var(--vks-text);
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-code);
+}
+
+/* Signature diagonal-line backdrop (board empty states, hero panels) */
+.vks-diagonal-lines {
+  background-image:
+    repeating-linear-gradient(
+      -45deg,
+      var(--border) 0 1px,
+      transparent 1px 12px
+    ),
+    linear-gradient(var(--background), var(--background));
+}
+
+/* --------------------------------------------------------------------------
+   ANSI / BBS textures — 80s/90s terminal-art backdrops for empty states,
+   hero panels and drop zones. Theme-aware (built from --border / --background).
+   -------------------------------------------------------------------------- */
+
+/* Shade-block dither (░) — a tileable dot field that reads as ANSI light shade */
+.vks-ansi-dither {
+  background-color: var(--background);
+  background-image: radial-gradient(var(--border) 1.1px, transparent 1.4px);
+  background-size: 6px 6px;
+}
+/* Denser variant (▒ medium shade) */
+.vks-ansi-dither-dense {
+  background-color: var(--background);
+  background-image: radial-gradient(var(--border) 1.2px, transparent 1.5px);
+  background-size: 4px 4px;
+}
+
+/* Half-block weave (▚▞) — the classic BBS cross-hatch */
+.vks-ansi-weave {
+  background-color: var(--background);
+  background-image:
+    repeating-linear-gradient(45deg, var(--border) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(-45deg, var(--border) 0 1px, transparent 1px 6px);
+  opacity: 1;
+}
+
+/* Character-cell grid (box-drawing lattice) */
+.vks-ansi-grid {
+  background-color: var(--background);
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 10px 16px; /* monospace cell ratio */
+}
+
+/* CRT scanline + vignette overlay — add to any positioned container */
+.vks-scanlines { position: relative; }
+.vks-scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg, rgb(0 0 0 / 0.16) 0 1px, transparent 1px 4px),
+    radial-gradient(120% 120% at 50% 0%, transparent 62%, rgb(0 0 0 / 0.4) 100%);
+}
+
+/* Thin dashed divider used between board columns & sections */
+.vks-dashed {
+  border-style: dashed;
+  border-color: var(--border);
+}
+
+/* The VK-SWARM wordmark, terminal-styled */
+.vks-wordmark {
+  font-family: var(--font-wordmark);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  user-select: none;
+}
+.vks-wordmark .vk {
+  color: var(--primary);
+}
+.vks-wordmark .swarm {
+  color: var(--foreground);
+}
+
+/* Uppercase micro-label, common on column headers & metadata */
+.vks-eyebrow {
+  font-family: var(--font-code);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}

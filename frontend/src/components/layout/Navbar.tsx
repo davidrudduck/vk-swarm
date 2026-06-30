@@ -1,5 +1,5 @@
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -14,14 +14,13 @@ import {
   BookOpen,
   MessageCircleQuestion,
   Menu,
-  Plus,
   LogOut,
   LogIn,
   Archive,
   Activity,
   Search,
 } from 'lucide-react';
-import { Logo } from '@/components/Logo';
+import { VKSLogo } from '@/components/VKSLogo';
 import { SearchBar } from '@/components/SearchBar';
 import { ActivityFeed } from '@/components/activity';
 import {
@@ -47,6 +46,7 @@ import { OAuthDialog } from '@/components/dialogs/global/OAuthDialog';
 import { useUserSystem } from '@/components/ConfigProvider';
 import { oauthApi } from '@/lib/api';
 import { ProjectSwitcher } from './ProjectSwitcher';
+import ThemeToggle from '@/components/ThemeToggle';
 
 const INTERNAL_NAV = [
   { label: 'Projects', icon: FolderOpen, to: '/projects' },
@@ -133,13 +133,30 @@ export function Navbar() {
 
   const isOAuthLoggedIn = loginStatus?.status === 'loggedin';
 
+  // Persist the active project so the Board tab can route back to it.
+  useEffect(() => {
+    if (projectId) {
+      localStorage.setItem('lastVisitedProjectId', projectId);
+    }
+  }, [projectId]);
+
+  // Board tab target: last-visited project's task board, else the projects list.
+  const lastVisitedProjectId =
+    typeof window !== 'undefined'
+      ? localStorage.getItem('lastVisitedProjectId')
+      : null;
+  const boardProjectId = projectId ?? lastVisitedProjectId;
+  const boardTo = boardProjectId
+    ? `/projects/${boardProjectId}/tasks`
+    : '/projects';
+
   return (
     <div className="border-b bg-background">
       <div className="w-full px-3">
         <div className="flex items-center h-12 py-2">
           <div className="flex-1 flex items-center">
             <Link to="/projects" className="shrink-0">
-              <Logo className="h-4 sm:h-6 w-auto" />
+              <VKSLogo className="text-sm sm:text-base" />
             </Link>
             <ProjectSwitcher className="ml-2 hidden sm:inline-flex" />
           </div>
@@ -199,21 +216,22 @@ export function Navbar() {
                   onClick={handleOpenInIDE}
                   className="h-9 w-9 hidden sm:inline-flex"
                 />
-                {/* Plus button - always visible for quick task creation */}
+                {/* Task creation button - text label for discoverability */}
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9"
+                  variant="default"
+                  size="sm"
                   onClick={handleCreateTask}
                   aria-label="Create new task"
                 >
-                  <Plus className="h-4 w-4" />
+                  {/* TODO(i18n): vk-swarm-node-ui-localize */}
+                  + Task
                 </Button>
                 <NavDivider />
               </>
             ) : null}
 
             <div className="flex items-center gap-1">
+              <ThemeToggle />
               <ActivityFeed />
 
               <Button
@@ -316,16 +334,54 @@ export function Navbar() {
             </div>
           </div>
         </div>
+
+        {/* Second nav row: primary section tabs */}
+        <nav className="flex items-center gap-4 h-9 border-t text-sm">
+          {/* TODO(i18n): vk-swarm-node-ui-localize */}
+          <Link
+            to={boardTo}
+            className={
+              location.pathname.startsWith('/projects')
+                ? 'mb-[-1px] border-b-2 border-primary py-2 text-foreground'
+                : 'mb-[-1px] py-2 text-muted-foreground hover:text-foreground'
+            }
+          >
+            {/* TODO(i18n): vk-swarm-node-ui-localize */}
+            Board
+          </Link>
+          <Link
+            to="/nodes"
+            className={
+              location.pathname === '/nodes'
+                ? 'mb-[-1px] border-b-2 border-primary py-2 text-foreground'
+                : 'mb-[-1px] py-2 text-muted-foreground hover:text-foreground'
+            }
+          >
+            {/* TODO(i18n): vk-swarm-node-ui-localize */}
+            Nodes
+          </Link>
+          <Link
+            to="/processes"
+            className={
+              location.pathname === '/processes'
+                ? 'mb-[-1px] border-b-2 border-primary py-2 text-foreground'
+                : 'mb-[-1px] py-2 text-muted-foreground hover:text-foreground'
+            }
+          >
+            {/* TODO(i18n): vk-swarm-node-ui-localize */}
+            Processes
+          </Link>
+        </nav>
       </div>
 
       {/* Mobile search dialog */}
       <Dialog open={mobileSearchOpen} onOpenChange={setMobileSearchOpen}>
-        <DialogHeader>
-          <DialogTitle className="sr-only">
-            {t('common:search', 'Search')}
-          </DialogTitle>
-        </DialogHeader>
         <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="sr-only">
+              {t('common:search', 'Search')}
+            </DialogTitle>
+          </DialogHeader>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input

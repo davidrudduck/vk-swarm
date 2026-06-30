@@ -19,7 +19,7 @@ export function VKSLogo({ className, alwaysFull = false }: VKSLogoProps) {
   return (
     <div
       className={cn(
-        'font-code font-bold tracking-tight select-none',
+        'font-wordmark font-bold tracking-tight select-none',
         className
       )}
       aria-label="VK-Swarm"
@@ -47,7 +47,7 @@ export function VKSIcon({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        'font-code font-bold tracking-tight select-none',
+        'font-wordmark font-bold tracking-tight select-none',
         className
       )}
       aria-label="VK-Swarm"
