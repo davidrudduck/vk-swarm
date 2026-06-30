@@ -452,16 +452,18 @@ User action: task card header shows execution status
   → statusStripColors → before:bg-[hsl(var(--status-*))] ✅
 ```
 
-Real-seam verification (Playwright, follow-up session — commit dc05c126):
+Real-seam verification via Playwright (commit dc05c126):
 
 | Check | Result |
 |-------|--------|
-| SC17 dark board smoke-test | Playwright confirmed Midnight Terminal palette live; dev banner intentional orange; no layout regressions |
+| SC17 dark board smoke-test | Playwright: Midnight Terminal palette live; dev banner orange (intentional); no layout regressions |
 | SC19 dark-mode primary contrast | `--primary = 190 100% 50%` on `--primary-foreground = 240 20% 5%` → ~11:1 ✅ |
-| SC19 light-mode primary contrast | `192 100% 35%` teal → 3.75:1 (accepted trade-off; matches design-system reference) |
+| SC19 light-mode primary contrast | `192 100% 35%` teal → 3.75:1 (accepted; matches design-system reference) |
 | SC20 theme persistence | `dark` survived hard reload via config-side `updateAndSaveConfig` ✅ |
 | SC22 runtime token | `getComputedStyle(html).getPropertyValue('--primary')` = `190 100% 50%` in dark ✅ |
-| Light bg | Playwright: `rgb(246,247,249)` ≈ `#f6f7f9` matches reference ✅ |
+| Light background | Playwright: `rgb(246,247,249)` ≈ `#f6f7f9` matches reference ✅ |
+
+VERDICT: PASS
 
 ## Post-review known issues
 
