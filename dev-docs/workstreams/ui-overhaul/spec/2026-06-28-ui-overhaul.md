@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: ui-overhaul
 change_kind: behaviour
 ---
