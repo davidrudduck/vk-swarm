@@ -181,11 +181,18 @@ Cards use flexbox with gap utilities:
 
 ### Unit Tests
 
-Located in `__tests__/` directories alongside components:
+Utility tests live alongside their utility module; component tests live alongside the component:
+
+**Utility tests** (`frontend/src/utils/__tests__/`):
 
 | Test File | Coverage |
 |-----------|----------|
 | `daysInColumn.test.ts` | Utility functions |
+
+**Component tests** (`frontend/src/components/tasks/__tests__/`):
+
+| Test File | Coverage |
+|-----------|----------|
 | `DaysInColumnBadge.test.tsx` | Badge rendering |
 | `CompactLabelList.test.tsx` | Label overflow |
 
