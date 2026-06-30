@@ -151,13 +151,16 @@ mod op_batch_tests {
   - Iterate `ops` IN ORDER. For each op:
     - **(a) Tracer scope guard:** `op.op_type != "task.upsert"` → SKIP + `applied_through_seq = op.seq`
       (later increments add other op types). Continue.
-    - **(b) Resolve context (copy `handle_task_sync` @1569-1667):**
+    - **(b) Resolve context (copy `handle_task_sync` @1569-1667).** Each op takes EXACTLY ONE of the
+      three terminal branches below — PARK, SKIP+ADVANCE (b), or APPLY (c) — they are mutually exclusive,
+      so an op is written to `node_op_log` at most once (no double-write):
       - `find_by_node_and_project(pool, node_id, payload.project_id)` is `None` → **PARK**: `break` (do
         NOT advance, do NOT insert node_op_log). TRANSIENT — re-sent after ProjectsSync. Log debug.
       - row present but `swarm_project_id` is `None`, OR the swarm-link/org query is `None` → **SKIP +
-        ADVANCE**: `applied_through_seq = op.seq`; record it in node_op_log (so the high-water reflects
-        it); do NOT call `upsert_from_node`. PERMANENT (not swarm-linked) — must NOT wedge the cursor.
-        Continue.
+        ADVANCE**: record it with the SAME write as (c) — `INSERT INTO node_op_log (..) ON CONFLICT
+        (node_id, idempotency_key) DO NOTHING` — then `applied_through_seq = op.seq`; do NOT call
+        `upsert_from_node`. PERMANENT (not swarm-linked) — must NOT wedge the cursor. `continue` (this op
+        does NOT fall through to (c)).
     - **(c) Idempotent apply — APPLY FIRST, RECORD SECOND (tournament R1/F1):** the dedup row must NOT be
       persisted independently of a successful apply. If `INSERT node_op_log` commits but `upsert_from_node`
       then fails, a retry sees the dedup row (`rows_affected==0`), SKIPS the apply, advances the ack →
