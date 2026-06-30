@@ -1,6 +1,16 @@
 /* Default fonts: Inter (UI/Prose), JetBrains Mono (Code), Chivo Mono (legacy), Noto Emoji, Source Serif 4 (heading) */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Chivo+Mono:ital,wght@0,100..900;1,100..900&family=Noto+Emoji:wght@300..700&family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&display=swap');
 
+@keyframes vks-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 hsl(var(--status-done, 152 100% 50%) / 0.6); }
+  50%      { opacity: 0.7; box-shadow: 0 0 0 4px hsl(var(--status-done, 152 100% 50%) / 0); }
+}
+
+.vks-ansi-dither { background-color: hsl(var(--background)); background-image: radial-gradient(hsl(var(--border)) 1.1px, transparent 1.4px); background-size: 6px 6px; }
+.vks-ansi-dither-dense { background-color: hsl(var(--background)); background-image: radial-gradient(hsl(var(--border)) 1.2px, transparent 1.5px); background-size: 4px 4px; }
+.vks-scanlines { position: relative; }
+.vks-scanlines::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, rgb(0 0 0 / 0.16) 0 1px, transparent 1px 4px), radial-gradient(120% 120% at 50% 0%, transparent 62%, rgb(0 0 0 / 0.4) 100%); }
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -49,42 +59,97 @@
     --_console-foreground: 222.2 84% 4.9%;
     --_console-success: 138 69% 45%;
     --_console-error: 5 100% 69%;
+
+    /* VKS brand primitives (Midnight Terminal) — promoted to :root so they resolve
+       in the applied .dark/.light cascade (scope C / D10). Corrected values. */
+    --vks-void: 240 20% 5%;
+    --vks-surface: 240 18% 9%;
+    --vks-surface-bright: 240 16% 12%;
+    --vks-cyan: 193 100% 50%;
+    --vks-amber: 43 100% 50%;
+    --vks-emerald: 152 100% 50%;
+    --vks-coral: 0 100% 71%;
+    --vks-violet: 270 91% 65%;
+    --vks-text: 240 6% 90%;
+    --vks-text-muted: 240 4% 46%;
+    --vks-text-dim: 240 3% 26%;
+    --strip-width: 4px;
   }
 
   /* Dark defaults (used if no theme class but user prefers dark) */
   .dark {
     color-scheme: dark;
-    --_background: 48 4% 16%;
-    --_foreground: 48 7% 85%;
-    --_primary: var(--_muted);
-    --_primary-foreground: var(--_muted-foreground);
-    --_secondary: var(--_muted);
-    --_secondary-foreground: 48 2% 65%;
-    --_muted: 60 2% 18%;
-    --_muted-foreground: var(--_foreground);
-    --_accent: var(--_background);
-    --_accent-foreground: 210 40% 98%;
-    --_destructive: 0 45% 55%;
-    --_destructive-foreground: var(--_background-foreground);
-    --_border: 60 2% 25%;
-    --_input: var(--_border);
-    --_ring: 212.7 26.8% 83.9%;
+    --font-heading: 'Source Serif 4', Georgia, serif;
+    --_background: var(--vks-void);
+    --_foreground: var(--vks-text);
+    --_primary: var(--vks-cyan);
+    --_primary-foreground: var(--vks-void);
+    --_secondary: var(--vks-surface-bright);
+    --_secondary-foreground: var(--vks-text);
+    --_muted: var(--vks-surface);
+    --_muted-foreground: var(--vks-text-muted);
+    --_accent: var(--vks-violet);
+    --_accent-foreground: var(--vks-text);
+    --_destructive: var(--vks-coral);
+    --_destructive-foreground: var(--vks-void);
+    --_border: var(--vks-surface-bright);
+    --_input: var(--vks-surface);
+    --_ring: var(--vks-cyan);
 
-    /* Status (dark) */
-    --_success: 138.5 76.5% 47.7%;
-    --_success-foreground: 138.5 76.5% 96.7%;
-    --_warning: 32.2 95% 44.1%;
-    --_warning-foreground: 26 83.3% 14.1%;
-    --_info: 217.2 91.2% 59.8%;
-    --_info-foreground: 222.2 84% 4.9%;
+    /* Status (dark) — brand palette */
+    --_success: var(--vks-emerald);
+    --_success-foreground: var(--vks-void);
+    --_warning: var(--vks-amber);
+    --_warning-foreground: var(--vks-void);
+    --_info: var(--vks-cyan);
+    --_info-foreground: var(--vks-void);
     --_neutral: 217.2 32.6% 17.5%;
     --_neutral-foreground: 210 40% 98%;
+
+    /* Status colours (dark) */
+    --status-todo: 240 5% 63%;
+    --status-inprogress: 217 91% 60%;
+    --status-inreview: 43 100% 50%;
+    --status-done: 152 100% 50%;
+    --status-cancelled: 0 100% 71%;
+
+    /* Shadows + glows (dark) */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+    --shadow-md: 0 2px 8px -1px rgb(0 0 0 / 0.5);
+    --shadow-lg: 0 8px 24px -4px rgb(0 0 0 / 0.6);
+    --glow-cyan: 0 0 0 1px hsl(var(--vks-cyan) / 0.4), 0 0 16px -2px hsl(var(--vks-cyan) / 0.35);
+    --glow-emerald: 0 0 12px -2px hsl(var(--vks-emerald) / 0.5);
+
+    /* Semantic surface/border aliases */
+    --surface-card: var(--vks-surface);
+    --surface-raised: var(--vks-surface-bright);
+    --border-strong: 240 10% 16%;
 
     /* Console (dark) */
     --_console-background: 0 0% 0%;
     --_console-foreground: 210 40% 98%;
     --_console-success: 138.5 76.5% 47.7%;
     --_console-error: 0 84.2% 60.2%;
+  }
+
+  /* Light theme — applied via ThemeProvider classList.add('light').
+     Inherits :root defaults; overrides primary for AA contrast + status tokens (added in 002). */
+  .light {
+    color-scheme: light;
+    --_background: 215 20% 97%;
+    --_primary: 192 100% 35%;
+    --_primary-foreground: 0 0% 100%;
+    --_secondary: 210 20% 93%;
+    --_secondary-foreground: 222.2 47.4% 11.2%;
+    --status-todo: 220 9% 46%;
+    --status-inprogress: 221 83% 53%;
+    --status-inreview: 38 100% 34%;
+    --status-done: 153 83% 30%;
+    --status-cancelled: 0 62% 52%;
+    --surface-card: 0 0% 100%;
+    --surface-raised: 210 40% 96%;
+    --border-strong: 214 20% 80%;
+    --glow-cyan: 0 0 0 1px hsl(var(--_primary) / 0.3), 0 0 12px -4px hsl(var(--_primary) / 0.2);
   }
 
   /* VK-Swarm "Midnight Terminal" Theme */
@@ -141,6 +206,10 @@
     --_console-foreground: var(--vks-text);
     --_console-success: var(--vks-emerald);
     --_console-error: var(--vks-coral);
+
+    /* Shadows + glows (vks-theme) */
+    --glow-cyan: 0 0 0 1px hsl(var(--vks-cyan) / 0.4), 0 0 16px -2px hsl(var(--vks-cyan) / 0.35);
+    --glow-emerald: 0 0 12px -2px hsl(var(--vks-emerald) / 0.5);
   }
 }
 

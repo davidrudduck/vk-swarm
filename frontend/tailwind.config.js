@@ -99,16 +99,11 @@ module.exports = {
           foreground: "hsl(var(--neutral-foreground))",
         },
         status: {
-          init: "hsl(var(--status-init))",
-          "init-foreground": "hsl(var(--status-init-foreground))",
-          running: "hsl(var(--status-running))",
-          "running-foreground": "hsl(var(--status-running-foreground))",
-          complete: "hsl(var(--status-complete))",
-          "complete-foreground": "hsl(var(--status-complete-foreground))",
-          failed: "hsl(var(--status-failed))",
-          "failed-foreground": "hsl(var(--status-failed-foreground))",
-          paused: "hsl(var(--status-paused))",
-          "paused-foreground": "hsl(var(--status-paused-foreground))",
+          todo: "hsl(var(--status-todo))",
+          inprogress: "hsl(var(--status-inprogress))",
+          inreview: "hsl(var(--status-inreview))",
+          done: "hsl(var(--status-done))",
+          cancelled: "hsl(var(--status-cancelled))",
         },
         console: {
           DEFAULT: "hsl(var(--console-background))",
@@ -142,6 +137,7 @@ module.exports = {
         prose: 'var(--font-prose)',
         mono: 'var(--font-code)', // Alias for backwards compatibility
         'chivo-mono': ['Chivo Mono', 'Noto Emoji', 'monospace'], // Keep for direct usage
+        wordmark: ["'Chivo Mono'", 'monospace'],
         heading: 'var(--font-heading, var(--font-ui))', // VKS heading font with fallback
         serif: ['"Source Serif 4"', 'Georgia', 'serif'], // Direct serif usage
       },

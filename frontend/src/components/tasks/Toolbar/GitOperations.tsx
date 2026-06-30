@@ -28,6 +28,7 @@ import { RebaseDialog } from '@/components/dialogs/tasks/RebaseDialog';
 import { CreatePRDialog } from '@/components/dialogs/tasks/CreatePRDialog';
 import { useTranslation } from 'react-i18next';
 import { useGitOperations } from '@/hooks/useGitOperations';
+import { useOpenInEditor } from '@/hooks/useOpenInEditor';
 
 interface GitOperationsProps {
   selectedAttempt: TaskAttempt;
@@ -55,6 +56,7 @@ function GitOperations({
   const { t } = useTranslation('tasks');
 
   const git = useGitOperations(selectedAttempt.id, projectId);
+  const openInEditor = useOpenInEditor(selectedAttempt.id);
   const isChangingTargetBranch = git.states.changeTargetBranchPending;
 
   // Git status calculations
@@ -410,9 +412,9 @@ function GitOperations({
                   !pushSuccess &&
                   !mergeSuccess)
               }
-              variant="outline"
-              size="xs"
-              className="border-success text-success hover:bg-success gap-1 shrink-0"
+              variant="default"
+              size="sm"
+              className="flex-1 gap-1 shrink-0"
               aria-label={mergeButtonLabel}
             >
               <GitBranchIcon className="h-3.5 w-3.5" />
@@ -451,7 +453,7 @@ function GitOperations({
                 hasConflictsCalculated
               }
               variant="outline"
-              size="xs"
+              size="sm"
               className="border-warning text-warning hover:bg-warning gap-1 shrink-0"
               aria-label={rebaseButtonLabel}
             >
@@ -459,6 +461,18 @@ function GitOperations({
                 className={`h-3.5 w-3.5 ${rebasing ? 'animate-spin' : ''}`}
               />
               <span className="truncate max-w-[10ch]">{rebaseButtonLabel}</span>
+            </Button>
+
+            {/* TODO(i18n): vk-swarm-node-ui-localize — literal "Open in IDE". */}
+            <Button
+              onClick={() => openInEditor()}
+              variant="ghost"
+              size="sm"
+              className="gap-1 shrink-0"
+              aria-label="Open in IDE"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              <span className="truncate max-w-[10ch]">Open in IDE</span>
             </Button>
           </div>
         )}

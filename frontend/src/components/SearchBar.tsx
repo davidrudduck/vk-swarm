@@ -20,7 +20,7 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
     }
 
     return (
-      <div className={cn('relative w-64 sm:w-72', className)}>
+      <div className={cn('relative w-[260px]', className)}>
         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           ref={ref}

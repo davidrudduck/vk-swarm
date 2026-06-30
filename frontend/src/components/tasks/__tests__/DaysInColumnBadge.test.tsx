@@ -34,26 +34,26 @@ describe('DaysInColumnBadge', () => {
     expect(screen.getByText('1d')).toBeInTheDocument();
   });
 
-  it('renders "3d" with warning style for 3 days', () => {
+  it('renders "3d" with flat secondary style for 3 days', () => {
     const activityAt = new Date('2025-01-12T12:00:00Z');
     render(<DaysInColumnBadge activityAt={activityAt} />);
     const badge = screen.getByText('3d');
     expect(badge).toBeInTheDocument();
-    expect(badge).toHaveClass('bg-amber-100');
+    expect(badge).toHaveClass('bg-secondary');
   });
 
-  it('renders "7d+" with strong warning for 7+ days', () => {
+  it('renders "7d" for 7 days (no cap)', () => {
     const activityAt = new Date('2025-01-08T12:00:00Z');
     render(<DaysInColumnBadge activityAt={activityAt} />);
-    const badge = screen.getByText('7d+');
+    const badge = screen.getByText('7d');
     expect(badge).toBeInTheDocument();
-    expect(badge).toHaveClass('bg-red-100');
+    expect(badge).toHaveClass('bg-secondary');
   });
 
-  it('renders "7d+" for 14 days', () => {
+  it('renders "14d" for 14 days (no cap)', () => {
     const activityAt = new Date('2025-01-01T12:00:00Z');
     render(<DaysInColumnBadge activityAt={activityAt} />);
-    expect(screen.getByText('7d+')).toBeInTheDocument();
+    expect(screen.getByText('14d')).toBeInTheDocument();
   });
 
   it('handles ISO string input', () => {

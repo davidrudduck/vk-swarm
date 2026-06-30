@@ -28,28 +28,9 @@ export function getDaysInColumn(
 /**
  * Format days into a display string.
  * Returns null if days is 0 (< 1 day old).
- * Returns "7d+" for 7 or more days.
+ * Returns the literal "{n}d" for any day count >= 1 (no upper cap).
  */
 export function formatDaysInColumn(days: number): string | null {
   if (days < 1) return null;
-  if (days >= 7) return '7d+';
   return `${days}d`;
-}
-
-/**
- * Get Tailwind classes for styling the days badge based on age.
- * - 1-2 days: neutral/subtle styling
- * - 3-6 days: warning (amber) styling
- * - 7+ days: strong warning (red) styling
- */
-export function getDaysStyle(days: number): string {
-  if (days < 1) return '';
-  if (days <= 2) {
-    return 'bg-muted text-muted-foreground';
-  }
-  if (days <= 6) {
-    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
-  }
-  // 7+ days
-  return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
 }
