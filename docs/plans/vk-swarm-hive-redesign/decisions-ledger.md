@@ -112,6 +112,62 @@ their phases are authored — this is **expected-pending**, not a lint failure t
 internal consistency (plan↔frontmatter deps/conflicts, verification present, failing-tests-first) IS
 enforced now. A full PLAN-LINT PASS is achieved only when the final phase is authored.
 
+## Phase-1 authoring — ratified judgment calls + tracer limitations (2026-06-30)
+
+The Phase-1 author surfaced six judgment calls (Trap 6). Ratified after review:
+
+1. **106 parks on project-link-absent, not parent-task-absent** — RATIFIED. `upsert_from_node`
+   (`tasks.rs:566`) has no parent-task FK; the real transient dependency is the ProjectsSync link, which
+   `handle_task_sync` already encodes. Correct reading of SC2b at the task tier.
+2. **106 splits PARK (transient, `node_local_projects` row absent) vs SKIP+ADVANCE (permanent,
+   not swarm-linked)** — RATIFIED, and load-bearing. Because 105 enqueues for ALL projects (the `db`
+   crate can't cheaply do the swarm lookup), a non-swarm task at the outbox head would park *permanently*
+   and wedge the cursor if "not linked" parked. The split (encoded as 106's third test) prevents the
+   wedge. This mirrors `handle_task_sync`'s three-branch resolution.
+3. **105 idempotency_key = `task:{id}:{uuid}` (per-write-unique, persisted on the op row), NOT
+   `task:{id}:{version}`** — RATIFIED. `Task::update` (`queries.rs:305`) bumps no version, so a
+   version-key would self-collide and `UNIQUE(idempotency_key)` would silently drop updates. A re-sent
+   op reuses its stored key → hive dedups. (Same no-version fact as ADR-0007's dirty-guard motivation.)
+4. **105 enqueue is best-effort, non-atomic** with the task write (callers hold `&SqlitePool`, not a
+   txn) — RATIFIED as a TRACER LIMITATION. The legacy sync path is the backstop. **Consequence:
+   Phase-1-tracer does NOT fully satisfy SC2c "zero silent write loss" — true no-loss needs the enqueue
+   in the SAME transaction as the entity write** (threading a txn through the ~8 `Task::create` callers),
+   which is the next Phase-1 increment. SC2c is *claimed* by 102/106/108 (the durable-ack mechanism) but
+   the no-loss guarantee is only fully closed by the transactional enqueue.
+5. **108 advances the cursor via a new `HiveEvent::OpAck`** consumed in `run_node_runner` (which holds
+   the pool), mirroring the `TaskSyncResponse`/`BackfillRequest` "DB write happens in run_node_runner"
+   pattern — RATIFIED. `HiveEvent` has no third/cross-crate match site (grep-verified), so 108's `files:`
+   (hive_client.rs + node_runner.rs) is complete.
+6. **Trap 2b (Postgres) applies to 102 + 106** — RATIFIED; each states the live-PG precondition.
+
+**Honest SC2 status after Phase-1-tracer:** the ordered, acknowledged round-trip *mechanism* is proven
+(SC2a single ordered channel — additive, alongside legacy; SC2b parent/link-before-child parking; SC2c
+durable per-op ack + cursor-advance-only-on-ack). NOT yet done: transactional enqueue (full SC2c
+no-loss), attempt/exec/log op types, and retirement of the five legacy push paths. These are tracked as
+the next Phase-1 increment in plan.md.
+
+## Phase-1 sibling-advisory acknowledgement (wai-plan-lint `W:` lines, SC6)
+
+- **101 `…_add_node_outbox.sql` beside `…_init.sql`** — migrations are independent forward-only DDL, NOT
+  reimplementations of a pattern. Authored to house conventions confirmed against the recent
+  `queued_messages` migration (BLOB UUID PKs, `datetime('now','subsec')`, `CREATE … IF NOT EXISTS`,
+  partial index). Not a pattern sibling.
+- **102 `…_add_node_op_log.sql` beside `…_shared_tasks_activity.sql`** — same: independent Postgres DDL,
+  not a pattern sibling. **102's test `node_op_log_migration.rs` beside `backfill_e2e.rs` IS a real
+  sibling** — the task reads it and reuses its `database_url()`/`skip_without_db!`/`create_pool()`
+  helpers verbatim (no shared `common` module exists). Acknowledged, handled in-task.
+- **104 `node_outbox.rs` beside `activity_dismissal.rs`** — the task carries a `## Sibling alignment`
+  step reading an existing `db` model (`draft.rs`) for trait surface / error type / test style. The
+  genuine pattern sibling is read; `activity_dismissal.rs` is one of many same-dir models, not the
+  authority. Acknowledged.
+
+## Phase-1 lint status (expected-pending, not a failure to paper over)
+After the Phase-1 fixes (SC2/TS1 claimed; clause sub-ids SC2a/b/c are colon-less PROSE in the spec so
+the lint's declared id is `SC2`), `wai-plan-lint` reports only **SC1, SC3–SC7 and TS2–TS7 unclaimed** —
+the unauthored phases. This is the documented phase-by-phase state; a full PLAN-LINT PASS lands when the
+final phase is authored. Phase-1 internal consistency (deps/conflicts ↔ frontmatter, verification
+present, failing-tests-first) passes.
+
 ## Precheck notes
 
 ### Anchor-check false positive (resolved — `--no-anchor-check` used)

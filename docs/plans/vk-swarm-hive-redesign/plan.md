@@ -68,12 +68,29 @@ rewire + net-new cross-node views — see that README and the decisions ledger).
 
 ## Task table
 
-> **PROVISIONAL — finalized after the hive-side anchor investigation and the user scope decision.**
-> `dep:`/`conflicts:` will mirror each task's frontmatter (wai-plan-lint enforces equality) once the
-> task files are authored. The phase shape and SC mapping below are the committed structure.
+`dep:`/`conflicts:` mirror each task's frontmatter (wai-plan-lint enforces equality). `-` = none.
+**Phase 1 is authored (this pass); Phases 2–7 are authored in subsequent `/wai:decompose` passes** as
+each prior ships (user-approved phase-by-phase, decisions-ledger).
 
-(Per-phase task rows are authored into the phase files after anchor verification; this table is
-completed in lockstep so the lint's plan==frontmatter equality holds.)
+### Phase 1 — op-log foundation (SC2; authored as a safe additive tracer, op_type `task.upsert`)
+
+| id  | title | dep | conflicts | SC |
+|-----|-------|-----|-----------|----|
+| 101 | Add `node_outbox` table migration (SQLite) | dep: - | conflicts: none | SC2a |
+| 102 | Add `node_op_log` table migration (Postgres/hive) | dep: - | conflicts: none | SC2c |
+| 103 | Add `OpBatch`/`OutboxOp`/`OpAck` WS variants to both crates + exhaustive stub arms | dep: - | conflicts: 106 108 | SC2a |
+| 104 | Add node `OutboxRepository` (enqueue/peek_unacked/mark_acked_through) | dep: 101 | conflicts: none | SC2a |
+| 105 | Enqueue a `task.upsert` op on `Task::create`/`update` | dep: 104 | conflicts: none | SC2b |
+| 106 | Hive `handle_op_batch` — idempotent apply + park/skip + durable `OpAck` | dep: 102 103 | conflicts: 103 | SC2c |
+| 107 | Node streamer — drain `node_outbox` into `OpBatch` in `sync_once` | dep: 103 104 | conflicts: none | SC2a |
+| 108 | Node `OpAck` — advance ack cursor on durable hive ack | dep: 103 104 | conflicts: 103 | SC2c |
+
+> **Tracer honesty (recorded in the ledger):** Phase 1 proves the ordered-ack'd round-trip *mechanism*
+> alongside the legacy paths. It does NOT yet fully discharge SC2 — (i) `105`'s enqueue is non-atomic
+> with the task write, so true SC2c no-loss needs a transactional enqueue; (ii) only `task.upsert`
+> flows; (iii) the five legacy push paths are NOT retired. Those are the next Phase-1 increment.
+
+### Phases 2–7 — authored later (structure fixed; see Phases section + SC map)
 
 ## Execution preconditions & closeout (READ — affects whether the gate passes)
 
