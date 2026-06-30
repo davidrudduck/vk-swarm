@@ -22,6 +22,13 @@ TaskCard.tsx
     └── ArchiveToggleIcon.tsx
 ```
 
+### Related Shared Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `StatusBadge` | `components/common/StatusBadge.tsx` | 8px coloured dot + optional label driven by `--status-*` CSS tokens; used in kanban column headers and wherever a compact status indicator is needed |
+| `LabelBadge` | `components/labels/LabelBadge.tsx` | Renders a label chip; outline-mode text uses WCAG 4.5:1-aware colour computation so bright labels stay legible on white surfaces |
+
 ## TaskCard Variants
 
 Three variants share the compact layout pattern:
@@ -81,14 +88,11 @@ interface CompactLabelListProps {
 Located at `frontend/src/utils/daysInColumn.ts`:
 
 ```typescript
-// Calculate days since activity date
+// Calculate full days since activity date (returns 0 if < 1 day or null input)
 getDaysInColumn(activityAt: Date | string | null | undefined): number
 
-// Format days for display ("1d", "7d+", or null if < 1 day)
+// Format days for display ("{n}d" for any n ≥ 1, null if n < 1 — no upper cap)
 formatDaysInColumn(days: number): string | null
-
-// Get Tailwind classes for age-based styling
-getDaysStyle(days: number): string
 ```
 
 ## Styling Approach
@@ -121,13 +125,38 @@ className={cn(
 
 ### Days Badge Styling
 
-Age-appropriate coloring via `getDaysStyle()`:
+`DaysInColumnBadge` renders a flat neutral badge (`bg-secondary text-secondary-foreground`) at all ages — there is no amber or red escalation. The badge appears only when the task has been in its current column for at least one full day.
 
-| Days | Classes |
-|------|---------|
-| 1-2 | `bg-muted text-muted-foreground` |
-| 3-6 | `bg-amber-100 text-amber-700` (light) / `bg-amber-900/30 text-amber-400` (dark) |
-| 7+ | `bg-red-100 text-red-700` (light) / `bg-red-900/30 text-red-400` (dark) |
+### StatusBadge Styling
+
+`StatusBadge` uses CSS custom properties for colour so both light and dark themes resolve correctly without hard-coded colour classes:
+
+```typescript
+const statusConfig: Record<TaskStatus, { dotClass: string; label: string }> = {
+  todo:      { dotClass: 'bg-[hsl(var(--status-todo))]',      label: 'Todo' },
+  inprogress:{ dotClass: 'bg-[hsl(var(--status-inprogress))]',label: 'In Progress' },
+  inreview:  { dotClass: 'bg-[hsl(var(--status-inreview))]',  label: 'In Review' },
+  done:      { dotClass: 'bg-[hsl(var(--status-done))]',      label: 'Done' },
+  cancelled: { dotClass: 'bg-[hsl(var(--status-cancelled))]', label: 'Cancelled' },
+};
+```
+
+The `--status-*` token values are defined in `frontend/src/styles/index.css` and mapped to Tailwind in `tailwind.config.js`. See [Theme System Architecture](/architecture/theme-system) for the full token map.
+
+### LabelBadge WCAG Contrast
+
+`LabelBadge` in outline mode computes a text colour that maintains ≥ 4.5:1 contrast against white surfaces using WCAG relative luminance:
+
+```typescript
+// frontend/src/components/labels/LabelBadge.tsx
+function getOutlineTextColor(hexColor: string): string {
+  // Converts hex → relative luminance; darkens the hue until it meets
+  // WCAG 4.5:1 threshold against L=1.0 (white). The border still renders
+  // the original label colour for recognition.
+}
+```
+
+This prevents bright colours (e.g. `#ffff00`) from producing unreadable text on light-mode card surfaces.
 
 ### Responsive Layout
 
@@ -156,9 +185,9 @@ Located in `__tests__/` directories alongside components:
 
 | Test File | Coverage |
 |-----------|----------|
-| `daysInColumn.test.ts` | Utility functions (24 tests) |
-| `DaysInColumnBadge.test.tsx` | Badge rendering (12 tests) |
-| `CompactLabelList.test.tsx` | Label overflow (11 tests) |
+| `daysInColumn.test.ts` | Utility functions |
+| `DaysInColumnBadge.test.tsx` | Badge rendering |
+| `CompactLabelList.test.tsx` | Label overflow |
 
 ### Test Patterns
 
@@ -195,7 +224,7 @@ describe('DaysInColumnBadge', () => {
 useTaskLabels hook
        │
        ▼
-CompactLabelList ────► LabelBadge components
+CompactLabelList ────► LabelBadge (with WCAG outline colour)
        │
        ▼
 TaskCard renders with labels
@@ -203,10 +232,12 @@ TaskCard renders with labels
 task.activity_at
        │
        ▼
-getDaysInColumn() ────► DaysInColumnBadge
+getDaysInColumn() ────► DaysInColumnBadge (flat neutral badge)
+
+task.status
        │
        ▼
-Badge with age styling
+StatusBadge ──────────► --status-* CSS token → resolved hsl colour
 ```
 
 ### Context Dependencies
@@ -219,17 +250,22 @@ Badge with age styling
 
 ```text
 frontend/src/
-├── components/tasks/
-│   ├── TaskCard.tsx
-│   ├── TaskCardHeader.tsx
-│   ├── SharedTaskCard.tsx
-│   ├── AllProjectsTaskCard.tsx
-│   ├── CompactLabelList.tsx
-│   ├── DaysInColumnBadge.tsx
-│   ├── ArchiveToggleIcon.tsx
-│   └── __tests__/
-│       ├── DaysInColumnBadge.test.tsx
-│       └── CompactLabelList.test.tsx
+├── components/
+│   ├── common/
+│   │   └── StatusBadge.tsx
+│   ├── labels/
+│   │   └── LabelBadge.tsx
+│   └── tasks/
+│       ├── TaskCard.tsx
+│       ├── TaskCardHeader.tsx
+│       ├── SharedTaskCard.tsx
+│       ├── AllProjectsTaskCard.tsx
+│       ├── CompactLabelList.tsx
+│       ├── DaysInColumnBadge.tsx
+│       ├── ArchiveToggleIcon.tsx
+│       └── __tests__/
+│           ├── DaysInColumnBadge.test.tsx
+│           └── CompactLabelList.test.tsx
 └── utils/
     ├── daysInColumn.ts
     └── __tests__/

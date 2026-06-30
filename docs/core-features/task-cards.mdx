@@ -37,16 +37,14 @@ The left strip provides instant visual recognition of task status:
 
 ## Days in Column Badge
 
-Tasks that have been in the same status for an extended period display an age badge to help identify stale items:
+Tasks that have been in the same status for at least one full day display an age badge to help identify items that may need attention:
 
 | Age | Badge | Style |
 |-----|-------|-------|
 | < 1 day | Not shown | — |
-| 1-2 days | "1d", "2d" | Subtle gray |
-| 3-6 days | "3d" - "6d" | Amber warning |
-| 7+ days | "7d+" | Red warning |
+| 1+ days | "1d", "2d", "3d" … | Neutral (secondary) |
 
-The badge calculates time based on the task's `activity_at` timestamp, which updates when a task changes status or has new activity.
+The badge uses a consistent neutral style at all ages — there is no amber or red escalation. The number is exact (e.g. a task idle for 14 days shows "14d"). The badge calculates time based on the task's `activity_at` timestamp, which updates when a task changes status or has new activity.
 
 ## Label Display
 
