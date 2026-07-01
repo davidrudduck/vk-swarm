@@ -31,14 +31,21 @@ This task's tests prove the **stale-token rejection** (the SC3 commit-effect gua
     async fn op_against_assigned_task_with_stale_token_is_rejected_not_applied() {
         skip_without_db!();
         let pool = create_pool().await;
-        // FULL reassignment seed (so a WRONG-KEY lookup returns empty and this test FAILS — non-hollow):
-        //   - org + node_a + node_b + swarm-linked project.
-        //   - a shared_tasks row with (source_node_id = node_a, source_task_id = a_local_task_id) so the
-        //     fence's find_by_source_task_id(node_a, a_local_task_id) resolves the shared id (tasks.rs:352).
-        //   - node_task_assignments active row keyed on that shared id, reassigned to node_b with token T2
-        //     (try_claim node_a@T1 with past TTL, then reclaim_expired_leases / try_claim node_b → T2 > T1).
+        // ASSIGNED-NOT-CREATED reassignment seed (R2/F2 — this is what makes the test guard the fix: a
+        // creator-keyed `find_by_source_task_id(node_a, …)` returns None here, so an impl that used it as the
+        // primary key would SKIP the fence and APPLY the stale op → this test would FAIL; only the correct
+        // `payload.shared_task_id` resolution passes it):
+        //   - org + node_c (CREATOR) + node_a + node_b + swarm-linked project.
+        //   - a shared_tasks row CREATED BY node_c: (source_node_id = node_c, source_task_id = c_local) → SID.
+        //     node_a did NOT create it, so find_by_source_task_id(node_a, a_local) resolves NOTHING.
+        //   - node_a has SID ASSIGNED: node_a's op payload carries shared_task_id = SID (the hive set it at
+        //     assignment). node_task_assignments active row keyed on SID.
+        //   - reassign SID to node_b with token T2 (try_claim node_a@T1 past-TTL, reclaim_expired_leases /
+        //     try_claim node_b → T2 > T1).
         // Now node_a (partitioned-but-alive) sends an op: node_id = node_a, payload.id = a_local_task_id,
-        //   fencing_token = T1 (stale vs the assignment's current T2). Apply it. ASSERT:
+        //   payload.shared_task_id = SID, fencing_token = T1 (stale vs the assignment's current T2). Apply it.
+        //   The fence MUST resolve the assignment via payload.shared_task_id = SID (NOT find_by_source_task_id).
+        //   ASSERT:
         //   - shared_tasks is NOT updated by the stale op (no apply),
         //   - node_op_log has NO dedup row for that op (no record),
         //   - applied_through_seq does NOT advance past the rejected op's seq (high-water unchanged),

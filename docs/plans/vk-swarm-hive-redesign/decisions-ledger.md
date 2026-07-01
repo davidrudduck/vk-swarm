@@ -709,6 +709,20 @@ to in-place). So the **code** cutover is the in-place data op (701–703, the on
 compile error (601/602 used the bin name `vks-hive-server` not the package `remote`), and the cross-phase
 WS-enum ordering edges (202↔501, 303→205, 601→{202,501}) the per-phase authors flagged for the orchestrator.
 
+## Executor watch-points (read before running P2–P6)
+
+- **`handle_op_batch` is edited in series by 106 → 205 → 303.** The `depends_on` edges sequence them
+  correctly (106 creates it; 205 inserts the fencing guard in the APPLY branch; 303 inserts the
+  status-author guard), but three tasks stacking edits on ONE function assume compatible pre-states. Read
+  the current function shape at each step; if 205's or 303's Before-text has drifted from what the prior
+  task produced, re-anchor (don't force the literal Before). This is the highest-contention seam.
+- **Tournament R2 remediations are lint-green but NOT adversarially re-verified.** F2/F4/F7/F8 were
+  substantive body rewrites (fencing key, anti-entropy replay floor, self-fence rule, SC3 test placement);
+  they were verified against the repo by the orchestrator but not re-tournamented (avoiding infinite
+  regress — same accepted residual as R1). Read those tasks with eyes open.
+- **SC3's at-most-once proof lives in 205's in-module `#[cfg(test)]` test** (not 210), and seeds an
+  ASSIGNED-NOT-CREATED task so a creator-keyed lookup would fail it (R2/F2+F8). Do not weaken that seed.
+
 ## Precheck notes
 
 ### Anchor-check false positive (resolved — `--no-anchor-check` used)
