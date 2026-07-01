@@ -15,7 +15,18 @@ allowed_change: create
 covers_criteria: [SC6]
 covers_tests: [TS6]
 ---
-## Cutover interpretation (judgment calls — read first; NEEDS ORCHESTRATOR/USER RATIFICATION)
+## Cutover interpretation (RATIFIED 2026-06-30 — user chose fresh-schema; code path is necessarily in-place)
+**Ratification outcome.** The user chose a "fresh-schema rebuild." Verified engineering reality: the
+DISCARDABLE tables are **live infrastructure with code references** (`auth_sessions` 8 refs, `activity`
+in `db/activity.rs`+`db/tasks.rs`, etc.), so NO schema — fresh or in-place — can omit them without
+breaking `cargo check -p remote`; a `sqlx::migrate!` of a fresh DB recreates them **empty**, identical
+end state to the in-place clear below. Therefore: the **CODE cutover is this in-place data operation**
+(the only buildable form), and the **fresh-schema rebuild is captured as the operational DEPLOYMENT
+RUNBOOK** in the decisions-ledger (dump MUST-MIGRATE → recreate DB → `sqlx::migrate!` → restore
+MUST-MIGRATE → REGENERABLE refilled by node re-ingest). TS6's "discardable tables absent" is realized as
+"discardable DATA not retained (tables empty post-cutover)" — true under both forms.
+
+**Original supporting analysis (still valid):**
 **PRECONDITION (Trap 2b — NON-NEGOTIABLE):** the test REQUIRES a live, migrated Postgres. The hive
 crate's tests SKIP without a DB (`skip_without_db!`), so a skip-guarded run is a HOLLOW pass. The
 executor MUST stand up Postgres, run `sqlx::migrate!("./migrations")` (which applies THIS migration plus

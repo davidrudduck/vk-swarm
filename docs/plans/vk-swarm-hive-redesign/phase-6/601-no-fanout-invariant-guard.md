@@ -3,7 +3,7 @@ id: "601"
 phase: 6
 title: No-fanout invariant guard — exhaustive HiveMessage classification + topology assertion
 status: ready
-depends_on: ["103"]
+depends_on: ["103", "202", "501"]
 parallel: false
 conflicts_with: []
 files:
@@ -37,10 +37,10 @@ regression fence: you cannot add a fan-out variant without either (i) editing th
 makes the intent reviewable) or (ii) breaking the build (non-exhaustive match under `-D warnings`).
 
 **The test MUST be a NEW integration test file** `crates/remote/tests/no_fanout_invariant.rs`.
-`HiveMessage` is `pub` and reachable as `vks_hive_server::nodes::ws::message::HiveMessage`
-(crate name is `vks-hive-server`; `nodes`, `ws`, `message` are all `pub mod`). An external integration
+`HiveMessage` is `pub` and reachable as `remote::nodes::ws::message::HiveMessage`
+(crate name is `remote`; `nodes`, `ws`, `message` are all `pub mod`). An external integration
 test sees it. **Sibling read (rubric #9):** `crates/remote/tests/pool_config.rs` is the existing
-*hermetic* (no-DB) integration test in this dir — copy its bare `use vks_hive_server::…;` + `#[test]`
+*hermetic* (no-DB) integration test in this dir — copy its bare `use remote::…;` + `#[test]`
 shape (NOT `backfill_e2e.rs`, which is the DB-bound template and the wrong model here).
 
 Create `crates/remote/tests/no_fanout_invariant.rs` with EXACTLY this content:
@@ -56,7 +56,7 @@ Create `crates/remote/tests/no_fanout_invariant.rs` with EXACTLY this content:
 //! Pairs with the send-site comment fence in
 //! `crates/remote/src/nodes/ws/connection.rs` (task 602).
 
-use vks_hive_server::nodes::ws::message::{
+use remote::nodes::ws::message::{
     AuthResultMessage, BackfillRequestMessage, BackfillType, HiveMessage, LabelSyncBroadcastMessage,
     NodeRemovedMessage, ProjectSyncMessage, TaskAssignMessage, TaskCancelMessage, TaskDetails,
     TaskSyncResponseMessage,
@@ -102,12 +102,12 @@ fn classify(msg: &HiveMessage) -> Delivery {
         // Added by P1 task 103 (this task `depends_on: 103`, so OpAck is present at execution time):
         // durable ack on the recipient's OWN op-log cursor — control, never task-state fan-out.
         HiveMessage::OpAck { .. } => Delivery::PerNodeControl,
-        // If P2/P5 have also landed, add their decision-locked arms here (see the table above).
-        // Use the variant's ACTUAL shape from message.rs — per CONTRACT §A these are struct-variants,
-        // and DigestResult is `DigestResult { .. }` (P5 task 501), so match with `{ .. }` not `(_)`:
-        //   HiveMessage::LeaseGrant { .. } | HiveMessage::LeaseRevoked { .. } => Delivery::OwnAssignment,
-        //   HiveMessage::DigestResult { .. } => Delivery::PerNodeControl,
-        // and a matching constructor in one_of_each(). They are NOT on main and may not exist yet.
+        // P2 lease variants (this task `depends_on: 202`, so they exist at execution time). A lease
+        // grant/revoke targets the recipient's OWN assignment — control, never task-state fan-out.
+        // Shapes per CONTRACT §A (struct-variants → match `{ .. }`).
+        HiveMessage::LeaseGrant { .. } | HiveMessage::LeaseRevoked { .. } => Delivery::OwnAssignment,
+        // P5 digest result (this task `depends_on: 501`) — directs the recipient's OWN heal; control.
+        HiveMessage::DigestResult { .. } => Delivery::PerNodeControl,
     }
 }
 
@@ -195,6 +195,15 @@ fn one_of_each() -> Vec<HiveMessage> {
             version: 1,
             is_deleted: false,
         }),
+        // P2 lease variants (depends_on 202) — shapes per CONTRACT §A.
+        HiveMessage::LeaseGrant {
+            assignment_id: sample_uuid(),
+            fencing_token: 1,
+            lease_expires_at: now,
+        },
+        HiveMessage::LeaseRevoked { assignment_id: sample_uuid(), reason: "x".into() },
+        // P5 digest result (depends_on 501) — shape per CONTRACT §A.
+        HiveMessage::DigestResult { resend_from_seq: None, pull_entities: vec![] },
     ]
 }
 
@@ -217,7 +226,7 @@ fn no_hive_message_variant_is_task_state_fanout() {
     }
 }
 ```
-> Run before the change exists: `cargo test -p vks-hive-server --test no_fanout_invariant` — RED
+> Run before the change exists: `cargo test -p remote --test no_fanout_invariant` — RED
 > (the file does not compile/exist). After creating the file it is GREEN. The fence value is in the
 > RED-on-future-regression: adding a task-state-push `HiveMessage` variant either breaks `classify`'s
 > exhaustive match (compile error) or, if classified `TaskStatePush`, fails this assertion.
@@ -259,7 +268,7 @@ time — the pre-decided `classify` arm + matching `one_of_each()` constructor f
 the `Delivery` arm the table assigns). No other source file may change: do NOT modify `message.rs`,
 `connection.rs`, `session.rs`, or anything else (602 owns the `connection.rs` comment fence). Do NOT add
 a Postgres/`DATABASE_URL` precondition. Do NOT add new dependencies — `uuid` (crate dep
-`crates/remote/Cargo.toml:33`) and `chrono` (`:17`) are already normal deps of `vks-hive-server` and
+`crates/remote/Cargo.toml:33`) and `chrono` (`:17`) are already normal deps of `remote` and
 available to integration tests. If a struct field name in `one_of_each()` does not match `message.rs`,
 align the literal to the ACTUAL field (read `message.rs`) — do NOT change `message.rs`.
 
@@ -275,10 +284,10 @@ align the literal to the ACTUAL field (read `message.rs`) — do NOT change `mes
   NOT silently classify it benign to make the test pass.
 - A field literal in `one_of_each()` is rejected by the compiler (field name/type drift) → align the
   literal to `message.rs`; do NOT edit `message.rs`.
-- The import path `vks_hive_server::nodes::ws::message::…` fails → confirm the crate name
-  (`crates/remote/Cargo.toml` `name = "vks-hive-server"`) and that `nodes`/`ws`/`message` are still
+- The import path `remote::nodes::ws::message::…` fails → confirm the crate name
+  (`crates/remote/Cargo.toml` `name = "remote"`) and that `nodes`/`ws`/`message` are still
   `pub mod`. Adjust the `use` path only; do NOT add `pub` to anything (the modules are already `pub`).
 - You feel the need to touch `connection.rs` → that is 602's file. STOP; this task is `create`-only.
 
 ## Done when
-`WAI_TYPECHECK_CMD="cargo check -p vks-hive-server --tests" WAI_TEST_CMD="cargo test -p vks-hive-server --test no_fanout_invariant" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-redesign 601` exits 0
+`WAI_TYPECHECK_CMD="cargo check -p remote --tests" WAI_TEST_CMD="cargo test -p remote --test no_fanout_invariant" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-redesign 601` exits 0

@@ -670,6 +670,45 @@ row-equality. Phases 1,3,4,5,6,7 + 2 are now all authored; the only remaining pe
 UI half** (`vk-swarm-hive-ui`, deliberately out of this workstream). A full PLAN-LINT PASS should now land
 modulo that documented carve.
 
+## Cross-phase ratifications + tournament R2 + deployment runbook (2026-06-30)
+
+### SC4 status machine — RATIFIED reconciliation (no spec edit / no re-precheck)
+SC4's parenthetical `assigned`/`failed` are **authority labels, not `TaskStatus` values** (the real enum
+is `{Todo, InProgress, InReview, Done, Cancelled}`, both crates). Ratified mapping: `assigned` = an active
+`node_task_assignments` row (hive, assignment layer); `failed` = an `execution_status` outcome (node,
+execution layer). The `task.status` matrix (hive: `Todo→InProgress`, `InReview→Done`/`InReview→InProgress`,
+`*→Cancelled`; node, lease+token-gated: `InProgress→InReview`, `InProgress→Done`) is encoded in ADR-0010 +
+CONTRACT §D. P3 tasks 301/303/304 were unblocked (`blocked→ready`) and reconciled. This corrects only my
+own artifacts (ADR + CONTRACT), not the frozen spec — same class as the SC7 parenthetical and P4 prod-bug.
+
+### P7 cutover — RATIFIED: in-place CODE + fresh-schema DEPLOYMENT RUNBOOK
+User chose a fresh-schema rebuild (Q answered twice). Verified engineering reality: the DISCARDABLE
+inventory items are **live infrastructure tables with code references** (`auth_sessions` 8 refs, `activity`
+in `db/activity.rs`+`db/tasks.rs`, etc.) — NO schema (fresh or in-place) can omit them without breaking
+`cargo check -p remote`, and `sqlx::migrate!` of a fresh DB recreates them **empty** (identical end state
+to in-place). So the **code** cutover is the in-place data op (701–703, the only buildable form); the
+**fresh-schema rebuild is this operational deployment runbook**:
+
+> **Fresh-schema cutover runbook (deploy-time, not a code task):**
+> 1. `pg_dump` the MUST-MIGRATE tables from the old hive (`node_api_keys`, `nodes`, active
+>    `node_task_assignments`, `swarm_projects`+`swarm_project_nodes`, `swarm_templates`, `shared_tasks`
+>    incl. the `source_task_id`/`source_node_id` id bridge, `labels`+`shared_task_labels`,
+>    `users`/`organizations`/membership/`oauth_accounts`).
+> 2. Create a fresh database; run `sqlx::migrate!("./migrations")` (builds the FULL schema — all tables,
+>    incl. the live "discardable" infra ones, empty).
+> 3. Restore the MUST-MIGRATE dump (apply the `inprogress`/`in-progress` status mapping on import if any
+>    legacy rows predate the canonical kebab-case enum).
+> 4. Bring nodes online — REGENERABLE state (`node_*` mirrors, logs, progress) refills via the op-log
+>    re-ingest. DISCARDABLE data is NOT restored (tables present but empty).
+> TS6 "discardable tables absent" is realized as **discardable DATA not retained** under both forms.
+
+### Tournament R2 (Phases 2–6) — see `reviews/tournament-r2.md`
+8 peer-validated findings remediated (codex+gemini; opencode DNF). Headline: a CRITICAL fencing bypass
+(205 resolved the task by creator-node, breaking the fence for reassigned tasks → fixed to read
+`payload.shared_task_id`), an SC5 replay-point bug (503 `MAX(seq)` missed older lost ops), a crate-name
+compile error (601/602 used the bin name `vks-hive-server` not the package `remote`), and the cross-phase
+WS-enum ordering edges (202↔501, 303→205, 601→{202,501}) the per-phase authors flagged for the orchestrator.
+
 ## Precheck notes
 
 ### Anchor-check false positive (resolved — `--no-anchor-check` used)

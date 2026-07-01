@@ -27,22 +27,25 @@ Stand up Postgres, `sqlx::migrate!("./migrations")`, export `DATABASE_URL=postgr
 **Scope decision (record in ledger):** a full cross-process WS round-trip (real node binary ↔ real hive)
 is not hermetically testable in a single `cargo test`. TS2 is proven as TWO coordinated assertions over the
 real units, NOT a mocked end-to-end:
-1. **Hive stale-token rejection (the at-most-once commit effect)** — an integration test here in
-   `crates/remote/tests/` that drives the real `try_claim` (203) → reclaim-with-higher-token (209's sweep
-   query or a second `try_claim` after expiry) → then applies a node-A op stamped with the OLD token and
-   asserts the hive REJECTS it (no apply, no advance, `LeaseRevoked` surfaced) per 205. This is the
-   commit-effect guarantee.
-2. **Node self-fence (bounded overlap)** — covered by 208's hermetic `self_fence_tests`
-   (`assignments_to_self_fence` selects an expired/revoked Running assignment for halt) + 206's lease-state
-   test. This task ASSERTS that coverage exists by reference (it cannot import the node `services` test
-   module from the `remote` crate); the ledger records the two test names as the self-fence evidence.
+1. **Hive stale-token rejection (the at-most-once commit EFFECT)** — proven by **205's in-module
+   `#[cfg(test)] mod` test in `session.rs`**, which CAN call the private `handle_op_batch` and asserts that
+   a stale-token op is rejected (no apply, no advance, `LeaseRevoked` surfaced). This acceptance task
+   ASSERTS that coverage exists BY REFERENCE (the ledger records 205's reject-test name), exactly as it does
+   for the self-fence leg below — it does NOT re-assert the reject at the fencing-free repository layer,
+   which would BYPASS the mechanism and be HOLLOW (tournament R2/F8: `upsert_from_node` has no fencing).
+2. **Reclaim → reassign → strictly-higher token (the partition-safety BASIS)** — an integration test here
+   in `crates/remote/tests/` drives the real `try_claim` (203) → `reclaim_expired_leases` (209) → second
+   `try_claim` and asserts **B's fencing_token is strictly higher than A's**. This is the public-repo chain
+   that makes 205's stale-token compare meaningful; it is genuinely exercisable from `tests/`.
+3. **Node self-fence (bounded overlap)** — covered by 208's hermetic `self_fence_tests`
+   (`assignments_to_self_fence` selects an EXPIRED Running assignment for halt) + 206's lease-state test.
+   ASSERTED by reference (this crate cannot import the node `services` test module); the ledger records the
+   two test names.
 
-> Because 205's fencing check is PRIVATE to `session.rs`, this `tests/` integration test cannot call
-> `handle_op_batch` directly. Drive the rejection through the SAME seam 205's own `#[cfg(test)] mod` uses —
-> i.e. if 205 extracted a `pub(crate)`-or-test-visible apply entry, reuse it; otherwise this acceptance
-> test asserts the rejection at the REPOSITORY layer it CAN reach: a stale-token op's effect is "shared_task
-> not updated + token unchanged + assignment now held by B." Pin TS2's observable end-state with the public
-> repo surface + 205's in-module test as the unit proof. Record exactly which seam was used.
+> **Seam (R2/F8):** the fencing REJECT needs the private `session.rs::handle_op_batch` and therefore lives
+> in 205's own in-module `#[cfg(test)]` test — NOT here. This `tests/` integration file proves only the
+> public-repo reclaim/token-bump chain (leg 2). Do NOT make `handle_op_batch` `pub` and do NOT assert the
+> reject at the repo layer (hollow). SC3/TS2 is the conjunction of the three legs, recorded in the ledger.
 
 Create `crates/remote/tests/lease_partition_e2e.rs`. **Sibling read (rubric #9):** `backfill_e2e.rs` for
 `database_url()`/`skip_without_db!`/`create_pool()`/`create_test_organization`/`create_test_node`; inline
@@ -73,21 +76,20 @@ async fn partitioned_node_late_commit_is_rejected_after_reassignment() {
     assert!(reclaimed.iter().any(|r| r.task_id == task_id), "the sweep reclaimed A's expired lease");
     let b = repo.try_claim(task_id, node_b, np_id, chrono::Duration::seconds(300))
         .await.unwrap().expect("B claims the reclaimed task");
-    assert!(b.fencing_token > a.fencing_token, "B's token is strictly higher (partition-safety basis)");
-    // 3. A's late commit (stamped with the OLD token T1) is STALE vs the assignment's current token T2.
-    //    Drive it through the seam 205 exposes (see scope note) and assert:
-    //      - the shared_task is NOT updated by A's stale op,
-    //      - the assignment's current fencing_token is STILL T2 (A's op did not roll it back),
-    //      - the rejection is surfaced (LeaseRevoked for A / an error) — A learns its lease is gone.
-    //    => at-most-once COMMIT effect: only the rightful holder (B, token T2) can commit.
+    assert!(b.fencing_token > a.fencing_token, "B's token is strictly higher (partition-safety BASIS)");
+    // That strictly-higher token is exactly what 205's fencing compare uses to REJECT node A's late op
+    // (stamped with the OLD token T1 < T2). The reject itself is proven by 205's in-module #[cfg(test)]
+    // test against the private `handle_op_batch` (R2/F8 — do NOT re-assert it here at the repo layer).
+    // SC3/TS2 = this token-bump chain + 205's reject test + 208's self-fence test (recorded in the ledger).
     let _ = (a, b);
 }
 ```
 
 ## Allowed moves
-ONLY create the one `tests/lease_partition_e2e.rs` integration test. Do NOT add production code, do NOT
-make `handle_op_batch`/the fencing check `pub` (use the seam 205 already exposes for its own test, or assert
-at the repo layer). Do NOT touch any other file.
+ONLY create the one `tests/lease_partition_e2e.rs` integration test (the reclaim/token-bump chain, leg 2).
+Do NOT add production code, do NOT make `handle_op_batch`/the fencing check `pub`, and do NOT re-assert the
+fencing reject at the repo layer (hollow — R2/F8; the reject is 205's in-module test). Do NOT touch any
+other file.
 
 ## STOP triggers
 - The test asserts the reject by making a private hive fn `pub` → STOP: that changes a contract for a test.

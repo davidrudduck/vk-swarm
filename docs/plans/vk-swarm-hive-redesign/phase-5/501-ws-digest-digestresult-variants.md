@@ -3,9 +3,9 @@ id: "501"
 phase: 5
 title: Add Digest/DigestEntry/DigestResult WS variants to both crates + exhaustive stub arms
 status: ready
-depends_on: []
+depends_on: ["202"]
 parallel: false
-conflicts_with: ["503", "504"]
+conflicts_with: ["202", "503", "504"]
 files:
   - crates/services/src/services/hive_client.rs
   - crates/remote/src/nodes/ws/message.rs

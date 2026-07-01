@@ -5,7 +5,7 @@ title: Add LeaseHeartbeat/LeaseGrant/LeaseRevoked WS variants to both crates + e
 status: ready
 depends_on: []
 parallel: false
-conflicts_with: ["204", "205", "206"]
+conflicts_with: ["204", "205", "206", "501"]
 files:
   - crates/services/src/services/hive_client.rs
   - crates/remote/src/nodes/ws/message.rs

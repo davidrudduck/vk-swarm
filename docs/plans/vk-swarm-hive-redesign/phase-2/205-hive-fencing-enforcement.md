@@ -78,19 +78,20 @@ This task's tests prove the **stale-token rejection** (the SC3 commit-effect gua
 - **Add the fencing guard (CONTRACT §C / ADR-0009).** For the op currently being applied, after its task
   context is resolved and BEFORE `upsert_from_node`:
   1. **Resolve the HIVE shared-task id (the load-bearing key — get this wrong and SC3 silently breaks).**
-     The op arrives on the SENDER node's session, so `node_id` = the sender (node A, the partitioned writer)
-     and `op.entity_id`/`payload.id` = A's LOCAL task id. The assignment row, however, is keyed on
-     `node_task_assignments.task_id` which is `shared_tasks.id` (FK, verified
-     `20251202000000_nodes_swarm.sql:75`). So you MUST first map A's local id → the shared id via the
-     **existing** `SharedTaskRepository::find_by_source_task_id(source_node_id = node_id, source_task_id =
-     payload.id)` (`tasks.rs:352`, the `(source_node_id, source_task_id)` unique-constraint lookup). Do NOT
-     key the assignment lookup on `node_id`/`local_task_id` directly — after reassignment the active row is
-     node B's, so a sender-keyed lookup finds NOTHING and the stale op would FALL THROUGH and apply = the
-     exact double-execution SC3 forbids. (If 106's context step already produced this shared id pre-apply,
-     reuse it; if it only resolves it INSIDE `upsert_from_node`'s `ON CONFLICT`, resolve it here explicitly
-     with `find_by_source_task_id` BEFORE the apply.)
-     - If `find_by_source_task_id` returns `None` → no shared task exists yet (first write) → no assignment
-       can exist → fence does not apply; fall through to 106's normal apply.
+     The assignment row is keyed on `node_task_assignments.task_id` = `shared_tasks.id` (FK, verified
+     `20251202000000_nodes_swarm.sql:75`), so you must map the op to its shared id. **Read
+     `payload.shared_task_id` DIRECTLY** — the op payload is `serde_json::to_value(&Task)` (P1/105) and the
+     node `Task` carries `shared_task_id: Option<Uuid>` (`crates/db/src/models/task/mod.rs:44`). For ANY
+     hive-assigned task (the only ops the fence governs) the hive set `shared_task_id` on the node at
+     assignment time, so `payload.shared_task_id` is the correct, reassignment-proof key REGARDLESS of which
+     node created the task. (tournament R2/F2.)
+     - **Do NOT resolve via `find_by_source_task_id(node_id, payload.id)`** as the primary path: that keys on
+       `(source_node_id, source_task_id)` = the task's ORIGINAL CREATOR. A task CREATED by node C and
+       ASSIGNED to node A would return `None` for A's ops → the fence would silently NOT apply → A's stale
+       op after reassignment FALLS THROUGH and applies = the exact double-execution SC3 forbids.
+     - `find_by_source_task_id(node_id, payload.id)` is the **fallback ONLY** when `payload.shared_task_id`
+       is `None` — i.e. the creator's first pre-link write. In that case no assignment exists yet, so the
+       fence does not apply anyway; fall through to 106's normal apply.
   2. **Look up the active assignment by the shared id:**
      `SELECT id, fencing_token FROM node_task_assignments WHERE task_id = $shared_id AND completed_at IS NULL`
      (a narrow scalar/row read — do NOT use `NodeTaskAssignment` FromRow; the new column is not on that
@@ -131,11 +132,13 @@ side, or any migration.
 - A rejected op ADVANCES `applied_through_seq` (or records a `node_op_log` dedup row) → BUG: a stale op must
   NOT be acked; advancing past it would let the node believe a bounced write was committed (silent loss in
   reverse). Do NOT advance, do NOT record. The first test asserts the high-water is unchanged.
-- Keying the assignment lookup on the SENDER's `node_id`/`local_task_id` instead of the resolved
-  `shared_tasks.id` → **THE SC3-BREAKING BUG**: after reassignment the active row is node B's, so a
-  sender-keyed lookup finds nothing, the stale op falls through and APPLIES = double execution. The fence
-  MUST resolve `find_by_source_task_id(node_id, payload.id) → shared id` first, then look up the assignment
-  by that shared id. The first test seeds the full reassignment so a wrong key makes it fail (non-hollow).
+- Resolving the shared id via `find_by_source_task_id(node_id, payload.id)` as the PRIMARY key →
+  **THE SC3-BREAKING BUG** (tournament R2/F2): that lookup keys on the task's CREATOR node, so a task
+  created elsewhere and ASSIGNED to the sender returns `None` → the fence silently does not apply → the
+  stale op falls through and APPLIES = double execution. The fence MUST read `payload.shared_task_id`
+  DIRECTLY (fallback to `find_by_source_task_id` only when it is `None`), then look up the assignment by
+  that shared id. The first test MUST seed a task the sender did NOT create (assigned to it) so a
+  creator-keyed lookup makes it fail (non-hollow).
 - Comparing against the WRONG token (e.g. the node's claimed token instead of the assignment's CURRENT
   token) → BUG: the authority is `node_task_assignments.fencing_token` (bumped on every (re)claim by 201's
   sequence). Read it live per op.

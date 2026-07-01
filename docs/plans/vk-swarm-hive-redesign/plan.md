@@ -104,7 +104,7 @@ are FIXED by CONTRACT §A; schema by §B; fencing semantics by §C.
 | id  | title | dep | conflicts | SC |
 |-----|-------|-----|-----------|----|
 | 201 | Add `lease_expires_at`+`fencing_token` cols + `node_fencing_token_seq` (Postgres) | dep: - | conflicts: none | SC3 |
-| 202 | Add `LeaseHeartbeat`/`LeaseGrant`/`LeaseRevoked` WS variants to both crates + stub arms | dep: - | conflicts: 204 205 206 | SC3 |
+| 202 | Add `LeaseHeartbeat`/`LeaseGrant`/`LeaseRevoked` WS variants to both crates + stub arms | dep: - | conflicts: 204 205 206 501 | SC3 |
 | 203 | Hive `TaskAssignmentRepository::try_claim` (atomic CAS) + `renew_lease` | dep: 201 | conflicts: 209 | SC3 |
 | 204 | Hive `handle_lease_heartbeat` — renew leases, reply `LeaseGrant` per assignment | dep: 202 203 | conflicts: 202 205 | SC3 |
 | 205 | Hive fencing enforcement in `handle_op_batch` — reject stale-token, emit `LeaseRevoked` | dep: 106 202 203 | conflicts: 202 204 | SC3 |
@@ -135,7 +135,7 @@ out-of-band SQL. The `Digest`/`DigestResult` variant shapes are FIXED by CONTRAC
 
 | id  | title | dep | conflicts | SC |
 |-----|-------|-----|-----------|----|
-| 501 | Add `Digest`/`DigestEntry`/`DigestResult` WS variants to both crates + exhaustive stub arms | dep: - | conflicts: 503 504 | SC5 |
+| 501 | Add `Digest`/`DigestEntry`/`DigestResult` WS variants to both crates + exhaustive stub arms | dep: 202 | conflicts: 202 503 504 | SC5 |
 | 502 | Node digest builder — emit `NodeMessage::Digest` of swarm-linked tasks each sync cycle | dep: 501 | conflicts: none | SC5 |
 | 503 | Hive `handle_digest` — compare vs `shared_tasks`/`node_op_log`, reply `DigestResult` (TS4 self-heal) | dep: 501 | conflicts: 501 | SC5 |
 | 504 | Node acts on `DigestResult` — re-stream from `resend_from_seq` + pull via reconcile leg | dep: 501 502 | conflicts: 501 | SC5 |
@@ -158,7 +158,7 @@ Phase-6 asserts and fences that invariant against regression; it is NOT a large 
 
 | id  | title | dep | conflicts | SC |
 |-----|-------|-----|-----------|----|
-| 601 | No-fanout invariant guard — exhaustive `HiveMessage` classification + topology assertion (hermetic, no DB) | dep: 103 | conflicts: none | SC1 |
+| 601 | No-fanout invariant guard — exhaustive `HiveMessage` classification + topology assertion (hermetic, no DB) | dep: 103 202 501 | conflicts: none | SC1 |
 | 602 | No-fanout send-site comment fence — document the SC1 invariant at `connection.rs` | dep: 601 | conflicts: none | SC1 |
 
 > **601 `depends_on: 103` (the enum-drift fence).** Phase-6 is sequenced after P1/P2/P5, which ADD
@@ -239,7 +239,7 @@ SECOND node-status write site (legacy `handle_task_status`).
 |-----|-------|-----|-----------|----|
 | 301 | Status transition matrix module — single-author guard table (ADR-0010) | dep: - | conflicts: 302 | SC4 |
 | 302 | One canonical status wire value — node→hive mapping boundary helper | dep: 301 | conflicts: 301 303 304 | SC4 |
-| 303 | Enforce single-author status transitions at `handle_op_batch` (node gated on lease+token) | dep: 301 302 | conflicts: 302 304 | SC4 |
+| 303 | Enforce single-author status transitions at `handle_op_batch` (node gated on lease+token) | dep: 301 302 205 | conflicts: 302 304 | SC4 |
 | 304 | Route the legacy `handle_task_status` write through the transition guard | dep: 301 303 | conflicts: 302 303 | SC4 |
 
 ## Execution preconditions & closeout (READ — affects whether the gate passes)

@@ -22,7 +22,7 @@ comment", so verification is manual (below) plus the build staying green. The 60
 mechanical regression guard this comment points reviewers at.
 
 ## Manual verification (record in decisions-ledger)
-- `cargo check -p vks-hive-server` exits 0 (the added lines are comments only — must not change
+- `cargo check -p remote` exits 0 (the added lines are comments only — must not change
   compilation).
 - `git diff crates/remote/src/nodes/ws/connection.rs` shows ONLY added comment (`//!` / `//`) lines —
   zero changes to any `fn`, signature, or expression.
@@ -88,11 +88,11 @@ struct. Do NOT touch `message.rs`, `session.rs`, or the 601 test file. The diff 
   with `#[allow]`.
 - You find yourself changing any non-comment line → STOP; this task is a documentation fence only. Any
   behavioral change here is out of scope (601 already proves the invariant mechanically).
-- `cargo check -p vks-hive-server` fails after the edit → the change is not comment-only (a real edit
+- `cargo check -p remote` fails after the edit → the change is not comment-only (a real edit
   slipped in) or an intra-doc link broke; revert to comment-only per above.
 
 ## Done when
-`WAI_TYPECHECK_CMD="cargo check -p vks-hive-server" WAI_TEST_CMD="cargo check -p vks-hive-server" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-redesign 602` exits 0
+`WAI_TYPECHECK_CMD="cargo check -p remote" WAI_TEST_CMD="cargo check -p remote" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-redesign 602` exits 0
 (comment-only change; both gate commands are `cargo check` since there is no new test — `scope_test:
 N/A` is satisfied by the `## Manual verification` section above, and the build staying green proves the
 comment did not perturb compilation.)

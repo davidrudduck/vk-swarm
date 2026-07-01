@@ -41,13 +41,14 @@ mod self_fence_tests {
             s.active_assignments.insert(live, mk(live, Some(chrono::Utc::now() + chrono::Duration::seconds(60))));
             // expired: lease in the past → fenced (renew-deadline miss).
             s.active_assignments.insert(expired, mk(expired, Some(chrono::Utc::now() - chrono::Duration::seconds(1))));
-            // revoked: lease cleared by HiveEvent::LeaseRevoked (token+expiry None) but still Running → fenced.
+            // None-expiry (ungranted OR post-revoke cleared): NOT selected by the EXPIRY timer (R2/F7) —
+            // revocation is fenced immediately by the LeaseRevoked event arm (206), asserted separately.
             let mut r = mk(revoked, None); r.fencing_token = None;
             s.active_assignments.insert(revoked, r);
         }
         let to_fence = assignments_to_self_fence(&state, chrono::Utc::now()).await;
         assert!(to_fence.contains(&expired), "an expired lease self-fences (ADR-0009)");
-        assert!(to_fence.contains(&revoked), "a revoked lease self-fences");
+        assert!(!to_fence.contains(&revoked), "a None-expiry lease is NOT fenced by the timer (R2/F7)");
         assert!(!to_fence.contains(&live), "a live lease is not fenced");
     }
 }
@@ -65,10 +66,13 @@ that SAME halt when a lease cannot be renewed within its TTL (or is revoked). It
 - **File:** `crates/services/src/services/node_runner.rs`
 - **Anchor A — the pure selector** (new free fn near 206's `apply_lease_*` helpers):
 ```rust
-    /// Assignments whose hive lease has lapsed (expired or revoked) while still Running — the node must
-    /// self-fence their agents (ADR-0009 §4: bounded overlap). A revoked lease has `lease_expires_at = None`
-    /// (cleared by HiveEvent::LeaseRevoked, task 206) but a still-Running status; an expired lease has
-    /// `lease_expires_at < now`. A live lease (future expiry) is left alone.
+    /// Assignments whose hive lease has EXPIRED while still Running — the node must self-fence their
+    /// agents (ADR-0009 §4: bounded overlap). **This selector fences on EXPIRY ONLY** (`Some(exp) < now`).
+    /// Revocation is NOT handled here (tournament R2/F7): a `HiveEvent::LeaseRevoked` fences its assignment
+    /// IMMEDIATELY via the event arm (Anchor C / task 206), and a freshly-assigned lease that has not YET
+    /// received its first `LeaseGrant` also has `lease_expires_at = None` — so a `None` arm here could not
+    /// distinguish "revoked" from "just starting" and must be omitted. A live lease (future expiry) or an
+    /// as-yet-ungranted one (`None`) is left alone.
     async fn assignments_to_self_fence(
         state: &std::sync::Arc<tokio::sync::RwLock<NodeRunnerState>>,
         now: chrono::DateTime<Utc>,
@@ -76,24 +80,15 @@ that SAME halt when a lease cannot be renewed within its TTL (or is revoked). It
         let s = state.read().await;
         s.active_assignments.values()
             .filter(|a| matches!(a.status, TaskExecutionStatus::Running)) // only halt live execution
-            .filter(|a| match a.lease_expires_at {
-                Some(exp) => exp < now,   // renew-deadline miss
-                None => a.fencing_token.is_none(), // revoked (lease cleared) — distinguishes from
-                                                   // never-yet-granted? see STOP triggers
-            })
+            .filter(|a| matches!(a.lease_expires_at, Some(exp) if exp < now)) // EXPIRY only (R2/F7)
             .map(|a| a.assignment_id)
             .collect()
     }
 ```
-  > **Never-granted vs revoked ambiguity (STOP trigger below):** a freshly-assigned assignment that has not
-  > YET received its first `LeaseGrant` also has `lease_expires_at = None`. Do NOT fence it (it is starting,
-  > not lapsed). The watchdog MUST only consider assignments that were once granted then lost their lease.
-  > Resolve by gating the `None` arm on a "was previously leased" signal — e.g. add a `lease_revoked: bool`
-  > flag set by 206's `apply_lease_revoke`, OR only fence on `Some(exp) where exp < now` (expiry) and let
-  > the explicit `HiveEvent::LeaseRevoked` arm (206) trigger an immediate fence directly (preferred — see
-  > Anchor C). Pick ONE and record it; the simplest is: watchdog fences on EXPIRY only, and the
-  > `LeaseRevoked` event arm fences immediately. Then the `None`/`fencing_token.is_none()` leg above is
-  > unnecessary — drop it and fence only `Some(exp) < now`.
+  > **Committed rule (R2/F7):** the watchdog selector fences on EXPIRY only; the `HiveEvent::LeaseRevoked`
+  > event arm (task 206, referenced at Anchor C) fences its assignment immediately. There is NO `None`
+  > arm in the selector — an ungranted lease (`None`) is indistinguishable from a revoked one and must not
+  > be fenced by the timer. This removes the earlier ambiguity.
 - **Anchor B — the watchdog loop:** where the runner spawns background tasks (near @658, beside 206's
   `LeaseHeartbeat` sender), spawn a `tokio::time::interval` loop (cadence ≤ the lease TTL granularity, e.g.
   every few seconds) that calls `assignments_to_self_fence(&state, Utc::now())` and, for each id, invokes

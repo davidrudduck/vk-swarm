@@ -46,14 +46,19 @@ mod digest_tests {
         //   source_node_id = node, version = 1, that the node's digest will NOT mention.
         // NODE-HAS / HIVE-LACKS: the node's digest WILL include entity_id = NID (a local task id) for
         //   which NO shared_tasks row exists (source_node_id=node, source_task_id=NID absent).
-        // Also seed node_op_log with MAX(seq)=5 for this node (so resend_from_seq is a real cursor).
+        // Seed node_op_log with a HIGH applied high-water (e.g. MAX(seq)=10) but the lost entity NID's op
+        // was an OLDER seq (e.g. 3) that the hive never durably applied — the tournament R2/F4 case: a
+        // replay from the high-water would MISS seq 3.
 
         let entries = vec![ DigestEntry { entity_type: "task".into(), entity_id: NID, version: 1 } ];
         // Drive handle_digest (or the ws-free apply split — see STOP note). Capture the DigestResult.
         let result = handle_digest_compare(&pool, node_id, &entries).await.unwrap();
 
-        // NODE-HAS/HIVE-LACKS → the hive asks the node to re-stream its op-log so the missing op replays.
-        assert!(result.resend_from_seq.is_some(), "node-has/hive-lacks → request a re-stream");
+        // NODE-HAS/HIVE-LACKS → the hive asks the node to re-stream from AT/BELOW the lost op's seq, NOT
+        // from the high-water. With the conservative floor, resend_from_seq == Some(1) (<= the lost seq 3),
+        // so the missing op is guaranteed to replay (R2/F4).
+        assert_eq!(result.resend_from_seq, Some(1),
+            "node-has/hive-lacks → re-stream from the floor (<= any lost op's seq), NOT MAX(seq)");
         // HIVE-HAS/NODE-LACKS → the hive lists HID for the node to PULL via the reconcile leg.
         assert!(result.pull_entities.contains(&HID), "hive-has/node-lacks → node pulls this entity");
         assert!(!result.pull_entities.contains(&NID), "an entity the node already has is NOT pulled");
@@ -161,12 +166,17 @@ impl SharedTaskRepository {
        the hive holds but the node's digest omitted. Collect into `pull_entities: Vec<Uuid>` (these are
        the node's LOCAL ids = bridge keys; 504 maps them via the reconcile leg).
     4. **node-has / hive-lacks → `resend_from_seq`:** if `node_ids.difference(&hive_ids)` is NON-EMPTY
-       (the node lists a task the hive has no shared_tasks row for → its op was lost), the hive cannot
-       know that op's seq, so it asks the node to re-stream conservatively from its applied high-water:
-       `resend_from_seq = Some(SELECT COALESCE(MAX(seq),0) FROM node_op_log WHERE node_id = $1)`. (At-most
-       a full re-stream from the last applied op; the node's re-send is idempotent at apply — 106's
-       `ON CONFLICT DO NOTHING` — so over-resending is safe, never lossy.) If that difference is EMPTY,
-       `resend_from_seq = None`.
+       (the node lists a task the hive has no shared_tasks row for → its op was lost), the hive must ask
+       the node to re-stream from a point **AT OR BELOW the lost op's seq**. **Do NOT use `MAX(seq)`**
+       (tournament R2/F4): a lost op at seq 3 while the hive's high-water is 10 would be MISSED by a
+       replay from 10 → SC5 self-heal silently fails. Post-R1/F1 (apply-first/record-second) a `node_op_log`
+       row implies the apply succeeded, so a lost entity has NO `node_op_log` row and the hive cannot derive
+       its seq — therefore replay from the **conservative floor**: `resend_from_seq = Some(1)` (re-stream all
+       retained ops; the node's `peek_from_seq` (504) includes acked-but-lost rows, and 106's
+       `ON CONFLICT DO NOTHING` makes over-resending idempotent — safe, never lossy). *(Optimization for a
+       later increment: carry a per-entity seq in the digest so the hive can pinpoint the replay point
+       instead of flooring to 1 — out of tracer scope; CONTRACT §A `DigestEntry` has no seq today.)* If that
+       difference is EMPTY, `resend_from_seq = None`.
     5. Return `DigestResultParts { resend_from_seq, pull_entities }`.
   - In `handle_digest`: `send_message(ws_sender, &HiveMessage::DigestResult { resend_from_seq,
     pull_entities }).await.map_err(|_| HandleError::Send)?;` (always reply, even when both are
