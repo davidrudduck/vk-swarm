@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use super::hive_client::{
     AttemptSyncMessage, ExecutionSyncMessage, LocalProjectSyncInfo, LogsBatchMessage, NodeMessage,
-    ProjectsSyncMessage, SyncLogEntry, TaskOutputType, TaskSyncMessage,
+    OutboxOp, ProjectsSyncMessage, SyncLogEntry, TaskOutputType, TaskSyncMessage,
 };
 
 /// Configuration for the Hive sync service.
@@ -184,6 +184,41 @@ impl HiveSyncService {
 
         // Labels are NOT synced from nodes to hive - they flow hive->nodes only
 
+        // Drain the node_outbox op-log (SC2 tracer): send unacked ops in seq order as a single
+        // OpBatch. Does NOT mark them acked — the cursor advances only on the hive's durable OpAck
+        // (task 108). Runs ALONGSIDE the legacy sync above (additive; hive apply is idempotent).
+        if let Err(e) = self.sync_outbox().await {
+            warn!(error = ?e, "Failed to drain node_outbox op-log");
+        }
+
+        Ok(())
+    }
+
+    /// Drain unacked node_outbox ops and push them to the hive as one ordered `OpBatch`.
+    /// Best-effort: an empty outbox sends nothing. Does NOT advance the ack cursor (108 owns that).
+    async fn sync_outbox(&self) -> Result<(), HiveSyncError> {
+        use db::models::node_outbox::OutboxRepository;
+        let rows =
+            OutboxRepository::peek_unacked(&self.pool, self.config.max_tasks_per_batch).await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let ops: Vec<OutboxOp> = rows
+            .into_iter()
+            .map(|r| OutboxOp {
+                seq: r.seq,
+                op_type: r.op_type,
+                entity_type: r.entity_type,
+                entity_id: r.entity_id,
+                payload: r.payload,
+                idempotency_key: r.idempotency_key,
+                fencing_token: r.fencing_token,
+            })
+            .collect();
+        self.command_tx
+            .send(NodeMessage::OpBatch { ops })
+            .await
+            .map_err(|e| HiveSyncError::Send(e.to_string()))?;
         Ok(())
     }
 
@@ -653,4 +688,46 @@ pub fn spawn_hive_sync_service(
 ) -> tokio::task::JoinHandle<()> {
     let service = HiveSyncService::new(pool, command_tx, config.unwrap_or_default());
     service.spawn()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HiveSyncConfig;
+    use super::HiveSyncService;
+    use crate::services::hive_client::NodeMessage;
+
+    #[tokio::test]
+    async fn sync_outbox_sends_unacked_ops_as_op_batch_in_seq_order() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        use db::models::node_outbox::{NewOutboxOp, OutboxRepository};
+        let mk = |k: &str| NewOutboxOp {
+            op_type: "task.upsert".into(),
+            entity_type: "task".into(),
+            entity_id: uuid::Uuid::new_v4(),
+            payload: serde_json::json!({}),
+            idempotency_key: k.into(),
+            fencing_token: None,
+        };
+        OutboxRepository::enqueue_op(&pool, mk("task:a:1")).await.unwrap();
+        OutboxRepository::enqueue_op(&pool, mk("task:b:1")).await.unwrap();
+
+        let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(8);
+        let service = HiveSyncService::new(pool.clone(), command_tx, HiveSyncConfig::default());
+        service.sync_outbox().await.unwrap();
+
+        let msg = command_rx.try_recv().expect("an OpBatch was sent");
+        match msg {
+            NodeMessage::OpBatch { ops } => {
+                assert_eq!(ops.len(), 2);
+                assert!(ops[1].seq > ops[0].seq, "seq order preserved");
+                assert!(ops.iter().all(|o| o.op_type == "task.upsert"));
+            }
+            other => panic!("expected OpBatch, got {other:?}"),
+        }
+
+        assert_eq!(
+            OutboxRepository::peek_unacked(&pool, 10).await.unwrap().len(),
+            2
+        );
+    }
 }
