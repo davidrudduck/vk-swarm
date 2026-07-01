@@ -481,6 +481,10 @@ impl NodeRunnerHandle {
                 // Note: Backfill handling should happen in run_node_runner where we have
                 // access to the database pool to query local data and send it to the hive.
             }
+            HiveEvent::OpAck { applied_through_seq } => {
+                tracing::trace!(applied_through_seq = *applied_through_seq, "op_ack received");
+                // DB cursor advance happens in run_node_runner where the pool is available.
+            }
         }
 
         Some(event)
@@ -918,6 +922,9 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                             "Sent backfill response to hive"
                         );
                     }
+                }
+                Some(HiveEvent::OpAck { applied_through_seq }) => {
+                    apply_op_ack(&db.pool, applied_through_seq).await;
                 }
                 Some(_) => {
                     // Other events are handled in process_event
@@ -1401,6 +1408,16 @@ fn build_logs_batch_message(
 ///
 /// # Returns
 /// The count of entities processed/sent, or an error if the operation fails.
+/// Advance the node_outbox ack cursor on a durable hive OpAck (SC2c). Clears all unacked ops with
+/// seq <= applied_through_seq. Best-effort: a failure is logged (the op stays unacked and is re-sent
+/// on the next OpBatch — at-least-once, which is safe because the hive apply is idempotent).
+pub(crate) async fn apply_op_ack(pool: &sqlx::SqlitePool, applied_through_seq: i64) {
+    use db::models::node_outbox::OutboxRepository;
+    if let Err(e) = OutboxRepository::mark_acked_through(pool, applied_through_seq).await {
+        tracing::warn!(error = %e, applied_through_seq, "failed to advance node_outbox ack cursor");
+    }
+}
+
 pub async fn handle_backfill_attempt(
     pool: &SqlitePool,
     command_tx: &mpsc::Sender<NodeMessage>,
@@ -1918,5 +1935,25 @@ mod backfill_tests {
             }
             _ => panic!("Expected LogsBatch, got {:?}", msg),
         }
+    }
+
+    #[tokio::test]
+    async fn op_ack_advances_outbox_cursor() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        use db::models::node_outbox::{NewOutboxOp, OutboxRepository};
+        let mk = |k: &str| NewOutboxOp {
+            op_type: "task.upsert".into(), entity_type: "task".into(),
+            entity_id: uuid::Uuid::new_v4(), payload: serde_json::json!({}),
+            idempotency_key: k.into(), fencing_token: None,
+        };
+        let a = OutboxRepository::enqueue_op(&pool, mk("task:a:1")).await.unwrap();
+        let _b = OutboxRepository::enqueue_op(&pool, mk("task:b:1")).await.unwrap();
+
+        // Durable ack through the first op's seq → only b remains unacked.
+        crate::services::node_runner::apply_op_ack(&pool, a.seq).await;
+
+        let remaining = OutboxRepository::peek_unacked(&pool, 10).await.unwrap();
+        assert_eq!(remaining.len(), 1, "ops at/under acked seq are cleared from unacked");
+        assert!(remaining[0].seq > a.seq);
     }
 }

@@ -703,6 +703,8 @@ pub enum HiveEvent {
     BackfillRequest(BackfillRequestMessage),
     /// Error from hive
     Error { message: String },
+    /// Durable op-log ack: all node_outbox ops with seq <= applied_through_seq are persisted (SC2c).
+    OpAck { applied_through_seq: i64 },
 }
 
 /// State of the hive connection.
@@ -1078,9 +1080,11 @@ impl HiveClient {
                     .await;
             }
             HiveMessage::OpAck { applied_through_seq } => {
-                // STUB — filled by task 108 (advance the node_outbox ack cursor). For now log only so
-                // the arm is EXPLICIT (not swallowed by the `_ =>` wildcard below) and compiles.
-                tracing::debug!(applied_through_seq, "received op_ack (cursor advance TODO: task 108)");
+                tracing::trace!(applied_through_seq, "received op_ack");
+                let _ = self
+                    .event_tx
+                    .send(HiveEvent::OpAck { applied_through_seq })
+                    .await;
             }
             _ => {
                 tracing::debug!(?hive_msg, "ignoring unhandled hive message");
