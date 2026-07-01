@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 use uuid::Uuid;
@@ -13,6 +13,16 @@ pub enum TaskAssignmentError {
     AlreadyAssigned,
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+}
+
+/// Narrow result of an atomic checkout / renew — only the lease fields the wire grant needs.
+#[derive(Debug, Clone)]
+pub struct LeaseClaim {
+    pub assignment_id: Uuid,
+    pub node_id: Uuid,
+    pub task_id: Uuid,
+    pub fencing_token: i64,
+    pub lease_expires_at: DateTime<Utc>,
 }
 
 pub struct TaskAssignmentRepository<'a> {
@@ -65,6 +75,127 @@ impl<'a> TaskAssignmentRepository<'a> {
         })?;
 
         Ok(assignment)
+    }
+
+    /// Atomically claim (or reclaim an expired lease on) a task for a node — the partition-safe
+    /// checkout (ADR-0009 SC3). Succeeds (returns Some) only when the task has NO live assignment:
+    /// either no active row, or the active row's lease has expired. Each grant bumps the monotonic
+    /// fencing token via nextval, so a reassigned lease always outranks any prior holder. Two nodes
+    /// can never both win (the UPDATE … RETURNING is atomic under the row lock). Returns None when a
+    /// live lease blocks the claim.
+    pub async fn try_claim(
+        &self,
+        task_id: Uuid,
+        node_id: Uuid,
+        node_project_id: Uuid,
+        lease_ttl: chrono::Duration,
+    ) -> Result<Option<LeaseClaim>, TaskAssignmentError> {
+        let expires_at = Utc::now() + lease_ttl;
+
+        // 1. UPDATE the active row IFF it is reclaimable (no live lease). Atomic under the row lock.
+        let row = sqlx::query(
+            r#"
+            UPDATE node_task_assignments
+            SET node_id = $2,
+                node_project_id = $3,
+                lease_expires_at = $4,
+                fencing_token = nextval('node_fencing_token_seq')
+            WHERE task_id = $1
+              AND completed_at IS NULL
+              AND (lease_expires_at IS NULL OR lease_expires_at < now())
+            RETURNING id, node_id, task_id, fencing_token, lease_expires_at
+            "#,
+        )
+        .bind(task_id)
+        .bind(node_id)
+        .bind(node_project_id)
+        .bind(expires_at)
+        .fetch_optional(self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            return Ok(Some(LeaseClaim {
+                assignment_id: row.get("id"),
+                node_id: row.get("node_id"),
+                task_id: row.get("task_id"),
+                fencing_token: row.get("fencing_token"),
+                lease_expires_at: row.get("lease_expires_at"),
+            }));
+        }
+
+        // 2. No row was updated: either no active row exists (→ INSERT a fresh one), or a live
+        //    lease blocks the claim (→ the INSERT trips the partial unique index → None).
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO node_task_assignments (task_id, node_id, node_project_id, lease_expires_at, fencing_token)
+            VALUES ($1, $2, $3, $4, nextval('node_fencing_token_seq'))
+            RETURNING id, node_id, task_id, fencing_token, lease_expires_at
+            "#,
+        )
+        .bind(task_id)
+        .bind(node_id)
+        .bind(node_project_id)
+        .bind(expires_at)
+        .fetch_optional(self.pool)
+        .await;
+
+        match inserted {
+            Ok(Some(row)) => Ok(Some(LeaseClaim {
+                assignment_id: row.get("id"),
+                node_id: row.get("node_id"),
+                task_id: row.get("task_id"),
+                fencing_token: row.get("fencing_token"),
+                lease_expires_at: row.get("lease_expires_at"),
+            })),
+            Ok(None) => Ok(None),
+            Err(e) => {
+                if let sqlx::Error::Database(ref db_err) = e
+                    && db_err.constraint() == Some("idx_task_assignments_active")
+                {
+                    return Ok(None);
+                }
+                Err(TaskAssignmentError::Database(e))
+            }
+        }
+    }
+
+    /// Renew (extend) a live lease for its current holder. Does NOT change the fencing token (renewal is
+    /// not a reassignment). Returns None if the assignment is gone, completed, or held by a different
+    /// node (a foreign node cannot renew someone else's lease).
+    pub async fn renew_lease(
+        &self,
+        assignment_id: Uuid,
+        node_id: Uuid,
+        lease_ttl: chrono::Duration,
+    ) -> Result<Option<LeaseClaim>, TaskAssignmentError> {
+        let expires_at = Utc::now() + lease_ttl;
+
+        let row = sqlx::query(
+            r#"
+            UPDATE node_task_assignments
+            SET lease_expires_at = $3
+            WHERE id = $1
+              AND node_id = $2
+              AND completed_at IS NULL
+            RETURNING id, node_id, task_id, fencing_token, lease_expires_at
+            "#,
+        )
+        .bind(assignment_id)
+        .bind(node_id)
+        .bind(expires_at)
+        .fetch_optional(self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(LeaseClaim {
+                assignment_id: row.get("id"),
+                node_id: row.get("node_id"),
+                task_id: row.get("task_id"),
+                fencing_token: row.get("fencing_token"),
+                lease_expires_at: row.get("lease_expires_at"),
+            })),
+            None => Ok(None),
+        }
     }
 
     /// Find an assignment by ID
@@ -395,5 +526,293 @@ impl<'a> TaskAssignmentRepository<'a> {
         .await?;
 
         Ok(assignment)
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping test: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+
+    async fn create_pool() -> PgPool {
+        let url = database_url().expect("DATABASE_URL must be set");
+        sqlx::PgPool::connect(&url)
+            .await
+            .expect("Failed to connect to database")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, status, capabilities, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, 'online', '{}'::jsonb, $5, $6)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+
+        node_id
+    }
+
+    async fn create_test_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test swarm project");
+
+        sp_id
+    }
+
+    async fn create_test_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+    ) -> Uuid {
+        let local_project_id = Uuid::new_v4();
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("test-repo")
+        .fetch_one(pool)
+        .await
+        .expect("Failed to create test swarm project node");
+
+        row.get("id")
+    }
+
+    async fn create_test_shared_task(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let task_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO shared_tasks (id, organization_id, title, status, created_at, updated_at)
+            VALUES ($1, $2, $3, 'todo'::task_status, $4, $5)
+            "#,
+        )
+        .bind(task_id)
+        .bind(org_id)
+        .bind(format!("Test Task {}", task_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test shared task");
+
+        task_id
+    }
+
+    async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn try_claim_wins_when_available_and_assigns_monotonic_token() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await;
+        let swarm_project = create_test_swarm_project(&pool, org_id).await;
+        let np_id = create_test_swarm_project_node(&pool, swarm_project, node_a).await;
+        let task_id = create_test_shared_task(&pool, org_id).await;
+
+        let claim = repo
+            .try_claim(task_id, node_a, np_id, chrono::Duration::seconds(30))
+            .await
+            .unwrap();
+        let claim = claim.expect("claim should succeed on an available task");
+        assert_eq!(claim.node_id, node_a);
+        assert!(
+            claim.fencing_token > 0,
+            "a granted token is from nextval (>0)"
+        );
+        assert!(
+            claim.lease_expires_at > chrono::Utc::now(),
+            "lease expiry is in the future"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn try_claim_fails_for_a_second_node_while_lease_is_live() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await;
+        let node_b = create_test_node(&pool, org_id).await;
+        let swarm_project = create_test_swarm_project(&pool, org_id).await;
+        let np_id = create_test_swarm_project_node(&pool, swarm_project, node_a).await;
+        let task_id = create_test_shared_task(&pool, org_id).await;
+
+        let first = repo
+            .try_claim(task_id, node_a, np_id, chrono::Duration::seconds(300))
+            .await
+            .unwrap()
+            .expect("a wins");
+
+        let second = repo
+            .try_claim(task_id, node_b, np_id, chrono::Duration::seconds(300))
+            .await
+            .unwrap();
+        assert!(
+            second.is_none(),
+            "a live lease blocks a second claimant"
+        );
+
+        let _ = first;
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn try_claim_reclaims_an_expired_lease_with_a_strictly_higher_token() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await;
+        let node_b = create_test_node(&pool, org_id).await;
+        let swarm_project = create_test_swarm_project(&pool, org_id).await;
+        let np_id = create_test_swarm_project_node(&pool, swarm_project, node_a).await;
+        let task_id = create_test_shared_task(&pool, org_id).await;
+
+        let a = repo
+            .try_claim(task_id, node_a, np_id, chrono::Duration::seconds(-1))
+            .await
+            .unwrap()
+            .expect("a wins");
+
+        let b = repo
+            .try_claim(task_id, node_b, np_id, chrono::Duration::seconds(300))
+            .await
+            .unwrap()
+            .expect("b reclaims expired");
+        assert_eq!(b.node_id, node_b);
+        assert!(
+            b.fencing_token > a.fencing_token,
+            "a reassigned lease MUST get a strictly higher fencing token (the SC3 basis)"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn renew_lease_extends_expiry_without_changing_the_token() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await;
+        let node_b = create_test_node(&pool, org_id).await;
+        let swarm_project = create_test_swarm_project(&pool, org_id).await;
+        let np_id = create_test_swarm_project_node(&pool, swarm_project, node_a).await;
+        let task_id = create_test_shared_task(&pool, org_id).await;
+
+        let a = repo
+            .try_claim(task_id, node_a, np_id, chrono::Duration::seconds(30))
+            .await
+            .unwrap()
+            .expect("a wins");
+
+        let renewed = repo
+            .renew_lease(a.assignment_id, node_a, chrono::Duration::seconds(120))
+            .await
+            .unwrap()
+            .expect("renew succeeds for the lease holder");
+        assert_eq!(
+            renewed.fencing_token,
+            a.fencing_token,
+            "renew does NOT bump the token"
+        );
+        assert!(
+            renewed.lease_expires_at > a.lease_expires_at,
+            "renew extends the expiry"
+        );
+
+        let stolen = repo
+            .renew_lease(a.assignment_id, node_b, chrono::Duration::seconds(120))
+            .await
+            .unwrap();
+        assert!(
+            stolen.is_none(),
+            "renew is scoped to the current lease holder"
+        );
+
+        cleanup_org(&pool, org_id).await;
     }
 }
