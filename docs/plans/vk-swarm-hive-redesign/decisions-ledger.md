@@ -810,3 +810,19 @@ All three legs of the round-trip (node drain, hive apply, node ack) have a test 
 The spec (§Intent) names the architectural root cause: "dirty flags clear before any Hive ack (silent write loss)". The behavioural assertion that maps to that symptom is: **a write survives the round-trip only after the hive durably acks it** — before ack, `peek_unacked` still returns the op (task 107 test asserts `peek_unacked().len()==2` after send); after ack, the op is cleared (`op_ack_advances_outbox_cursor` asserts `remaining.len()==1` after acking through `a.seq`). The legacy dirty-flag path cleared on send; the new path clears only on `HiveEvent::OpAck`. That is the symptom-to-assertion mapping: ack-before-clear, verified on the real seam.
 
 VERDICT: PASS
+
+## Phase-7 ratification gates (user-ratified 2026-07-01)
+
+- **Gate 1 (P7 cutover strategy):** ratified (a) in-place rebuild. User notes the
+  Postgres on this system is test-only (spun up for this run); no backup/data-loss
+  concern. Plan's authored option stands.
+- **Gate 2 (discardable legacy inbound-sync tables):** ratified (b) follow-up DROP
+  after P4/P5 confirm no reads. Keep-but-empty for the P7 cutover itself, then a
+  follow-up migration drops them. Adds a P7 follow-up task to the plan. Spec TS6
+  "absent" honored literally via the follow-up DROP.
+- **Gate 3 (Phase-3 status-enum escalation):** ratified (a) amend ADR-0010 §D.
+  Drop `Failed`/`Assigned` from ADR-0010 §D; use the real 5-value enum
+  (`Todo`/`InProgress`/`InReview`/`Done`/`Cancelled`) that already exists on both
+  crates. CONTRACT.md §D already reconciled to this. No schema change. Unblocks
+  P3 tasks 301/303/304. ADR-0010 §D update is a /wai:decompose preflight
+  amendment (frozen-spec touch) — handle at P3 session start.
