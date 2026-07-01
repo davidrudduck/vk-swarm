@@ -578,6 +578,13 @@ async fn handle_node_message(
         NodeMessage::OpBatch { ops } => {
             handle_op_batch(node_id, organization_id, node_name, ops, pool, ws_sender).await
         }
+        NodeMessage::LeaseHeartbeat { assignment_ids } => {
+            // STUB — filled by task 204 (renew leases, reply LeaseGrant per assignment). Logs so the
+            // exhaustive match compiles now; 204 replaces the body with handle_lease_heartbeat(...).
+            tracing::debug!(node_id = %node_id, count = assignment_ids.len(),
+                "received lease_heartbeat (renew TODO: task 204)");
+            Ok(())
+        }
     }
 }
 

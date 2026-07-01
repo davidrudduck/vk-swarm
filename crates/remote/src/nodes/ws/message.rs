@@ -87,6 +87,10 @@ pub enum NodeMessage {
     /// Ordered batch of outbox ops (node→hive op-log, SC2). Tracer scope: op_type = "task.upsert".
     #[serde(rename = "op_batch")]
     OpBatch { ops: Vec<OutboxOp> },
+
+    /// Periodic lease renewal: the node's in-flight hive-assignment ids to keep alive (SC3, CONTRACT §A).
+    #[serde(rename = "lease_heartbeat")]
+    LeaseHeartbeat { assignment_ids: Vec<Uuid> },
 }
 
 /// Messages sent from the hive to a node.
@@ -147,6 +151,18 @@ pub enum HiveMessage {
     /// Durable ack of the node op-log: all ops with seq <= applied_through_seq are persisted (SC2c).
     #[serde(rename = "op_ack")]
     OpAck { applied_through_seq: i64 },
+
+    /// Lease granted/renewed: the assignment's current fencing token + lease expiry (SC3, CONTRACT §A).
+    #[serde(rename = "lease_grant")]
+    LeaseGrant {
+        assignment_id: Uuid,
+        fencing_token: i64,
+        lease_expires_at: DateTime<Utc>,
+    },
+
+    /// Lease revoked: the hive reclaimed/expired this assignment; the node must self-fence (SC3).
+    #[serde(rename = "lease_revoked")]
+    LeaseRevoked { assignment_id: Uuid, reason: String },
 }
 
 /// Authentication message from node to hive.

@@ -832,3 +832,8 @@ VERDICT: PASS
 
 ## Task 201 — panel adjudication (orchestrator)
 - [Task 201 orchestrator] Initial Stage-2 panel findings 1/2/4/6 adjudicated FALSE POSITIVE: the task file's own "exact contents" block requires multi-line SQL with the same comments and the `.contains('0')` default assertion; migration-running is intentionally delegated to the executor per the task's Trap 2b note. Finding 3 (helpers not verbatim from backfill_e2e.rs) was confirmed REAL, fixed, and the amended commit passed a lighter two-reviewer re-review with VERDICT: APPROVE.
+
+## Task 202
+- The task file's "Before" blocks were STALE: task 103 had already appended `OpBatch`/`OpAck` variants after `BackfillResponse`/`BackfillRequest`, so the enum tails shifted. Appended `LeaseHeartbeat`/`LeaseGrant`/`LeaseRevoked` AFTER the current `OpBatch`/`OpAck` tails (the new actual enum ends) instead of the stale `BackfillResponse`/`BackfillRequest` anchors.
+- The node→hive dispatch `_ =>` wildcard shifted from the task file's `@1062` to `@1089` (now `@1112` after the two new arms). Re-located it via grep; the explicit `LeaseGrant`/`LeaseRevoked` arms precede it.
+- `cargo check --workspace` exit status: 0 (Finished in 33.59s).

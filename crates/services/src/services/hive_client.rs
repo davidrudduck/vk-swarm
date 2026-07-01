@@ -118,6 +118,9 @@ pub enum NodeMessage {
     /// Ordered batch of outbox ops (node→hive op-log, SC2). Tracer scope: op_type = "task.upsert".
     #[serde(rename = "op_batch")]
     OpBatch { ops: Vec<OutboxOp> },
+    /// Periodic lease renewal: the node's in-flight hive-assignment ids to keep alive (SC3, CONTRACT §A).
+    #[serde(rename = "lease_heartbeat")]
+    LeaseHeartbeat { assignment_ids: Vec<Uuid> },
 }
 
 /// Messages sent from hive to node.
@@ -154,6 +157,16 @@ pub enum HiveMessage {
     /// Durable ack of the node op-log: all ops with seq <= applied_through_seq are persisted (SC2c).
     #[serde(rename = "op_ack")]
     OpAck { applied_through_seq: i64 },
+    /// Lease granted/renewed: the assignment's current fencing token + lease expiry (SC3, CONTRACT §A).
+    #[serde(rename = "lease_grant")]
+    LeaseGrant {
+        assignment_id: Uuid,
+        fencing_token: i64,
+        lease_expires_at: chrono::DateTime<Utc>,
+    },
+    /// Lease revoked: the hive reclaimed/expired this assignment; the node must self-fence (SC3).
+    #[serde(rename = "lease_revoked")]
+    LeaseRevoked { assignment_id: Uuid, reason: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1085,6 +1098,16 @@ impl HiveClient {
                     .event_tx
                     .send(HiveEvent::OpAck { applied_through_seq })
                     .await;
+            }
+            HiveMessage::LeaseGrant { assignment_id, fencing_token, lease_expires_at } => {
+                // STUB — filled by task 206 (store token+lease, emit HiveEvent::LeaseGranted). Explicit
+                // arm so it is NOT swallowed by the `_ =>` wildcard below.
+                tracing::debug!(%assignment_id, fencing_token, %lease_expires_at,
+                    "received lease_grant (store TODO: task 206)");
+            }
+            HiveMessage::LeaseRevoked { assignment_id, reason } => {
+                // STUB — filled by task 206 (emit HiveEvent::LeaseRevoked → self-fence). Explicit arm.
+                tracing::debug!(%assignment_id, %reason, "received lease_revoked (handle TODO: task 206)");
             }
             _ => {
                 tracing::debug!(?hive_msg, "ignoring unhandled hive message");
