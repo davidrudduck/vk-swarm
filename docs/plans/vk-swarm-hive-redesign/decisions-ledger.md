@@ -735,3 +735,8 @@ succeed. These are the only two path tokens the regex extracts from this spec; b
 grounded. The sibling `vk-swarm-node-foundations` spec (shipped) produces the identical truncation
 pattern. Precheck was therefore re-run with `--no-anchor-check`; the spec is frozen against
 `spec_sha` in `.precheck.passed`.
+
+## Task 101
+- [Task 101] `ls crates/db/migrations/20260201000400_add_node_outbox.sql` → exists, sorts last after `20260201000300_add_fence_attempt_count.sql` — verification per task — `crates/db/migrations/20260201000400_add_node_outbox.sql`.
+- [Task 101] `cargo test -p db --lib` exit 0 (185 passed, 0 failed, 7 ignored) — template-DB migration apply verified — `crates/db/migrations/20260201000400_add_node_outbox.sql`.
+- [Task 101] `sqlite3 <test.db> ".schema node_outbox"` shows `node_outbox` table + `idx_node_outbox_unacked_seq` partial index `WHERE acked_at IS NULL` — schema dump verified — `crates/db/migrations/20260201000400_add_node_outbox.sql`.
