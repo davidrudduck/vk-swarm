@@ -83,6 +83,10 @@ pub enum NodeMessage {
     /// Response to a backfill request from hive
     #[serde(rename = "backfill_response")]
     BackfillResponse(BackfillResponseMessage),
+
+    /// Ordered batch of outbox ops (node→hive op-log, SC2). Tracer scope: op_type = "task.upsert".
+    #[serde(rename = "op_batch")]
+    OpBatch { ops: Vec<OutboxOp> },
 }
 
 /// Messages sent from the hive to a node.
@@ -139,6 +143,10 @@ pub enum HiveMessage {
     /// Request data backfill from node
     #[serde(rename = "backfill_request")]
     BackfillRequest(BackfillRequestMessage),
+
+    /// Durable ack of the node op-log: all ops with seq <= applied_through_seq are persisted (SC2c).
+    #[serde(rename = "op_ack")]
+    OpAck { applied_through_seq: i64 },
 }
 
 /// Authentication message from node to hive.
@@ -430,6 +438,18 @@ pub struct NodeRemovedMessage {
     pub node_id: Uuid,
     /// Reason for removal
     pub reason: String,
+}
+
+/// A single node→hive op-log operation (SC2). Mirrors the node's `node_outbox` row shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboxOp {
+    pub seq: i64,
+    pub op_type: String,
+    pub entity_type: String,
+    pub entity_id: Uuid,
+    pub payload: serde_json::Value,
+    pub idempotency_key: String,
+    pub fencing_token: Option<i64>,
 }
 
 /// Project sync message from hive to node.

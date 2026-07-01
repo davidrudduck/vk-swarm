@@ -115,6 +115,9 @@ pub enum NodeMessage {
     },
     #[serde(rename = "backfill_response")]
     BackfillResponse(BackfillResponseMessage),
+    /// Ordered batch of outbox ops (node→hive op-log, SC2). Tracer scope: op_type = "task.upsert".
+    #[serde(rename = "op_batch")]
+    OpBatch { ops: Vec<OutboxOp> },
 }
 
 /// Messages sent from hive to node.
@@ -148,6 +151,9 @@ pub enum HiveMessage {
     LabelSync(LabelSyncBroadcastMessage),
     #[serde(rename = "backfill_request")]
     BackfillRequest(BackfillRequestMessage),
+    /// Durable ack of the node op-log: all ops with seq <= applied_through_seq are persisted (SC2c).
+    #[serde(rename = "op_ack")]
+    OpAck { applied_through_seq: i64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +271,18 @@ pub struct NodeRemovedMessage {
     pub node_id: Uuid,
     /// Reason for removal
     pub reason: String,
+}
+
+/// A single node→hive op-log operation (SC2). Mirrors the `node_outbox` row shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboxOp {
+    pub seq: i64,
+    pub op_type: String,
+    pub entity_type: String,
+    pub entity_id: Uuid,
+    pub payload: serde_json::Value,
+    pub idempotency_key: String,
+    pub fencing_token: Option<i64>,
 }
 
 /// Message for syncing project info between nodes.
@@ -1058,6 +1076,11 @@ impl HiveClient {
                     .event_tx
                     .send(HiveEvent::BackfillRequest(request))
                     .await;
+            }
+            HiveMessage::OpAck { applied_through_seq } => {
+                // STUB — filled by task 108 (advance the node_outbox ack cursor). For now log only so
+                // the arm is EXPLICIT (not swallowed by the `_ =>` wildcard below) and compiles.
+                tracing::debug!(applied_through_seq, "received op_ack (cursor advance TODO: task 108)");
             }
             _ => {
                 tracing::debug!(?hive_msg, "ignoring unhandled hive message");

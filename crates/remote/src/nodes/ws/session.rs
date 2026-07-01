@@ -575,6 +575,12 @@ async fn handle_node_message(
         NodeMessage::BackfillResponse(response) => {
             handle_backfill_response(node_id, response, pool, tracker).await
         }
+        NodeMessage::OpBatch { ops } => {
+            // STUB — filled by task 106 (idempotent apply + durable OpAck). Logs so the exhaustive
+            // match compiles now; 106 replaces the body with handle_op_batch(...).
+            tracing::debug!(node_id = %node_id, op_count = ops.len(), "received op_batch (apply TODO: task 106)");
+            Ok(())
+        }
     }
 }
 
