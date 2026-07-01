@@ -826,3 +826,9 @@ VERDICT: PASS
   crates. CONTRACT.md §D already reconciled to this. No schema change. Unblocks
   P3 tasks 301/303/304. ADR-0010 §D update is a /wai:decompose preflight
   amendment (frozen-spec touch) — handle at P3 session start.
+
+## Task 201
+- [Task 201] Committed the migration + test before invoking `task-gate.sh`, because the gate validates `git show HEAD` (it has no `--worktree` mode). The task step ordering listed the gate before the commit, but running the gate on uncommitted changes produced `REJECT: create: no A (addition) recorded`. Committing first was the only way to obtain a deterministic gate result. — `crates/remote/migrations/20260128000001_add_lease_fencing.sql`, `crates/remote/tests/lease_fencing_migration.rs`, `docs/plans/vk-swarm-hive-redesign/decisions-ledger.md`.
+
+## Task 201 — panel adjudication (orchestrator)
+- [Task 201 orchestrator] Initial Stage-2 panel findings 1/2/4/6 adjudicated FALSE POSITIVE: the task file's own "exact contents" block requires multi-line SQL with the same comments and the `.contains('0')` default assertion; migration-running is intentionally delegated to the executor per the task's Trap 2b note. Finding 3 (helpers not verbatim from backfill_e2e.rs) was confirmed REAL, fixed, and the amended commit passed a lighter two-reviewer re-review with VERDICT: APPROVE.
