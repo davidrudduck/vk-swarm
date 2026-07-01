@@ -27,6 +27,7 @@ pub mod label;
 pub mod merge;
 pub mod project;
 pub mod task;
+pub mod node_outbox;
 pub mod task_attempt;
 pub mod task_variable;
 pub mod template;
