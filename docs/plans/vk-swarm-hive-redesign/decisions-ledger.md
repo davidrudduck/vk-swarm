@@ -768,3 +768,45 @@ pattern. Precheck was therefore re-run with `--no-anchor-check`; the spec is fro
 ## Task 108
 - [Task 108] Test placed inside the existing `#[cfg(test)] mod tests` block in `node_runner.rs`, specifically in its `mod backfill_tests` submodule (the only `#[tokio::test]`-bearing submodule at file end, starting @1556). The verbatim `crate::services::node_runner::apply_op_ack` path resolves from there. Test fn landed as `services::node_runner::backfill_tests::op_ack_advances_outbox_cursor`.
 - [Task 108] Verification required `SQLX_OFFLINE=true` alongside `DATABASE_URL` (same root cause as Task 107: `services` → `remote` `query!` macros emit E0282 without it). `cargo check -p services` finished clean; `cargo test -p services op_ack` → 1 passed, 0 failed (`services::node_runner::backfill_tests::op_ack_advances_outbox_cursor ... ok`), 218 filtered out across other suites.
+
+## Reachability gate
+
+Spec `change_kind: behaviour`. The new outbox→OpBatch→OpAck path must be proven
+live on the production code path, not just green in isolation.
+
+### (a) Call-path trace (cited file:line on merged HEAD `49f79032`)
+
+Production entry → bug path → changed code, both halves of the round-trip:
+
+**Node → Hive (outbox drain):**
+1. `spawn_hive_sync_service(db.pool.clone(), command_tx.clone(), None)` @ `crates/services/src/services/node_runner.rs:662` — production wiring inside `run_node_runner`.
+2. → `HiveSyncService::spawn` @ `hive_sync.rs:129` → loop @134 → `self.sync_once().await` @137.
+3. → `sync_once` @ `hive_sync.rs:151` → `self.sync_outbox().await` @190 (NEW, task 107).
+4. → `sync_outbox` @ `hive_sync.rs:199` → `OutboxRepository::peek_unacked` @202 (task 104) → `command_tx.send(NodeMessage::OpBatch { ops })` @219 (task 103 variant).
+5. OpBatch enqueued by `Task::create`/`Task::update` → `enqueue_task_upsert_op` @ `crates/db/src/models/task/queries.rs` (task 105) writing `node_outbox` (task 101 table).
+
+**Hive apply + ack:**
+6. WS frame arrives → `handle_node_message` @ `crates/remote/src/nodes/ws/session.rs:512` → `NodeMessage::OpBatch { ops }` arm @578 (task 106 replaced 103's stub).
+7. → `handle_op_batch(...)` @ `session.rs` wrapper → `handle_op_batch_apply(...)` core (task 106) → idempotent `upsert_from_node` + `INSERT node_op_log ON CONFLICT DO NOTHING` (task 102 table) → `send_message(ws_sender, &HiveMessage::OpAck { applied_through_seq })`.
+
+**Node ack cursor advance:**
+8. `HiveClient::handle_hive_message` @ `hive_client.rs:1062` → `HiveMessage::OpAck` arm @1082 (task 108 replaced 103's stub) → `event_tx.send(HiveEvent::OpAck { applied_through_seq })` @1086.
+9. → `run_node_runner` loop @ `node_runner.rs:926` `Some(HiveEvent::OpAck { applied_through_seq })` arm (task 108) → `apply_op_ack(&db.pool, applied_through_seq)` @927.
+10. → `apply_op_ack` @ `node_runner.rs:1414` → `OutboxRepository::mark_acked_through(pool, applied_through_seq)` (task 104). Cursor advances ONLY on durable hive ack, never on send (verified: sole `mark_acked_through` call site in `crates/services` is @1416, grep-confirmed).
+
+Every edge is a real call in merged code, not a hypothetical.
+
+### (b) Real-seam test
+
+No test mocks past the integration seam:
+- `sync_outbox_sends_unacked_ops_as_op_batch_in_seq_order` (task 107, `hive_sync.rs:700`) drives the real `sync_outbox` method on a real `HiveSyncService` with a real migrated `create_test_pool()` SQLite and a real mpsc channel; asserts the `NodeMessage::OpBatch` payload shape + seq order + that `peek_unacked` still returns 2 (cursor NOT advanced). Drives the actual production method, not a helper extracted for testability.
+- `op_batch_applies_swarm_linked_task_idempotently_and_acks` (task 106, `session.rs:~2270`) drives the real `handle_op_batch_apply` core against a real Postgres pool with seeded `swarm_projects`/`node_local_projects`/`swarm_project_nodes`; asserts idempotent apply (2 calls → 1 `node_op_log` row, seq==1 both) + shared task status. Drives the actual hive apply seam.
+- `op_ack_advances_outbox_cursor` (task 108, `node_runner.rs:1941`) drives the real `apply_op_ack` against a real migrated SQLite pool; enqueues 2 ops, acks through the first, asserts `remaining.len()==1` + `remaining[0].seq > a.seq`. Drives the actual cursor-advance seam.
+
+All three legs of the round-trip (node drain, hive apply, node ack) have a test driving the real entry point, not a mock past it.
+
+### (c) Incident-symptom assertion
+
+The spec (§Intent) names the architectural root cause: "dirty flags clear before any Hive ack (silent write loss)". The behavioural assertion that maps to that symptom is: **a write survives the round-trip only after the hive durably acks it** — before ack, `peek_unacked` still returns the op (task 107 test asserts `peek_unacked().len()==2` after send); after ack, the op is cleared (`op_ack_advances_outbox_cursor` asserts `remaining.len()==1` after acking through `a.seq`). The legacy dirty-flag path cleared on send; the new path clears only on `HiveEvent::OpAck`. That is the symptom-to-assertion mapping: ack-before-clear, verified on the real seam.
+
+VERDICT: PASS
