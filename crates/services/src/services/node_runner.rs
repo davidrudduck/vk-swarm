@@ -243,6 +243,12 @@ pub struct ActiveAssignment {
     pub local_task_id: Option<Uuid>,
     pub local_attempt_id: Option<Uuid>,
     pub status: TaskExecutionStatus,
+    /// Current fencing token from the hive lease grant (SC3). None until a LeaseGrant arrives, or for
+    /// node-owned work (no hive assignment).
+    pub fencing_token: Option<i64>,
+    /// Lease expiry from the hive (SC3). The self-fence watchdog (task 208) halts the agent if this
+    /// passes without a renewal.
+    pub lease_expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Node runner state.
@@ -428,6 +434,8 @@ impl NodeRunnerHandle {
                         local_task_id: None,
                         local_attempt_id: None,
                         status: TaskExecutionStatus::Pending,
+                        fencing_token: None,
+                        lease_expires_at: None,
                     },
                 );
             }
@@ -484,6 +492,15 @@ impl NodeRunnerHandle {
             HiveEvent::OpAck { applied_through_seq } => {
                 tracing::trace!(applied_through_seq = *applied_through_seq, "op_ack received");
                 // DB cursor advance happens in run_node_runner where the pool is available.
+            }
+            HiveEvent::LeaseGranted { assignment_id, fencing_token, lease_expires_at } => {
+                apply_lease_grant(&self.state, *assignment_id, *fencing_token, *lease_expires_at).await;
+                tracing::debug!(%assignment_id, fencing_token, "stored lease grant");
+            }
+            HiveEvent::LeaseRevoked { assignment_id, reason } => {
+                apply_lease_revoke(&self.state, *assignment_id).await;
+                tracing::warn!(%assignment_id, %reason, "lease revoked — agent halt is task 208");
+                // The actual agent halt is task 208's watchdog/handler; here we only clear the lease.
             }
         }
 
@@ -660,6 +677,30 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
 
     // Spawn the Hive sync service for syncing attempts, executions, and logs
     let _sync_handle = spawn_hive_sync_service(db.pool.clone(), command_tx.clone(), None);
+
+    // Periodic lease heartbeat: renew leases well before the hive LEASE_TTL (60s in task 204) expires.
+    // Cadence = 30s = TTL/2, strictly shorter than the TTL so a healthy node never lets a lease lapse.
+    {
+        let state = state.clone();
+        let command_tx = command_tx.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                ticker.tick().await;
+                let assignment_ids: Vec<Uuid> =
+                    state.read().await.active_assignments.keys().copied().collect();
+                if assignment_ids.is_empty() {
+                    continue;
+                }
+                if let Err(e) = command_tx
+                    .send(NodeMessage::LeaseHeartbeat { assignment_ids })
+                    .await
+                {
+                    tracing::warn!(error = %e, "failed to send lease heartbeat");
+                }
+            }
+        });
+    }
 
     tokio::spawn(async move {
         // Create assignment handler if container is available
@@ -1418,6 +1459,30 @@ pub(crate) async fn apply_op_ack(pool: &sqlx::SqlitePool, applied_through_seq: i
     }
 }
 
+async fn apply_lease_grant(
+    state: &std::sync::Arc<tokio::sync::RwLock<NodeRunnerState>>,
+    assignment_id: Uuid, fencing_token: i64, lease_expires_at: chrono::DateTime<chrono::Utc>,
+) {
+    let mut s = state.write().await;
+    if let Some(a) = s.active_assignments.get_mut(&assignment_id) {
+        // Never lower a token (monotonic): only accept a >= token.
+        if a.fencing_token.is_none_or(|t| fencing_token >= t) {
+            a.fencing_token = Some(fencing_token);
+            a.lease_expires_at = Some(lease_expires_at);
+        }
+    }
+}
+
+async fn apply_lease_revoke(
+    state: &std::sync::Arc<tokio::sync::RwLock<NodeRunnerState>>, assignment_id: Uuid,
+) {
+    let mut s = state.write().await;
+    if let Some(a) = s.active_assignments.get_mut(&assignment_id) {
+        a.fencing_token = None;
+        a.lease_expires_at = None;
+    }
+}
+
 pub async fn handle_backfill_attempt(
     pool: &SqlitePool,
     command_tx: &mpsc::Sender<NodeMessage>,
@@ -1955,5 +2020,39 @@ mod backfill_tests {
         let remaining = OutboxRepository::peek_unacked(&pool, 10).await.unwrap();
         assert_eq!(remaining.len(), 1, "ops at/under acked seq are cleared from unacked");
         assert!(remaining[0].seq > a.seq);
+    }
+}
+
+#[cfg(test)]
+mod lease_state_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn lease_grant_sets_token_and_expiry_on_active_assignment_then_revoke_clears() {
+        let state = std::sync::Arc::new(tokio::sync::RwLock::new(NodeRunnerState::default()));
+        let aid = uuid::Uuid::new_v4();
+        let local = uuid::Uuid::new_v4();
+        // Seed an active assignment (as HiveEvent::TaskAssigned would).
+        state.write().await.active_assignments.insert(aid, ActiveAssignment {
+            assignment_id: aid, task_id: uuid::Uuid::new_v4(), local_task_id: Some(local),
+            local_attempt_id: None, status: TaskExecutionStatus::Pending,
+            fencing_token: None, lease_expires_at: None,
+        });
+        let expires = chrono::Utc::now() + chrono::Duration::seconds(60);
+
+        // apply_lease_grant is the small helper the process_event arm calls (testable, no WS).
+        apply_lease_grant(&state, aid, 7, expires).await;
+        {
+            let s = state.read().await;
+            let a = s.active_assignments.get(&aid).unwrap();
+            assert_eq!(a.fencing_token, Some(7));
+            assert_eq!(a.lease_expires_at, Some(expires));
+        }
+        // A higher token replaces a lower one; a grant never lowers a token.
+        apply_lease_grant(&state, aid, 9, expires).await;
+        assert_eq!(state.read().await.active_assignments.get(&aid).unwrap().fencing_token, Some(9));
+
+        apply_lease_revoke(&state, aid).await;
+        assert_eq!(state.read().await.active_assignments.get(&aid).unwrap().fencing_token, None);
     }
 }

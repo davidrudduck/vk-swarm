@@ -718,6 +718,10 @@ pub enum HiveEvent {
     Error { message: String },
     /// Durable op-log ack: all node_outbox ops with seq <= applied_through_seq are persisted (SC2c).
     OpAck { applied_through_seq: i64 },
+    /// Lease granted/renewed by the hive (assignment's current fencing token + expiry).
+    LeaseGranted { assignment_id: Uuid, fencing_token: i64, lease_expires_at: chrono::DateTime<Utc> },
+    /// Lease revoked by the hive — the node must self-fence the assignment's agent.
+    LeaseRevoked { assignment_id: Uuid, reason: String },
 }
 
 /// State of the hive connection.
@@ -1100,14 +1104,18 @@ impl HiveClient {
                     .await;
             }
             HiveMessage::LeaseGrant { assignment_id, fencing_token, lease_expires_at } => {
-                // STUB — filled by task 206 (store token+lease, emit HiveEvent::LeaseGranted). Explicit
-                // arm so it is NOT swallowed by the `_ =>` wildcard below.
-                tracing::debug!(%assignment_id, fencing_token, %lease_expires_at,
-                    "received lease_grant (store TODO: task 206)");
+                tracing::debug!(%assignment_id, fencing_token, "lease granted");
+                let _ = self
+                    .event_tx
+                    .send(HiveEvent::LeaseGranted { assignment_id, fencing_token, lease_expires_at })
+                    .await;
             }
             HiveMessage::LeaseRevoked { assignment_id, reason } => {
-                // STUB — filled by task 206 (emit HiveEvent::LeaseRevoked → self-fence). Explicit arm.
-                tracing::debug!(%assignment_id, %reason, "received lease_revoked (handle TODO: task 206)");
+                tracing::warn!(%assignment_id, %reason, "lease revoked by hive");
+                let _ = self
+                    .event_tx
+                    .send(HiveEvent::LeaseRevoked { assignment_id, reason })
+                    .await;
             }
             _ => {
                 tracing::debug!(?hive_msg, "ignoring unhandled hive message");

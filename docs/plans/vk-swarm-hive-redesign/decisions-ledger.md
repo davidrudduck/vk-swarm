@@ -923,3 +923,17 @@ VERDICT: PASS
   `20260124200000_remove_node_projects.sql` rebased the FK); tests use
   `create_swarm_project_node(...).await` as `np_id` for `try_claim(node_project_id=...)`,
   matching 204's pattern.
+
+## Task 206
+- Implemented node-side lease state: `ActiveAssignment` gained `fencing_token: Option<i64>`
+  and `lease_expires_at: Option<chrono::DateTime<chrono::Utc>>` (None until grant; node-owned
+  work stays None). Initializer at `TaskAssigned` arm sets both to `None`.
+- `HiveEvent` variants added in `hive_client.rs` using `chrono::DateTime<Utc>` (matches the
+  202 `LeaseGrant` convention there); `process_event` arms added and call helper fns.
+- Helpers `apply_lease_grant` / `apply_lease_revoke` are free fns taking `&Arc<RwLock<NodeRunnerState>>`;
+  grant is monotonic-never-lower (`is_none_or(|t| fencing_token >= t)`), revoke clears both fields.
+- Periodic `LeaseHeartbeat` sender spawned in `spawn_node_runner` at 30s cadence;
+  hive `LEASE_TTL` from task 204 is 60s, so cadence = TTL/2 and strictly shorter.
+- `lease_state_tests` hermetic mod added at bottom of `node_runner.rs`; 1 test passed.
+- `services --lib` full suite times out on a pre-existing test unrelated to this change;
+  targeted `cargo test -p services --lib lease_state` passes.
