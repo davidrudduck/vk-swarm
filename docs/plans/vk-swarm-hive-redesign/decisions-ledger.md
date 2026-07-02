@@ -1008,3 +1008,44 @@ VERDICT: PASS
   (the query mirrors 203's `try_claim` reclaim path, which is already proven green). The task
   gate (`test -n "$DATABASE_URL" && cargo test -p remote sweep_tests`) is fail-closed without
   a DB — flagged for the next session/CI to execute with `DATABASE_URL` set.
+
+## Task 210
+- **SC3/TS2 three-leg framing.** A full cross-process WS round-trip (real node binary ↔ real
+  hive) is not hermetically testable in a single `cargo test`. TS2 is proven as THREE
+  coordinated assertions over the real units, NOT a mocked end-to-end:
+  1. **Hive stale-token rejection (the at-most-once commit EFFECT)** — proven by 205's
+     in-module `#[cfg(test)]` test `op_against_assigned_task_with_stale_token_is_rejected_not_applied`
+     in `crates/remote/src/nodes/ws/session.rs` (calls the private `handle_op_batch`; asserts
+     a stale-token op is rejected — no apply, no advance, `LeaseRevoked` surfaced). Asserted
+     BY REFERENCE here — this `tests/` file does NOT re-assert the reject.
+  2. **Reclaim → reassign → strictly-higher token (the partition-safety BASIS)** — the test
+     `partitioned_node_late_commit_is_rejected_after_reassignment` in
+     `crates/remote/tests/lease_partition_e2e.rs` drives the real `try_claim` (203) →
+     `reclaim_expired_leases` (209) → a second `try_claim` and asserts B's `fencing_token` is
+     strictly higher than A's. This is the public-repo chain that makes 205's stale-token
+     compare meaningful; it is genuinely exercisable from `tests/`.
+  3. **Node self-fence (bounded overlap)** — proven by 208's hermetic
+     `self_fence_tests::assignments_with_expired_or_missing_lease_are_selected_for_fencing`
+     and 206's `lease_state_tests::lease_grant_sets_token_and_expiry_on_active_assignment_then_revoke_clears`
+     in `crates/services/src/services/node_runner.rs`. Asserted BY REFERENCE — this crate
+     cannot import the node `services` test module.
+- **Seam (R2/F8).** The fencing REJECT needs the private `session.rs::handle_op_batch` and
+  therefore lives in 205's own in-module `#[cfg(test)]` test — NOT here. This `tests/`
+  integration file proves only the public-repo reclaim/token-bump chain (leg 2). Do NOT make
+  `handle_op_batch` `pub` (changes a contract for a test — STOP trigger) and do NOT assert
+  the reject at the fencing-free repository layer (`upsert_from_node` has no fencing — would
+  be HOLLOW). SC3/TS2 is the conjunction of the three legs, recorded here.
+- **Fixture provenance.** The fixture helpers (`create_test_organization` / `create_test_node`
+  / `create_test_swarm_project` / `create_test_swarm_project_node` / `create_test_shared_task`)
+  and the `database_url()` / `skip_without_db!` / `create_pool()` trio are copied verbatim
+  from 209's `sweep_tests` mod in `crates/remote/src/db/task_assignments.rs` — proven against
+  the 201-migrated schema. The stale `backfill_e2e.rs` fixtures (pre-`slug` org, dropped
+  `hostname/os_type/os_version` node columns, pre-`node_project_id` shared_task) were NOT
+  used; only its three helper strings (`"Skipping test: DATABASE_URL not set"` /
+  `"DATABASE_URL must be set"` / `"Failed to connect to database"`) were inlined verbatim.
+- **Verification (Trap 2b satisfied).** `cargo check -p remote` → exit 0.
+  `cargo clippy -p remote --all-targets -- -D warnings` → exit 0.
+  `DATABASE_URL=postgres://postgres:postgres@localhost:5435/vibe_remote_dev cargo test -p
+  remote --test lease_partition_e2e` → 1 passed (RAN, not skipped — `DATABASE_URL` was set
+  against a migrated Postgres). The `test -n "$DATABASE_URL" &&` fail-closed prefix in the
+  gate command is preserved.
