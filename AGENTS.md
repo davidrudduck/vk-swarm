@@ -31,6 +31,17 @@ Code review findings — from adversarial panels, Gemini review, `/dr:pr`, the W
 
 This rule exists because deferred findings compound: the next session inherits stale context, the fix is harder without the original reasoning, and PR review history becomes misleading.
 
+## Post-Phase Integrated Adversarial Review (mandatory)
+
+Per-task adversarial panels verify each task in isolation. They **cannot** catch cross-task
+interaction bugs — e.g. a fencing guard (task 205) + a reclaim path (task 209) + a completion path
+combining to produce a query that returns `None` at the wrong time. After completing each WAI
+phase, run an **integrated adversarial review** (Gemini or cross-model) over the full phase diff
+before moving to the next phase. Findings are subject to the No Deferred Remediation rule above:
+fix in-session or dismiss with ledger evidence. No exceptions for "I'll catch it in the next phase."
+
+Report path: `.agents/reports/YYYY-MM-DD-round-N-<panelist>-<2-word-description>.md`.
+
 ## Safe Process Management
 
 When running in a worktree spawned by vibe-kanban, NEVER use `pkill`, `killall`, or
