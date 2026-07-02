@@ -1049,3 +1049,100 @@ VERDICT: PASS
   remote --test lease_partition_e2e` → 1 passed (RAN, not skipped — `DATABASE_URL` was set
   against a migrated Postgres). The `test -n "$DATABASE_URL" &&` fail-closed prefix in the
   gate command is preserved.
+
+## Reachability gate (Phase-2 close — lease/fencing partition-safety)
+
+Spec `change_kind: behaviour` → mandatory run-level close gate (SC#10). Phase-2 implements
+SC3 (a partitioned node cannot cause double execution). The three legs cited below are the
+SUM of merged tasks 201–210 on the production code path the bug lives on.
+
+### (a) CALL-PATH TRACE (the partition-safety path, cited file:line on merged HEAD)
+
+**Hive side (reject stale-token ops):**
+- Entry: `handle_node_message` (`crates/remote/src/nodes/ws/session.rs:512`) receives
+  `NodeMessage::OpBatch` (103) → `handle_op_batch` (`session.rs:2068`) →
+  `handle_op_batch_apply` (`session.rs:1773`).
+- Fencing guard (`session.rs:1941-1995`, task 205): AFTER the `seen` dedup check, BEFORE
+  `upsert_from_node` — reads `payload.shared_task_id` directly (NOT `find_by_source_task_id`,
+  which would silently disable the fence for ASSIGNED-NOT-CREATED tasks = the SC3 bug).
+  Narrow `SELECT id, fencing_token FROM node_task_assignments WHERE task_id=$1 AND
+  completed_at IS NULL` (`session.rs:1958`). Stale = `op.fencing_token` is `None` OR
+  `tok < current_token` (`session.rs:1969-1972`) → REJECT: `revokes.push((assignment_id,
+  "stale fencing token".to_string())); break;` (`session.rs:1987-1988`) — no `upsert_from_node`
+  (`session.rs:2033`), no `node_op_log` INSERT (`session.rs:2051`), no `applied_through_seq`
+  advance (`session.rs:2066`). `>= current_token` → falls through to 106's apply.
+- `handle_op_batch` (`session.rs:2083-2094`) iterates `revokes` and emits
+  `HiveMessage::LeaseRevoked { assignment_id, reason }` (202) for each, THEN sends `OpAck`.
+
+**Hive side (token-bump on reclaim — the basis of the stale compare):**
+- `reclaim_expired_leases` (`crates/remote/src/db/task_assignments.rs:502`, task 209):
+  `UPDATE node_task_assignments SET fencing_token = nextval('node_fencing_token_seq'),
+  lease_expires_at = NULL WHERE completed_at IS NULL AND lease_expires_at IS NOT NULL AND
+  lease_expires_at < now() RETURNING id, node_id, task_id, fencing_token`. The token bump is
+  the whole point — a reassigned lease ALWAYS gets a strictly-higher token than any prior
+  holder, which is what 205's `tok < current_token` compare keys on.
+- `try_claim` (`task_assignments.rs:92`, task 203): UPDATE-reclaim path (NULL/expired lease →
+  `nextval`) then INSERT-fresh path (catches `idx_task_assignments_active` → `Ok(None)`).
+  Both paths use `nextval('node_fencing_token_seq')` → strictly monotonic.
+- Timer: `spawn_lease_sweep_service` (`crates/remote/src/services/lease_sweep.rs`, task 209)
+  spawned at `crates/remote/src/app.rs:44` (beside `stale_cleanup_service`) — 10s cadence,
+  `MissedTickBehavior::Skip`, calls `reclaim_expired_leases` each tick.
+
+**Node side (stamp token at stream time + self-fence on revoke/expiry):**
+- Stamp (task 207): `sync_outbox` (`crates/services/src/services/hive_sync.rs`, ~:199) builds
+  `local_task_id -> fencing_token` lookup from `node_state` active assignments; stamps
+  `OutboxOp.fencing_token` for `entity_type == "task"` ops (hive-assigned only; node-owned → None).
+- Self-fence watchdog (task 208): `assignments_to_self_fence(state, now)`
+  (`crates/services/src/services/node_runner.rs:1559`) selects Running + `Some(exp) < now`;
+  watchdog task (`node_runner.rs:751`) at 5s cadence re-checks under lock before
+  `handle_cancellation` (race fix). `LeaseRevoked` event arm in `run_node_runner`
+  (`node_runner.rs:1049-1064`) immediately halts via `handle_cancellation`.
+
+### (b) REAL-SEAM TESTS (drive the real entry points, not mock-past)
+
+- **Leg 1 (hive reject):** `fencing_tests::op_against_assigned_task_with_stale_token_is_rejected_not_applied`
+  (`session.rs`) calls `handle_op_batch_apply` with a stale-token op → asserts status unchanged,
+  `node_op_log` count 0, seq 0, `revokes == [(assignment_id, "stale fencing token")]`.
+  Non-hollow: removing the guard → 3 of 4 assertions FAIL.
+- **Leg 2 (reclaim/token-bump chain):** `lease_partition_e2e::partitioned_node_late_commit_is_rejected_after_reassignment`
+  (`crates/remote/tests/`) drives real `try_claim` → `reclaim_expired_leases` → second
+  `try_claim` → asserts `b.fencing_token > a.fencing_token`. Non-hollow: if reclaim omits
+  `nextval`, token doesn't bump → assertion FAILS.
+- **Leg 3 (node self-fence):** `self_fence_tests::assignments_with_expired_or_missing_lease_are_selected_for_fencing`
+  (`node_runner.rs`) asserts the selector picks expired-Running, not live/revoked/None.
+  Non-hollow: a selector that picked live leases would fail the "not selected" assertions.
+  `lease_state_tests::assignments_to_self_fence_selects_only_running_expired_leases` covers
+  the Running+expired / Running+live / Pending+expired / Running+no-lease matrix.
+
+### (c) INCIDENT-SYMPTOM ASSERTION
+
+- **Symptom:** "partitioned node's late commit causes double execution" (SC3 violation).
+- **Assertion (leg 1):** stale-token op → `shared_task_status_by_id == pre_status` (NOT
+  updated), `node_op_log_count_for_key == 0` (no dedup row), `seq == 0` (NOT advanced),
+  `revokes.len() == 1` (rejected + surfaced). The at-most-once EFFECT is asserted directly:
+  the late op did NOT apply.
+- **Assertion (leg 2):** `b.fencing_token > a.fencing_token` — the partition-safety BASIS.
+  Without this, 205's `tok < current_token` compare is meaningless (a reclaimed lease would
+  have the same token as the prior holder → no reject).
+- **Assertion (leg 3):** expired-Running assignment IS selected for fencing; live lease is NOT.
+  The bounded-overlap guarantee: a node whose lease expired (but hasn't been revoked yet) is
+  halted by the watchdog within 5s, and a `LeaseRevoked` event halts immediately in the run loop.
+
+**Verification (AGENTS.md gate, final committed state `c48470ae`):**
+- `cargo clippy --all --all-targets --all-features -- -D warnings` → exit 0.
+- `DATABASE_URL=postgres://postgres:postgres@localhost:5435/vibe_remote_dev`:
+  - `cargo test -p remote --lib lease` → 9 passed (lease_heartbeat 2 + lease_tests 4 + lease_state 3 overlap).
+  - `cargo test -p remote --lib fencing` → 3 passed.
+  - `cargo test -p remote --lib sweep_tests` → 2 passed.
+  - `cargo test -p remote --lib lease_sweep` → 1 passed (hermetic).
+  - `cargo test -p remote --test lease_partition_e2e` → 1 passed (RAN, not skipped).
+- `SQLX_OFFLINE=true`:
+  - `cargo test -p services --lib lease` → 3 passed.
+  - `cargo test -p services --lib self_fence` → 2 passed.
+  - `cargo test -p services --lib sync_outbox` → 3 passed.
+- Frontend: zero frontend files in the PR (P2 is Rust/SQL only); `npm run lint` clean;
+  `npx tsc --noEmit` pre-existing `@tanstack/db` peer-dep errors (unchanged from P1).
+
+**VERDICT: PASS.** The partition-safety path is reachable on the production code path, the
+real-seam tests drive it (not mock-past), and the incident symptom (double execution) is
+asserted directly across all three legs.
