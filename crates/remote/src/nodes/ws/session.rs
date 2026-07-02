@@ -1980,10 +1980,21 @@ async fn handle_op_batch_apply(
                     revokes.push((assignment_id, "stale fencing token".to_string()));
                     break;
                 }
+            } else {
+                // No active assignment for a hive-managed task (shared_task_id present):
+                // the lease was reclaimed or the task was completed/cancelled. A late write
+                // from a partitioned node MUST NOT overwrite the completed task (SC3). Drop
+                // the op and stop processing this batch — the node's self-fence watchdog
+                // and the reclaim sweep's LeaseRevoked event will halt the node.
+                tracing::warn!(
+                    node_id = %node_id,
+                    seq = op.seq,
+                    shared_task_id = %shared_id,
+                    op_token = ?op.fencing_token,
+                    "op_batch: reject (no active assignment for hive-managed task) — lease reclaimed or completed"
+                );
+                break;
             }
-            // No active assignment → fall through to 106's normal apply (node-owned or
-            // unassigned work; the fence does not apply). `op.fencing_token` may be None
-            // here — that is correct (CONTRACT §C).
         }
         // `shared_id` None → creator's first pre-link write / node-owned work: no fence.
 
@@ -3325,6 +3336,98 @@ mod fencing_tests {
             "node-owned shared_tasks row is created with the mapped status"
         );
         assert!(revokes.is_empty(), "no LeaseRevoked for node-owned work");
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn op_for_completed_task_with_no_active_assignment_is_rejected_not_applied() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await; // partitioned writer (stale)
+        let node_b = create_test_node(&pool, org_id).await; // rightful holder who completed
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_proj_a = Uuid::new_v4();
+        let local_proj_b = Uuid::new_v4();
+        create_node_local_project(&pool, node_a, local_proj_a, Some(swarm_project_id)).await;
+        create_node_local_project(&pool, node_b, local_proj_b, Some(swarm_project_id)).await;
+        let np_a = create_swarm_project_node(&pool, swarm_project_id, node_a, local_proj_a).await;
+        let np_b = create_swarm_project_node(&pool, swarm_project_id, node_b, local_proj_b).await;
+
+        let a_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_a,
+            a_local_task_id,
+            "todo",
+        )
+        .await;
+
+        // node_a claims (T1), then its lease expires and node_b reclaims (T2 > T1).
+        let claim_a = repo
+            .try_claim(shared_id, node_a, np_a, chrono::Duration::seconds(-300))
+            .await
+            .expect("claim a")
+            .expect("node_a claimed");
+        let t1 = claim_a.fencing_token;
+
+        let claim_b = repo
+            .try_claim(shared_id, node_b, np_b, chrono::Duration::seconds(300))
+            .await
+            .expect("claim b")
+            .expect("node_b reclaimed");
+        let t2 = claim_b.fencing_token;
+        assert!(t2 > t1, "reassignment bumps token");
+
+        // node_b COMPLETES the task → completed_at is set on the assignment row.
+        repo.complete(claim_b.assignment_id, "done")
+            .await
+            .expect("complete");
+
+        // Now there is NO active assignment (completed_at IS NULL returns nothing).
+        // node_a (partitioned, late) sends an op stamped with its stale token T1.
+        let key = format!("task:{}:{}", local_proj_a, a_local_task_id);
+        let op = make_fence_op(
+            1,
+            a_local_task_id,
+            local_proj_a,
+            Some(shared_id),
+            Some(t1),
+            "done",
+            &key,
+        );
+
+        let pre_status = shared_task_status_by_id(&pool, shared_id)
+            .await
+            .expect("task exists pre-apply");
+
+        let (seq, _revokes) = handle_op_batch_apply(node_a, org_id, "node-a", &[op], &pool)
+            .await
+            .expect("apply");
+
+        // (a) shared_tasks NOT updated — the late op must not overwrite the completed task.
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some(pre_status),
+            "late op for completed task MUST NOT update shared_tasks (SC3)"
+        );
+        // (b) node_op_log has NO row for the op's idempotency_key.
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_a, &key).await,
+            0,
+            "rejected op MUST NOT record a node_op_log dedup row"
+        );
+        // (c) seq does NOT advance past the rejected op.
+        assert_eq!(
+            seq, 0,
+            "applied_through_seq MUST NOT advance past the rejected op (break, not continue)"
+        );
 
         cleanup_org(&pool, org_id).await;
     }

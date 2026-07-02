@@ -1146,3 +1146,50 @@ SUM of merged tasks 201–210 on the production code path the bug lives on.
 **VERDICT: PASS.** The partition-safety path is reachable on the production code path, the
 real-seam tests drive it (not mock-past), and the incident symptom (double execution) is
 asserted directly across all three legs.
+
+## Post-phase adversarial review — Gemini round 1 (2026-07-02)
+
+**Panelist:** Gemini CLI (codebase-review mode, read-only). Report:
+`.agents/reports/2026-07-02-round-1-gemini-fencing-bypass.md`.
+
+Two [BLOCKING] findings submitted; one accepted + remediated, one dismissed as a legitimate scope split.
+
+### F1 — Non-transactional outbox enqueue breaks SC2c no-loss → DISMISSED
+
+Gemini's claim: `enqueue_task_upsert_op` is called outside the same transaction as `Task::create`,
+so a crash between the two statements silently loses the outbox op (SC2c violation).
+
+**Adjudication — DISMISSED with evidence:** This is the RATIFIED tracer limitation documented at
+ledger L131-136. The legacy sync path runs ALONGSIDE the new op-log (additive, not replacement), so a
+lost outbox op is caught by the legacy sync. The transactional enqueue is the planned next Phase-1
+increment (plan.md + ledger L145-147). This satisfies the AGENTS.md legitimate-scope-split exception
+(all 3 requirements: explicitly named, tracked follow-up, documented in ledger before the PR). Not
+deferred remediation — a deliberate scope decision made during decompose.
+
+### F2 — Fencing guard bypasses completed tasks, allowing double execution → ACCEPTED, FIXED
+
+Gemini's claim: the fencing guard queries `WHERE task_id = $1 AND completed_at IS NULL`. For a
+completed task with no active assignment, the query returns `None`, and the code fell through to
+normal apply — allowing a partitioned node's late write to overwrite the completed task (SC3 violation).
+
+**Confirmed by code trace:**
+1. Task T assigned to A (token T1). A partitioned.
+2. `reclaim_expired_leases` bumps token on A's row (T_reclaim), `completed_at` stays NULL.
+3. B's `try_claim` UPDATEs the same row (T2). B completes → `completed_at` set.
+4. A's late op (token T1) → guard query returns **None** → old code fell through to normal apply →
+   **A overwrites the completed task. SC3 violated.**
+
+**Fix:** In `session.rs` `handle_op_batch_apply`, when `payload.shared_task_id` is present (hive-managed
+task) but no active assignment exists, the op is REJECTED (break, don't apply) instead of falling
+through to normal apply. A hive-managed task with no active assignment means the lease was reclaimed or
+completed — a late write from a partitioned node must not overwrite it.
+
+**Test added:** `op_for_completed_task_with_no_active_assignment_is_rejected_not_applied` — exercises the
+full bypass scenario (claim → reclaim → complete → late op rejected). All 4 fencing tests pass +
+SC3 e2e still passes.
+
+**Verification:**
+- `cargo clippy -p remote --all-targets -- -D warnings` → exit 0.
+- `DATABASE_URL=…vibe_remote_dev`:
+  - `cargo test -p remote --lib fencing_tests` → 4 passed (3 existing + 1 new).
+  - `cargo test -p remote --test lease_partition_e2e` → 1 passed (no regression).
