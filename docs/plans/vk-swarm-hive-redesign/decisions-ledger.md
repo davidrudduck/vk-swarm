@@ -937,3 +937,17 @@ VERDICT: PASS
 - `lease_state_tests` hermetic mod added at bottom of `node_runner.rs`; 1 test passed.
 - `services --lib` full suite times out on a pre-existing test unrelated to this change;
   targeted `cargo test -p services --lib lease_state` passes.
+
+## Task 207
+- Architecture redirection recorded: the task text framed stamping at enqueue time, but the db crate
+  enqueue path has no lease knowledge and ADR-0009 §3 says the token stamped is the one the node
+  holds at send time. The actual seam is `sync_outbox` in `hive_sync.rs` (db row → WS OutboxOp map),
+  so the stamp happens there, not at enqueue. `node_outbox.fencing_token` stays NULL.
+- Added optional `node_state: Option<Arc<RwLock<NodeRunnerState>>>` to `HiveSyncService`, builder
+  `with_node_state`, and default `None` (preserves 107 callers/tests).
+- `sync_outbox` now builds a `local_task_id -> fencing_token` lookup from active assignments when
+  state is attached, and stamps only `entity_type == "task"` ops; node-owned tasks are absent from
+  the map and carry `None` (CONTRACT §C).
+- `spawn_hive_sync_service` gained a `node_state` param; `spawn_node_runner` threads its state in.
+- Two tests added to `hive_sync.rs`: hive-assigned task gets token, node-owned task gets None,
+  and without state the column is passed through unchanged.

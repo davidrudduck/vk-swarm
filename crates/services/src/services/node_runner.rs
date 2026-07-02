@@ -675,8 +675,15 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
         command_tx: command_tx.clone(),
     };
 
-    // Spawn the Hive sync service for syncing attempts, executions, and logs
-    let _sync_handle = spawn_hive_sync_service(db.pool.clone(), command_tx.clone(), None);
+    // Spawn the Hive sync service for syncing attempts, executions, and logs.
+    // The node runner state is threaded in so outbox ops for hive-assigned tasks are stamped
+    // with the current lease fencing token (SC3 / task 207).
+    let _sync_handle = spawn_hive_sync_service(
+        db.pool.clone(),
+        command_tx.clone(),
+        None,
+        Some(state.clone()),
+    );
 
     // Periodic lease heartbeat: renew leases well before the hive LEASE_TTL (60s in task 204) expires.
     // Cadence = 30s = TTL/2, strictly shorter than the TTL so a healthy node never lets a lease lapse.
