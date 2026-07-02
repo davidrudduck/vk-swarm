@@ -867,3 +867,16 @@ VERDICT: PASS
     correctly returns `None` (node_id mismatch). Accepted.
   - Fixture helpers adapted to live schema (backfill_e2e.rs fixtures are themselves stale).
     Correct per task prose ("inline ... fixture style", not "verbatim").
+
+## Task 204
+
+- ws-free test split: `handle_lease_heartbeat_renew` extracted (pure DB, no `SplitSink` ws_sender)
+  so the unit tests exercise the renew logic without a WebSocket — same pattern as task 106's
+  `handle_op_batch_apply` extraction.
+- `LEASE_TTL` = 60s. Must exceed the node's heartbeat/renew cadence (task 206) so a renewing
+  node never expires between heartbeats; 206's interval < 60s is the invariant.
+- Renewal does NOT bump the fencing token — per task 203's `renew_lease` contract (UPDATE only
+  touches `lease_expires_at`); tests assert token equality pre/post renew.
+- Test mod imports `sqlx::Row` (needed by the `row.get("id")` fixture, not in scope via
+  `use super::*` in session.rs unlike task_assignments.rs); dropped unused `LeaseClaim` from
+  the test import to satisfy `clippy -D warnings` (the mandatory gate).

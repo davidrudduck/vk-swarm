@@ -41,6 +41,10 @@ use crate::{
 /// Heartbeat timeout - close connection if no heartbeat received.
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// Lease TTL granted on renewal. Must exceed the node's heartbeat/renew cadence (task 206)
+/// so a renewing node never expires between heartbeats.
+const LEASE_TTL: chrono::Duration = chrono::Duration::seconds(60);
+
 /// Channel buffer size for outgoing messages.
 const OUTGOING_BUFFER_SIZE: usize = 64;
 
@@ -579,11 +583,7 @@ async fn handle_node_message(
             handle_op_batch(node_id, organization_id, node_name, ops, pool, ws_sender).await
         }
         NodeMessage::LeaseHeartbeat { assignment_ids } => {
-            // STUB — filled by task 204 (renew leases, reply LeaseGrant per assignment). Logs so the
-            // exhaustive match compiles now; 204 replaces the body with handle_lease_heartbeat(...).
-            tracing::debug!(node_id = %node_id, count = assignment_ids.len(),
-                "received lease_heartbeat (renew TODO: task 204)");
-            Ok(())
+            handle_lease_heartbeat(node_id, assignment_ids, pool, ws_sender).await
         }
     }
 }
@@ -2033,6 +2033,54 @@ async fn handle_op_batch(
     Ok(())
 }
 
+/// Renew held leases for the given assignment_ids (pure DB, no WebSocket send).
+///
+/// Returns the `LeaseClaim` for each assignment this node still holds (renew_lease Some).
+/// Foreign/missing assignments are skipped (renew_lease None → no entry).
+async fn handle_lease_heartbeat_renew(
+    node_id: Uuid,
+    assignment_ids: &[Uuid],
+    pool: &PgPool,
+) -> Result<Vec<crate::db::task_assignments::LeaseClaim>, HandleError> {
+    let repo = crate::db::task_assignments::TaskAssignmentRepository::new(pool);
+    let mut grants = Vec::new();
+    for assignment_id in assignment_ids {
+        match repo.renew_lease(*assignment_id, node_id, LEASE_TTL).await {
+            Ok(Some(claim)) => grants.push(claim),
+            Ok(None) => {} // not held by this node — skip, no grant
+            Err(e) => return Err(HandleError::Database(e.to_string())),
+        }
+    }
+    Ok(grants)
+}
+
+/// Handle a lease heartbeat: renew held leases and reply LeaseGrant per assignment.
+///
+/// For each assignment_id, renews the lease via `TaskAssignmentRepository::renew_lease`.
+/// Replies `HiveMessage::LeaseGrant` only for assignments the node actually holds
+/// (renew_lease returns Some); skips foreign/missing assignments (no grant).
+async fn handle_lease_heartbeat(
+    node_id: Uuid,
+    assignment_ids: &[Uuid],
+    pool: &PgPool,
+    ws_sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+) -> Result<(), HandleError> {
+    let grants = handle_lease_heartbeat_renew(node_id, assignment_ids, pool).await?;
+    for claim in grants {
+        send_message(
+            ws_sender,
+            &HiveMessage::LeaseGrant {
+                assignment_id: claim.assignment_id,
+                fencing_token: claim.fencing_token,
+                lease_expires_at: claim.lease_expires_at,
+            },
+        )
+        .await
+        .map_err(|_| HandleError::Send)?;
+    }
+    Ok(())
+}
+
 /// Helper struct for swarm project link lookup
 #[derive(sqlx::FromRow)]
 struct SwarmProjectLink {
@@ -2728,5 +2776,233 @@ mod op_batch_tests {
         let task_status = shared_task_status(&pool, node_id, local_task_id).await;
         assert_eq!(log_count, 1, "dedup row present");
         assert_eq!(task_status, "done", "task apply present");
+    }
+}
+
+#[cfg(test)]
+mod lease_heartbeat_tests {
+    use super::*;
+    use crate::db::task_assignments::TaskAssignmentRepository;
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use sqlx::Row;
+    use uuid::Uuid;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping test: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+    async fn create_pool() -> PgPool {
+        let url = database_url().expect("DATABASE_URL must be set");
+        sqlx::PgPool::connect(&url)
+            .await
+            .expect("Failed to connect to database")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, status, capabilities, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, 'online', '{}'::jsonb, $5, $6)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+
+        node_id
+    }
+
+    async fn create_test_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test swarm project");
+
+        sp_id
+    }
+
+    async fn create_test_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+    ) -> Uuid {
+        let local_project_id = Uuid::new_v4();
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("test-repo")
+        .fetch_one(pool)
+        .await
+        .expect("Failed to create test swarm project node");
+
+        row.get("id")
+    }
+
+    async fn create_test_shared_task(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let task_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO shared_tasks (id, organization_id, title, status, created_at, updated_at)
+            VALUES ($1, $2, $3, 'todo'::task_status, $4, $5)
+            "#,
+        )
+        .bind(task_id)
+        .bind(org_id)
+        .bind(format!("Test Task {}", task_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test shared task");
+
+        task_id
+    }
+
+    async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn renew_extends_held_leases_and_returns_a_grant_per_assignment() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await;
+        let swarm_project = create_test_swarm_project(&pool, org_id).await;
+        let np_id = create_test_swarm_project_node(&pool, swarm_project, node_a).await;
+        let task_1 = create_test_shared_task(&pool, org_id).await;
+        let task_2 = create_test_shared_task(&pool, org_id).await;
+
+        let claim_1 = repo
+            .try_claim(task_1, node_a, np_id, chrono::Duration::seconds(30))
+            .await
+            .unwrap()
+            .expect("claim 1");
+        let claim_2 = repo
+            .try_claim(task_2, node_a, np_id, chrono::Duration::seconds(30))
+            .await
+            .unwrap()
+            .expect("claim 2");
+
+        let pre_token_1 = claim_1.fencing_token;
+        let pre_token_2 = claim_2.fencing_token;
+
+        let grants =
+            handle_lease_heartbeat_renew(node_a, &[claim_1.assignment_id, claim_2.assignment_id], &pool)
+                .await
+                .expect("renew");
+
+        assert_eq!(grants.len(), 2, "one grant per held assignment");
+        for g in &grants {
+            assert!(g.lease_expires_at > chrono::Utc::now(), "renewed lease in the future");
+            assert!(g.fencing_token > 0, "token present");
+        }
+        let grant_1 = grants
+            .iter()
+            .find(|g| g.assignment_id == claim_1.assignment_id)
+            .expect("grant 1");
+        let grant_2 = grants
+            .iter()
+            .find(|g| g.assignment_id == claim_2.assignment_id)
+            .expect("grant 2");
+        assert_eq!(grant_1.fencing_token, pre_token_1, "renewal does NOT bump fencing token (1)");
+        assert_eq!(grant_2.fencing_token, pre_token_2, "renewal does NOT bump fencing token (2)");
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn renew_skips_assignments_not_held_by_this_node() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await;
+        let node_b = create_test_node(&pool, org_id).await;
+        let swarm_project = create_test_swarm_project(&pool, org_id).await;
+        let np_id_a = create_test_swarm_project_node(&pool, swarm_project, node_a).await;
+        let _np_id_b = create_test_swarm_project_node(&pool, swarm_project, node_b).await;
+        let task_1 = create_test_shared_task(&pool, org_id).await;
+
+        let claim_a = repo
+            .try_claim(task_1, node_a, np_id_a, chrono::Duration::seconds(300))
+            .await
+            .unwrap()
+            .expect("node_a claims");
+
+        let grants = handle_lease_heartbeat_renew(node_b, &[claim_a.assignment_id], &pool)
+            .await
+            .expect("renew");
+        assert!(grants.is_empty(), "no grant for a foreign assignment");
+
+        cleanup_org(&pool, org_id).await;
     }
 }
