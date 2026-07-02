@@ -1772,7 +1772,7 @@ async fn handle_op_batch_apply(
     pool: &PgPool,
 ) -> Result<(i64, Vec<(Uuid, String)>), HandleError> {
     use crate::db::node_local_projects::NodeLocalProjectRepository;
-    use crate::db::tasks::{SharedTaskRepository, TaskStatus, UpsertTaskFromNodeData};
+    use crate::db::tasks::{SharedTaskRepository, UpsertTaskFromNodeData};
 
     // Revoke queue (ws-free split, option (a)): (assignment_id, reason) pairs surfaced
     // out of the apply loop for `handle_op_batch` to emit as `HiveMessage::LeaseRevoked`.
@@ -1999,25 +1999,14 @@ async fn handle_op_batch_apply(
         // `shared_id` None → creator's first pre-link write / node-owned work: no fence.
 
         // (d) Status value mapping (tournament R1/F5): node serializes lowercase
-        // (inprogress/inreview); map explicitly, do NOT default to Todo.
+        // (inprogress/inreview); canonicalize via the single boundary helper (302).
         let status_raw = op
             .payload
             .get("status")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let status = match status_raw {
-            "todo" => TaskStatus::Todo,
-            "inprogress" => TaskStatus::InProgress,
-            "inreview" => TaskStatus::InReview,
-            "done" => TaskStatus::Done,
-            "cancelled" => TaskStatus::Cancelled,
-            other => {
-                return Err(HandleError::Database(format!(
-                    "op_batch: op seq {} has unknown status {:?} (expected todo/inprogress/inreview/done/cancelled)",
-                    op.seq, other
-                )));
-            }
-        };
+        let status = crate::nodes::ws::status_machine::canonical_status_from_node(status_raw)
+            .map_err(|e| HandleError::Database(format!("op_batch: op seq {}: {}", op.seq, e)))?;
 
         let title = op
             .payload

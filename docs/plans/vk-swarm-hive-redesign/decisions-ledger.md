@@ -1197,3 +1197,7 @@ SC3 e2e still passes.
 ## Task 301
 
 Added `#[allow(dead_code)]` to `TransitionAuthor`, `author_of_transition`, and `node_may_author` in `crates/remote/src/nodes/ws/status_machine.rs`. These items are consumed by task 303 (`session.rs::handle_op_batch`), not by this task's non-test build, so `cargo check` flagged them as unused. The task spec explicitly permits this allowance.
+
+## Task 302
+
+Off-plan choice: removed the now-unused `TaskStatus` from the function-scoped `use` statement in `handle_op_batch_apply` (`crates/remote/src/nodes/ws/session.rs:1775`). After replacing the inline `match` with `canonical_status_from_node`, `TaskStatus` was no longer referenced anywhere in that function, producing an `unused_imports` warning that would break the clippy `-D warnings` gate. This is a minimal cleanup inside one of the two permitted files; no other apply-order, branch, or external code was touched.

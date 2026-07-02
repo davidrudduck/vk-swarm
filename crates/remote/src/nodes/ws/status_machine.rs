@@ -50,6 +50,26 @@ pub(crate) fn node_may_author(from: TaskStatus, to: TaskStatus) -> bool {
     matches!(author_of_transition(from, to), Some(TransitionAuthor::Node))
 }
 
+/// Map a node-reported `task.status` wire string to the canonical hive `TaskStatus`.
+///
+/// The node serializes its `TaskStatus` `#[serde(rename_all = "lowercase")]` →
+/// `todo`/`inprogress`/`inreview`/`done`/`cancelled` (`crates/db/src/models/task/mod.rs:25`); the hive
+/// enum is `kebab-case` → `in-progress`/`in-review`. This is the SINGLE boundary where the two
+/// representations are reconciled (ADR-0010 "one canonical wire value", CONTRACT §D). Both forms are
+/// accepted (so a re-canonicalized value is idempotent); an UNKNOWN value returns `Err` and is NEVER
+/// coerced to `Todo` (tournament R1/F5 — the legacy default-to-`Todo` parse silently corrupts).
+#[allow(dead_code)]
+pub(crate) fn canonical_status_from_node(raw: &str) -> Result<TaskStatus, String> {
+    match raw {
+        "todo" => Ok(TaskStatus::Todo),
+        "inprogress" | "in-progress" => Ok(TaskStatus::InProgress),
+        "inreview" | "in-review" => Ok(TaskStatus::InReview),
+        "done" => Ok(TaskStatus::Done),
+        "cancelled" => Ok(TaskStatus::Cancelled),
+        other => Err(format!("unknown node task.status wire value: {other:?}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +126,34 @@ mod tests {
         // no-op / illegal are not node-authored
         assert!(!node_may_author(TaskStatus::Done, TaskStatus::Done));
         assert!(!node_may_author(TaskStatus::Done, TaskStatus::InProgress));
+    }
+
+    #[test]
+    fn canonicalizes_node_lowercase_status_to_hive_enum() {
+        use crate::db::tasks::TaskStatus;
+        // node TaskStatus serializes #[serde(rename_all="lowercase")] (db/.../task/mod.rs:25)
+        // all five node wire forms canonicalize to their hive enum (representative subset below).
+        assert_eq!(canonical_status_from_node("inprogress").unwrap(), TaskStatus::InProgress);
+        assert_eq!(canonical_status_from_node("inreview").unwrap(), TaskStatus::InReview);
+        assert_eq!(canonical_status_from_node("done").unwrap(), TaskStatus::Done);
+        assert_eq!(canonical_status_from_node("cancelled").unwrap(), TaskStatus::Cancelled);
+    }
+
+    #[test]
+    fn also_accepts_the_hive_hyphenated_forms() {
+        use crate::db::tasks::TaskStatus;
+        // the one canonical wire value is the hive hyphenated form; accept it idempotently so a
+        // re-canonicalized value round-trips (CONTRACT §D "node and hive serialize identically").
+        assert_eq!(canonical_status_from_node("in-progress").unwrap(), TaskStatus::InProgress);
+        assert_eq!(canonical_status_from_node("in-review").unwrap(), TaskStatus::InReview);
+    }
+
+    #[test]
+    fn rejects_unknown_status_returns_err_no_silent_default() {
+        // tournament R1/F5: the legacy parse defaults an unknown value to the initial status (silent
+        // corruption). The boundary helper MUST return Err on unknown, never a silent fallback.
+        assert!(canonical_status_from_node("bogus").is_err());
+        assert!(canonical_status_from_node("").is_err());
+        assert!(canonical_status_from_node("IN_PROGRESS").is_err()); // case-sensitive: only the wire forms
     }
 }
