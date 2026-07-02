@@ -340,7 +340,10 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         use crate::models::node_outbox::{NewOutboxOp, OutboxRepository};
         let payload = match serde_json::to_value(task) {
             Ok(v) => v,
-            Err(e) => { tracing::warn!(error = %e, task_id = %task.id, "skip outbox enqueue: serialize failed"); return; }
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task.id, "skip outbox enqueue: serialize failed");
+                return;
+            }
         };
         // Per-write-unique idempotency key. DELIBERATELY NOT `task:{id}:{version}`: Task::update does
         // NOT bump any version column (queries.rs UPDATE sets only title/description/status/parent_task_id),
@@ -533,7 +536,10 @@ mod outbox_enqueue_tests {
     async fn seed_project(pool: &SqlitePool) -> Uuid {
         let pid = Uuid::new_v4();
         sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (?, 'p', '/tmp/p')")
-            .bind(pid).execute(pool).await.unwrap();
+            .bind(pid)
+            .execute(pool)
+            .await
+            .unwrap();
         pid
     }
 
@@ -545,14 +551,31 @@ mod outbox_enqueue_tests {
         let task_id = Uuid::new_v4();
         let created = Task::create(
             &pool,
-            &CreateTask { project_id, title: "t1".into(), description: None,
-                         status: None, parent_task_id: None, image_ids: None,
-                         shared_task_id: None },
+            &CreateTask {
+                project_id,
+                title: "t1".into(),
+                description: None,
+                status: None,
+                parent_task_id: None,
+                image_ids: None,
+                shared_task_id: None,
+            },
             task_id,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
-        Task::update(&pool, created.id, project_id, "t2".into(), None,
-                     TaskStatus::InProgress, None).await.unwrap();
+        Task::update(
+            &pool,
+            created.id,
+            project_id,
+            "t2".into(),
+            None,
+            TaskStatus::InProgress,
+            None,
+        )
+        .await
+        .unwrap();
 
         let ops = OutboxRepository::peek_unacked(&pool, 10).await.unwrap();
         assert_eq!(ops.len(), 2, "create + update each enqueue one op");

@@ -1778,13 +1778,12 @@ async fn handle_op_batch_apply(
     // out of the apply loop for `handle_op_batch` to emit as `HiveMessage::LeaseRevoked`.
     let mut revokes: Vec<(Uuid, String)> = Vec::new();
 
-    let mut applied_through_seq: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(seq), 0) FROM node_op_log WHERE node_id = $1",
-    )
-    .bind(node_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| HandleError::Database(e.to_string()))?;
+    let mut applied_through_seq: i64 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM node_op_log WHERE node_id = $1")
+            .bind(node_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| HandleError::Database(e.to_string()))?;
 
     for op in ops {
         // (a) Tracer scope guard: only task.upsert is handled in this phase.
@@ -1810,20 +1809,14 @@ async fn handle_op_batch_apply(
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<Uuid>().ok())
             .ok_or_else(|| {
-                HandleError::Database(format!(
-                    "op_batch: op seq {} missing payload.id",
-                    op.seq
-                ))
+                HandleError::Database(format!("op_batch: op seq {} missing payload.id", op.seq))
             })?;
 
         // (b) Resolve context — copy handle_task_sync's three-branch resolution exactly.
-        let local_project = NodeLocalProjectRepository::find_by_node_and_project(
-            pool,
-            node_id,
-            local_project_id,
-        )
-        .await
-        .map_err(|e| HandleError::Database(e.to_string()))?;
+        let local_project =
+            NodeLocalProjectRepository::find_by_node_and_project(pool, node_id, local_project_id)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?;
 
         let local_project = match local_project {
             Some(p) => p,
@@ -2598,12 +2591,14 @@ mod op_batch_tests {
     }
 
     async fn node_op_log_count_for_key(pool: &PgPool, node_id: Uuid, key: &str) -> i64 {
-        sqlx::query_scalar("SELECT COUNT(*) FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2")
-            .bind(node_id)
-            .bind(key)
-            .fetch_one(pool)
-            .await
-            .expect("count")
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2",
+        )
+        .bind(node_id)
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .expect("count")
     }
 
     async fn node_op_log_max_seq(pool: &PgPool, node_id: Uuid) -> i64 {
@@ -2670,7 +2665,10 @@ mod op_batch_tests {
         let (seq, _revokes) = handle_op_batch_apply(node_id, org_id, "node-name", &ops, &pool)
             .await
             .expect("first apply");
-        assert_eq!(seq, 1, "applied_through_seq advances to 1 after first apply");
+        assert_eq!(
+            seq, 1,
+            "applied_through_seq advances to 1 after first apply"
+        );
         assert_eq!(
             node_op_log_count_for_key(&pool, node_id, &key).await,
             1,
@@ -2993,12 +2991,14 @@ mod fencing_tests {
     }
 
     async fn node_op_log_count_for_key(pool: &PgPool, node_id: Uuid, key: &str) -> i64 {
-        sqlx::query_scalar("SELECT COUNT(*) FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2")
-            .bind(node_id)
-            .bind(key)
-            .fetch_one(pool)
-            .await
-            .expect("count")
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2",
+        )
+        .bind(node_id)
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .expect("count")
     }
 
     async fn shared_task_status_by_id(pool: &PgPool, shared_id: Uuid) -> Option<String> {
@@ -3179,8 +3179,9 @@ mod fencing_tests {
             .await
             .expect("task exists pre-apply");
 
-        let (seq, revokes) =
-            handle_op_batch_apply(node_a, org_id, "node-a", &[op], &pool).await.expect("apply");
+        let (seq, revokes) = handle_op_batch_apply(node_a, org_id, "node-a", &[op], &pool)
+            .await
+            .expect("apply");
 
         // (a) shared_tasks NOT updated by the stale op (status unchanged).
         assert_eq!(
@@ -3262,10 +3263,14 @@ mod fencing_tests {
             &key,
         );
 
-        let (seq, revokes) =
-            handle_op_batch_apply(node_b, org_id, "node-b", &[op], &pool).await.expect("apply");
+        let (seq, revokes) = handle_op_batch_apply(node_b, org_id, "node-b", &[op], &pool)
+            .await
+            .expect("apply");
 
-        assert_eq!(seq, 1, "applied_through_seq advances to op.seq on a current-token apply");
+        assert_eq!(
+            seq, 1,
+            "applied_through_seq advances to op.seq on a current-token apply"
+        );
         assert_eq!(
             node_op_log_count_for_key(&pool, node_b, &key).await,
             1,
@@ -3298,20 +3303,16 @@ mod fencing_tests {
         let key = format!("task:{}:{}", local_project_id, local_task_id);
         // No shared_task_id, no fencing_token — node-owned work (CONTRACT §C / ADR-0009).
         // No active assignment exists for this task, so the fence does not apply.
-        let op = make_fence_op(
-            1,
-            local_task_id,
-            local_project_id,
-            None,
-            None,
-            "done",
-            &key,
+        let op = make_fence_op(1, local_task_id, local_project_id, None, None, "done", &key);
+
+        let (seq, revokes) = handle_op_batch_apply(node_id, org_id, "node-name", &[op], &pool)
+            .await
+            .expect("apply");
+
+        assert_eq!(
+            seq, 1,
+            "node-owned op applies and advances applied_through_seq"
         );
-
-        let (seq, revokes) =
-            handle_op_batch_apply(node_id, org_id, "node-name", &[op], &pool).await.expect("apply");
-
-        assert_eq!(seq, 1, "node-owned op applies and advances applied_through_seq");
         assert_eq!(
             node_op_log_count_for_key(&pool, node_id, &key).await,
             1,
@@ -3504,14 +3505,20 @@ mod lease_heartbeat_tests {
         let pre_token_1 = claim_1.fencing_token;
         let pre_token_2 = claim_2.fencing_token;
 
-        let grants =
-            handle_lease_heartbeat_renew(node_a, &[claim_1.assignment_id, claim_2.assignment_id], &pool)
-                .await
-                .expect("renew");
+        let grants = handle_lease_heartbeat_renew(
+            node_a,
+            &[claim_1.assignment_id, claim_2.assignment_id],
+            &pool,
+        )
+        .await
+        .expect("renew");
 
         assert_eq!(grants.len(), 2, "one grant per held assignment");
         for g in &grants {
-            assert!(g.lease_expires_at > chrono::Utc::now(), "renewed lease in the future");
+            assert!(
+                g.lease_expires_at > chrono::Utc::now(),
+                "renewed lease in the future"
+            );
             assert!(g.fencing_token > 0, "token present");
         }
         let grant_1 = grants
@@ -3522,8 +3529,14 @@ mod lease_heartbeat_tests {
             .iter()
             .find(|g| g.assignment_id == claim_2.assignment_id)
             .expect("grant 2");
-        assert_eq!(grant_1.fencing_token, pre_token_1, "renewal does NOT bump fencing token (1)");
-        assert_eq!(grant_2.fencing_token, pre_token_2, "renewal does NOT bump fencing token (2)");
+        assert_eq!(
+            grant_1.fencing_token, pre_token_1,
+            "renewal does NOT bump fencing token (1)"
+        );
+        assert_eq!(
+            grant_2.fencing_token, pre_token_2,
+            "renewal does NOT bump fencing token (2)"
+        );
 
         cleanup_org(&pool, org_id).await;
     }

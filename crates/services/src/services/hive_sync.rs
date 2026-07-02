@@ -108,7 +108,8 @@ pub struct HiveSyncService {
     config: HiveSyncConfig,
     /// Optional node runner state, attached only in the running node so outbox ops for
     /// hive-assigned tasks are stamped with the current lease fencing token (SC3).
-    node_state: Option<std::sync::Arc<tokio::sync::RwLock<crate::services::node_runner::NodeRunnerState>>>,
+    node_state:
+        Option<std::sync::Arc<tokio::sync::RwLock<crate::services::node_runner::NodeRunnerState>>>,
 }
 
 impl HiveSyncService {
@@ -748,8 +749,12 @@ mod tests {
             idempotency_key: k.into(),
             fencing_token: None,
         };
-        OutboxRepository::enqueue_op(&pool, mk("task:a:1")).await.unwrap();
-        OutboxRepository::enqueue_op(&pool, mk("task:b:1")).await.unwrap();
+        OutboxRepository::enqueue_op(&pool, mk("task:a:1"))
+            .await
+            .unwrap();
+        OutboxRepository::enqueue_op(&pool, mk("task:b:1"))
+            .await
+            .unwrap();
 
         let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(8);
         let service = HiveSyncService::new(pool.clone(), command_tx, HiveSyncConfig::default());
@@ -766,7 +771,10 @@ mod tests {
         }
 
         assert_eq!(
-            OutboxRepository::peek_unacked(&pool, 10).await.unwrap().len(),
+            OutboxRepository::peek_unacked(&pool, 10)
+                .await
+                .unwrap()
+                .len(),
             2
         );
     }
@@ -786,21 +794,28 @@ mod tests {
             idempotency_key: k.into(),
             fencing_token: None,
         };
-        OutboxRepository::enqueue_op(&pool, mk(assigned_task, "task:a:1")).await.unwrap();
-        OutboxRepository::enqueue_op(&pool, mk(owned_task, "task:b:1")).await.unwrap();
+        OutboxRepository::enqueue_op(&pool, mk(assigned_task, "task:a:1"))
+            .await
+            .unwrap();
+        OutboxRepository::enqueue_op(&pool, mk(owned_task, "task:b:1"))
+            .await
+            .unwrap();
 
         let state = std::sync::Arc::new(tokio::sync::RwLock::new(NodeRunnerState::default()));
         {
             let aid = uuid::Uuid::new_v4();
-            state.write().await.active_assignments.insert(aid, ActiveAssignment {
-                assignment_id: aid,
-                task_id: uuid::Uuid::new_v4(),
-                local_task_id: Some(assigned_task),
-                local_attempt_id: None,
-                status: TaskExecutionStatus::Pending,
-                fencing_token: Some(5),
-                lease_expires_at: Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
-            });
+            state.write().await.active_assignments.insert(
+                aid,
+                ActiveAssignment {
+                    assignment_id: aid,
+                    task_id: uuid::Uuid::new_v4(),
+                    local_task_id: Some(assigned_task),
+                    local_attempt_id: None,
+                    status: TaskExecutionStatus::Pending,
+                    fencing_token: Some(5),
+                    lease_expires_at: Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+                },
+            );
         }
 
         let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(8);
@@ -812,8 +827,15 @@ mod tests {
             NodeMessage::OpBatch { ops } => {
                 let assigned = ops.iter().find(|o| o.entity_id == assigned_task).unwrap();
                 let owned = ops.iter().find(|o| o.entity_id == owned_task).unwrap();
-                assert_eq!(assigned.fencing_token, Some(5), "hive-assigned op carries the lease token");
-                assert_eq!(owned.fencing_token, None, "node-owned op carries no token (CONTRACT §C)");
+                assert_eq!(
+                    assigned.fencing_token,
+                    Some(5),
+                    "hive-assigned op carries the lease token"
+                );
+                assert_eq!(
+                    owned.fencing_token, None,
+                    "node-owned op carries no token (CONTRACT §C)"
+                );
             }
             other => panic!("expected OpBatch, got {other:?}"),
         }

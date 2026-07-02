@@ -719,7 +719,11 @@ pub enum HiveEvent {
     /// Durable op-log ack: all node_outbox ops with seq <= applied_through_seq are persisted (SC2c).
     OpAck { applied_through_seq: i64 },
     /// Lease granted/renewed by the hive (assignment's current fencing token + expiry).
-    LeaseGranted { assignment_id: Uuid, fencing_token: i64, lease_expires_at: chrono::DateTime<Utc> },
+    LeaseGranted {
+        assignment_id: Uuid,
+        fencing_token: i64,
+        lease_expires_at: chrono::DateTime<Utc>,
+    },
     /// Lease revoked by the hive — the node must self-fence the assignment's agent.
     LeaseRevoked { assignment_id: Uuid, reason: String },
 }
@@ -1096,25 +1100,43 @@ impl HiveClient {
                     .send(HiveEvent::BackfillRequest(request))
                     .await;
             }
-            HiveMessage::OpAck { applied_through_seq } => {
+            HiveMessage::OpAck {
+                applied_through_seq,
+            } => {
                 tracing::trace!(applied_through_seq, "received op_ack");
                 let _ = self
                     .event_tx
-                    .send(HiveEvent::OpAck { applied_through_seq })
+                    .send(HiveEvent::OpAck {
+                        applied_through_seq,
+                    })
                     .await;
             }
-            HiveMessage::LeaseGrant { assignment_id, fencing_token, lease_expires_at } => {
+            HiveMessage::LeaseGrant {
+                assignment_id,
+                fencing_token,
+                lease_expires_at,
+            } => {
                 tracing::debug!(%assignment_id, fencing_token, "lease granted");
                 let _ = self
                     .event_tx
-                    .send(HiveEvent::LeaseGranted { assignment_id, fencing_token, lease_expires_at })
+                    .send(HiveEvent::LeaseGranted {
+                        assignment_id,
+                        fencing_token,
+                        lease_expires_at,
+                    })
                     .await;
             }
-            HiveMessage::LeaseRevoked { assignment_id, reason } => {
+            HiveMessage::LeaseRevoked {
+                assignment_id,
+                reason,
+            } => {
                 tracing::warn!(%assignment_id, %reason, "lease revoked by hive");
                 let _ = self
                     .event_tx
-                    .send(HiveEvent::LeaseRevoked { assignment_id, reason })
+                    .send(HiveEvent::LeaseRevoked {
+                        assignment_id,
+                        reason,
+                    })
                     .await;
             }
             _ => {

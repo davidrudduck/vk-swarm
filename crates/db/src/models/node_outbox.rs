@@ -130,8 +130,12 @@ mod tests {
             fencing_token: None,
         };
 
-        let a = OutboxRepository::enqueue_op(&pool, mk("task:a:1")).await.unwrap();
-        let b = OutboxRepository::enqueue_op(&pool, mk("task:b:1")).await.unwrap();
+        let a = OutboxRepository::enqueue_op(&pool, mk("task:a:1"))
+            .await
+            .unwrap();
+        let b = OutboxRepository::enqueue_op(&pool, mk("task:b:1"))
+            .await
+            .unwrap();
         assert!(b.seq > a.seq, "seq must be per-node monotonic");
 
         let unacked = OutboxRepository::peek_unacked(&pool, 10).await.unwrap();
@@ -140,7 +144,9 @@ mod tests {
         assert_eq!(unacked[1].seq, b.seq);
 
         // Ack through the first op's seq → only b remains unacked.
-        OutboxRepository::mark_acked_through(&pool, a.seq).await.unwrap();
+        OutboxRepository::mark_acked_through(&pool, a.seq)
+            .await
+            .unwrap();
         let remaining = OutboxRepository::peek_unacked(&pool, 10).await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].seq, b.seq);
@@ -150,12 +156,19 @@ mod tests {
     async fn enqueue_op_rejects_duplicate_idempotency_key() {
         let (pool, _tmp) = create_test_pool().await;
         let op = NewOutboxOp {
-            op_type: "task.upsert".into(), entity_type: "task".into(),
-            entity_id: uuid::Uuid::new_v4(), payload: serde_json::json!({}),
-            idempotency_key: "task:dup:1".into(), fencing_token: None,
+            op_type: "task.upsert".into(),
+            entity_type: "task".into(),
+            entity_id: uuid::Uuid::new_v4(),
+            payload: serde_json::json!({}),
+            idempotency_key: "task:dup:1".into(),
+            fencing_token: None,
         };
-        OutboxRepository::enqueue_op(&pool, op.clone()).await.unwrap();
-        assert!(OutboxRepository::enqueue_op(&pool, op).await.is_err(),
-            "UNIQUE(idempotency_key) must reject a re-enqueue");
+        OutboxRepository::enqueue_op(&pool, op.clone())
+            .await
+            .unwrap();
+        assert!(
+            OutboxRepository::enqueue_op(&pool, op).await.is_err(),
+            "UNIQUE(idempotency_key) must reject a re-enqueue"
+        );
     }
 }
