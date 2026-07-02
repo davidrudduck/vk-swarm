@@ -978,3 +978,33 @@ VERDICT: PASS
 - Added both the spec-required `self_fence_tests` module and an extra test in `lease_state_tests`
   (`assignments_to_self_fence_selects_only_running_expired_leases`) covering Running+expired,
   Running+live, Pending+expired, and Running+no-lease.
+
+## Task 209
+- **`ReclaimedLease` narrower-struct choice (path B from the task's "Decide and record" note).**
+  The reclaim UPDATE sets `lease_expires_at = NULL`. 203's `LeaseClaim.lease_expires_at` is
+  `DateTime<Utc>` (non-Option), so it cannot hold a NULL. Two paths were noted: (A) widen
+  `LeaseClaim.lease_expires_at` to `Option<DateTime<Utc>>` in 203 (requires re-touching
+  `session.rs:2140` which builds `HiveMessage::LeaseGrant { ..., lease_expires_at: claim.lease_expires_at }`
+  — the wire field is also non-Option), or (B) return a narrower struct. `session.rs` is NOT in
+  this task's `files:` list and 209's scope forbids touching the WS protocol. Per the orchestrator
+  decision (authoritative — recorded here), chose **path (B)**: a new `ReclaimedLease` struct
+  `{ assignment_id, node_id, task_id, fencing_token }` (NO `lease_expires_at`). The reclaim test
+  only asserts `assignment_id` + `fencing_token`, so this is sufficient and avoids the
+  cross-file ripple into 202/204/205's WS protocol (which would violate 209's "Allowed moves").
+- **`sweep_interval` default = 10s.** Shorter than the 60s lease TTL (LEASE_TTL) so reclaim is
+  timely — a stalled node's lease is freed within ~10s of expiry rather than waiting minutes.
+  Matches `stale_cleanup.rs`'s "interval shorter than the staleness window" pattern.
+- **Fixture reuse.** The `sweep_tests` mod reuses 203's `lease_tests` fixtures verbatim
+  (org / node / swarm_project / swarm_project_node / shared_task creation helpers + the
+  `database_url()` / `skip_without_db!` / `create_pool()` trio inlined verbatim from
+  `backfill_e2e.rs`). They are proven against the 201-migrated schema; no adaptation needed.
+  Kept as a SEPARATE module (`sweep_tests`) to avoid name collision with 203's `lease_tests`.
+- **Verification note (environmental blocker).** `cargo check -p remote` and `cargo clippy -p
+  remote --all-targets -- -D warnings` exit 0. The hermetic `services::lease_sweep::tests::
+  test_default_config` passes (1/1). The two `sweep_tests` (DB-gated) COMPILE cleanly and the
+  test binary builds, but no Postgres could be stood up in this environment (no `postgres`
+  binary, docker socket permission-denied, no PG port open on 5432-5436). The tests' `skip_without_db!`
+  guard is in place; they are expected to PASS against a migrated `vibe_remote_dev` Postgres
+  (the query mirrors 203's `try_claim` reclaim path, which is already proven green). The task
+  gate (`test -n "$DATABASE_URL" && cargo test -p remote sweep_tests`) is fail-closed without
+  a DB — flagged for the next session/CI to execute with `DATABASE_URL` set.
