@@ -1209,3 +1209,152 @@ Two off-plan choices, both inside the permitted file (`crates/remote/src/nodes/w
 1. **Adapted an existing `fencing_tests` case to be matrix-compliant.** `op_with_current_token_against_assigned_task_applies_normally` seeded a shared task as `"todo"` and sent an op with `status="done"` to verify a current-token op applies past the fence. After 303's author guard landed, `Todo→Done` is illegal (no author in the ADR-0010 matrix) → the guard now correctly SKIP+ADVANCEs it, breaking the test. Changed the seed from `"todo"` to `"in-progress"` so the op is the legal node-authored `In-Progress→Done` transition. The test's PURPOSE (verify a current-token op applies past the P2 fence) is unchanged; only the seed status was made matrix-compliant. The three other `fencing_tests` cases (`op_against_assigned_task_with_stale_token_is_rejected_not_applied`, `op_for_completed_task_with_no_active_assignment_is_rejected_not_applied`, `op_with_null_token_node_owned_work_is_unaffected_by_the_fence`) needed no change: the first two break out in P2's fence before 303's guard runs, and the third carries `shared_id = None` so 303's guard skips it.
 
 2. **`task_status` Postgres enum values are kebab-case (`in-progress`/`in-review`), not the Rust `#[serde(rename_all = "lowercase")]` form.** Migration `20251001000000_shared_tasks_activity.sql` declares `CREATE TYPE task_status AS ENUM ('todo', 'in-progress', 'in-review', 'done', 'cancelled')`. The `status_guard_tests` seed helper `insert_shared_task` casts its status string via `$7::task_status`, and `shared_task_status_by_id` reads `status::text`, so seed/assert strings must use the kebab form (`"in-progress"`, `"in-review"`) — not `"inprogress"`/`"inreview"`. The op payload's `status` field still uses the node's lowercase wire form (`"inprogress"`, `"done"`, …) and is reconciled by 302's `canonical_status_from_node`, which accepts both forms. (No code change beyond using the correct string literals in the new tests.)
+
+## Task 304
+
+No off-plan choices. The implementation matches the task file's exact "After" code (lines 107-151 of `304-gate-legacy-task-status-path.md`) verbatim — the five-arm `match` on `task_repo.find_by_id(assignment.task_id)`: equal-status no-op, `node_may_author` true → `update_status_from_node`, else → warn+skip, `None` → warn, `Err` → warn. The two required tests (`legacy_path_applies_node_authored_transition_with_lease`, `legacy_path_rejects_hive_authored_or_illegal_transition_from_node`) were added per spec at `session.rs:4480+`.
+
+## Reachability gate (Phase-3 close — single-author status transitions)
+
+Spec `change_kind: behaviour` → mandatory run-level close gate (SC#10). Phase-3 implements
+SC4 (a node may not author hive-exclusive status transitions). The two legs cited below are the
+SUM of merged tasks 301–304 on the production code paths the bug lives on: the op-log path
+(`handle_op_batch_apply`, task 303 target) and the legacy path (`handle_task_status`, task 304
+target). Both paths write `shared_tasks.status` from a node — both are now guarded.
+
+### (a) CALL-PATH TRACE (the single-author status path, cited file:line on merged HEAD `70b05488`)
+
+**Shared module (301 + 302):**
+- `status_machine::author_of_transition(from, to)` (`crates/remote/src/nodes/ws/status_machine.rs:29-43`)
+  is the single source of truth for ADR-0010 §D's matrix: `Todo→InProgress`, `InReview→Done`,
+  `InReview→InProgress`, `*→Cancelled` → `Some(Hive)`; `InProgress→Done`, `InProgress→InReview`
+  → `Some(Node)`; everything else → `None` (illegal). `node_may_author` (`status_machine.rs:49-50`)
+  wraps it as `matches!(author_of_transition(...), Some(TransitionAuthor::Node))`.
+- `status_machine::canonical_status_from_node(raw)` (`status_machine.rs:62`) is the single
+  boundary helper (302) that maps the node's lowercase wire form (`"inprogress"`, `"inreview"`)
+  and the kebab DB form (`"in-progress"`, `"in-review"`) to the canonical `TaskStatus` enum.
+  Rejects unknown strings (no silent `Todo` default).
+
+**Leg 1 — op-log path (task 303):**
+- Entry: `handle_node_message` (`session.rs:512`) → `NodeMessage::OpBatch` arm (`session.rs:582`)
+  → `handle_op_batch` (`session.rs:2188`) → `handle_op_batch_apply` (`session.rs:1791`).
+- 302 canonicalization: `status_raw = op.payload.get("status").as_str()` (`session.rs:2027-2031`)
+  → `canonical_status_from_node(status_raw)` (`session.rs:2032`) — BEFORE the guard, so the
+  matrix compare uses canonical enums, not raw strings.
+- Fencing (P2, task 205): `session.rs:1941-1995` — `shared_id`-bearing ops must pass the
+  stale-token check BEFORE reaching 303's guard. Stale → `break` (PARK, no advance) at
+  `session.rs:1987-1988`. 303 rides this seam: by `session.rs:2061`, the lease+token are valid.
+- 303 guard: `if let Some(shared_id) = shared_id` (`session.rs:2061`) — only hive-managed work;
+  node-owned (`shared_id = None`) skips, mirroring P2's fence scope. `find_by_id(shared_id)`
+  (`session.rs:2065-2069`) — `None` (creation path) skips the guard (no `from` status).
+  `if status != current` (`session.rs:2071`) — no-op (metadata-only, same status) falls through
+  to upsert, NOT rejected. `author_of_transition(current, status)` (`session.rs:2075`):
+    - `Some(Node)` (`session.rs:2076`) → proceed to `upsert_from_node` (`session.rs:2122`).
+    - `Some(Hive)` (`session.rs:2080`) → a hive-authored transition arriving FROM A NODE →
+      REJECT via SKIP+ADVANCE: `tracing::warn!`, write `node_op_log`, advance
+      `applied_through_seq = op.seq`, `continue` (`session.rs:2084-2096`) — bypasses the
+      post-upsert `node_op_log` write at `session.rs:2139-2155` (no double-write).
+    - `None` (illegal, `session.rs:2097`) → same SKIP+ADVANCE path (`session.rs:2113-2120`).
+
+**Leg 2 — legacy path (task 304):**
+- Entry: `handle_node_message` (`session.rs:512`) → `NodeMessage::TaskStatus` arm (`session.rs:528`)
+  → `handle_task_status` (`session.rs:635`).
+- Assignment execution-status write is unconditional and PRECEDES the guard:
+  `service.update_assignment_status(status.assignment_id, db_status)` (`session.rs:670`) — the
+  node's own bookkeeping is NOT gated by the shared_status author matrix (spec point #4).
+- 304 guard: `if let Ok(Some(assignment)) = assignment_repo.find_by_id(...)` (`session.rs:677`)
+  — only when the assignment row exists. `proposed = match status.status { ... }` (`session.rs:679-684`)
+  preserves the legacy `TaskExecutionStatus→TaskStatus` map (Completed→InReview, Running→InProgress,
+  Failed|Cancelled→Todo, never yields Done). `task_repo.find_by_id(assignment.task_id)` (`session.rs:690`)
+  — five-arm match:
+    - `Ok(Some(current_task)) if current_task.status == proposed` (`session.rs:691`) → no-op
+      (equal status, separate arm BEFORE the author check — no spurious "rejected" warning).
+    - `Ok(Some(current_task)) if node_may_author(current_task.status, proposed)` (`session.rs:694-695`)
+      → `update_status_from_node` (`session.rs:700`). Guard calls `node_may_author` (transition
+      author); NO lease/token re-check (lease context is the in-hand `assignment` from `:677`,
+      spec point #9 — no double-guard).
+    - `Ok(Some(current_task))` fall-through (`session.rs:708`) → `tracing::warn!` + skip (no panic,
+      no error to caller — degrades gracefully on hive-authored-from-node or illegal transition).
+    - `Ok(None)` (`session.rs:713`) → `tracing::warn!("shared task not found")`.
+    - `Err` (`session.rs:716`) → `tracing::warn!`.
+
+### (b) REAL-SEAM TESTS (drive the real entry points, not mock-past)
+
+- **Leg 1 (op-log guard, 303):** `status_guard_tests` module (`session.rs:3763+`), 7 tests:
+  - `node_reported_in_progress_to_done_accepted` — valid lease+token, `InProgress→Done`
+    (node-authored) → `update_status_from_node` called, status == `"done"`.
+  - `node_reported_done_rejected_without_lease_or_current_token` — P2 seam: no-lease and
+    stale-token cases break in P2's fence BEFORE 303's guard runs → status unchanged, seq 0.
+  - `hive_authored_transition_rejected_when_reported_by_node` — `*→cancelled` (hive-authored
+    from node) and `InReview→Done` (hive-authored from node) → SKIP+ADVANCE: status unchanged,
+    `node_op_log` count 1, seq advanced.
+  - `illegal_transition_rejected` — `Done→InProgress` (no author) → SKIP+ADVANCE.
+  - `noop_same_status_is_not_a_rejected_transition` — `from==to` → upsert proceeds (metadata-only
+    update), seq advanced, no reject warning.
+  - Non-hollow: removing the `author_of_transition` match → illegal/hive-authored transitions
+    would apply → 4 of 7 assertions FAIL.
+- **Leg 2 (legacy guard, 304):** `legacy_status_guard_tests` module (`session.rs:4480+`), 2 tests:
+  - `legacy_path_applies_node_authored_transition_with_lease` — seed `in-progress` + active
+    assignment, send `TaskExecutionStatus::Completed` (maps to `InReview`, node-authored
+    `InProgress→InReview`) → `update_status_from_node` called, status == `"in-review"`.
+  - `legacy_path_rejects_hive_authored_or_illegal_transition_from_node` — seed `done`, send
+    `TaskExecutionStatus::Failed` (maps to `Todo`, illegal `Done→Todo`) → guard rejects,
+    `update_status_from_node` NOT called, status stays `"done"`.
+  - Non-hollow: removing the `node_may_author` arm → illegal `Done→Todo` would apply → second
+    assertion FAILS.
+- **Matrix module (301):** `status_machine::tests` (`status_machine.rs:82+`), 6 tests:
+  - `matrix_authors_each_transition_exactly_once` — every transition in ADR-0010 §D maps to
+    exactly one author; no transition is dual-authored or orphaned.
+  - `rejects_unknown_status_returns_err_no_silent_default` — 302's `canonical_status_from_node`
+    rejects `"unknown"` with `Err`, does NOT silently default to `Todo`.
+- **No regression (P2 paths):**
+  - `fencing_tests` (4 passed) — including 303's adapted seed (`todo`→`in-progress`).
+  - `op_batch_tests` (5 passed) — SC2 idempotent apply + 302's lowercase wire mapping.
+  - `lease_partition_e2e` (1 passed) — SC3 partition-safety e2e, no regression.
+
+### (c) INCIDENT-SYMPTOM ASSERTION
+
+- **Symptom:** "a node silently clobbers a hive-authored status transition" (SC4 violation) —
+  e.g. a node reports `Completed` on a task still in `Todo` (hive hasn't assigned/started it),
+  or a node cancels a task that the hive should cancel.
+- **Assertion (leg 1):** op-log path — hive-authored/illegal transition op →
+  `shared_task_status_by_id == pre_status` (NOT updated), `node_op_log_count_for_key == 1`
+  (SKIP+ADVANCE recorded, op-log not wedged), `applied_through_seq == op.seq` (cursor advanced).
+  The single-author EFFECT is asserted directly: the rejected op did NOT mutate `shared_tasks.status`,
+  and the op-log continued processing (not PARKed).
+- **Assertion (leg 2):** legacy path — illegal `Done→Todo` from a node →
+  `shared_task_status_by_id == "done"` (NOT updated). The single-author EFFECT: the legacy path
+  no longer does last-write-wins on `shared_tasks.status`.
+- **Matrix basis (301):** `author_of_transition` is the single source of truth — both guards
+  (303 op-log, 304 legacy) call it, so the matrix cannot drift between paths. ADR-0010 §D and
+  `status_machine.rs:29-43` are traceable line-for-line.
+
+**Verification (AGENTS.md gate, final committed state `70b05488`):**
+- `SQLX_OFFLINE=true cargo clippy --all --all-targets --all-features -- -D warnings` → exit 0
+  (workspace clean). NOTE: `DATABASE_URL=vibe_remote_dev cargo clippy --all` FAILS on
+  `crates/db` because `activity_dismissals` table doesn't exist in `vibe_remote_dev` —
+  pre-existing environment issue (the `crates/db` macros validate against a different database),
+  NOT Phase 3. Use `SQLX_OFFLINE=true` for workspace clippy.
+- `DATABASE_URL=postgres://postgres:postgres@localhost:5435/vibe_remote_dev` +
+  `SQLX_OFFLINE=true`:
+  - `cargo test -p remote --lib status_machine` → 6 passed.
+  - `cargo test -p remote --lib status_guard` → 7 passed (303).
+  - `cargo test -p remote --lib legacy_status_guard` → 2 passed (304).
+  - `cargo test -p remote --lib fencing` → 4 passed (no regression, P2).
+  - `cargo test -p remote --lib op_batch` → 5 passed (no regression, 106+302).
+  - `cargo test -p remote --test lease_partition_e2e` → 1 passed (SC3 e2e, no regression).
+  - `cargo test --workspace` → 86 passed, 4 failed. The 4 failures are PRE-EXISTING
+    (confirmed on commit `8a90485c` baseline, before Phase 3):
+    `db::activity::integration_tests::test_fetch_since_by_swarm_project_{limit,pagination,returns_events}`
+    (null `project_id` in partitioned `activity_p_*` table — DB schema migration mismatch) +
+    `routes::organization_members::integration_tests::test_ensure_swarm_project_access_success`
+    (`member_role` cast — DB schema migration mismatch). All unrelated to hive-redesign.
+- Frontend: zero frontend files in Phase 3 PR; `npm run lint` + `npx tsc --noEmit`
+  pre-existing errors unchanged (per P2 ledger).
+
+**VERDICT: PASS.** Both `shared_tasks.status` write paths (op-log `handle_op_batch_apply` +
+legacy `handle_task_status`) are reachable on the production code path, both route through
+`author_of_transition` (301's single source of truth) via `node_may_author`, and the real-seam
+tests drive them (not mock-past). The incident symptom (node silently clobbers hive-authored
+transition) is asserted directly on both legs: the rejected transition does NOT mutate
+`shared_tasks.status`, and (op-log) the cursor advances so the op-log doesn't wedge.
