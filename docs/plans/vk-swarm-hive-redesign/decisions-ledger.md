@@ -848,3 +848,22 @@ VERDICT: PASS
   - `swarm_project_nodes` is seeded with `local_project_id = Uuid::new_v4()`, `git_repo_path = "test-repo"`, `RETURNING id` (`node_project_id`). `shared_tasks.project_id` is nullable (migration `20260124100000`) and omitted from the INSERT column list.
 - **Cleanup:** each test deletes its org via `DELETE FROM organizations WHERE id = $1`, which cascades through `nodes`, `swarm_projects`, `swarm_project_nodes`, `shared_tasks`, and `node_task_assignments` (all FK `ON DELETE CASCADE`). Unique org_id per test isolates runs.
 - **Test results:** `cargo test -p remote lease_tests -- --nocapture` → 4 passed, 0 failed (`try_claim_wins_when_available_and_assigns_monotonic_token`, `try_claim_fails_for_a_second_node_while_lease_is_live`, `try_claim_reclaims_an_expired_lease_with_a_strictly_higher_token`, `renew_lease_extends_expiry_without_changing_the_token`). `cargo check -p remote` exit 0.
+
+## Task 203 — panel adjudication (orchestrator)
+- Stage-2 panel (2 subagents) both returned VERDICT: REVISE with a single shared [BLOCKING]
+  finding: `clippy::collapsible_if` at `task_assignments.rs:152-156` (nested `if let`/`if` in the
+  try_claim INSERT-error handler). AGENTS.md finish-gate requires clippy green; the violation was
+  introduced by this commit (parent f56dd496 clippy-clean). The existing `create` method's
+  structurally-identical block escapes the lint only because it lives inside a `.map_err` closure
+  that clippy does not flag; the new code is in a bare `Err(e) => { … }` arm where the lint fires.
+- REAL finding. FIXED directly by collapsing to `if let … && … { … }` (let-chains, stable on
+  this toolchain). Re-ran `cargo clippy -p remote --all-targets -- -D warnings` → clean; re-ran
+  `cargo test -p remote --lib lease_tests` → 4 passed. Amended commit `11464a4a`, force-pushed.
+- Panel [INFO] notes (non-blocking, accepted as noted debt):
+  - `renew_lease` does NOT check `lease_expires_at > now()` — an already-expired-but-not-reclaimed
+    holder can renew. This matches the task file's literal contract (`WHERE id=$1 AND node_id=$2
+    AND completed_at IS NULL`, no lease-liveness leg). The race is safe: a concurrent `try_claim`
+    reclaim UPDATEs `node_id` to the new holder, so the old holder's subsequent `renew_lease`
+    correctly returns `None` (node_id mismatch). Accepted.
+  - Fixture helpers adapted to live schema (backfill_e2e.rs fixtures are themselves stale).
+    Correct per task prose ("inline ... fixture style", not "verbatim").
