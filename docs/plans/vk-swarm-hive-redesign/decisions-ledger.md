@@ -880,3 +880,46 @@ VERDICT: PASS
 - Test mod imports `sqlx::Row` (needed by the `row.get("id")` fixture, not in scope via
   `use super::*` in session.rs unlike task_assignments.rs); dropped unused `LeaseClaim` from
   the test import to satisfy `clippy -D warnings` (the mandatory gate).
+
+## Task 205
+
+- break-vs-continue on REJECT: chose `break` (not continue-without-advance). A rejected op is a
+  PERMANENT reject (stale fencing token = the writer's lease is gone), not a transient park.
+  `break` keeps the high-water at the last successfully-applied seq so the node re-sends from
+  the rejected op onward after it re-claims; mirroring 106's PARK control-flow of NOT advancing,
+  but permanent. The first test asserts `seq == 0` (high-water unchanged) which only `break`
+  satisfies.
+- ws-free split: option (a) — return `(i64, Vec<(Uuid, String)>)` from `handle_op_batch_apply`
+  (the ws-free core), threading `(assignment_id, reason)` pairs OUT. `handle_op_batch` iterates
+  the vec and emits `HiveMessage::LeaseRevoked` for each via `send_message`, then sends
+  `HiveMessage::OpAck`. This mirrors 106/204's ws-free extraction and keeps the fencing
+  rejection testable without a WebSocket. Updated all 7 existing `op_batch_tests` call sites to
+  destructure `(seq, _revokes)`.
+- test-mod placement: new `fencing_tests` mod beside `op_batch_tests` (not merged into it),
+  with fixture helpers duplicated from `op_batch_tests` per task 204's established pattern. The
+  `op_batch_tests` fixtures are private to that mod; option (b) (a shared `test_fixtures` mod)
+  would touch the sibling mod's shape beyond the task scope, so (a) was chosen. Added
+  `shared_task_status_by_id` (reads by `shared_tasks.id`) and `shared_task_status_by_source`
+  (reads by `(source_node_id, source_task_id)`) helpers since the `op_batch_tests`
+  `shared_task_status` is private and the stale-token test keys on `shared_id`.
+- shared-id resolution: read `payload.shared_task_id` DIRECTLY (the load-bearing,
+  reassignment-proof key). When `None`, fall through to 106's normal apply with NO
+  `find_by_source_task_id` fallback — the task file's step 1 is authoritative ("fall through to
+  106's normal apply (no fence; node-owned or pre-link first write)"), and the third test
+  (node-owned, `fencing_token = None`, no assignment) confirms no fence applies. The prompt's
+  hard rule permits a `find_by_source_task_id` fallback when `None` but does not require it; the
+  task file's simpler fall-through was followed. Recorded as a deliberate alignment with the
+  task file, not a deviation.
+- test 2 (`op_with_current_token_against_assigned_task_applies_normally`) seeds node_b as BOTH
+  creator AND holder (not a separate creator node_c). Rationale: `upsert_from_node` keys its ON
+  CONFLICT on `(source_node_id, source_task_id)` = the CREATOR identity; if node_b is only the
+  holder (task created by node_c), node_b's op with its own `local_task_id` INSERTs a NEW
+  shared_tasks row instead of updating the seeded one, so the status assertion would fail for
+  reasons unrelated to the fence (106's source-key semantics, not 205's scope). Making node_b
+  the creator+holder isolates the test to the fence behavior. The first test still seeds the
+  ASSIGNED-NOT-CREATED scenario (creator=node_c, holder=node_a) to guard the
+  `payload.shared_task_id`-vs-`find_by_source_task_id` SC3 fix.
+- `node_task_assignments.node_project_id` now references `swarm_project_nodes.id` (migration
+  `20260124200000_remove_node_projects.sql` rebased the FK); tests use
+  `create_swarm_project_node(...).await` as `np_id` for `try_claim(node_project_id=...)`,
+  matching 204's pattern.
