@@ -675,8 +675,8 @@ async fn handle_task_status(
     // First, get the task_id from the assignment
     let assignment_repo = TaskAssignmentRepository::new(pool);
     if let Ok(Some(assignment)) = assignment_repo.find_by_id(status.assignment_id).await {
-        // Map execution status to shared task status
-        let shared_status = match status.status {
+        // Map execution status to the proposed shared task status.
+        let proposed = match status.status {
             TaskExecutionStatus::Pending | TaskExecutionStatus::Starting => TaskStatus::Todo,
             TaskExecutionStatus::Running => TaskStatus::InProgress,
             TaskExecutionStatus::Completed => TaskStatus::InReview,
@@ -684,15 +684,39 @@ async fn handle_task_status(
         };
 
         let task_repo = SharedTaskRepository::new(pool);
-        if let Err(e) = task_repo
-            .update_status_from_node(assignment.task_id, shared_status)
-            .await
-        {
-            tracing::warn!(
-                task_id = %assignment.task_id,
-                error = %e,
-                "failed to update shared task status"
-            );
+        // Guard via the single-author matrix (ADR-0010 §D). The legacy path is node-reported, so only a
+        // no-op or a node-authored transition (with an active lease) may write — never a hive-authored
+        // or illegal transition (the old `*→Todo` clobber).
+        match task_repo.find_by_id(assignment.task_id).await {
+            Ok(Some(current_task)) if current_task.status == proposed => {
+                // no-op — nothing to write
+            }
+            Ok(Some(current_task))
+                if crate::nodes::ws::status_machine::node_may_author(
+                    current_task.status,
+                    proposed,
+                ) =>
+            {
+                if let Err(e) = task_repo
+                    .update_status_from_node(assignment.task_id, proposed)
+                    .await
+                {
+                    tracing::warn!(task_id = %assignment.task_id, error = %e,
+                        "failed to update shared task status");
+                }
+            }
+            Ok(Some(current_task)) => {
+                tracing::warn!(task_id = %assignment.task_id, from = ?current_task.status,
+                    to = ?proposed,
+                    "rejected non-node-authored status transition on legacy path (ADR-0010)");
+            }
+            Ok(None) => {
+                tracing::warn!(task_id = %assignment.task_id, "shared task not found for status update");
+            }
+            Err(e) => {
+                tracing::warn!(task_id = %assignment.task_id, error = %e,
+                    "failed to read shared task status");
+            }
         }
     }
 
@@ -4447,6 +4471,308 @@ mod status_guard_tests {
             "no-op op leaves status as 'in-progress' (from==to, not a transition)"
         );
         assert!(revokes.is_empty(), "no LeaseRevoked for a no-op");
+
+        cleanup_org(&pool, org_id).await;
+    }
+}
+
+#[cfg(test)]
+mod legacy_status_guard_tests {
+    use super::*;
+    use crate::db::task_assignments::TaskAssignmentRepository;
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping test: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+    async fn create_pool() -> PgPool {
+        let url = database_url().expect("DATABASE_URL must be set");
+        sqlx::PgPool::connect(&url)
+            .await
+            .expect("Failed to connect to database")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, last_heartbeat_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+        node_id
+    }
+
+    async fn create_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm project");
+        sp_id
+    }
+
+    async fn create_node_local_project(
+        pool: &PgPool,
+        node_id: Uuid,
+        local_project_id: Uuid,
+        swarm_project_id: Option<Uuid>,
+    ) {
+        let res = sqlx::query(
+            r#"
+            INSERT INTO node_local_projects (node_id, local_project_id, name, git_repo_path, swarm_project_id)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("local-proj")
+        .bind("/repo/path")
+        .bind(swarm_project_id)
+        .execute(pool)
+        .await;
+        if let Err(e) = res {
+            eprintln!("create_node_local_project (non-fatal): {}", e);
+        }
+    }
+
+    async fn create_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+        local_project_id: Uuid,
+    ) -> Uuid {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("/repo/path")
+        .fetch_one(pool)
+        .await
+        .expect("Failed to create swarm_project_nodes link");
+        sqlx::Row::get(&row, "id")
+    }
+
+    async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(pool)
+            .await;
+    }
+
+    #[allow(dead_code)]
+    async fn node_op_log_count_for_key(pool: &PgPool, node_id: Uuid, key: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2",
+        )
+        .bind(node_id)
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .expect("count")
+    }
+
+    async fn shared_task_status_by_id(pool: &PgPool, shared_id: Uuid) -> Option<String> {
+        sqlx::query_scalar("SELECT status::text FROM shared_tasks WHERE id = $1")
+            .bind(shared_id)
+            .fetch_optional(pool)
+            .await
+            .expect("shared task status by id")
+    }
+
+    async fn insert_shared_task(
+        pool: &PgPool,
+        org_id: Uuid,
+        swarm_project_id: Uuid,
+        creator_node: Uuid,
+        creator_local_task_id: Uuid,
+        status: &str,
+    ) -> Uuid {
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO shared_tasks (
+                id, organization_id, project_id, swarm_project_id,
+                source_node_id, source_task_id,
+                title, status, version, shared_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $3, $4, $5, $6, $7::task_status, 1, $8, $8, $8)
+            "#,
+        )
+        .bind(id)
+        .bind(org_id)
+        .bind(swarm_project_id)
+        .bind(creator_node)
+        .bind(creator_local_task_id)
+        .bind("seeded task")
+        .bind(status)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("insert shared task");
+        id
+    }
+
+    #[tokio::test]
+    async fn legacy_path_applies_node_authored_transition_with_lease() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        let np = create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        let creator_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_id,
+            creator_local_task_id,
+            "in-progress",
+        )
+        .await;
+
+        // Active assignment (valid lease) held by node_id — the legacy path's lease context.
+        let claim = repo
+            .try_claim(shared_id, node_id, np, chrono::Duration::seconds(300))
+            .await
+            .expect("claim")
+            .expect("node claimed");
+
+        // Completed → InReview. in-progress→in-review is node-authored (ADR-0010 §D) → APPLIED.
+        let msg = TaskStatusMessage {
+            assignment_id: claim.assignment_id,
+            local_task_id: Some(creator_local_task_id),
+            local_attempt_id: None,
+            status: TaskExecutionStatus::Completed,
+            message: None,
+            timestamp: Utc::now(),
+        };
+        handle_task_status(node_id, org_id, &msg, &pool)
+            .await
+            .expect("handle_task_status");
+
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("in-review".to_string()),
+            "node-authored in-progress→in-review transition is applied on the legacy path"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_path_rejects_hive_authored_or_illegal_transition_from_node() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        let np = create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        let creator_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_id,
+            creator_local_task_id,
+            "done",
+        )
+        .await;
+
+        let claim = repo
+            .try_claim(shared_id, node_id, np, chrono::Duration::seconds(300))
+            .await
+            .expect("claim")
+            .expect("node claimed");
+
+        // Failed → Todo. done→todo is illegal (no author) → REJECTED: status stays 'done'.
+        // This is the concrete clobber the old `*→Todo` map caused (Failed/Cancelled reset).
+        let msg = TaskStatusMessage {
+            assignment_id: claim.assignment_id,
+            local_task_id: Some(creator_local_task_id),
+            local_attempt_id: None,
+            status: TaskExecutionStatus::Failed,
+            message: None,
+            timestamp: Utc::now(),
+        };
+        handle_task_status(node_id, org_id, &msg, &pool)
+            .await
+            .expect("handle_task_status");
+
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("done".to_string()),
+            "illegal done→todo reset MUST NOT clobber shared_tasks.status (ADR-0010)"
+        );
 
         cleanup_org(&pool, org_id).await;
     }
