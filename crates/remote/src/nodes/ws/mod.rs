@@ -18,6 +18,7 @@ mod connection;
 mod dispatcher;
 pub mod message;
 mod session;
+mod status_machine;
 
 pub use connection::{ConnectionManager, NodeConnectionInfo, SendError};
 pub use dispatcher::{AssignResult, DispatchError, TaskDispatcher};

@@ -1193,3 +1193,7 @@ SC3 e2e still passes.
 - `DATABASE_URL=…vibe_remote_dev`:
   - `cargo test -p remote --lib fencing_tests` → 4 passed (3 existing + 1 new).
   - `cargo test -p remote --test lease_partition_e2e` → 1 passed (no regression).
+
+## Task 301
+
+Added `#[allow(dead_code)]` to `TransitionAuthor`, `author_of_transition`, and `node_may_author` in `crates/remote/src/nodes/ws/status_machine.rs`. These items are consumed by task 303 (`session.rs::handle_op_batch`), not by this task's non-test build, so `cargo check` flagged them as unused. The task spec explicitly permits this allowance.
