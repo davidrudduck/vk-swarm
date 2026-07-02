@@ -951,3 +951,30 @@ VERDICT: PASS
 - `spawn_hive_sync_service` gained a `node_state` param; `spawn_node_runner` threads its state in.
 - Two tests added to `hive_sync.rs`: hive-assigned task gets token, node-owned task gets None,
   and without state the column is passed through unchanged.
+
+## Task 208
+- Implemented node-side self-fence watchdog in `spawn_node_runner` inner block.
+  - `handler` is now `Option<Arc<AssignmentHandler<C>>>` so it can be cloned into both the
+    `LeaseRevoked` event arm and the watchdog task.
+  - `assignments_to_self_fence(state, now)` is a pure-state selector: returns Running assignments
+    whose `lease_expires_at` is Some(exp) and exp < now. Pending/completed/unset-lease assignments
+    are ignored — only a running agent with a real, expired lease is halted (ADR-0009 §4).
+  - Watchdog spawned at 5s cadence (much shorter than the hive LEASE_TTL of 60s and finer than the
+    30s heartbeat) calling `handler.handle_cancellation(assignment_id)` for each selected assignment.
+    The `JoinHandle` is captured and `abort()`ed when the runner event loop exits.
+  - `missed_tick_behavior` set to `Skip` so a slow `handle_cancellation` does not trigger a burst of
+    repeats for the same assignment.
+  - Before halting, the watchdog re-checks the assignment under the lock; if a `LeaseGrant` renewed
+    the lease while the task was scheduling, the halt is skipped.
+  - `LeaseRevoked` hive event arm in the main `run_node_runner` loop immediately halts via
+    `handle_cancellation`, so the agent responds to explicit revocation faster than the timer.
+  - `process_event` `LeaseRevoked` arm clears lease fields; actual halt is left for the run loop
+    where the handler is owned. This differs from the literal spec wording ("add the halt to the
+    process_event arm") but is functionally immediate and keeps the halt path where the handler is
+    accessible.
+- `TaskAssigned` / `TaskCancelled` arms were already guarded with `if let Some(ref h) = handler`;
+  converting `handler` from `Option<AssignmentHandler<C>>` to `Option<Arc<AssignmentHandler<C>>>`
+  keeps those arms compiling via `Arc` deref.
+- Added both the spec-required `self_fence_tests` module and an extra test in `lease_state_tests`
+  (`assignments_to_self_fence_selects_only_running_expired_leases`) covering Running+expired,
+  Running+live, Pending+expired, and Running+no-lease.
