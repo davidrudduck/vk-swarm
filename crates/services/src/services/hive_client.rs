@@ -121,6 +121,10 @@ pub enum NodeMessage {
     /// Periodic lease renewal: the node's in-flight hive-assignment ids to keep alive (SC3, CONTRACT §A).
     #[serde(rename = "lease_heartbeat")]
     LeaseHeartbeat { assignment_ids: Vec<Uuid> },
+    /// Anti-entropy digest: per-entity version snapshot the hive compares against its own state to
+    /// detect silent divergence the ack cursor misses (SC5, CONTRACT §A). Tracer scope: entity_type "task".
+    #[serde(rename = "digest")]
+    Digest { entries: Vec<DigestEntry> },
 }
 
 /// Messages sent from hive to node.
@@ -167,6 +171,11 @@ pub enum HiveMessage {
     /// Lease revoked: the hive reclaimed/expired this assignment; the node must self-fence (SC3).
     #[serde(rename = "lease_revoked")]
     LeaseRevoked { assignment_id: Uuid, reason: String },
+    /// Reply to a node Digest (SC5, CONTRACT §A): `resend_from_seq` asks the node to re-stream its
+    /// op-log from that seq (node-has/hive-lacks heal); `pull_entities` lists shared-task ids the hive
+    /// has that the node lacks (hive-has/node-lacks heal via the bulk-snapshot reconcile leg).
+    #[serde(rename = "digest_result")]
+    DigestResult { resend_from_seq: Option<i64>, pull_entities: Vec<Uuid> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -684,6 +693,16 @@ pub struct BackfillResponseMessage {
     pub entities_sent: u32,
 }
 
+/// One entry in a node→hive anti-entropy Digest (SC5, CONTRACT §A). `entity_id` is the node's LOCAL
+/// task id (= the hive's `shared_tasks.source_task_id` for this node — the id bridge); `version` is the
+/// node's `Task::remote_version`. Mirrored byte-for-byte in the hive crate's `message.rs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestEntry {
+    pub entity_type: String,
+    pub entity_id: Uuid,
+    pub version: i64,
+}
+
 /// Protocol version
 const PROTOCOL_VERSION: u32 = 1;
 
@@ -726,6 +745,12 @@ pub enum HiveEvent {
     },
     /// Lease revoked by the hive — the node must self-fence the assignment's agent.
     LeaseRevoked { assignment_id: Uuid, reason: String },
+    /// Anti-entropy heal directive (SC5): re-stream the op-log from `resend_from_seq` and/or pull the
+    /// listed entities via the bulk-snapshot reconcile leg.
+    DigestResult {
+        resend_from_seq: Option<i64>,
+        pull_entities: Vec<Uuid>,
+    },
 }
 
 /// State of the hive connection.
@@ -1138,6 +1163,30 @@ impl HiveClient {
                         reason,
                     })
                     .await;
+            }
+            HiveMessage::DigestResult {
+                resend_from_seq,
+                pull_entities,
+            } => {
+                tracing::trace!(
+                    ?resend_from_seq,
+                    pull_count = pull_entities.len(),
+                    "received digest_result"
+                );
+                if let Err(e) = self
+                    .event_tx
+                    .send(HiveEvent::DigestResult {
+                        resend_from_seq,
+                        pull_entities,
+                    })
+                    .await
+                {
+                    tracing::warn!(
+                        error = ?e,
+                        "failed to forward DigestResult to node_runner loop — consumer gone; \
+                         reconnect/retry will re-emit the digest next cycle"
+                    );
+                }
             }
             _ => {
                 tracing::debug!(?hive_msg, "ignoring unhandled hive message");

@@ -1,0 +1,9 @@
+Warning: Limited color support detected (TERM=screen). Some visual elements may not render correctly. For better color support in tmux, add to ~/.tmux.conf:
+      set -g default-terminal "tmux-256color"
+      set -ga terminal-overrides ",*256col*:Tc"
+Warning: True color (24-bit) support not detected. Using a terminal with true color enabled will result in a better visual experience.
+Ripgrep is not available. Falling back to GrepTool.
+Error executing tool run_shell_command: Tool "run_shell_command" not found. Did you mean one of: "update_topic", "grep_search", "replace"?
+(node:2752971) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Error executing tool replace: Error: Failed to edit, could not find the string to replace.

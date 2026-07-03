@@ -390,6 +390,40 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         .await?;
         Ok(result.is_some())
     }
+
+    /// All swarm-linked tasks (`shared_task_id IS NOT NULL`) with their `remote_version`, for the SC5
+    /// anti-entropy digest. Read-only; ordered by `id` for a stable digest. NO `limit` cap — the digest
+    /// MUST cover EVERY swarm-linked task in one shot so the hive can detect divergence on any task
+    /// (a `limit` would silently truncate the digest and leave divergences undetected past the batch
+    /// boundary with no cursor/pagination to advance). The node's swarm-linked task count is bounded by
+    /// its local `tasks` table, so the unbounded read is acceptable. The `archived_at IS NULL` filter
+    /// was REMOVED to align with the "all swarm-linked tasks" requirement: an archived task that still
+    /// carries a `shared_task_id` is still part of the swarm link, and the hive must see it in the
+    /// digest to detect if the hive lost it (hive-has/node-lacks divergence includes archived tasks).
+    pub async fn find_digest_entries(
+        pool: &SqlitePool,
+    ) -> Result<Vec<TaskDigestRow>, sqlx::Error> {
+        sqlx::query!(
+            r#"SELECT id as "id!: Uuid", remote_version as "remote_version!: i64"
+               FROM tasks
+               WHERE shared_task_id IS NOT NULL
+               ORDER BY id ASC"#,
+        )
+        .fetch_all(pool)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|r| TaskDigestRow { id: r.id, remote_version: r.remote_version })
+                .collect()
+        })
+    }
+}
+
+/// A node-side anti-entropy digest row: the id-bridge key + the version the node believes the hive holds.
+#[derive(Debug, Clone)]
+pub struct TaskDigestRow {
+    pub id: Uuid,
+    pub remote_version: i64,
 }
 
 #[cfg(test)]
@@ -584,5 +618,63 @@ mod outbox_enqueue_tests {
         assert!(ops.iter().all(|o| o.entity_id == task_id));
         assert!(ops[1].seq > ops[0].seq, "causal order preserved");
         assert_ne!(ops[0].idempotency_key, ops[1].idempotency_key);
+    }
+
+    #[tokio::test]
+    async fn find_digest_entries_returns_only_swarm_linked_tasks_with_version() {
+        let (pool, _tmp) = create_test_pool().await;
+        let project_id = seed_project(&pool).await;
+
+        let linked_id = Uuid::new_v4();
+        let linked = Task::create(
+            &pool,
+            &CreateTask {
+                project_id,
+                title: "linked".into(),
+                description: None,
+                status: None,
+                parent_task_id: None,
+                image_ids: None,
+                shared_task_id: Some(Uuid::new_v4()),
+            },
+            linked_id,
+        )
+        .await
+        .unwrap();
+
+        sqlx::query("UPDATE tasks SET remote_version = 3 WHERE id = ?")
+            .bind(linked.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let _unlinked = Task::create(
+            &pool,
+            &CreateTask {
+                project_id,
+                title: "unlinked".into(),
+                description: None,
+                status: None,
+                parent_task_id: None,
+                image_ids: None,
+                shared_task_id: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap();
+
+        let entries = Task::find_digest_entries(&pool).await.unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "only the swarm-linked (shared_task_id IS NOT NULL) task is in the digest"
+        );
+        assert_eq!(
+            entries[0].remote_version,
+            3,
+            "version is the task's remote_version"
+        );
+        assert_eq!(entries[0].id, linked_id, "entity_id == the linked task's LOCAL id");
     }
 }

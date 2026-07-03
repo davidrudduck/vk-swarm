@@ -315,11 +315,11 @@ Once a project is linked, the following data syncs automatically:
 
 | Data | Direction | Method |
 |------|-----------|--------|
-| Tasks (hive-created) | Hive → Node | ElectricSQL + WebSocket |
-| Tasks (locally-created) | Node → Hive | WebSocket (`TaskSync`) |
+| Tasks (hive-created) | Hive → Node | WS activity stream (ADR-0007) |
+| Tasks (locally-created) | Node → Hive | Durable outbox → `OpBatch` / `OpAck` |
 | Labels | Bidirectional | WebSocket (`LabelSync`) |
-| Task Attempts | Node → Hive | HiveSyncService (background) |
-| Execution Processes | Node → Hive | HiveSyncService (background) |
+| Task Attempts | Node → Hive | Durable outbox → `OpBatch` |
+| Execution Processes | Node → Hive | Durable outbox → `OpBatch` |
 | Log Entries | Node → Hive | HiveSyncService (batched) |
 
 The **HiveSyncService** runs automatically in the background (every 5 seconds) to sync execution data. This is offline-first: data is queued locally if the Hive is unreachable and synced when connection is restored.

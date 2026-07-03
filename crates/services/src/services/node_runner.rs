@@ -25,6 +25,11 @@ use super::hive_client::{
 use super::node_cache;
 use super::remote_client::{RemoteClient, RemoteClientError};
 
+/// Max number of op-log rows to re-stream in one `OpBatch` for a digest heal (SC5).
+/// Bounded to avoid unbounded bursts when the hive's `resend_from_seq` is far behind; subsequent
+/// digest cycles pick up further rows. Matches the hive-sync batch size order of magnitude.
+const RESTREAM_LIMIT: i64 = 500;
+
 /// Configuration for the node runner loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct NodeRunnerConfig {
@@ -521,6 +526,17 @@ impl NodeRunnerHandle {
                 // The actual halt is performed in the run_node_runner event loop so we have access
                 // to the AssignmentHandler; here we only clear the lease state.
             }
+            HiveEvent::DigestResult {
+                resend_from_seq,
+                pull_entities,
+            } => {
+                tracing::trace!(
+                    ?resend_from_seq,
+                    pull_count = pull_entities.len(),
+                    "digest_result received"
+                );
+                // Heal (re-stream + reconcile) happens in run_node_runner where pool+remote_client live.
+            }
         }
 
         Some(event)
@@ -793,7 +809,11 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                     linked_projects,
                     swarm_labels,
                 }) => {
-                    // Sync remote projects into unified schema on connect
+                    // ADR-0007 SINGLE LIVE INBOUND CHANNEL: the bulk-snapshot reconcile runs ONLY here,
+                    // on (re)connect — it is cold-start / gap-fill, NOT a second continuous channel.
+                    // The WS activity stream (project_watcher_task → ActivityProcessor::process_event)
+                    // is the single LIVE inbound path. Do NOT call sync_remote_projects on a timer / in a
+                    // periodic loop — that re-introduces the double-delivery class SC7 eliminates.
                     if let Some(ref client) = remote_client
                         && let Err(e) =
                             sync_remote_projects(&db.pool, client, organization_id, node_id).await
@@ -1062,6 +1082,83 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                         tracing::warn!("lease revoked but no container/handler available to fence");
                     }
                 }
+                Some(HiveEvent::DigestResult {
+                    resend_from_seq,
+                    pull_entities,
+                }) => {
+                    // (a) node-has/hive-lacks: re-stream the op-log from the hive's conservative cursor.
+                    if let Some(mut from_seq) = resend_from_seq {
+                        use db::models::node_outbox::OutboxRepository;
+                        // Re-stamp fencing tokens for task ops (mirrors the live-send path in
+                        // hive_sync.rs:231-241). Outbox rows are enqueued with fencing_token=None
+                        // (queries.rs:362); the live send path stamps the token in-memory from
+                        // active_assignments before sending. The re-stream path MUST do the same
+                        // or the hive's SC3 guard (session.rs:2123-2124) rejects every task op
+                        // as stale (None => true).
+                        let token_by_task: HashMap<Uuid, i64> = {
+                            let s = handle.state.read().await;
+                            s.active_assignments
+                                .values()
+                                .filter_map(|a| Some((a.local_task_id?, a.fencing_token?)))
+                                .collect()
+                        };
+                        // Paginate: the floor is `Some(1)` so a node with >RESTREAM_LIMIT ops would
+                        // never reach the lost op without cursor advancement (F2 fix). Loop until a
+                        // batch returns < RESTREAM_LIMIT rows (exhausted). The hive apply is
+                        // idempotent (ON CONFLICT DO NOTHING), so the burst is safe.
+                        loop {
+                            match OutboxRepository::peek_from_seq(&db.pool, from_seq, RESTREAM_LIMIT)
+                                .await
+                            {
+                                Ok(rows) if !rows.is_empty() => {
+                                    let batch_size = rows.len() as i64;
+                                    let last_seq = rows.last().unwrap().seq;
+                                    let ops: Vec<super::hive_client::OutboxOp> = rows
+                                        .into_iter()
+                                        .map(|r| restream_row_to_ws_op(r, &token_by_task))
+                                        .collect();
+                                    if let Err(e) = command_tx
+                                        .send(super::hive_client::NodeMessage::OpBatch { ops })
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            error = ?e,
+                                            "Failed to re-stream op-log for digest heal"
+                                        );
+                                        break;
+                                    }
+                                    if batch_size < RESTREAM_LIMIT {
+                                        break;
+                                    }
+                                    from_seq = last_seq + 1;
+                                }
+                                Ok(_) => break,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = ?e,
+                                        "Failed to read op-log for digest re-stream"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // (b) hive-has/node-lacks: pull via the bulk-snapshot reconcile leg
+                    // (ADR-0008 gap-fill).
+                    if !pull_entities.is_empty() {
+                        let (org_id, nid) = {
+                            let s = handle.state.read().await;
+                            (s.organization_id, s.node_id)
+                        };
+                        if let (Some(client), Some(org_id), Some(nid)) =
+                            (remote_client.as_ref(), org_id, nid)
+                            && let Err(e) =
+                                sync_remote_projects(&db.pool, client, org_id, nid).await
+                        {
+                            tracing::warn!(error = ?e, "Failed to pull entities for digest heal");
+                        }
+                    }
+                }
                 Some(_) => {
                     // Other events are handled in process_event
                 }
@@ -1077,6 +1174,32 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
     });
 
     Some(context)
+}
+
+/// Map a db `OutboxOp` row into the WS `OutboxOp` wire shape for a digest heal re-stream.
+///
+/// This is a REPLAY, not a fresh enqueue — but the stored `fencing_token` is None for task ops
+/// (queries.rs:362 enqueues with None; the live send path stamps it in-memory from
+/// `active_assignments`). We must re-stamp task ops here too, mirroring hive_sync.rs:251-257,
+/// or the hive's SC3 guard rejects them as stale (session.rs:2123-2124: `None => true`).
+fn restream_row_to_ws_op(
+    r: db::models::node_outbox::OutboxOp,
+    token_by_task: &HashMap<Uuid, i64>,
+) -> super::hive_client::OutboxOp {
+    let fencing_token = if r.entity_type == "task" {
+        token_by_task.get(&r.entity_id).copied().or(r.fencing_token)
+    } else {
+        r.fencing_token
+    };
+    super::hive_client::OutboxOp {
+        seq: r.seq,
+        op_type: r.op_type,
+        entity_type: r.entity_type,
+        entity_id: r.entity_id,
+        payload: r.payload,
+        idempotency_key: r.idempotency_key,
+        fencing_token,
+    }
 }
 
 /// Sync remote projects and their tasks into the unified schema.
@@ -1174,15 +1297,18 @@ async fn sync_remote_project_tasks(
         active_task_ids.push(task.id);
     }
 
-    // Handle deleted tasks
+    // Handle deleted tasks — SOFT-UNLINK (ADR-0007 one delete semantic): clear shared_task_id,
+    // retain the local row + its task_attempt. Identical outcome to the WS `task.deleted` leg.
     for deleted_id in snapshot.deleted_task_ids {
-        Task::delete_by_shared_task_id(pool, deleted_id).await?;
+        Task::unlink_by_shared_task_id(pool, deleted_id).await?;
     }
 
-    // Clean up stale shared tasks for this project
-    if !active_task_ids.is_empty() {
-        Task::delete_stale_shared_tasks(pool, local_project_id, &active_task_ids).await?;
-    }
+    // Soft-unlink stale shared tasks for this project (no longer present in the snapshot).
+    // NOTE: run UNCONDITIONALLY — an empty `active_task_ids` means the hive dropped every shared task
+    // in this project, so `unlink_stale_shared_tasks` clears ALL linked tasks (no `NOT IN` filter).
+    // The previous `if !active_task_ids.is_empty()` guard skipped the unlink on an empty snapshot,
+    // leaving stale links behind.
+    Task::unlink_stale_shared_tasks(pool, local_project_id, &active_task_ids).await?;
 
     Ok(())
 }
@@ -1728,6 +1854,61 @@ pub async fn handle_backfill_attempt(
             }
             Ok(count)
         }
+    }
+}
+
+#[cfg(test)]
+mod restream_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn make_row(entity_type: &str, entity_id: Uuid, fencing_token: Option<i64>) -> db::models::node_outbox::OutboxOp {
+        db::models::node_outbox::OutboxOp {
+            id: Uuid::new_v4(),
+            seq: 1,
+            op_type: format!("{}.upsert", entity_type),
+            entity_type: entity_type.to_string(),
+            entity_id,
+            payload: serde_json::Value::String(String::new()),
+            idempotency_key: "k".into(),
+            fencing_token,
+            created_at: Utc::now(),
+            acked_at: None,
+        }
+    }
+
+    /// CF1 (round-4 tournament): outbox rows are enqueued with `fencing_token: None`
+    /// (queries.rs:362). The re-stream path MUST re-stamp task ops from `active_assignments`,
+    /// mirroring the live send path (hive_sync.rs:231-241), or the hive's SC3 guard rejects
+    /// every task op as stale (`None => true`, session.rs:2123-2124).
+    #[test]
+    fn restream_re_stamps_fencing_token_for_task_op() {
+        let task_id = Uuid::new_v4();
+        let mut token_by_task = HashMap::new();
+        token_by_task.insert(task_id, 7i64);
+
+        let row = make_row("task", task_id, None);
+        let op = restream_row_to_ws_op(row, &token_by_task);
+        assert_eq!(op.fencing_token, Some(7), "task op must be re-stamped from active_assignments");
+    }
+
+    /// Non-task ops (e.g. log) keep their stored fencing_token as-is (no assignment mapping).
+    #[test]
+    fn restream_preserves_stored_token_for_non_task_op() {
+        let token_by_task = HashMap::new();
+        let row = make_row("log", Uuid::new_v4(), Some(42));
+        let op = restream_row_to_ws_op(row, &token_by_task);
+        assert_eq!(op.fencing_token, Some(42), "non-task op keeps stored token");
+    }
+
+    /// Task op with no active assignment falls back to the stored token (None → None).
+    /// The hive will reject it as stale, which is correct — the node has no lease for that task.
+    #[test]
+    fn restream_falls_back_to_stored_token_when_no_assignment() {
+        let token_by_task = HashMap::new();
+        let row = make_row("task", Uuid::new_v4(), None);
+        let op = restream_row_to_ws_op(row, &token_by_task);
+        assert_eq!(op.fencing_token, None, "no assignment → stored None (hive will reject as stale)");
     }
 }
 

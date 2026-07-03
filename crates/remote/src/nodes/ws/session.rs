@@ -21,11 +21,11 @@ use super::{
     connection::ConnectionManager,
     message::{
         AttemptSyncMessage, AuthResultMessage, BackfillResponseMessage, DeregisterMessage,
-        ExecutionSyncMessage, HeartbeatMessage, HiveMessage, LinkProjectMessage, LinkedProjectInfo,
-        LogsBatchMessage, NodeMessage, NodeRemovedMessage, OutboxOp, PROTOCOL_VERSION,
-        ProjectSyncMessage, ProjectsSyncMessage, SwarmLabelInfo, TaskExecutionStatus,
-        TaskOutputMessage, TaskProgressMessage, TaskStatusMessage, TaskSyncMessage,
-        TaskSyncResponseMessage, UnlinkProjectMessage,
+        DigestEntry, ExecutionSyncMessage, HeartbeatMessage, HiveMessage, LinkProjectMessage,
+        LinkedProjectInfo, LogsBatchMessage, NodeMessage, NodeRemovedMessage, OutboxOp,
+        PROTOCOL_VERSION, ProjectSyncMessage, ProjectsSyncMessage, SwarmLabelInfo,
+        TaskExecutionStatus, TaskOutputMessage, TaskProgressMessage, TaskStatusMessage,
+        TaskSyncMessage, TaskSyncResponseMessage, UnlinkProjectMessage,
     },
 };
 use crate::{
@@ -584,6 +584,9 @@ async fn handle_node_message(
         }
         NodeMessage::LeaseHeartbeat { assignment_ids } => {
             handle_lease_heartbeat(node_id, assignment_ids, pool, ws_sender).await
+        }
+        NodeMessage::Digest { entries } => {
+            handle_digest(node_id, entries, pool, ws_sender).await
         }
     }
 }
@@ -2083,13 +2086,15 @@ async fn handle_op_batch_apply(
             // skip the lease+token fence (the owner does not need a lease to write its
             // own task). Only hive-assigned tasks (owner_node_id != node_id or NULL)
             // require the fence.
-            let owner_node_id: Option<Uuid> = sqlx::query_scalar(
-                r#"SELECT owner_node_id FROM shared_tasks WHERE id = $1 AND deleted_at IS NULL"#,
-            )
-            .bind(shared_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| HandleError::Database(e.to_string()))?;
+            let owner_node_id: Option<Uuid> =
+                sqlx::query_scalar::<_, Option<Uuid>>(
+                    r#"SELECT owner_node_id FROM shared_tasks WHERE id = $1 AND deleted_at IS NULL"#,
+                )
+                .bind(shared_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?
+                .flatten();
 
             if owner_node_id == Some(node_id) {
                 // Node-owned task — bypass the fence. Proceed to status mapping + upsert.
@@ -2120,28 +2125,47 @@ async fn handle_op_batch_apply(
                         Some(tok) => tok < current_token,
                     };
                     if stale {
-                        // REJECT (permanent): do NOT upsert, do NOT record node_op_log, do NOT
-                        // advance applied_through_seq past this op. Mirror 106's PARK control-flow
-                        // of NOT advancing (break, not continue), but this is a permanent reject,
-                        // not a transient park. Emit LeaseRevoked so the partitioned writer learns
-                        // its lease is gone.
+                        // REJECT (permanent): the op carries a stale fencing token, so we
+                        // skip it permanently. Unlike a transient park, this op will NEVER
+                        // be valid — record it in node_op_log and advance applied_through_seq
+                        // so the outbox drains past it. Without SKIP+ADVANCE the op stays
+                        // `acked_at IS NULL` forever, and peek_unacked's head-of-line
+                        // ordering wedges ALL subsequent ops for this node (round-5 CF1).
+                        // Emit LeaseRevoked so the partitioned writer learns its lease is gone.
                         tracing::warn!(
                             node_id = %node_id,
                             seq = op.seq,
                             assignment_id = %assignment_id,
                             op_token = ?op.fencing_token,
                             current_token = current_token,
-                            "op_batch: reject (stale fencing token) — LeaseRevoked"
+                            "op_batch: skip+advance (stale fencing token) — LeaseRevoked"
                         );
+                        sqlx::query(
+                            r#"
+                            INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                            VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                            "#,
+                        )
+                        .bind(node_id)
+                        .bind(&op.idempotency_key)
+                        .bind(op.seq)
+                        .bind(&op.op_type)
+                        .bind(op.entity_id)
+                        .execute(pool)
+                        .await
+                        .map_err(|e| HandleError::Database(e.to_string()))?;
+                        applied_through_seq = op.seq;
                         revokes.push((assignment_id, "stale fencing token".to_string()));
                         break;
                     }
                 } else {
                     // No active assignment for a hive-managed task (shared_task_id present):
                     // the lease was reclaimed or the task was completed/cancelled. A late write
-                    // from a partitioned node MUST NOT overwrite the completed task (SC3). Drop
-                    // the op and stop processing this batch — the node's self-fence watchdog
-                    // and the reclaim sweep's LeaseRevoked event will halt the node.
+                    // from a partitioned node MUST NOT overwrite the completed task (SC3).
+                    // Skip+advance (permanent reject): record in node_op_log + advance cursor so
+                    // the outbox drains past this op. Without SKIP+ADVANCE the op stays
+                    // `acked_at IS NULL` forever, wedging the op-log head-of-line (round-5 CF1).
                     //
                     // Emit LeaseRevoked so the partitioned writer learns its lease is gone
                     // (tournament R1/D — without this, the node retries unacked ops forever).
@@ -2153,7 +2177,7 @@ async fn handle_op_batch_apply(
                         seq = op.seq,
                         shared_task_id = %shared_id,
                         op_token = ?op.fencing_token,
-                        "op_batch: reject (no active assignment for hive-managed task) — lease revoked or completed"
+                        "op_batch: skip+advance (no active assignment for hive-managed task) — lease revoked or completed"
                     );
                     let assignment_id: Option<Uuid> = sqlx::query_scalar(
                         r#"SELECT id FROM node_task_assignments
@@ -2172,6 +2196,22 @@ async fn handle_op_batch_apply(
                             "no active assignment (lease revoked or completed)".to_string(),
                         ));
                     }
+                    sqlx::query(
+                        r#"
+                        INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                        VALUES ($1, $2, $3, $4, $5)
+                        ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                        "#,
+                    )
+                    .bind(node_id)
+                    .bind(&op.idempotency_key)
+                    .bind(op.seq)
+                    .bind(&op.op_type)
+                    .bind(op.entity_id)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| HandleError::Database(e.to_string()))?;
+                    applied_through_seq = op.seq;
                     break;
                 }
             }
@@ -2368,6 +2408,114 @@ async fn handle_op_batch_apply(
     }
 
     Ok((applied_through_seq, revokes))
+}
+
+/// Pure compare result for the SC5 digest handler — the heal directives the hive replies with.
+/// Split out of `handle_digest` so tests can drive the compare ws-free.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DigestResultParts {
+    /// `Some(seq)` directs the node to re-stream its `node_op_log` from `seq` (inclusive) when the
+    /// hive detects a task the node has but the hive lacks (node-has/hive-lacks). The conservative
+    /// floor `Some(1)` re-streams all retained ops; the hive apply is idempotent
+    /// (`ON CONFLICT DO NOTHING`), so a replay never harms a converged set. `None` when in sync.
+    /// Do NOT use `MAX(seq)` (tournament R2/F4: a lost op at seq 3 while high-water is 10 would be
+    /// missed by a high-water replay).
+    resend_from_seq: Option<i64>,
+    /// `source_task_id`s the hive holds but the node's digest omitted (hive-has/node-lacks) — the
+    /// node pulls these via the reconcile leg. Empty when in sync.
+    pull_entities: Vec<Uuid>,
+}
+
+/// Handle a `NodeMessage::Digest` (SC5): compare the node's digest entries against the hive's
+/// `shared_tasks` for that node and reply with a `HiveMessage::DigestResult` directing
+/// convergence (resend + pull). Heal signal is entity EXISTENCE (set-difference on `entity_id`),
+/// NOT version equality — `remote_version` is noisy (advisor #3). Tracer scope:
+/// `entity_type == "task"` only. Always replies, even when both directives are empty/None
+/// (a converged sweep is a no-op ack).
+async fn handle_digest(
+    node_id: Uuid,
+    entries: &[DigestEntry],
+    pool: &PgPool,
+    ws_sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+) -> Result<(), HandleError> {
+    let parts = handle_digest_compare(pool, node_id, entries).await?;
+    send_message(
+        ws_sender,
+        &HiveMessage::DigestResult {
+            resend_from_seq: parts.resend_from_seq,
+            pull_entities: parts.pull_entities,
+        },
+    )
+    .await
+    .map_err(|_| HandleError::Send)?;
+    Ok(())
+}
+
+/// WS-free compare core: returns the heal directives for the given digest without sending.
+/// Tests call this directly. Tracer scope: `entity_type == "task"` only.
+async fn handle_digest_compare(
+    pool: &PgPool,
+    node_id: Uuid,
+    entries: &[DigestEntry],
+) -> Result<DigestResultParts, HandleError> {
+    use std::collections::HashSet;
+    use crate::db::tasks::SharedTaskRepository;
+
+    // 1. The node's view: entity_ids of task entries (the id bridge — node local task id).
+    let node_ids: HashSet<Uuid> = entries
+        .iter()
+        .filter(|e| e.entity_type == "task")
+        .map(|e| e.entity_id)
+        .collect();
+
+    // 2. The hive's view: source_task_ids the hive holds for this node.
+    //    ACTIVE rows — for the hive-has/node-lacks pull set.
+    //    SOFT-DELETED rows — tombstones the node must learn to unlink. Routing them through
+    //    `pull_entities` triggers the reconcile leg (`deleted_task_ids` → `unlink_by_shared_task_id`),
+    //    closing the digest convergence loop (F1 fix).
+    let repo = SharedTaskRepository::new(pool);
+    let hive = repo
+        .list_source_task_versions_for_node(node_id)
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?;
+    let hive_ids: HashSet<Uuid> = hive.iter().map(|h| h.source_task_id).collect();
+
+    let hive_deleted_ids: HashSet<Uuid> = repo
+        .list_soft_deleted_source_task_ids_for_node(node_id)
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?
+        .into_iter()
+        .collect();
+
+    // 3. hive-has / node-lacks → pull_entities (the node pulls what the hive has).
+    //    PLUS: soft-deleted tasks the node still reports as active → also pull_entities
+    //    (the reconcile leg will unlink them via `deleted_task_ids`).
+    let mut pull_entities: Vec<Uuid> = hive_ids.difference(&node_ids).copied().collect();
+    for id in node_ids.intersection(&hive_deleted_ids) {
+        pull_entities.push(*id);
+    }
+
+    // 4. node-has / hive-lacks → resend_from_seq = Some(1) (conservative floor). Any non-empty
+    //    difference means the hive is missing at least one task the node has; re-stream all
+    //    retained ops (idempotent ON CONFLICT DO NOTHING). Never MAX(seq) (R2/F4).
+    //    A soft-deleted task is NOT "hive-lacks" — the hive HAS it (tombstoned); it goes to
+    //    `pull_entities` instead, so it does NOT trigger a re-stream (which would be a no-op
+    //    anyway — `handle_op_batch_apply` skips `seen` ops).
+    //
+    //    The test must be a SINGLE intersection: one id absent from BOTH `hive_ids` and
+    //    `hive_deleted_ids`. Two independent `.difference().is_some()` checks (the prior code)
+    //    test different ids — e.g. {A(tombstoned), B(in-sync)} yields non-empty for both
+    //    differences but no id is genuinely missing. Round-4 tournament finding CF2.
+    let resend_from_seq = if node_ids
+        .iter()
+        .any(|id| !hive_ids.contains(id) && !hive_deleted_ids.contains(id))
+    {
+        Some(1i64)
+    } else {
+        None
+    };
+
+    Ok(DigestResultParts { resend_from_seq, pull_entities })
 }
 
 /// Handle a `NodeMessage::OpBatch` (SC2): apply each op idempotently to `node_op_log` +
@@ -3158,6 +3306,475 @@ mod op_batch_tests {
 }
 
 #[cfg(test)]
+mod digest_tests {
+    use super::*;
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    use crate::nodes::ws::message::DigestEntry;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+    async fn create_pool() -> PgPool {
+        sqlx::PgPool::connect(&database_url().unwrap())
+            .await
+            .expect("connect")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, last_heartbeat_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+        node_id
+    }
+
+    async fn create_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm project");
+        sp_id
+    }
+
+    async fn create_node_local_project(
+        pool: &PgPool,
+        node_id: Uuid,
+        local_project_id: Uuid,
+        swarm_project_id: Option<Uuid>,
+    ) {
+        let res = sqlx::query(
+            r#"
+            INSERT INTO node_local_projects (node_id, local_project_id, name, git_repo_path, swarm_project_id)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("local-proj")
+        .bind("/repo/path")
+        .bind(swarm_project_id)
+        .execute(pool)
+        .await;
+        if let Err(e) = res {
+            eprintln!("create_node_local_project (non-fatal): {}", e);
+        }
+    }
+
+    async fn create_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+        local_project_id: Uuid,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("/repo/path")
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm_project_nodes link");
+    }
+
+    async fn cleanup_node_op_log(pool: &PgPool, node_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM node_op_log WHERE node_id = $1")
+            .bind(node_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn cleanup_shared_task(pool: &PgPool, source_node_id: Uuid, source_task_id: Uuid) {
+        let _ = sqlx::query(
+            "DELETE FROM shared_tasks WHERE source_node_id = $1 AND source_task_id = $2",
+        )
+        .bind(source_node_id)
+        .bind(source_task_id)
+        .execute(pool)
+        .await;
+    }
+
+    /// Insert a `shared_tasks` row the hive holds for `node_id` with the given `source_task_id`
+    /// and `version`. project_id is NULL (swarm_project_id is the source of truth post-P4).
+    async fn seed_hive_task(
+        pool: &PgPool,
+        org_id: Uuid,
+        swarm_project_id: Uuid,
+        source_node_id: Uuid,
+        source_task_id: Uuid,
+        version: i64,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO shared_tasks
+                (organization_id, swarm_project_id, source_node_id, source_task_id,
+                 title, status, version)
+            VALUES ($1, $2, $3, $4, 'seed', 'todo', $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(swarm_project_id)
+        .bind(source_node_id)
+        .bind(source_task_id)
+        .bind(version)
+        .execute(pool)
+        .await
+        .expect("seed shared_tasks row");
+    }
+
+    /// Seed a `node_op_log` row for the R2/F4 high-water scenario: a lost op at `lost_seq`
+    /// while `MAX(seq) = high_seq`. The digest compare does not read node_op_log, but the row
+    /// proves the scenario the conservative floor defends against (a MAX(seq) replay would miss
+    /// the older lost op).
+    async fn seed_node_op_log_row(
+        pool: &PgPool,
+        node_id: Uuid,
+        idempotency_key: &str,
+        seq: i64,
+        entity_id: Uuid,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+            VALUES ($1, $2, $3, 'task.upsert', $4)
+            "#,
+        )
+        .bind(node_id)
+        .bind(idempotency_key)
+        .bind(seq)
+        .bind(entity_id)
+        .execute(pool)
+        .await
+        .expect("seed node_op_log row");
+    }
+
+    #[tokio::test]
+    async fn digest_detects_bidirectional_divergence_and_replies_resend_and_pull() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        // HIVE-HAS / NODE-LACKS: a shared_tasks row the hive holds for this node that the node's
+        // digest will NOT mention.
+        let hid = Uuid::new_v4();
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, hid, 1).await;
+
+        // NODE-HAS / HIVE-LACKS: the node's digest WILL include NID, for which NO shared_tasks row
+        // exists (source_node_id=node, source_task_id=NID absent).
+        let nid = Uuid::new_v4();
+
+        // Seed node_op_log with a HIGH high-water (seq=10) but the lost entity NID's op was an
+        // OLDER seq (3) the hive never durably applied — the tournament R2/F4 case: a replay from
+        // the high-water would MISS seq 3.
+        seed_node_op_log_row(&pool, node_id, &format!("lost:{}", nid), 3, nid).await;
+        seed_node_op_log_row(&pool, node_id, "high-water", 10, Uuid::new_v4()).await;
+
+        let entries = vec![DigestEntry {
+            entity_type: "task".into(),
+            entity_id: nid,
+            version: 1,
+        }];
+        let result = handle_digest_compare(&pool, node_id, &entries)
+            .await
+            .expect("compare");
+
+        // NODE-HAS/HIVE-LACKS → re-stream from the floor (<= any lost op's seq), NOT MAX(seq).
+        assert_eq!(
+            result.resend_from_seq,
+            Some(1),
+            "node-has/hive-lacks → re-stream from the floor (<= any lost op's seq), NOT MAX(seq)"
+        );
+        // HIVE-HAS/NODE-LACKS → the hive lists HID for the node to PULL via the reconcile leg.
+        assert!(
+            result.pull_entities.contains(&hid),
+            "hive-has/node-lacks → node pulls this entity"
+        );
+        assert!(
+            !result.pull_entities.contains(&nid),
+            "an entity the node already has is NOT pulled"
+        );
+
+        // Cleanup. No manual reset_*/repair step — convergence is purely the DigestResult.
+        cleanup_shared_task(&pool, node_id, hid).await;
+        cleanup_node_op_log(&pool, node_id).await;
+        let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM node_local_projects WHERE node_id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM swarm_projects WHERE id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(&pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn digest_in_sync_replies_empty() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        // Seed one shared_tasks row (source_task_id = SID) AND a digest entry for SID at the same
+        // version → in sync.
+        let sid = Uuid::new_v4();
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, sid, 1).await;
+
+        let entries = vec![DigestEntry {
+            entity_type: "task".into(),
+            entity_id: sid,
+            version: 1,
+        }];
+        let result = handle_digest_compare(&pool, node_id, &entries)
+            .await
+            .expect("compare");
+        assert!(
+            result.resend_from_seq.is_none() && result.pull_entities.is_empty(),
+            "no divergence → no heal directives (idempotent: a converged sweep is a no-op)"
+        );
+
+        cleanup_shared_task(&pool, node_id, sid).await;
+        let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM node_local_projects WHERE node_id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM swarm_projects WHERE id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(&pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn digest_routes_soft_deleted_task_to_pull_not_restream() {
+        // F1 fix: a task the hive has SOFT-DELETED (tombstoned) but the node still reports as active
+        // must go to `pull_entities` (so the reconcile leg unlinks it), NOT trigger `resend_from_seq`
+        // (re-streaming would be a no-op — `handle_op_batch_apply` skips `seen` ops).
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        // Seed a shared_tasks row then SOFT-DELETE it (tombstone).
+        let sid = Uuid::new_v4();
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, sid, 1).await;
+        let _ = sqlx::query("UPDATE shared_tasks SET deleted_at = NOW() WHERE source_node_id = $1 AND source_task_id = $2")
+            .bind(node_id)
+            .bind(sid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Node still reports sid as active.
+        let entries = vec![DigestEntry {
+            entity_type: "task".into(),
+            entity_id: sid,
+            version: 1,
+        }];
+        let result = handle_digest_compare(&pool, node_id, &entries)
+            .await
+            .expect("compare");
+
+        // Soft-deleted → routed to pull_entities (reconcile leg unlinks it), NOT resend_from_seq.
+        assert!(
+            result.pull_entities.contains(&sid),
+            "soft-deleted task the node still has → pull_entities (reconcile unlinks it)"
+        );
+        assert_eq!(
+            result.resend_from_seq, None,
+            "soft-deleted task is NOT hive-lacks → no re-stream (would be a no-op)"
+        );
+
+        cleanup_shared_task(&pool, node_id, sid).await;
+        let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM node_local_projects WHERE node_id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM swarm_projects WHERE id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(&pool)
+            .await;
+    }
+    #[tokio::test]
+    async fn digest_mixed_tombstoned_and_in_sync_no_spurious_restream() {
+        // CF2 (round-4 tournament): the prior two-independent-differences `&&` test produced a
+        // spurious `resend_from_seq = Some(1)` when the node has one tombstoned task (goes to
+        // pull_entities) AND one in-sync task. The fix requires a SINGLE id absent from both
+        // `hive_ids` and `hive_deleted_ids` (genuine hive-lacks).
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        // A = tombstoned on hive; B = active + in-sync on hive.
+        let sid_a = Uuid::new_v4();
+        let sid_b = Uuid::new_v4();
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, sid_a, 1).await;
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, sid_b, 1).await;
+        let _ = sqlx::query(
+            "UPDATE shared_tasks SET deleted_at = NOW() WHERE source_node_id = $1 AND source_task_id = $2",
+        )
+        .bind(node_id)
+        .bind(sid_a)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Node reports both A and B as active.
+        let entries = vec![
+            DigestEntry { entity_type: "task".into(), entity_id: sid_a, version: 1 },
+            DigestEntry { entity_type: "task".into(), entity_id: sid_b, version: 1 },
+        ];
+        let result = handle_digest_compare(&pool, node_id, &entries)
+            .await
+            .expect("compare");
+
+        // A is tombstoned → pull_entities (reconcile unlinks). B is in-sync → no action.
+        // No id is genuinely missing from the hive → NO re-stream.
+        assert!(
+            result.pull_entities.contains(&sid_a),
+            "tombstoned task A → pull_entities"
+        );
+        assert_eq!(
+            result.resend_from_seq, None,
+            "mixed tombstoned + in-sync → no spurious re-stream (CF2 fix)"
+        );
+
+        cleanup_shared_task(&pool, node_id, sid_a).await;
+        cleanup_shared_task(&pool, node_id, sid_b).await;
+        let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM node_local_projects WHERE node_id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM swarm_projects WHERE id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(&pool)
+            .await;
+    }
+}
+
+#[cfg(test)]
 mod fencing_tests {
     use super::*;
     use crate::db::task_assignments::TaskAssignmentRepository;
@@ -3497,17 +4114,18 @@ mod fencing_tests {
             Some(pre_status),
             "stale-token op MUST NOT update shared_tasks"
         );
-        // (b) node_op_log has NO row for the op's idempotency_key.
+        // (b) node_op_log HAS a row for the op's idempotency_key (SKIP+ADVANCE: the op is
+        // permanently rejected, but it IS recorded so the outbox drains past it — without
+        // this, peek_unacked's head-of-line ordering wedges ALL subsequent ops for this node).
         assert_eq!(
             node_op_log_count_for_key(&pool, node_a, &key).await,
-            0,
-            "rejected op MUST NOT record a node_op_log dedup row"
+            1,
+            "rejected op MUST record a node_op_log dedup row (skip+advance, not wedge)"
         );
-        // (c) returned seq does NOT advance past the rejected op's seq (high-water stays at
-        // the pre-reject value — break, not continue).
+        // (c) returned seq advances past the rejected op (SKIP+ADVANCE, not bare break).
         assert_eq!(
-            seq, 0,
-            "applied_through_seq MUST NOT advance past the rejected op (break, not continue)"
+            seq, 1,
+            "applied_through_seq MUST advance past the rejected op (skip+advance)"
         );
         // (d) the revoke vec contains (assignment_id, "stale fencing token").
         assert_eq!(revokes.len(), 1, "exactly one LeaseRevoked emitted");
@@ -3717,16 +4335,17 @@ mod fencing_tests {
             Some(pre_status),
             "late op for completed task MUST NOT update shared_tasks (SC3)"
         );
-        // (b) node_op_log has NO row for the op's idempotency_key.
+        // (b) node_op_log HAS a row (SKIP+ADVANCE: the op is permanently rejected, but it IS
+        // recorded so the outbox drains past it — prevents head-of-line wedge).
         assert_eq!(
             node_op_log_count_for_key(&pool, node_a, &key).await,
-            0,
-            "rejected op MUST NOT record a node_op_log dedup row"
+            1,
+            "rejected op MUST record a node_op_log dedup row (skip+advance, not wedge)"
         );
-        // (c) seq does NOT advance past the rejected op.
+        // (c) seq advances past the rejected op (SKIP+ADVANCE, not bare break).
         assert_eq!(
-            seq, 0,
-            "applied_through_seq MUST NOT advance past the rejected op (break, not continue)"
+            seq, 1,
+            "applied_through_seq MUST advance past the rejected op (skip+advance)"
         );
 
         cleanup_org(&pool, org_id).await;
@@ -4350,12 +4969,12 @@ mod status_guard_tests {
         );
         assert_eq!(
             node_op_log_count_for_key(&pool, node_a, &key_a).await,
-            0,
-            "(a) rejected op MUST NOT record a node_op_log dedup row"
+            1,
+            "(a) rejected op MUST record a node_op_log dedup row (skip+advance, not wedge)"
         );
         assert_eq!(
-            seq_a, 0,
-            "(a) applied_through_seq MUST NOT advance past the rejected op (break)"
+            seq_a, 1,
+            "(a) applied_through_seq MUST advance past the rejected op (skip+advance)"
         );
 
         // (b) Stale token: node_a claims (T1), node_b reclaims (T2 > T1). node_a sends an
@@ -4401,12 +5020,12 @@ mod status_guard_tests {
         );
         assert_eq!(
             node_op_log_count_for_key(&pool, node_a, &key_b).await,
-            0,
-            "(b) rejected op MUST NOT record a node_op_log dedup row"
+            1,
+            "(b) rejected op MUST record a node_op_log dedup row (skip+advance, not wedge)"
         );
         assert_eq!(
-            seq_b, 0,
-            "(b) applied_through_seq MUST NOT advance past the rejected op (break)"
+            seq_b, 2,
+            "(b) applied_through_seq MUST advance past the rejected op (skip+advance)"
         );
         assert_eq!(revokes_b.len(), 1, "(b) exactly one LeaseRevoked emitted");
         assert_eq!(

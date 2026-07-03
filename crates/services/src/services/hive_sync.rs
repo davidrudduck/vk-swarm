@@ -36,8 +36,8 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::hive_client::{
-    AttemptSyncMessage, ExecutionSyncMessage, LocalProjectSyncInfo, LogsBatchMessage, NodeMessage,
-    OutboxOp, ProjectsSyncMessage, SyncLogEntry, TaskOutputType, TaskSyncMessage,
+    AttemptSyncMessage, DigestEntry, ExecutionSyncMessage, LocalProjectSyncInfo, LogsBatchMessage,
+    NodeMessage, OutboxOp, ProjectsSyncMessage, SyncLogEntry, TaskOutputType, TaskSyncMessage,
 };
 
 /// Configuration for the Hive sync service.
@@ -206,6 +206,14 @@ impl HiveSyncService {
             warn!(error = ?e, "Failed to drain node_outbox op-log");
         }
 
+        // Emit the anti-entropy digest (SC5): a per-entity version snapshot the hive compares against
+        // its own state to detect silent divergence the ack cursor misses, then replies DigestResult
+        // (503). Read-only — does NOT mark anything synced/acked. Runs every cycle (so "on reconnect" =
+        // the first cycle after the channel is re-established); the heal is applied by 504.
+        if let Err(e) = self.sync_digest().await {
+            warn!(error = ?e, "Failed to send anti-entropy digest");
+        }
+
         Ok(())
     }
 
@@ -251,6 +259,30 @@ impl HiveSyncService {
             .collect();
         self.command_tx
             .send(NodeMessage::OpBatch { ops })
+            .await
+            .map_err(|e| HiveSyncError::Send(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Build and push the SC5 anti-entropy digest: one `DigestEntry` per swarm-linked task
+    /// (`shared_task_id IS NOT NULL`) carrying its `remote_version`. Best-effort, read-only; an empty
+    /// set sends nothing. Does NOT advance any cursor (it is divergence DETECTION, not sync).
+    async fn sync_digest(&self) -> Result<(), HiveSyncError> {
+        use db::models::task::Task;
+        let rows = Task::find_digest_entries(&self.pool).await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let entries: Vec<DigestEntry> = rows
+            .into_iter()
+            .map(|r| DigestEntry {
+                entity_type: "task".to_string(),
+                entity_id: r.id,
+                version: r.remote_version,
+            })
+            .collect();
+        self.command_tx
+            .send(NodeMessage::Digest { entries })
             .await
             .map_err(|e| HiveSyncError::Send(e.to_string()))?;
         Ok(())
@@ -866,6 +898,55 @@ mod tests {
         match command_rx.try_recv().unwrap() {
             NodeMessage::OpBatch { ops } => assert_eq!(ops[0].fencing_token, None),
             other => panic!("expected OpBatch, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_digest_sends_one_entry_per_swarm_linked_task() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        use db::models::task::{CreateTask, Task};
+        let project_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO projects (id, name, git_repo_path) VALUES (?, 'p', '/tmp/p')",
+        )
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let linked_id = uuid::Uuid::new_v4();
+        let linked = Task::create(
+            &pool,
+            &CreateTask {
+                project_id,
+                title: "linked".into(),
+                description: None,
+                status: None,
+                parent_task_id: None,
+                image_ids: None,
+                shared_task_id: Some(uuid::Uuid::new_v4()),
+            },
+            linked_id,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE tasks SET remote_version = 1 WHERE id = ?")
+            .bind(linked.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(8);
+        let service = HiveSyncService::new(pool.clone(), command_tx, HiveSyncConfig::default());
+        service.sync_digest().await.unwrap();
+
+        let msg = command_rx.try_recv().expect("a Digest was sent");
+        match msg {
+            NodeMessage::Digest { entries } => {
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].entity_type, "task");
+            }
+            other => panic!("expected Digest, got {other:?}"),
         }
     }
 }
