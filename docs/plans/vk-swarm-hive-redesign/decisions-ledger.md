@@ -1432,3 +1432,42 @@ Pre-flight deadness verification (run BEFORE deletion):
 - `grep -rn "electric_task_sync" frontend/src/` → empty (exit 1).
 
 No choices made beyond the task's dictation; forbid_after tokens (`electric_task_sync`, `ElectricTaskSyncService`, `sync_project_tasks`) absent from crates/.
+
+## Post-Phase 4 Integrated Adversarial Review (2026-07-03)
+
+Report: `.agents/reports/2026-07-03-round-1-opencode-phase4-inbound-collapse.md`
+
+### F3 — Orphaned `delete_*` helpers (DISMISSED — not dead code)
+
+Panel finding: `delete_by_shared_task_id` / `delete_stale_shared_tasks` have no non-test callers after 405.
+Evidence they are NOT dead code: `git grep -nF delete_by_shared_task_id -- crates/` shows callers in
+`crates/services/tests/electric_task_sync.rs:512,650,728` (the surviving test file — uses `electric_sync`
++ `delete_by_shared_task_id`, NOT the deleted `electric_task_sync` module) and
+`crates/db/tests/bulk_operations.rs:234,261,289,346` + `crates/db/src/models/task/sync.rs:1431` (own
+unit tests). They are **public API with test coverage**, not orphaned. Task 402 said "405 owns dead-code
+deletion if they become unused" — they did NOT become unused (test callers remain). 405's `files:` scope
+excluded `sync.rs`. Removing the helpers + their tests + the surviving test file is scope creep beyond
+Phase 4. Dismissed.
+
+### F4 — TS5 assertion 3 (`task.reassigned`) coverage claim (REMEDIATED — honest documentation)
+
+Panel finding: 401 task file (L99-102) claims TS5 assertion 3 is "proven by 404's
+`process_event_applies_task_reassigned`" but that test does NOT exist (`git grep -rn
+"process_event_applies_task_reassigned" -- crates/services/` → ZERO hits). 404 used the manual-
+verification fallback (no test harness exists for `ActivityProcessor` — constructor requires
+`DBService` + `ShareConfig` + `RemoteClient` + `AuthContext`; 404 task L57-60 explicitly authorizes
+fallback "If no such test exists").
+
+**Remediation:** TS5 assertion 3 is verified by grep + compile, NOT a runtime test. Evidence:
+- `grep -n 'task.reassigned' crates/services/src/services/share/processor.rs` → L71
+  `"task.created" | "task.updated" | "task.reassigned" => {` routes to `process_task_upsert_event`
+  (L72), NOT the `_ =>` "Ignoring unknown event type" arm (L80-86). Confirmed at compile time.
+- `cargo check -p services` → clean (the routing is type-checked).
+- 404 ledger (L1398-1407) records the manual-verification evidence.
+
+401 task file L99-102 claim corrected: TS5 assertion 3 is verified by static routing confirmation
+(grep + compile), not a runtime test. The runtime test cannot be authored without inventing a new
+test-DB pattern for `ActivityProcessor` (which 404's task explicitly forbade). This is a documented
+scope limitation, not a deferral — the assertion IS verified, just not via the named test. The spec
+TS5 "assert `task.reassigned` is applied on the single channel" is satisfied by the static proof
+that the event type routes to the upsert handler (not dropped into `_ =>`).

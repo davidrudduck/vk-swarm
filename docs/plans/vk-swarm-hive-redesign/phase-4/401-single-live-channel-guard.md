@@ -96,10 +96,12 @@ already imports `CreateProject`, `Project`, `CreateTask`, `setup_test_pool`; `Ta
         }
     }
 ```
-> The dirty-guard (assertion 2) and `task.reassigned` (assertion 3) are proven by 403's
-> `upsert_remote_task_skips_when_local_op_unacked` and 404's `process_event_applies_task_reassigned`
-> respectively — TS5 is covered by THIS task's claim plus those tests (one task claims `covers_tests:
-> [TS5]`; the assertions live where their seams are). Do NOT duplicate them here.
+> The dirty-guard (assertion 2) is proven by 403's
+> `upsert_remote_task_skips_when_local_op_unacked`. `task.reassigned` (assertion 3) is verified by
+> 404's manual-verification fallback (grep + compile — no runtime test harness exists for
+> `ActivityProcessor`; 404 task L57-60 explicitly authorizes the fallback). TS5 is covered by THIS
+> task's test (assertion 1, both-legs delete-equivalence) plus those assertions (one task claims
+> `covers_tests: [TS5]`; the assertions live where their seams are). Do NOT duplicate them here.
 >
 > If `executors::executors::BaseCodingAgent` is not the import path used by the existing
 > `task_attempt` tests, mirror whatever those tests use to construct a `CreateTaskAttempt`.
