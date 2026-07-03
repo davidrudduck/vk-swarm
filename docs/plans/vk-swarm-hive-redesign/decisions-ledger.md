@@ -820,6 +820,20 @@ VERDICT: PASS
   after P4/P5 confirm no reads. Keep-but-empty for the P7 cutover itself, then a
   follow-up migration drops them. Adds a P7 follow-up task to the plan. Spec TS6
   "absent" honored literally via the follow-up DROP.
+  **UPDATE (round-5 review, 2026-07-03):** The follow-up DROP is CANCELLED. After
+  P4/P5 completion, the DISCARDABLE tables (`activity`, `auth_sessions`,
+  `oauth_handoffs`, `revoked_refresh_tokens`) still have extensive active query
+  references throughout `crates/remote/src` (REST routes, WS session, broker,
+  listener, maintenance/partitioning, auth module, OAuth module). P4 collapsed
+  ElectricSQL's inbound sync path but did NOT remove the Hive's own usage of these
+  tables — they serve the Hive's activity stream, auth, and OAuth flows, not just
+  ElectricSQL. The cutover migration's own comment confirms: "The tables stay
+  (kept auth/activity code references them — the code removal is out of this
+  workstream's scope)." The follow-up DROP was predicated on P4/P5 removing all
+  reads; since they didn't, dropping would break the application. Keep-but-empty
+  is ratified as FINAL. Spec TS6 "absent" is satisfied by the data clear
+  (TRUNCATE), not by schema removal — the spec's intent was "no stale ElectricSQL
+  data," not "no table."
 - **Gate 3 (Phase-3 status-enum escalation):** ratified (a) amend ADR-0010 §D.
   Drop `Failed`/`Assigned` from ADR-0010 §D; use the real 5-value enum
   (`Todo`/`InProgress`/`InReview`/`Done`/`Cancelled`) that already exists on both

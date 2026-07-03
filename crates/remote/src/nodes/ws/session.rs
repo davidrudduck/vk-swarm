@@ -2125,28 +2125,47 @@ async fn handle_op_batch_apply(
                         Some(tok) => tok < current_token,
                     };
                     if stale {
-                        // REJECT (permanent): do NOT upsert, do NOT record node_op_log, do NOT
-                        // advance applied_through_seq past this op. Mirror 106's PARK control-flow
-                        // of NOT advancing (break, not continue), but this is a permanent reject,
-                        // not a transient park. Emit LeaseRevoked so the partitioned writer learns
-                        // its lease is gone.
+                        // REJECT (permanent): the op carries a stale fencing token, so we
+                        // skip it permanently. Unlike a transient park, this op will NEVER
+                        // be valid — record it in node_op_log and advance applied_through_seq
+                        // so the outbox drains past it. Without SKIP+ADVANCE the op stays
+                        // `acked_at IS NULL` forever, and peek_unacked's head-of-line
+                        // ordering wedges ALL subsequent ops for this node (round-5 CF1).
+                        // Emit LeaseRevoked so the partitioned writer learns its lease is gone.
                         tracing::warn!(
                             node_id = %node_id,
                             seq = op.seq,
                             assignment_id = %assignment_id,
                             op_token = ?op.fencing_token,
                             current_token = current_token,
-                            "op_batch: reject (stale fencing token) — LeaseRevoked"
+                            "op_batch: skip+advance (stale fencing token) — LeaseRevoked"
                         );
+                        sqlx::query(
+                            r#"
+                            INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                            VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                            "#,
+                        )
+                        .bind(node_id)
+                        .bind(&op.idempotency_key)
+                        .bind(op.seq)
+                        .bind(&op.op_type)
+                        .bind(op.entity_id)
+                        .execute(pool)
+                        .await
+                        .map_err(|e| HandleError::Database(e.to_string()))?;
+                        applied_through_seq = op.seq;
                         revokes.push((assignment_id, "stale fencing token".to_string()));
                         break;
                     }
                 } else {
                     // No active assignment for a hive-managed task (shared_task_id present):
                     // the lease was reclaimed or the task was completed/cancelled. A late write
-                    // from a partitioned node MUST NOT overwrite the completed task (SC3). Drop
-                    // the op and stop processing this batch — the node's self-fence watchdog
-                    // and the reclaim sweep's LeaseRevoked event will halt the node.
+                    // from a partitioned node MUST NOT overwrite the completed task (SC3).
+                    // Skip+advance (permanent reject): record in node_op_log + advance cursor so
+                    // the outbox drains past this op. Without SKIP+ADVANCE the op stays
+                    // `acked_at IS NULL` forever, wedging the op-log head-of-line (round-5 CF1).
                     //
                     // Emit LeaseRevoked so the partitioned writer learns its lease is gone
                     // (tournament R1/D — without this, the node retries unacked ops forever).
@@ -2158,7 +2177,7 @@ async fn handle_op_batch_apply(
                         seq = op.seq,
                         shared_task_id = %shared_id,
                         op_token = ?op.fencing_token,
-                        "op_batch: reject (no active assignment for hive-managed task) — lease revoked or completed"
+                        "op_batch: skip+advance (no active assignment for hive-managed task) — lease revoked or completed"
                     );
                     let assignment_id: Option<Uuid> = sqlx::query_scalar(
                         r#"SELECT id FROM node_task_assignments
@@ -2177,6 +2196,22 @@ async fn handle_op_batch_apply(
                             "no active assignment (lease revoked or completed)".to_string(),
                         ));
                     }
+                    sqlx::query(
+                        r#"
+                        INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                        VALUES ($1, $2, $3, $4, $5)
+                        ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                        "#,
+                    )
+                    .bind(node_id)
+                    .bind(&op.idempotency_key)
+                    .bind(op.seq)
+                    .bind(&op.op_type)
+                    .bind(op.entity_id)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| HandleError::Database(e.to_string()))?;
+                    applied_through_seq = op.seq;
                     break;
                 }
             }
@@ -4079,17 +4114,18 @@ mod fencing_tests {
             Some(pre_status),
             "stale-token op MUST NOT update shared_tasks"
         );
-        // (b) node_op_log has NO row for the op's idempotency_key.
+        // (b) node_op_log HAS a row for the op's idempotency_key (SKIP+ADVANCE: the op is
+        // permanently rejected, but it IS recorded so the outbox drains past it — without
+        // this, peek_unacked's head-of-line ordering wedges ALL subsequent ops for this node).
         assert_eq!(
             node_op_log_count_for_key(&pool, node_a, &key).await,
-            0,
-            "rejected op MUST NOT record a node_op_log dedup row"
+            1,
+            "rejected op MUST record a node_op_log dedup row (skip+advance, not wedge)"
         );
-        // (c) returned seq does NOT advance past the rejected op's seq (high-water stays at
-        // the pre-reject value — break, not continue).
+        // (c) returned seq advances past the rejected op (SKIP+ADVANCE, not bare break).
         assert_eq!(
-            seq, 0,
-            "applied_through_seq MUST NOT advance past the rejected op (break, not continue)"
+            seq, 1,
+            "applied_through_seq MUST advance past the rejected op (skip+advance)"
         );
         // (d) the revoke vec contains (assignment_id, "stale fencing token").
         assert_eq!(revokes.len(), 1, "exactly one LeaseRevoked emitted");
@@ -4299,16 +4335,17 @@ mod fencing_tests {
             Some(pre_status),
             "late op for completed task MUST NOT update shared_tasks (SC3)"
         );
-        // (b) node_op_log has NO row for the op's idempotency_key.
+        // (b) node_op_log HAS a row (SKIP+ADVANCE: the op is permanently rejected, but it IS
+        // recorded so the outbox drains past it — prevents head-of-line wedge).
         assert_eq!(
             node_op_log_count_for_key(&pool, node_a, &key).await,
-            0,
-            "rejected op MUST NOT record a node_op_log dedup row"
+            1,
+            "rejected op MUST record a node_op_log dedup row (skip+advance, not wedge)"
         );
-        // (c) seq does NOT advance past the rejected op.
+        // (c) seq advances past the rejected op (SKIP+ADVANCE, not bare break).
         assert_eq!(
-            seq, 0,
-            "applied_through_seq MUST NOT advance past the rejected op (break, not continue)"
+            seq, 1,
+            "applied_through_seq MUST advance past the rejected op (skip+advance)"
         );
 
         cleanup_org(&pool, org_id).await;
@@ -4932,12 +4969,12 @@ mod status_guard_tests {
         );
         assert_eq!(
             node_op_log_count_for_key(&pool, node_a, &key_a).await,
-            0,
-            "(a) rejected op MUST NOT record a node_op_log dedup row"
+            1,
+            "(a) rejected op MUST record a node_op_log dedup row (skip+advance, not wedge)"
         );
         assert_eq!(
-            seq_a, 0,
-            "(a) applied_through_seq MUST NOT advance past the rejected op (break)"
+            seq_a, 1,
+            "(a) applied_through_seq MUST advance past the rejected op (skip+advance)"
         );
 
         // (b) Stale token: node_a claims (T1), node_b reclaims (T2 > T1). node_a sends an
@@ -4983,12 +5020,12 @@ mod status_guard_tests {
         );
         assert_eq!(
             node_op_log_count_for_key(&pool, node_a, &key_b).await,
-            0,
-            "(b) rejected op MUST NOT record a node_op_log dedup row"
+            1,
+            "(b) rejected op MUST record a node_op_log dedup row (skip+advance, not wedge)"
         );
         assert_eq!(
-            seq_b, 0,
-            "(b) applied_through_seq MUST NOT advance past the rejected op (break)"
+            seq_b, 2,
+            "(b) applied_through_seq MUST advance past the rejected op (skip+advance)"
         );
         assert_eq!(revokes_b.len(), 1, "(b) exactly one LeaseRevoked emitted");
         assert_eq!(
