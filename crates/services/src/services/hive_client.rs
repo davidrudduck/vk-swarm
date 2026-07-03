@@ -745,6 +745,12 @@ pub enum HiveEvent {
     },
     /// Lease revoked by the hive — the node must self-fence the assignment's agent.
     LeaseRevoked { assignment_id: Uuid, reason: String },
+    /// Anti-entropy heal directive (SC5): re-stream the op-log from `resend_from_seq` and/or pull the
+    /// listed entities via the bulk-snapshot reconcile leg.
+    DigestResult {
+        resend_from_seq: Option<i64>,
+        pull_entities: Vec<Uuid>,
+    },
 }
 
 /// State of the hive connection.
@@ -1158,14 +1164,29 @@ impl HiveClient {
                     })
                     .await;
             }
-            HiveMessage::DigestResult { resend_from_seq, pull_entities } => {
-                // STUB — filled by task 504 (re-stream from resend_from_seq + pull listed entities).
-                // For now log only so the arm is EXPLICIT (not swallowed by the `_ =>` wildcard below).
-                tracing::debug!(
+            HiveMessage::DigestResult {
+                resend_from_seq,
+                pull_entities,
+            } => {
+                tracing::trace!(
                     ?resend_from_seq,
                     pull_count = pull_entities.len(),
-                    "received digest_result (heal TODO: task 504)"
+                    "received digest_result"
                 );
+                if let Err(e) = self
+                    .event_tx
+                    .send(HiveEvent::DigestResult {
+                        resend_from_seq,
+                        pull_entities,
+                    })
+                    .await
+                {
+                    tracing::warn!(
+                        error = ?e,
+                        "failed to forward DigestResult to node_runner loop — consumer gone; \
+                         reconnect/retry will re-emit the digest next cycle"
+                    );
+                }
             }
             _ => {
                 tracing::debug!(?hive_msg, "ignoring unhandled hive message");

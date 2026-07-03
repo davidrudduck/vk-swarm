@@ -111,6 +111,32 @@ impl OutboxRepository {
         Ok(rows.into_iter().map(OutboxOp::from).collect())
     }
 
+    /// Anti-entropy heal read (SC5): replay acked AND unacked rows at/after `from_seq`.
+    ///
+    /// Unlike `peek_unacked` (which filters `acked_at IS NULL`), this intentionally returns acked
+    /// rows too — when the hive reports a digest gap via `DigestResult { resend_from_seq }`, the
+    /// node must re-stream its op-log from the hive's conservative cursor, including ops the node
+    /// has already marked acked locally (the hive may not have durably applied them yet). The ack
+    /// cursor is NOT advanced/cleared here — only `apply_op_ack` (task 108) advances it.
+    pub async fn peek_from_seq(
+        pool: &SqlitePool,
+        from_seq: i64,
+        limit: i64,
+    ) -> Result<Vec<OutboxOp>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, OutboxOpRow>(
+            r#"SELECT id, seq, op_type, entity_type, entity_id, payload, idempotency_key, fencing_token, created_at, acked_at
+               FROM node_outbox
+               WHERE seq >= ?
+               ORDER BY seq ASC
+               LIMIT ?"#,
+        )
+        .bind(from_seq)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows.into_iter().map(OutboxOp::from).collect())
+    }
+
     /// True if `entity_id` has at least one UNACKED outbound op (ADR-0007 dirty-guard).
     ///
     /// Used by the inbound apply path to skip applying a hive update while the node still has a
@@ -183,6 +209,48 @@ mod tests {
         let remaining = OutboxRepository::peek_unacked(&pool, 10).await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].seq, b.seq);
+    }
+
+    #[tokio::test]
+    async fn peek_from_seq_returns_acked_and_unacked_ops_at_or_after_seq() {
+        let (pool, _tmp) = create_test_pool().await;
+        let mk = |k: &str| NewOutboxOp {
+            op_type: "task.upsert".into(),
+            entity_type: "task".into(),
+            entity_id: uuid::Uuid::new_v4(),
+            payload: serde_json::json!({}),
+            idempotency_key: k.into(),
+            fencing_token: None,
+        };
+        let a = OutboxRepository::enqueue_op(&pool, mk("task:a:1"))
+            .await
+            .unwrap();
+        let b = OutboxRepository::enqueue_op(&pool, mk("task:b:1"))
+            .await
+            .unwrap();
+        let c = OutboxRepository::enqueue_op(&pool, mk("task:c:1"))
+            .await
+            .unwrap();
+
+        OutboxRepository::mark_acked_through(&pool, b.seq)
+            .await
+            .unwrap();
+        assert_eq!(
+            OutboxRepository::peek_unacked(&pool, 10).await.unwrap().len(),
+            1,
+            "unacked sees only c"
+        );
+
+        let restream = OutboxRepository::peek_from_seq(&pool, a.seq, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            restream.len(),
+            3,
+            "peek_from_seq returns acked+unacked at/after seq"
+        );
+        assert_eq!(restream[0].seq, a.seq);
+        assert!(restream[2].seq == c.seq, "seq-ordered");
     }
 
     #[tokio::test]

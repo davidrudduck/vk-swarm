@@ -25,6 +25,11 @@ use super::hive_client::{
 use super::node_cache;
 use super::remote_client::{RemoteClient, RemoteClientError};
 
+/// Max number of op-log rows to re-stream in one `OpBatch` for a digest heal (SC5).
+/// Bounded to avoid unbounded bursts when the hive's `resend_from_seq` is far behind; subsequent
+/// digest cycles pick up further rows. Matches the hive-sync batch size order of magnitude.
+const RESTREAM_LIMIT: i64 = 500;
+
 /// Configuration for the node runner loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct NodeRunnerConfig {
@@ -520,6 +525,17 @@ impl NodeRunnerHandle {
                 tracing::warn!(%assignment_id, %reason, "lease revoked by hive — agent halt in run loop");
                 // The actual halt is performed in the run_node_runner event loop so we have access
                 // to the AssignmentHandler; here we only clear the lease state.
+            }
+            HiveEvent::DigestResult {
+                resend_from_seq,
+                pull_entities,
+            } => {
+                tracing::trace!(
+                    ?resend_from_seq,
+                    pull_count = pull_entities.len(),
+                    "digest_result received"
+                );
+                // Heal (re-stream + reconcile) happens in run_node_runner where pool+remote_client live.
             }
         }
 
@@ -1066,6 +1082,52 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                         tracing::warn!("lease revoked but no container/handler available to fence");
                     }
                 }
+                Some(HiveEvent::DigestResult {
+                    resend_from_seq,
+                    pull_entities,
+                }) => {
+                    // (a) node-has/hive-lacks: re-stream the op-log from the hive's conservative cursor.
+                    if let Some(from_seq) = resend_from_seq {
+                        use db::models::node_outbox::OutboxRepository;
+                        match OutboxRepository::peek_from_seq(&db.pool, from_seq, RESTREAM_LIMIT)
+                            .await
+                        {
+                            Ok(rows) if !rows.is_empty() => {
+                                let ops: Vec<super::hive_client::OutboxOp> =
+                                    rows.into_iter().map(restream_row_to_ws_op).collect();
+                                if let Err(e) = command_tx
+                                    .send(super::hive_client::NodeMessage::OpBatch { ops })
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        error = ?e,
+                                        "Failed to re-stream op-log for digest heal"
+                                    );
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!(
+                                error = ?e,
+                                "Failed to read op-log for digest re-stream"
+                            ),
+                        }
+                    }
+                    // (b) hive-has/node-lacks: pull via the bulk-snapshot reconcile leg
+                    // (ADR-0008 gap-fill).
+                    if !pull_entities.is_empty() {
+                        let (org_id, nid) = {
+                            let s = handle.state.read().await;
+                            (s.organization_id, s.node_id)
+                        };
+                        if let (Some(ref client), Some(org_id), Some(nid)) =
+                            (remote_client.as_ref(), org_id, nid)
+                            && let Err(e) =
+                                sync_remote_projects(&db.pool, client, org_id, nid).await
+                        {
+                            tracing::warn!(error = ?e, "Failed to pull entities for digest heal");
+                        }
+                    }
+                }
                 Some(_) => {
                     // Other events are handled in process_event
                 }
@@ -1081,6 +1143,25 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
     });
 
     Some(context)
+}
+
+/// Map a db `OutboxOp` row into the WS `OutboxOp` wire shape for a digest heal re-stream.
+///
+/// This is a REPLAY, not a fresh enqueue — copy `fencing_token` AS-IS from the row. Re-stamping
+/// the fencing token here would break the lease-fencing invariant (the hive must see the same
+/// token that the original op carried; task 107 stamps fencing_token only at fresh-enqueue time).
+fn restream_row_to_ws_op(
+    r: db::models::node_outbox::OutboxOp,
+) -> super::hive_client::OutboxOp {
+    super::hive_client::OutboxOp {
+        seq: r.seq,
+        op_type: r.op_type,
+        entity_type: r.entity_type,
+        entity_id: r.entity_id,
+        payload: r.payload,
+        idempotency_key: r.idempotency_key,
+        fencing_token: r.fencing_token,
+    }
 }
 
 /// Sync remote projects and their tasks into the unified schema.
