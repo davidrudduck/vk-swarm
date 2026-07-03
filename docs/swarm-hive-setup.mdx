@@ -468,6 +468,53 @@ The frontend automatically streams logs:
 
 ---
 
+## Partition Handling & Lease Recovery
+
+When a node loses its network connection to the hive (partition), the swarm uses **lease-based
+fencing** to guarantee that the partitioned node cannot cause double execution or corrupt another
+node's task status.
+
+### What Happens During a Partition
+
+1. **Lease expiry**: each task assignment has a `lease_expires_at` timestamp. If the node cannot
+   renew its lease (via heartbeat) within the TTL, the lease is considered expired.
+2. **Task reclaim**: the hive's `reclaim_expired_leases` sweep sets `lease_expires_at = NULL` on
+   expired assignments, making them available for reassignment to another node.
+3. **Fencing token bump**: the reclaimed task is reassigned with a **strictly higher fencing
+   token**. Any late commit from the partitioned node (whose token is now stale) is rejected.
+4. **Node self-fencing**: a node that cannot renew its lease within the TTL halts the agent
+   process, bounding execution overlap.
+
+### What Admins Should Expect
+
+- **No manual intervention needed** for partition recovery. The hive automatically reclaims expired
+  leases and reassigns tasks.
+- **A partitioned node's late commits are rejected**, not silently merged. The node receives a
+  `LeaseRevoked` signal for the affected task and halts the agent.
+- **Task status is protected**: the partitioned node cannot clobber the new holder's task status.
+  Status transitions are gated by an explicit single-author state machine
+  ([ADR-0010](https://github.com/davidrudduck/vk-swarm/tree/main/dev-docs/adr/0010-task-status-state-machine.md)).
+- **Node-owned tasks** (created locally by the partitioned node, not hive-assigned) are unaffected
+  by lease fencing — the node is the sole authority for its own tasks.
+- **Reconnection**: when the partitioned node reconnects, it receives its current sync state and
+  any `LeaseRevoked` signals. Tasks that were reassigned will appear under the new holder's node.
+
+### Monitoring Lease Health
+
+Check node status and lease health via the API:
+
+```bash
+# List all nodes and their online status
+curl https://hive.example.com/v1/nodes?organization_id=<org-uuid> \
+  -H "Authorization: Bearer <user-jwt>"
+
+# Node status shows: online, offline, busy
+# A node that is "offline" but was running tasks will have its leases
+# automatically reclaimed after the TTL expires.
+```
+
+---
+
 ## Viewing Nodes
 
 ### Frontend

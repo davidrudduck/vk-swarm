@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "codex",
+    "exec",
+    "-C",
+    "/home/david/Code/vk-swarm/.claude/worktrees/bridge-cse_01B8B52jjMEdikaLRoA25qhr",
+    "--sandbox",
+    "read-only",
+    "--json",
+    "-"
+  ],
+  "cwd": "/home/david/Code/vk-swarm/.claude/worktrees/bridge-cse_01B8B52jjMEdikaLRoA25qhr",
+  "exit_code": 0,
+  "finished_at": "2026-06-30T12:09:29.023757+00:00",
+  "notes": [],
+  "prompt_file": "/home/david/Code/vk-swarm/.claude/worktrees/bridge-cse_01B8B52jjMEdikaLRoA25qhr/docs/plans/vk-swarm-hive-redesign/reviews/r1-find-prompt.md",
+  "raw_log": "/home/david/Code/vk-swarm/.claude/worktrees/bridge-cse_01B8B52jjMEdikaLRoA25qhr/docs/plans/vk-swarm-hive-redesign/reviews/r1-codex.raw.log",
+  "report": "/home/david/Code/vk-swarm/.claude/worktrees/bridge-cse_01B8B52jjMEdikaLRoA25qhr/docs/plans/vk-swarm-hive-redesign/reviews/r1-codex.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-06-30T12:06:05.453031+00:00",
+  "status": "ok",
+  "task": "plan-review",
+  "tool": "codex",
+  "tool_version": "codex-cli 0.142.4"
+}

@@ -60,11 +60,94 @@ Tasks flow between nodes in the following manner:
 
 ### 3. Conflict Resolution
 
-When the same task is modified on multiple nodes simultaneously:
+When the same task is modified on multiple nodes simultaneously, the resolution strategy
+depends on the field:
 
-- **Last Write Wins**: The node that writes changes to Hive last wins
-- **Version Detection**: Each task update includes a timestamp
-- **Notification**: Other nodes receive conflict notifications and can merge/reject changes
+- **Task status (`task.status`)**: governed by an **explicit single-author transition matrix**
+  ([ADR-0010](https://github.com/davidrudduck/vk-swarm/tree/main/dev-docs/adr/0010-task-status-state-machine.md)),
+  NOT last-write-wins. Every status transition has exactly one authoritative author (hive or node);
+  illegal transitions are rejected, not merged. See [Lease Fencing & Status Guards](#lease-fencing--status-guards)
+  below.
+- **Other task fields** (title, description, etc.): **last-write-wins** with version detection.
+  Each task update includes a timestamp; the node that writes to the Hive last wins.
+- **Notification**: other nodes receive conflict notifications and can merge/reject changes for
+  non-status fields.
+
+## Lease Fencing & Status Guards
+
+The swarm sync system uses **lease-based fencing** ([ADR-0009](https://github.com/davidrudduck/vk-swarm/tree/main/dev-docs/adr/0009-lease-checkout-fencing.md))
+and a **single-author status state machine** ([ADR-0010](https://github.com/davidrudduck/vk-swarm/tree/main/dev-docs/adr/0010-task-status-state-machine.md))
+to guarantee that a network partition cannot cause double execution or status corruption.
+
+### Lease Checkout
+
+When the hive assigns a task to a node, it creates a `node_task_assignments` row with:
+
+- `node_id` — the assigned node
+- `lease_expires_at` — a real-time lease expiry (not just a heartbeat)
+- `fencing_token` — a monotonically increasing token, bumped on every reassignment
+
+### Partition Safety (Fencing Tokens)
+
+If a node partitions but stays alive, its lease eventually expires. The hive may then reclaim
+the task and reassign it to another node with a **strictly higher fencing token**. When the
+partitioned node eventually reconnects and sends a late commit, the hive **rejects** any commit
+whose fencing token is older than the assignment's current token — producing an **at-most-once commit
+effect**.
+
+The node also **self-fences**: if it cannot renew its lease within the TTL, it halts the agent
+process, bounding execution overlap.
+
+### Status State Machine (SC4)
+
+`task.status` is governed by an explicit transition matrix where every transition has exactly one
+authoritative author:
+
+| Transition | Author |
+|---|---|
+| `todo → in-progress` | **hive** (on assignment + node start) |
+| `in-progress → in-review` | **node** (run completed, awaiting review) |
+| `in-progress → done` | **node** (terminal) |
+| `in-review → done` / `in-review → in-progress` (reopen) | **hive** (operator review) |
+| `* → cancelled` | **hive** (operator action) |
+
+A node-reported status transition is accepted by the hive only when:
+1. The node holds an **active lease** (`completed_at IS NULL AND lease_expires_at > NOW()`)
+2. The transition is **node-authored** per the matrix above
+3. The status wire value is **canonical** (`inprogress`, `inreview`, `done`, `cancelled`, `todo`)
+
+Illegal transitions are rejected with a `success: false` response — they are never silently coerced.
+
+### Guarded Write Sites
+
+Three write sites can mutate `shared_tasks.status` from a node. All three are gated by the
+single-author guard (`status_machine::author_of_transition`):
+
+1. **`handle_op_batch_apply`** (the durable op-log path) — gated by P2's fence (stale-token check)
+   + the SC4 author guard. Node-owned tasks (where `shared_tasks.owner_node_id == node_id`) bypass
+   the fence (the owner doesn't need a lease to write its own task).
+2. **`handle_task_status`** (the legacy TaskStatusMessage path) — gated by `find_active_lease_for_node`
+   which checks `node_id`, `completed_at IS NULL`, and `lease_expires_at > NOW()`. The guard runs
+   **before** any assignment-row writes, so a stale holder cannot mutate `execution_status` or
+   `local_task_id`.
+3. **`handle_task_sync`** (the TaskSyncMessage path) — gated by the SC4 author guard, which looks up
+   the existing task via `find_by_source_task_id(node_id, local_task_id)` and rejects hive-authored
+   or illegal transitions with a `TaskSyncResponse { success: false }`.
+
+### Unknown Wire Values
+
+If a node sends an unrecognized status wire value (e.g. due to a serialization bug), the hive:
+- In `handle_op_batch_apply`: **SKIP+ADVANCE** — writes the op to `node_op_log`, advances the cursor,
+  and continues. The op is permanently consumed (no infinite retry).
+- In `handle_task_sync`: returns `TaskSyncResponse { success: false, error: "REJECTED: unknown
+  status wire value" }` — the node is informed, not left hanging.
+
+### Lease Revocation on Reassignment
+
+When the hive reclaims a task (lease expired) and the partitioned node later sends an op for it,
+the hive emits a `LeaseRevoked` signal keyed on the sender's own `assignment_id`. The node uses
+this to halt the agent for that task. The revoke lookup filters on `node_id` to ensure the signal
+reaches the correct node (a task may have multiple historical assignment rows from prior holders).
 
 ## Data Model Overview
 
@@ -537,28 +620,36 @@ if incoming.version > db.current_version {
 
 ### Node Disconnection
 
-When a node disconnects from the hive:
+When a node disconnects from the hive (network partition or shutdown):
 
 1. WebSocket connection closes
 2. Node status updated to `offline` on hive
-3. Node continues serving cached data
-4. Write operations blocked (require hive)
+3. Node continues serving cached data locally
+4. Write operations are queued locally (op-log) for replay on reconnect
+5. The node's task **leases begin expiring** — if the lease TTL passes without renewal,
+   the hive reclaims the assignments and may reassign the tasks to other nodes with higher
+   fencing tokens (see [Lease Fencing & Status Guards](#lease-fencing--status-guards))
+6. A partitioned-but-alive node that cannot renew its lease **self-fences** (halts the agent)
 
 ### Reconnection
 
 When a node reconnects:
 
 1. Authenticate with API key
-2. Hive sends current sync state
+2. Hive sends current sync state + any `LeaseRevoked` signals for tasks that were reassigned
+   during the partition
 3. Node reconciles local cache with hive state
 4. Node re-registers all linked projects
 5. Background sync service resumes
+6. Queued ops are replayed through the op-log; stale-token ops (for reassigned tasks) are
+   rejected by the fence
 
 ### Queued Operations
 
-During disconnection, these operations are queued:
+During disconnection, these operations are queued locally:
 - Execution logs (stored locally, synced on reconnect)
 - Task attempts (created locally, synced on reconnect)
+- Task updates (queued in the op-log, replayed on reconnect — subject to fencing)
 
 These operations are blocked until reconnection:
 - Task create/update/delete
