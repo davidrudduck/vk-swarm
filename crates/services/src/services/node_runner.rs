@@ -1174,15 +1174,18 @@ async fn sync_remote_project_tasks(
         active_task_ids.push(task.id);
     }
 
-    // Handle deleted tasks
+    // Handle deleted tasks — SOFT-UNLINK (ADR-0007 one delete semantic): clear shared_task_id,
+    // retain the local row + its task_attempt. Identical outcome to the WS `task.deleted` leg.
     for deleted_id in snapshot.deleted_task_ids {
-        Task::delete_by_shared_task_id(pool, deleted_id).await?;
+        Task::unlink_by_shared_task_id(pool, deleted_id).await?;
     }
 
-    // Clean up stale shared tasks for this project
-    if !active_task_ids.is_empty() {
-        Task::delete_stale_shared_tasks(pool, local_project_id, &active_task_ids).await?;
-    }
+    // Soft-unlink stale shared tasks for this project (no longer present in the snapshot).
+    // NOTE: run UNCONDITIONALLY — an empty `active_task_ids` means the hive dropped every shared task
+    // in this project, so `unlink_stale_shared_tasks` clears ALL linked tasks (no `NOT IN` filter).
+    // The previous `if !active_task_ids.is_empty()` guard skipped the unlink on an empty snapshot,
+    // leaving stale links behind.
+    Task::unlink_stale_shared_tasks(pool, local_project_id, &active_task_ids).await?;
 
     Ok(())
 }
