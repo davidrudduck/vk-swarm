@@ -1,0 +1,2 @@
+User-ratified 2026-07-01 (decisions-ledger §Phase-7 ratification gates, Gate 1).
+In-place rebuild strategy. Postgres is test-only (spun up for this run); no backup/data-loss concern.
