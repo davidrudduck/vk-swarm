@@ -2,7 +2,7 @@
 id: "303"
 phase: 3
 title: Enforce single-author status transitions at handle_op_batch (node-reported gated on lease+token)
-status: ready
+status: done
 depends_on: ["301", "302", "205"]
 parallel: false
 conflicts_with: ["302", "304"]

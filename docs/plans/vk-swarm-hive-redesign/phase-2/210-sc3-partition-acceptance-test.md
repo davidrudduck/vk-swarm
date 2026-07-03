@@ -2,7 +2,7 @@
 id: "210"
 phase: 2
 title: SC3 acceptance test — partition cannot double-execute (stale-token reject + self-fence)
-status: ready
+status: done
 depends_on: ["203", "205", "208", "209"]
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "104"
 phase: 1
 title: Add node OutboxRepository (enqueue_op / peek_unacked / mark_acked_through)
-status: ready
+status: done
 depends_on: ["101"]
 parallel: false
 conflicts_with: []

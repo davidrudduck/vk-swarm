@@ -2,7 +2,7 @@
 id: "105"
 phase: 1
 title: Enqueue a task.upsert outbox op on Task::create / Task::update
-status: ready
+status: done
 depends_on: ["104"]
 parallel: false
 conflicts_with: []

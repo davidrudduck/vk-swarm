@@ -2,7 +2,7 @@
 id: "202"
 phase: 2
 title: Add LeaseHeartbeat/LeaseGrant/LeaseRevoked WS variants to both crates + exhaustive stub arms
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: ["204", "205", "206", "501"]

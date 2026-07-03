@@ -2,7 +2,7 @@
 id: "304"
 phase: 3
 title: Route the legacy handle_task_status shared-status write through the transition guard
-status: ready
+status: done
 depends_on: ["301", "303"]
 parallel: false
 conflicts_with: ["302", "303"]

@@ -2,7 +2,7 @@
 id: "201"
 phase: 2
 title: Add lease_expires_at + fencing_token columns and node_fencing_token_seq (Postgres/hive)
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: []

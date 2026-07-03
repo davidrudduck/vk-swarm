@@ -2,7 +2,7 @@
 id: "205"
 phase: 2
 title: Hive fencing enforcement in handle_op_batch — reject stale-token ops, emit LeaseRevoked
-status: ready
+status: done
 depends_on: ["106", "202", "203"]
 parallel: false
 conflicts_with: ["202", "204"]

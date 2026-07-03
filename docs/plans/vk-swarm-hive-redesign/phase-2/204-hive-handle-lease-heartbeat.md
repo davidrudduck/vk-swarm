@@ -2,7 +2,7 @@
 id: "204"
 phase: 2
 title: Hive handle_lease_heartbeat — renew leases and reply LeaseGrant per assignment
-status: ready
+status: done
 depends_on: ["202", "203"]
 parallel: false
 conflicts_with: ["202", "205"]

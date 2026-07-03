@@ -2,7 +2,7 @@
 id: "108"
 phase: 1
 title: Node OpAck — advance node_outbox ack cursor on durable hive ack
-status: ready
+status: done
 depends_on: ["103", "104"]
 parallel: false
 conflicts_with: ["103"]

@@ -2,7 +2,7 @@
 id: "106"
 phase: 1
 title: Hive handle_op_batch — idempotent apply + durable OpAck
-status: ready
+status: done
 depends_on: ["102", "103"]
 parallel: false
 conflicts_with: ["103"]

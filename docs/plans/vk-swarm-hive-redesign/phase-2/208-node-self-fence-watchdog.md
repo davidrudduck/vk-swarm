@@ -2,7 +2,7 @@
 id: "208"
 phase: 2
 title: Node self-fence watchdog — halt the agent on lease-revoke or renew-deadline miss
-status: ready
+status: done
 depends_on: ["206"]
 parallel: false
 conflicts_with: ["206", "207"]

@@ -2,7 +2,7 @@
 id: "107"
 phase: 1
 title: Node streamer — drain node_outbox into NodeMessage::OpBatch in sync_once
-status: ready
+status: done
 depends_on: ["103", "104"]
 parallel: false
 conflicts_with: []

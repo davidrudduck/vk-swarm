@@ -2,7 +2,7 @@
 id: "206"
 phase: 2
 title: Node lease state — HiveEvent Lease variants, store token+expiry on ActiveAssignment, send LeaseHeartbeat
-status: ready
+status: done
 depends_on: ["202"]
 parallel: false
 conflicts_with: ["202", "207", "208"]

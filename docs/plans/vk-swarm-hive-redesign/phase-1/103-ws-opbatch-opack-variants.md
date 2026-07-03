@@ -2,7 +2,7 @@
 id: "103"
 phase: 1
 title: Add OpBatch/OutboxOp/OpAck WS variants to both crates + exhaustive stub arms
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: ["106", "108"]

@@ -2,7 +2,7 @@
 id: "207"
 phase: 2
 title: Node — stamp OutboxOp.fencing_token from the lease at stream time for hive-assigned tasks
-status: ready
+status: done
 depends_on: ["107", "206"]
 parallel: false
 conflicts_with: ["206", "208"]

@@ -2,7 +2,7 @@
 id: "203"
 phase: 2
 title: Hive TaskAssignmentRepository::try_claim (atomic CAS) + renew_lease
-status: ready
+status: done
 depends_on: ["201"]
 parallel: false
 conflicts_with: ["209"]

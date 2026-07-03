@@ -123,7 +123,7 @@ Constraints require before the cutover design hardens:
   op-log preserves it by construction rather than re-deriving it. The real defect is **ack timing**
   (flags clear on mpsc-enqueue, not durable ack → silent write loss).
 - **The two inbound channels can double-deliver and diverge on delete** (one hive tx writes
-  `shared_tasks` + an activity row, `remote/src/db/tasks.rs:892-893`; bulk-snapshot **hard-deletes**
+  `shared_tasks` + an activity row, `crates/remote/src/db/tasks.rs:892-893`; bulk-snapshot **hard-deletes**
   vs WS activity **soft-unlinks**), and `task.reassigned` is dropped by the activity processor
   (`processor.rs:77`). The live second channel is the **REST bulk-snapshot reconcile**
   (`node_runner.rs:986`); the Electric `shared_tasks` shape path is **dead** (no Rust caller; frontend

@@ -1358,3 +1358,36 @@ legacy `handle_task_status`) are reachable on the production code path, both rou
 tests drive them (not mock-past). The incident symptom (node silently clobbers hive-authored
 transition) is asserted directly on both legs: the rejected transition does NOT mutate
 `shared_tasks.status`, and (op-log) the cursor advances so the op-log doesn't wedge.
+
+## Session 2026-07-03 — Post-merge reconciliation (P1–P3 shipped via PR #450)
+
+PR #450 merged Phases 1–3 (24 tasks: 101–108, 201–210, 301–304) into main. The WAI
+tracking state was not reconciled post-merge. Reconciliation performed in worktree
+`.worktrees/vk-swarm-hive-redesign-p47` (branch `vk-swarm-hive-redesign-p47`):
+
+1. **Task frontmatter:** all 24 Phase 1–3 task files flipped `status: ready → done`
+   (the work is on main; `status_machine.rs`, `OutboxRepository`, lease/fencing, etc.
+   all present at HEAD). Plan-lint still reports `task 301: … defers (matches …TODO…)`
+   — this is the **known cross-phase `TaskStatus::Todo` false positive** documented
+   at ledger lines 506–517 (the enum variant `TaskStatus::Todo` matches `TODO`
+   case-insensitively; 301 is `allowed_change: mixed` so SC6 fires, while 302/303/304
+   are `edit` and skip the check). Task 301 is shipped
+   (`crates/remote/src/nodes/ws/status_machine.rs` exists on main). Dismissed per
+   AGENTS.md No-Deferred-Remediation (false positive → document with evidence);
+   resolution deferred to `/wai:close` (tighten regex to `\bTODO\b|\bFIXME\b`).
+2. **Spec re-freeze:** `.precheck.passed` referenced stale spec SHA `81c4b794…`
+   (pre-CodeRabbit-nitpicks). Re-ran `/wai:precheck` → new token `spec_sha=2ac86436…`.
+3. **Anchor-check false positive (dismissed with evidence):** precheck's path regex
+   `(src|extensions|ui|packages|apps)/…` extracts `src/db/tasks.rs` as a substring of
+   the correct path `crates/remote/src/db/tasks.rs` (spec line 126), then checks
+   `main:src/db/tasks.rs` which doesn't exist → spurious CONTRADICTION. The spec's
+   actual reference is correct (`crates/remote/src/db/tasks.rs` exists on main,
+   verified: `git ls-tree -r main --name-only | grep 'db/tasks.rs$'` →
+   `crates/remote/src/db/tasks.rs`). Re-ran with `--no-anchor-check` per the skill's
+   documented false-positive remedy. Evidence: `git cat-file -e
+   main:crates/remote/src/db/tasks.rs` → exists.
+4. **Spec edit:** line 126 `remote/src/db/tasks.rs` → `crates/remote/src/db/tasks.rs`
+   (cosmetic; the path-extraction regex was matching the `src/db/tasks.rs` tail either
+   way, but the full correct path is now in the spec text).
+
+Ready set for `/wai:execute`: Phase 4 (401–405), independent of the spine.

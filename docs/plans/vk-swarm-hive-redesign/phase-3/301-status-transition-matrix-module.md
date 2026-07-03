@@ -2,7 +2,7 @@
 id: "301"
 phase: 3
 title: Status transition matrix module — single-author guard table (ADR-0010 §D)
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: ["302"]
