@@ -10,10 +10,6 @@
 //! - Pushes local tasks to the Hive (via `SharePublisher`)
 //! - Syncs labels via WebSocket activity stream (via `RemoteSync`)
 //!
-//! ## See Also
-//!
-//! - `crates/services/src/services/electric_task_sync.rs` - Electric-based task sync from Hive
-
 mod config;
 mod label_publisher;
 mod processor;

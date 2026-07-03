@@ -5,14 +5,13 @@
 //! The following modules provide ElectricSQL-based real-time sync:
 //!
 //! - [`electric_sync`] - Electric Shape API client for parsing NDJSON responses
-//! - [`electric_task_sync`] - Task sync service using Electric shapes
 //! - [`log_migration`] - Migration from legacy JSONL logs to row-based log_entries
 //!
 //! # Legacy Sync Modules (Deprecated)
 //!
 //! The following modules use WebSocket/REST-based sync and are being replaced:
 //!
-//! - [`share`] - **DEPRECATED** - Use `electric_task_sync` instead
+//! - [`share`] - WebSocket activity stream — the single live inbound channel (ADR-0007)
 //! - [`node_cache`] - **DEPRECATED** - Will be replaced by Electric node shapes
 //!
 //! See individual module documentation for migration guidance.
@@ -56,7 +55,6 @@ pub mod worktree_manager;
 
 // === Electric SQL Integration (New) ===
 pub mod electric_sync;
-pub mod electric_task_sync;
 pub mod log_migration;
 
 // === Legacy Sync Modules (Deprecated) ===

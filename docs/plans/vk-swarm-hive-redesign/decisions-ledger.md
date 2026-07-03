@@ -1405,3 +1405,30 @@ task forbids inventing a new test-DB pattern). Evidence recorded below.
   `71:            "task.created" | "task.updated" | "task.reassigned" => {` — in the
   `process_task_upsert_event` arm, NOT the `_ =>`/"Ignoring unknown event type" arm.
 - `cargo check -p services`: clean (gate run below).
+
+## Task 405
+
+Manual verification outputs (scope_test N/A — pure dead-code deletion):
+
+1. `cargo check -p services` → clean:
+   ```
+   Compiling utils v0.0.125 ...
+   Checking executors v0.0.125 ...
+   Checking remote v0.0.125 ...
+   Checking db v0.0.125 ...
+   Checking services v0.0.125 ...
+   Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.30s
+   ```
+2. `git grep -nF electric_task_sync -- crates/ ':!docs/'` → exit 1 (ZERO hits).
+3. `git grep -nF ElectricTaskSyncService -- crates/` → exit 1 (ZERO hits);
+   `git grep -nF sync_project_tasks -- crates/` → exit 1 (ZERO hits).
+4. `git status --porcelain crates/services/src/services/electric_task_sync.rs` →
+   `D  crates/services/src/services/electric_task_sync.rs` (deleted);
+   `git show HEAD:crates/services/src/services/mod.rs | grep -c electric_sync` → `2`
+   (separate NDJSON `electric_sync` module UNTOUCHED: doc bullet + pub mod line).
+
+Pre-flight deadness verification (run BEFORE deletion):
+- `grep -rn "ElectricTaskSyncService\|sync_project_tasks" crates/ --include="*.rs" | grep -v "electric_task_sync.rs:"` → empty (exit 1).
+- `grep -rn "electric_task_sync" frontend/src/` → empty (exit 1).
+
+No choices made beyond the task's dictation; forbid_after tokens (`electric_task_sync`, `ElectricTaskSyncService`, `sync_project_tasks`) absent from crates/.
