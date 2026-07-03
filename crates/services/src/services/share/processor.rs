@@ -64,8 +64,11 @@ impl ActivityProcessor {
             }
             "label.deleted" => self.process_label_deleted_event(&mut tx, &event).await?,
 
-            // Task events - sync version and metadata to keep local cache fresh
-            "task.created" | "task.updated" => {
+            // Task events - sync version and metadata to keep local cache fresh.
+            // `task.reassigned` carries the same SharedTaskActivityPayload { task, user } as
+            // `task.updated` (the new assignee is a field on `task`), so it routes through the same
+            // upsert handler — no dropped event type (ADR-0007). It must NOT fall through to the `_` arm.
+            "task.created" | "task.updated" | "task.reassigned" => {
                 self.process_task_upsert_event(&mut tx, &event).await?
             }
             "task.deleted" => {

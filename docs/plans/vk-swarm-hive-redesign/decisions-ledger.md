@@ -1394,3 +1394,14 @@ Ready set for `/wai:execute`: Phase 4 (401–405), independent of the spine.
 
 ## Task 403
 (none — task fully dictated)
+
+## Task 404
+Used `## Manual verification` fallback (no unit-test harness exists for the share
+processor — no `mod tests` in `crates/services/src/services/share/processor.rs`, no
+`make_task_activity_event` helper, no `process_event` test anywhere in the crate; the
+task forbids inventing a new test-DB pattern). Evidence recorded below.
+- `grep -n 'task.reassigned' crates/services/src/services/share/processor.rs`:
+  `68:            // `task.reassigned` carries the same SharedTaskActivityPayload { task, user } as` (comment)
+  `71:            "task.created" | "task.updated" | "task.reassigned" => {` — in the
+  `process_task_upsert_event` arm, NOT the `_ =>`/"Ignoring unknown event type" arm.
+- `cargo check -p services`: clean (gate run below).
