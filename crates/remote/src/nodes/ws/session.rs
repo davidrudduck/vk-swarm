@@ -585,6 +585,12 @@ async fn handle_node_message(
         NodeMessage::LeaseHeartbeat { assignment_ids } => {
             handle_lease_heartbeat(node_id, assignment_ids, pool, ws_sender).await
         }
+        NodeMessage::Digest { entries } => {
+            // STUB — filled by task 503 (compare against shared_tasks + node_op_log, reply DigestResult).
+            // Logs so the exhaustive match compiles now; 503 replaces the body with handle_digest(...).
+            tracing::debug!(node_id = %node_id, entry_count = entries.len(), "received digest (compare TODO: task 503)");
+            Ok(())
+        }
     }
 }
 
