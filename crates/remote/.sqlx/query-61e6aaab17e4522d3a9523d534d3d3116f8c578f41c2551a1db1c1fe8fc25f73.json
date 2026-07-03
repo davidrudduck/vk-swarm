@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT source_task_id AS \"source_task_id!: Uuid\", version AS \"version!\"\n               FROM shared_tasks\n               WHERE source_node_id = $1\n                 AND source_task_id IS NOT NULL\n                 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "source_task_id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "version!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "61e6aaab17e4522d3a9523d534d3d3116f8c578f41c2551a1db1c1fe8fc25f73"
+}

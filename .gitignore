@@ -112,3 +112,4 @@ vks-progress.md
 .playwright-mcp/
 .mcp.json
 .omc/
+.worktrees/

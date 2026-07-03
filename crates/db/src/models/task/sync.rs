@@ -265,6 +265,15 @@ impl Task {
         activity_at: Option<DateTime<Utc>>,
         archived_at: Option<DateTime<Utc>>,
     ) -> Result<Self, sqlx::Error> {
+        // Dirty-guard (ADR-0007 one conflict policy): if the local task linked to this shared_task_id
+        // has an UNACKED outbound op, an inbound update must NOT overwrite it — the local edit travels
+        // up the ordered outbox first (ADR-0008). Skip the apply and return the retained local row.
+        if let Some(existing) = Task::find_by_shared_task_id(pool, shared_task_id).await?
+            && crate::models::node_outbox::OutboxRepository::has_unacked_for_entity(pool, existing.id)
+                .await?
+        {
+            return Ok(existing);
+        }
         let now = Utc::now();
         let result = sqlx::query_as!(
             Task,
@@ -405,6 +414,80 @@ impl Task {
                AND shared_task_id NOT IN ({})"#,
             placeholders_str
         );
+
+        let mut query_builder = sqlx::query(&query).bind(project_id);
+        for id in active_shared_task_ids {
+            query_builder = query_builder.bind(id);
+        }
+
+        let result = query_builder.execute(pool).await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Soft-unlink a task from a deleted hive shared task (ADR-0007 one-delete semantic).
+    ///
+    /// Clears `shared_task_id` (tombstone) but RETAINS the local row and its `task_attempt`/run
+    /// artifacts — the hub owns the board, the node never loses local work it ran. This is the
+    /// SINGLE soft-unlink used by BOTH inbound legs — the WS `task.deleted` path (`processor.rs`, via a
+    /// `&mut Transaction`) AND the cold-start/gap-fill reconcile (`node_runner.rs`, via a `&SqlitePool`) —
+    /// so a hive soft-delete yields ONE node outcome regardless of which leg applies it. Executor-generic
+    /// (mirrors `set_shared_task_id`) so the tx-based caller can pass `tx.as_mut()`.
+    /// Returns the number of rows unlinked.
+    pub async fn unlink_by_shared_task_id<'e, E>(
+        executor: E,
+        shared_task_id: Uuid,
+    ) -> Result<u64, sqlx::Error>
+    where
+        E: Executor<'e, Database = Sqlite>,
+    {
+        let result = sqlx::query!(
+            r#"UPDATE tasks
+               SET shared_task_id = NULL, updated_at = CURRENT_TIMESTAMP
+               WHERE shared_task_id = ?"#,
+            shared_task_id
+        )
+        .execute(executor)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Soft-unlink shared tasks no longer present in the reconcile snapshot (ADR-0007).
+    ///
+    /// The stale-sweep analogue of `unlink_by_shared_task_id`: any task in this project whose
+    /// `shared_task_id` is NOT in the active set is unlinked (cleared) rather than hard-deleted,
+    /// preserving local attempts. Only touches rows that HAVE a `shared_task_id` (hive-synced),
+    /// leaving locally-created tasks untouched. Returns the number of rows unlinked.
+    pub async fn unlink_stale_shared_tasks(
+        pool: &SqlitePool,
+        project_id: Uuid,
+        active_shared_task_ids: &[Uuid],
+    ) -> Result<u64, sqlx::Error> {
+        // NOTE: do NOT short-circuit when `active_shared_task_ids` is empty — an empty snapshot means
+        // EVERY linked task in this project is stale (the hive dropped them all), so all
+        // `shared_task_id` values for linked tasks must be cleared. The early-return that was here
+        // (`if active.is_empty() { return Ok(0); }`) skipped the unlink entirely, leaving stale links.
+        let query = if active_shared_task_ids.is_empty() {
+            // No active tasks → unlink ALL linked tasks in this project.
+            r#"UPDATE tasks
+               SET shared_task_id = NULL, updated_at = CURRENT_TIMESTAMP
+               WHERE project_id = $1
+               AND shared_task_id IS NOT NULL"#.to_string()
+        } else {
+            let placeholders: Vec<String> = active_shared_task_ids
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("${}", i + 2))
+                .collect();
+            let placeholders_str = placeholders.join(", ");
+            format!(
+                r#"UPDATE tasks
+                   SET shared_task_id = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE project_id = $1
+                   AND shared_task_id IS NOT NULL
+                   AND shared_task_id NOT IN ({})"#,
+                placeholders_str
+            )
+        };
 
         let mut query_builder = sqlx::query(&query).bind(project_id);
         for id in active_shared_task_ids {
@@ -793,6 +876,107 @@ mod tests {
         project::{CreateProject, Project},
         task::{CreateTask, tests::setup_test_pool},
     };
+
+    #[tokio::test]
+    async fn unlink_by_shared_task_id_keeps_local_row() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id).await.unwrap();
+
+        let local_id = Uuid::new_v4();
+        let shared_id = Uuid::new_v4();
+        Task::create(&pool, &CreateTask::from_title_description(project_id, "t".into(), None), local_id)
+            .await.unwrap();
+        Task::set_shared_task_id(&pool, local_id, Some(shared_id)).await.unwrap();
+
+        // Reconcile leg: hive deleted this shared task.
+        let n = Task::unlink_by_shared_task_id(&pool, shared_id).await.unwrap();
+        assert_eq!(n, 1, "one row unlinked");
+
+        let still = Task::find_by_id(&pool, local_id).await.unwrap();
+        assert!(still.is_some(), "local row is RETAINED (soft-unlink, not hard-delete)");
+        assert!(still.unwrap().shared_task_id.is_none(), "shared_task_id cleared (tombstone)");
+    }
+
+    #[tokio::test]
+    async fn unlink_stale_shared_tasks_keeps_local_rows() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id).await.unwrap();
+
+        let kept = Uuid::new_v4();
+        let stale = Uuid::new_v4();
+        let kept_shared = Uuid::new_v4();
+        let stale_shared = Uuid::new_v4();
+        for (lid, sid) in [(kept, kept_shared), (stale, stale_shared)] {
+            Task::create(&pool, &CreateTask::from_title_description(project_id, "t".into(), None), lid)
+                .await.unwrap();
+            Task::set_shared_task_id(&pool, lid, Some(sid)).await.unwrap();
+        }
+
+        // Active set contains only `kept_shared`; `stale_shared` is no longer present on hive.
+        let n = Task::unlink_stale_shared_tasks(&pool, project_id, &[kept_shared]).await.unwrap();
+        assert_eq!(n, 1, "only the stale row is unlinked");
+
+        assert!(Task::find_by_id(&pool, stale).await.unwrap().unwrap().shared_task_id.is_none());
+        assert_eq!(
+            Task::find_by_id(&pool, kept).await.unwrap().unwrap().shared_task_id,
+            Some(kept_shared),
+            "active task stays linked",
+        );
+        assert!(Task::find_by_id(&pool, stale).await.unwrap().is_some(), "stale local row retained");
+    }
+
+    #[tokio::test]
+    async fn unlink_stale_shared_tasks_clears_all_when_active_set_is_empty() {
+        // An empty active set means the hive dropped every shared task in this project — ALL linked
+        // tasks must be unlinked (not skipped, which would leave stale links).
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id).await.unwrap();
+
+        let stale = Uuid::new_v4();
+        let stale_shared = Uuid::new_v4();
+        Task::create(&pool, &CreateTask::from_title_description(project_id, "t".into(), None), stale)
+            .await.unwrap();
+        Task::set_shared_task_id(&pool, stale, Some(stale_shared)).await.unwrap();
+
+        // Empty active set → every linked task in the project is unlinked.
+        let n = Task::unlink_stale_shared_tasks(&pool, project_id, &[]).await.unwrap();
+        assert_eq!(n, 1, "the linked row is unlinked even when the active set is empty");
+        assert!(Task::find_by_id(&pool, stale).await.unwrap().unwrap().shared_task_id.is_none(),
+            "stale link cleared on empty active set");
+    }
 
     #[tokio::test]
     async fn test_shared_task_id_operations() {
@@ -1428,5 +1612,140 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].id, synced_task_id);
         assert_eq!(tasks[0].title, "Synced Task");
+    }
+
+    #[tokio::test]
+    async fn upsert_remote_task_skips_when_local_op_unacked() {
+        use crate::models::node_outbox::{NewOutboxOp, OutboxRepository};
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id).await.unwrap();
+
+        let local_id = Uuid::new_v4();
+        let shared_id = Uuid::new_v4();
+        Task::upsert_remote_task(
+            &pool, local_id, project_id, shared_id, "remote-title".into(), None,
+            TaskStatus::InReview, None, None, None, 1, None, None,
+        ).await.unwrap();
+        let row = Task::find_by_shared_task_id(&pool, shared_id).await.unwrap().unwrap();
+
+        OutboxRepository::enqueue_op(&pool, NewOutboxOp {
+            op_type: "task.upsert".into(), entity_type: "task".into(), entity_id: row.id,
+            payload: serde_json::json!({}), idempotency_key: format!("task:{}:1", row.id),
+            fencing_token: None,
+        }).await.unwrap();
+
+        let returned = Task::upsert_remote_task(
+            &pool, Uuid::new_v4(), project_id, shared_id, "HIVE-CLOBBER".into(), None,
+            TaskStatus::Done, None, None, None, 2, None, None,
+        ).await.unwrap();
+
+        let after = Task::find_by_shared_task_id(&pool, shared_id).await.unwrap().unwrap();
+        assert_eq!(after.title, "remote-title", "local edit not clobbered (apply skipped)");
+        assert_eq!(after.remote_version, 1, "version not advanced while dirty");
+        assert_eq!(returned.title, "remote-title", "returns the retained local row");
+    }
+
+    #[tokio::test]
+    async fn ts5_one_delete_outcome_both_legs_attempt_retained() {
+        use crate::models::task_attempt::{CreateTaskAttempt, TaskAttempt};
+        use executors::executors::BaseCodingAgent;
+
+        // Helper: build a project + a hive-linked task that has a local task_attempt.
+        async fn linked_task_with_attempt(pool: &sqlx::SqlitePool) -> (uuid::Uuid, uuid::Uuid) {
+            let project_id = Uuid::new_v4();
+            let project_data = CreateProject {
+                name: "Test Project".to_string(),
+                git_repo_path: format!("/tmp/test-repo-{}", project_id),
+                use_existing_repo: true,
+                clone_url: None,
+                setup_script: None,
+                dev_script: None,
+                cleanup_script: None,
+                copy_files: None,
+            };
+            Project::create(pool, &project_data, project_id).await.unwrap();
+            let local_id = Uuid::new_v4();
+            let shared_id = Uuid::new_v4();
+            Task::create(pool, &CreateTask::from_title_description(project_id, "t".into(), None), local_id)
+                .await.unwrap();
+            Task::set_shared_task_id(pool, local_id, Some(shared_id)).await.unwrap();
+            // TaskAttempt::create(pool, &data, attempt_id, task_id) — 4 args (see task_attempt.rs:870).
+            TaskAttempt::create(
+                pool,
+                &CreateTaskAttempt {
+                    executor: BaseCodingAgent::ClaudeCode,
+                    base_branch: "main".into(),
+                    branch: "vk/x".into(),
+                    origin_node_id: None,
+                },
+                Uuid::new_v4(),
+                local_id,
+            ).await.unwrap();
+            (local_id, shared_id)
+        }
+
+        // LEG A — reconcile path (&SqlitePool).
+        let (pool, _t1) = setup_test_pool().await;
+        let (local_a, shared_a) = linked_task_with_attempt(&pool).await;
+        let n = Task::unlink_by_shared_task_id(&pool, shared_a).await.unwrap();
+        assert_eq!(n, 1);
+
+        // LEG B — WS path (&mut Transaction), SAME helper.
+        let (local_b, shared_b) = linked_task_with_attempt(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let n = Task::unlink_by_shared_task_id(tx.as_mut(), shared_b).await.unwrap();
+        assert_eq!(n, 1);
+        tx.commit().await.unwrap();
+
+        // IDENTICAL outcome on both legs: row retained, shared_task_id cleared, attempt retained.
+        for local_id in [local_a, local_b] {
+            let task = Task::find_by_id(&pool, local_id).await.unwrap();
+            assert!(task.is_some(), "local task RETAINED (soft-unlink, not hard-delete)");
+            assert!(task.unwrap().shared_task_id.is_none(), "shared_task_id cleared (tombstone)");
+            let attempts = TaskAttempt::fetch_all(&pool, Some(local_id)).await.unwrap();
+            assert_eq!(attempts.len(), 1, "local task_attempt RETAINED — node never loses work it ran");
+        }
+    }
+
+    #[tokio::test]
+    async fn upsert_remote_task_applies_when_clean() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id).await.unwrap();
+
+        let shared_id = Uuid::new_v4();
+        Task::upsert_remote_task(
+            &pool, Uuid::new_v4(), project_id, shared_id, "v1".into(), None,
+            TaskStatus::InReview, None, None, None, 1, None, None,
+        ).await.unwrap();
+        Task::upsert_remote_task(
+            &pool, Uuid::new_v4(), project_id, shared_id, "v2".into(), None,
+            TaskStatus::InReview, None, None, None, 2, None, None,
+        ).await.unwrap();
+
+        let after = Task::find_by_shared_task_id(&pool, shared_id).await.unwrap().unwrap();
+        assert_eq!(after.title, "v2", "clean path still applies");
+        assert_eq!(after.remote_version, 2);
     }
 }

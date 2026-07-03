@@ -13,8 +13,9 @@ The system uses three complementary sync methods:
 
 | Method | Direction | Use Case | Status |
 |--------|-----------|----------|--------|
-| **ElectricSQL** | Bidirectional | Task data, projects, nodes | Modern (recommended) |
-| **WebSocket** | Bidirectional | Events, logs, heartbeats | Active |
+| **WS Activity Stream** | Bidirectional | Task data (op-batch/ack/digest) | Active (ADR-0007) |
+| **ElectricSQL** | Hive → Node | Projects, nodes, logs (non-task sync) | Active |
+| **WebSocket** | Bidirectional | Events, heartbeats, lease management | Active |
 | **REST API** | Pull only | Node cache, activity polling | Legacy (deprecated) |
 
 ## Architecture Diagram
@@ -31,19 +32,22 @@ The system uses three complementary sync methods:
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │                       ElectricSQL                             │   │
 │  │              (Shape API: /v1/shape?table=...)                 │   │
+│  │              (projects, nodes, logs — NOT tasks)              │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                               │                                      │
 └───────────────────────────────┼──────────────────────────────────────┘
                                 │
               ┌─────────────────┼─────────────────┐
               │ HTTP (NDJSON)   │   WebSocket     │
-              │                 │                 │
+              │ (ElectricSQL    │ (op-batch/ack   │
+              │  for projects)  │  + activity)    │
               ▼                 ▼                 ▼
 ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
 │   NODE: Mac      │   │   NODE: Linux    │   │   NODE: Windows  │
 │                  │   │                  │   │                  │
-│  ElectricSync ◄──┼───┼──► Tasks         │   │                  │
-│  HiveClient  ◄───┼───┼──► Events        │   │                  │
+│  ElectricSync ◄──┼───┼──► Projects      │   │                  │
+│  HiveClient  ◄───┼───┼──► Tasks (ops)   │   │                  │
+│  node_outbox  ───┼───┼──► (durable)     │   │                  │
 │                  │   │                  │   │                  │
 │  [SQLite DB]     │   │  [SQLite DB]     │   │  [SQLite DB]     │
 └──────────────────┘   └──────────────────┘   └──────────────────┘
@@ -51,9 +55,11 @@ The system uses three complementary sync methods:
 
 ---
 
-## ElectricSQL Sync
+## ElectricSQL Sync (Non-Task Data)
 
-ElectricSQL provides real-time, bidirectional sync using PostgreSQL's logical replication.
+ElectricSQL provides real-time sync for non-task data (projects, nodes, logs) using PostgreSQL's
+logical replication. Task sync was moved to the WS activity stream (ADR-0007); ElectricSQL is no
+longer used for `shared_tasks`.
 
 ### How It Works
 
@@ -65,22 +71,22 @@ ElectricSQL provides real-time, bidirectional sync using PostgreSQL's logical re
 
 ### Synced Tables
 
-| Hive Table | Local Representation | Direction |
-|------------|---------------------|-----------|
-| `shared_tasks` | `tasks` (via `shared_task_id`) | Bidirectional |
-| `projects` | `projects` (via `remote_project_id`) | Bidirectional |
-| `nodes` | `cached_nodes` | Hive → Node |
-| `node_projects` | `cached_node_projects` | Hive → Node |
-| `node_task_assignments` | Task status | Hive → Node |
+| Hive Table | Local Representation | Direction | Method |
+|------------|---------------------|-----------|--------|
+| `shared_tasks` | `tasks` (via `shared_task_id`) | Bidirectional | WS activity stream + outbox (ADR-0007) |
+| `projects` | `projects` (via `remote_project_id`) | Bidirectional | ElectricSQL |
+| `nodes` | `cached_nodes` | Hive → Node | ElectricSQL |
+| `node_projects` | `cached_node_projects` | Hive → Node | ElectricSQL |
+| `node_task_assignments` | Task status | Hive → Node | WebSocket (lease grant/revoke) |
 
 ### ElectricSQL Shape Configuration
 
 ```rust
-// Example: Sync tasks for a specific project
+// Example: Sync projects for a specific organization
 let config = ShapeConfig {
     base_url: "https://electric.example.com".to_string(),
-    table: "shared_tasks".to_string(),
-    where_clause: Some(format!(r#""project_id" = '{}'"#, project_id)),
+    table: "projects".to_string(),
+    where_clause: Some(format!(r#""organization_id" = '{}'"#, org_id)),
     columns: None,  // All columns
 };
 ```
@@ -113,30 +119,29 @@ WebSocket provides real-time bidirectional messaging for events that require imm
 |---------|---------|------|
 | `Auth` | Initial authentication | API key, node capabilities |
 | `Heartbeat` | Health check | Node status, active tasks |
-| `TaskStatus` | Execution state change | Task ID, status, local IDs |
-| `TaskOutput` | Log streaming | Stdout/stderr content |
-| `TaskProgress` | Execution milestone | Event type, message, metadata |
+| `OpBatch` | Durable op-log batch (P1) | Vec of `OutboxOp` (task/attempt/log ops) |
+| `LeaseHeartbeat` | Lease renewal (P2) | Vec of assignment_ids |
+| `Digest` | Anti-entropy digest (P5) | Vec of `DigestEntry` (entity_type, entity_id, version) |
 | `LinkProject` | Register project | Local project ID, git path |
 | `UnlinkProject` | Deregister project | Project ID |
-| `AttemptSync` | Sync task attempt | Attempt ID, executor, branch, timestamps |
-| `ExecutionSync` | Sync execution process | Process ID, status, commits, exit code |
-| `LogsBatch` | Batch log entries | Array of log entries with execution_process_id |
 | `LabelSync` | Sync label to hive | Label ID, name, icon, color, version |
-| `TaskSync` | Sync local task to hive | Task details for tasks created locally |
 
 ### Message Types: Hive → Node
 
 | Message | Purpose | Data |
 |---------|---------|------|
-| `AuthResult` | Confirm authentication | Node ID, linked projects |
-| `TaskAssign` | Dispatch task | Task details, project info |
-| `TaskCancel` | Cancel execution | Task ID |
+| `Authenticated` | Auth response | Node ID |
+| `OpAck` | Op-log acknowledgment (P1) | `applied_through_seq` |
+| `LeaseGrant` | Lease granted (P2) | Assignment ID, fencing token, lease expires at |
+| `LeaseRevoked` | Lease revoked (P2) | Assignment ID, reason |
+| `DigestResult` | Anti-entropy reply (P5) | `resend_from_seq`, `pull_entities` |
+| `LabelUpdated` | Label broadcast | Label data |
+| `LabelDeleted` | Label deletion | Label ID |
+| `SyncState` | Project sync state | Vec of project links |
+|---------|---------|------|
 | `ProjectSync` | New project link | Project info from another node |
 | `NodeRemoved` | Node was removed | - |
-| `StatusRequest` | Request status | - |
-| `HeartbeatAck` | Acknowledge heartbeat | - |
 | `LabelSync` | Broadcast label from another node | Shared label ID, name, icon, color, version |
-| `TaskSyncResponse` | Confirm task sync | Task ID, shared_task_id |
 
 ### Task Assignment Flow
 
@@ -297,11 +302,10 @@ If direct connection fails or `public_url` is not set:
 
 | Service | Crate | File | Purpose |
 |---------|-------|------|---------|
-| ElectricSync | services | `electric_sync.rs` | Shape API client |
-| ElectricTaskSync | services | `electric_task_sync.rs` | Task-specific sync |
-| HiveClient | services | `hive_client.rs` | WebSocket connection |
-| HiveSyncService | services | `hive_sync.rs` | Background entity sync |
-| NodeRunner | services | `node_runner.rs` | Task assignment handling |
+| ElectricSync | services | `electric_sync.rs` | Shape API client (non-task sync) |
+| HiveClient | services | `hive_client.rs` | WebSocket connection + op-batch/ack |
+| HiveSyncService | services | `hive_sync.rs` | Digest anti-entropy + background sync |
+| NodeRunner | services | `node_runner.rs` | Task handling + outbox re-stream |
 | NodeProxyClient | services | `node_proxy_client.rs` | Node-to-node HTTP |
 | RemoteClient | services | `remote_client.rs` | REST API client |
 | LabelPublisher | services | `share/label_publisher.rs` | Label sync to/from Hive |
@@ -568,12 +572,12 @@ WARN  Connection lost, reconnecting in 5s
 ERROR Failed to reconnect after 5 attempts
 ```
 
-### ElectricSQL Shape Polling
+### ElectricSQL Shape Polling (Non-Task Data)
 
-Shape API returns offset for pagination:
+Shape API returns offset for pagination (used for projects, nodes, logs — NOT tasks):
 
 ```text
-GET /v1/shape?table=shared_tasks&offset=0_0
+GET /v1/shape?table=projects&offset=0_0
 → Returns NDJSON with operations
 → Last line contains new offset: 1234_5678
 ```

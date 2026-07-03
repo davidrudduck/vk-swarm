@@ -268,7 +268,8 @@ async fn fetch(pool: &SqlitePool) -> Result<ActivityFeed, sqlx::Error>
 
 **Source:** `crates/db/src/models/shared_task.rs`
 
-Legacy caching of remote tasks from the Hive. Being replaced by ElectricSQL shape subscriptions.
+Legacy caching of remote tasks from the Hive. Replaced by the WS activity stream (ADR-0007); task
+sync now flows through the durable outbox + op-batch/ack model directly to the `tasks` table.
 
 ### Quick Reference
 
@@ -280,8 +281,8 @@ Legacy caching of remote tasks from the Hive. Being replaced by ElectricSQL shap
 | `delete` | Remove task | `()` |
 
 **Notes:**
-- Used for WebSocket-based sync (being deprecated)
-- ElectricSQL provides real-time sync to `tasks` table directly
+- Superseded by WS activity stream + `node_outbox` (ADR-0007)
+- Task sync is now durable + idempotent via op-batch/ack
 
 ---
 
@@ -289,7 +290,7 @@ Legacy caching of remote tasks from the Hive. Being replaced by ElectricSQL shap
 
 **Source:** `crates/db/src/models/cached_node.rs`
 
-Legacy node caching for swarm visibility. Being replaced by ElectricSQL.
+Legacy node caching for swarm visibility. Being replaced by ElectricSQL shape subscriptions.
 
 ### Quick Reference
 

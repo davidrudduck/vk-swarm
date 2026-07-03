@@ -25,8 +25,8 @@ Vibe Kanban uses a distributed database architecture with two database systems w
 │                                    │                                         │
 │                    ┌───────────────┼───────────────┐                        │
 │                    │               │               │                        │
-│              ElectricSQL      WebSocket       REST API                      │
-│              (real-time)    (events/logs)    (legacy)                       │
+│              WS activity    WebSocket       REST API                      │
+│              stream         (events/logs)    (legacy)                       │
 └────────────────────┼───────────────┼───────────────┼────────────────────────┘
                      │               │               │
         ┌────────────┴───────────────┴───────────────┴────────────┐
@@ -114,10 +114,10 @@ The PostgreSQL hive database is the source of truth for:
 
 | Data Type | Primary Location | Sync Direction | Method |
 |-----------|-----------------|----------------|--------|
-| Task definitions | PostgreSQL | Hive → Node | ElectricSQL |
-| Task status | Both | Bidirectional | ElectricSQL + WebSocket |
-| Task assignments | PostgreSQL | Hive → Node | WebSocket |
-| Execution logs | SQLite | Node → Hive | WebSocket (streaming) |
+| Task definitions | PostgreSQL | Bidirectional | WS activity stream + durable outbox (ADR-0007) |
+| Task status | Both | Bidirectional | WS activity stream + durable outbox |
+| Task assignments | PostgreSQL | Hive → Node | WebSocket (lease grant/revoke) |
+| Execution logs | SQLite | Node → Hive | Durable outbox → `OpBatch` |
 | Execution history | SQLite | Node only | Not synced |
 | Node status | PostgreSQL | Node → Hive | WebSocket (heartbeat) |
 | Organizations/Users | PostgreSQL | Hive only | Not synced |
@@ -143,7 +143,7 @@ The PostgreSQL hive database is the source of truth for:
 
 - Robust multi-user support
 - Advanced features (partitioning, logical replication)
-- ElectricSQL compatibility for real-time sync
+- Logical replication support for ElectricSQL (non-task sync)
 - Proven reliability for production workloads
 
 ## Project Tables

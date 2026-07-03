@@ -214,6 +214,13 @@ pub enum SharedTaskError {
     Serialization(#[from] serde_json::Error),
 }
 
+/// One (source_task_id, version) the hive holds for a node — the hive side of the SC5 digest compare.
+#[derive(Debug, Clone)]
+pub struct NodeSourceTaskVersion {
+    pub source_task_id: Uuid,
+    pub version: i64,
+}
+
 pub struct SharedTaskRepository<'a> {
     pool: &'a PgPool,
 }
@@ -395,6 +402,50 @@ impl<'a> SharedTaskRepository<'a> {
         .await?;
 
         Ok(task)
+    }
+
+    /// All non-deleted shared_tasks the hive holds for `source_node_id`, keyed by the id bridge
+    /// (`source_task_id` = the node's local task id). Used by `handle_digest` to compute the
+    /// hive-has/node-lacks set (SC5).
+    pub async fn list_source_task_versions_for_node(
+        &self,
+        source_node_id: Uuid,
+    ) -> Result<Vec<NodeSourceTaskVersion>, SharedTaskError> {
+        let rows = sqlx::query!(
+            r#"SELECT source_task_id AS "source_task_id!: Uuid", version AS "version!"
+               FROM shared_tasks
+               WHERE source_node_id = $1
+                 AND source_task_id IS NOT NULL
+                 AND deleted_at IS NULL"#,
+            source_node_id
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| NodeSourceTaskVersion { source_task_id: r.source_task_id, version: r.version })
+            .collect())
+    }
+
+    /// `source_task_id`s of SOFT-DELETED shared_tasks for `source_node_id` (ADR-0007 tombstones).
+    /// Used by `handle_digest_compare` to detect tasks the hive has soft-deleted but the node still
+    /// reports as active — those are routed to `pull_entities` so the reconcile leg unlinks them
+    /// (`deleted_task_ids` → `unlink_by_shared_task_id`), closing the digest convergence loop.
+    pub async fn list_soft_deleted_source_task_ids_for_node(
+        &self,
+        source_node_id: Uuid,
+    ) -> Result<Vec<Uuid>, SharedTaskError> {
+        let rows = sqlx::query!(
+            r#"SELECT source_task_id AS "source_task_id!: Uuid"
+               FROM shared_tasks
+               WHERE source_node_id = $1
+                 AND source_task_id IS NOT NULL
+                 AND deleted_at IS NOT NULL"#,
+            source_node_id
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.source_task_id).collect())
     }
 
     /// Update the source tracking fields on a task.
