@@ -191,6 +191,7 @@ impl<'a> TaskAssignmentRepository<'a> {
             WHERE id = $1
               AND node_id = $2
               AND completed_at IS NULL
+              AND lease_expires_at > NOW()
             RETURNING id, node_id, task_id, fencing_token, lease_expires_at
             "#,
         )
@@ -236,6 +237,45 @@ impl<'a> TaskAssignmentRepository<'a> {
             "#,
         )
         .bind(assignment_id)
+        .fetch_optional(self.pool)
+        .await?;
+
+        Ok(assignment)
+    }
+
+    /// Find an assignment by `id` but ONLY if it is an active lease held by `node_id`
+    /// (tournament R1/A): `find_by_id` filters solely on `id`, so any node that knows
+    /// the assignment_id can look it up. This method adds `node_id`, `completed_at IS NULL`,
+    /// and `lease_expires_at IS NOT NULL` guards — the 304 status handler must only act on
+    /// an assignment whose lease this node currently holds, not a reclaimed or foreign one.
+    pub async fn find_active_lease_for_node(
+        &self,
+        assignment_id: Uuid,
+        node_id: Uuid,
+    ) -> Result<Option<NodeTaskAssignment>, TaskAssignmentError> {
+        let assignment = sqlx::query_as::<_, NodeTaskAssignment>(
+            r#"
+            SELECT
+                id,
+                task_id,
+                node_id,
+                node_project_id,
+                local_task_id,
+                local_attempt_id,
+                execution_status,
+                assigned_at,
+                started_at,
+                completed_at,
+                created_at
+            FROM node_task_assignments
+            WHERE id = $1
+              AND node_id = $2
+              AND completed_at IS NULL
+              AND lease_expires_at > NOW()
+            "#,
+        )
+        .bind(assignment_id)
+        .bind(node_id)
         .fetch_optional(self.pool)
         .await?;
 

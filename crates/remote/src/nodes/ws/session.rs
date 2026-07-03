@@ -653,6 +653,30 @@ async fn handle_task_status(
         TaskExecutionStatus::Cancelled => "cancelled",
     };
 
+    // Guard the entire handler on an active, unexpired lease (tournament R1/A + R2/A).
+    // The legacy `find_by_id` filtered only on `id`, so any node that knew the
+    // assignment_id could mutate the assignment row AND propagate a shared-task status.
+    // `find_active_lease_for_node` guards on `node_id`, `completed_at IS NULL`, AND
+    // `lease_expires_at > NOW()` — only the current, unexpired lease-holder may write.
+    // This gate precedes the assignment-row writes below so a node whose lease has
+    // expired (or was never held) cannot mutate `execution_status` or `local_task_id`.
+    let assignment_repo = TaskAssignmentRepository::new(pool);
+    let assignment = match assignment_repo
+        .find_active_lease_for_node(status.assignment_id, node_id)
+        .await
+    {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            tracing::warn!(
+                node_id = %node_id,
+                assignment_id = %status.assignment_id,
+                "rejected task status update — no active lease for this node (ADR-0010 §D)"
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(HandleError::Database(e.to_string())),
+    };
+
     // Update local IDs if provided
     if status.local_task_id.is_some() || status.local_attempt_id.is_some() {
         service
@@ -672,9 +696,7 @@ async fn handle_task_status(
         .map_err(|e| HandleError::Database(e.to_string()))?;
 
     // Also update the shared task status
-    // First, get the task_id from the assignment
-    let assignment_repo = TaskAssignmentRepository::new(pool);
-    if let Ok(Some(assignment)) = assignment_repo.find_by_id(status.assignment_id).await {
+    {
         // Map execution status to the proposed shared task status.
         let proposed = match status.status {
             TaskExecutionStatus::Pending | TaskExecutionStatus::Starting => TaskStatus::Todo,
@@ -1587,15 +1609,34 @@ async fn handle_task_sync(
     ws_sender: &mut futures::stream::SplitSink<WebSocket, Message>,
 ) -> Result<(), HandleError> {
     use crate::db::node_local_projects::NodeLocalProjectRepository;
-    use crate::db::tasks::{SharedTaskRepository, TaskStatus, UpsertTaskFromNodeData};
+    use crate::db::tasks::{SharedTaskRepository, UpsertTaskFromNodeData};
 
-    let status = match task_sync.status.as_str() {
-        "todo" => TaskStatus::Todo,
-        "in_progress" | "in-progress" => TaskStatus::InProgress,
-        "in_review" | "in-review" => TaskStatus::InReview,
-        "done" => TaskStatus::Done,
-        "cancelled" => TaskStatus::Cancelled,
-        _ => TaskStatus::Todo,
+    // Canonicalize the node-reported status via the single boundary helper (302 / tournament R1/B).
+    // The node serializes lowercase (`inprogress`/`inreview`); the old manual match only checked
+    // kebab-case forms and fell through to `Todo` — silently corrupting `InProgress`/`InReview`.
+    // An unknown wire value is a node-side serialization bug; we surface it as a `success: false`
+    // response rather than `?`-propagating (which would leave the node waiting on a response).
+    // This mirrors `handle_op_batch_apply`'s SKIP+ADVANCE for the identical failure class (R2/E).
+    let status = match crate::nodes::ws::status_machine::canonical_status_from_node(&task_sync.status)
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                node_id = %node_id,
+                local_task_id = %task_sync.local_task_id,
+                status = %task_sync.status,
+                error = %e,
+                "task_sync: rejected unknown status wire value"
+            );
+            let r = TaskSyncResponseMessage {
+                local_task_id: task_sync.local_task_id,
+                shared_task_id: Uuid::nil(),
+                success: false,
+                error: Some(format!("REJECTED: unknown status wire value: {}", e)),
+            };
+            let _ = send_message(ws_sender, &HiveMessage::TaskSyncResponse(r)).await;
+            return Ok(());
+        }
     };
 
     // First check if the node_local_projects record exists
@@ -1705,6 +1746,73 @@ async fn handle_task_sync(
     let sanitized_description = sanitize_option_string(task_sync.description.clone());
 
     let repo = SharedTaskRepository::new(pool);
+
+    // SC4 author guard (ADR-0010 §D / tournament R1/C): mirror the guard in
+    // `handle_op_batch_apply` — a node may not author hive-only status transitions
+    // (todo→in-progress, in-review→done, in-review→in-progress, *→cancelled) nor any
+    // out-of-matrix transition. `handle_task_sync` is the third write site (in addition
+    // to 303's `handle_op_batch_apply` and 304's `handle_task_status`); without this
+    // guard, a node could bypass the matrix via a TaskSync message.
+    if let Some(existing) = repo
+        .find_by_source_task_id(node_id, task_sync.local_task_id)
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?
+    {
+        let current = existing.status;
+        if status != current {
+            use crate::nodes::ws::status_machine::{TransitionAuthor, author_of_transition};
+            match author_of_transition(current, status) {
+                Some(TransitionAuthor::Node) => {
+                    // Node-authored transition; proceed to upsert.
+                }
+                Some(TransitionAuthor::Hive) => {
+                    tracing::warn!(
+                        node_id = %node_id,
+                        local_task_id = %task_sync.local_task_id,
+                        shared_task_id = %existing.id,
+                        from = ?current,
+                        to = ?status,
+                        "task_sync: reject (hive-authored transition reported by node)"
+                    );
+                    let r = TaskSyncResponseMessage {
+                        local_task_id: task_sync.local_task_id,
+                        shared_task_id: existing.id,
+                        success: false,
+                        error: Some(format!(
+                            "Status transition {:?}→{:?} is hive-only — not authorizable from a node",
+                            current, status
+                        )),
+                    };
+                    let _ = send_message(ws_sender, &HiveMessage::TaskSyncResponse(r)).await;
+                    return Ok(());
+                }
+                None => {
+                    tracing::warn!(
+                        node_id = %node_id,
+                        local_task_id = %task_sync.local_task_id,
+                        shared_task_id = %existing.id,
+                        from = ?current,
+                        to = ?status,
+                        "task_sync: reject (illegal status transition)"
+                    );
+                    let r = TaskSyncResponseMessage {
+                        local_task_id: task_sync.local_task_id,
+                        shared_task_id: existing.id,
+                        success: false,
+                        error: Some(format!(
+                            "Status transition {:?}→{:?} is not in the transition matrix",
+                            current, status
+                        )),
+                    };
+                    let _ = send_message(ws_sender, &HiveMessage::TaskSyncResponse(r)).await;
+                    return Ok(());
+                }
+            }
+        }
+        // incoming == current → no-op (metadata-only update); proceed to upsert.
+    }
+    // Task not found → creation path; no `from` status, no guard. Proceed to upsert.
+
     match repo
         .upsert_from_node(UpsertTaskFromNodeData {
             swarm_project_id,
@@ -1968,59 +2076,108 @@ async fn handle_op_batch_apply(
             .and_then(|s| s.parse::<Uuid>().ok());
 
         if let Some(shared_id) = shared_id {
-            // Narrow read: do NOT use `NodeTaskAssignment` FromRow (the `fencing_token` column
-            // is not on that struct — 203's judgment call). Read only `id` + `fencing_token`.
-            let assignment: Option<(Uuid, i64)> = sqlx::query_as(
-                r#"
-                SELECT id, fencing_token
-                FROM node_task_assignments
-                WHERE task_id = $1 AND completed_at IS NULL
-                "#,
+            // Node-owned task bypass (tournament R1/G): a task created by THIS node
+            // (`owner_node_id == node_id`) has no `node_task_assignments` row — the
+            // fence lookup below would find no assignment and `break`, rejecting the
+            // owner's own writes. Query `owner_node_id` and if it matches `node_id`,
+            // skip the lease+token fence (the owner does not need a lease to write its
+            // own task). Only hive-assigned tasks (owner_node_id != node_id or NULL)
+            // require the fence.
+            let owner_node_id: Option<Uuid> = sqlx::query_scalar(
+                r#"SELECT owner_node_id FROM shared_tasks WHERE id = $1 AND deleted_at IS NULL"#,
             )
             .bind(shared_id)
             .fetch_optional(pool)
             .await
             .map_err(|e| HandleError::Database(e.to_string()))?;
 
-            if let Some((assignment_id, current_token)) = assignment {
-                let stale = match op.fencing_token {
-                    None => true,
-                    Some(tok) => tok < current_token,
-                };
-                if stale {
-                    // REJECT (permanent): do NOT upsert, do NOT record node_op_log, do NOT
-                    // advance applied_through_seq past this op. Mirror 106's PARK control-flow
-                    // of NOT advancing (break, not continue), but this is a permanent reject,
-                    // not a transient park. Emit LeaseRevoked so the partitioned writer learns
-                    // its lease is gone.
-                    tracing::warn!(
-                        node_id = %node_id,
-                        seq = op.seq,
-                        assignment_id = %assignment_id,
-                        op_token = ?op.fencing_token,
-                        current_token = current_token,
-                        "op_batch: reject (stale fencing token) — LeaseRevoked"
-                    );
-                    revokes.push((assignment_id, "stale fencing token".to_string()));
-                    break;
-                }
-            } else {
-                // No active assignment for a hive-managed task (shared_task_id present):
-                // the lease was reclaimed or the task was completed/cancelled. A late write
-                // from a partitioned node MUST NOT overwrite the completed task (SC3). Drop
-                // the op and stop processing this batch — the node's self-fence watchdog
-                // and the reclaim sweep's LeaseRevoked event will halt the node.
-                tracing::warn!(
+            if owner_node_id == Some(node_id) {
+                // Node-owned task — bypass the fence. Proceed to status mapping + upsert.
+                tracing::trace!(
                     node_id = %node_id,
                     seq = op.seq,
                     shared_task_id = %shared_id,
-                    op_token = ?op.fencing_token,
-                    "op_batch: reject (no active assignment for hive-managed task) — lease reclaimed or completed"
+                    "op_batch: node-owned task, skipping lease+token fence"
                 );
-                break;
+            } else {
+                // Narrow read: do NOT use `NodeTaskAssignment` FromRow (the `fencing_token` column
+                // is not on that struct — 203's judgment call). Read only `id` + `fencing_token`.
+                let assignment: Option<(Uuid, i64)> = sqlx::query_as(
+                    r#"
+                SELECT id, fencing_token
+                FROM node_task_assignments
+                WHERE task_id = $1 AND completed_at IS NULL
+                "#,
+                )
+                .bind(shared_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?;
+
+                if let Some((assignment_id, current_token)) = assignment {
+                    let stale = match op.fencing_token {
+                        None => true,
+                        Some(tok) => tok < current_token,
+                    };
+                    if stale {
+                        // REJECT (permanent): do NOT upsert, do NOT record node_op_log, do NOT
+                        // advance applied_through_seq past this op. Mirror 106's PARK control-flow
+                        // of NOT advancing (break, not continue), but this is a permanent reject,
+                        // not a transient park. Emit LeaseRevoked so the partitioned writer learns
+                        // its lease is gone.
+                        tracing::warn!(
+                            node_id = %node_id,
+                            seq = op.seq,
+                            assignment_id = %assignment_id,
+                            op_token = ?op.fencing_token,
+                            current_token = current_token,
+                            "op_batch: reject (stale fencing token) — LeaseRevoked"
+                        );
+                        revokes.push((assignment_id, "stale fencing token".to_string()));
+                        break;
+                    }
+                } else {
+                    // No active assignment for a hive-managed task (shared_task_id present):
+                    // the lease was reclaimed or the task was completed/cancelled. A late write
+                    // from a partitioned node MUST NOT overwrite the completed task (SC3). Drop
+                    // the op and stop processing this batch — the node's self-fence watchdog
+                    // and the reclaim sweep's LeaseRevoked event will halt the node.
+                    //
+                    // Emit LeaseRevoked so the partitioned writer learns its lease is gone
+                    // (tournament R1/D — without this, the node retries unacked ops forever).
+                    // The active-lease query above filtered `completed_at IS NULL`, so we look
+                    // up the assignment WITHOUT that filter to obtain the `assignment_id` for
+                    // the revoke signal.
+                    tracing::warn!(
+                        node_id = %node_id,
+                        seq = op.seq,
+                        shared_task_id = %shared_id,
+                        op_token = ?op.fencing_token,
+                        "op_batch: reject (no active assignment for hive-managed task) — lease revoked or completed"
+                    );
+                    let assignment_id: Option<Uuid> = sqlx::query_scalar(
+                        r#"SELECT id FROM node_task_assignments
+                       WHERE task_id = $1 AND node_id = $2
+                       ORDER BY completed_at DESC NULLS LAST
+                       LIMIT 1"#,
+                    )
+                    .bind(shared_id)
+                    .bind(node_id)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| HandleError::Database(e.to_string()))?;
+                    if let Some(aid) = assignment_id {
+                        revokes.push((
+                            aid,
+                            "no active assignment (lease revoked or completed)".to_string(),
+                        ));
+                    }
+                    break;
+                }
             }
         }
         // `shared_id` None → creator's first pre-link write / node-owned work: no fence.
+        // `shared_id` Some + owner_node_id == node_id → node-owned task, fence bypassed above.
 
         // (d) Status value mapping (tournament R1/F5): node serializes lowercase
         // (inprogress/inreview); canonicalize via the single boundary helper (302).
@@ -2029,8 +2186,39 @@ async fn handle_op_batch_apply(
             .get("status")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let status = crate::nodes::ws::status_machine::canonical_status_from_node(status_raw)
-            .map_err(|e| HandleError::Database(format!("op_batch: op seq {}: {}", op.seq, e)))?;
+        let status = match crate::nodes::ws::status_machine::canonical_status_from_node(status_raw)
+        {
+            Ok(s) => s,
+            Err(e) => {
+                // Unknown status value → SKIP+ADVANCE (tournament R1/E): propagating `?`
+                // would return a Database error → no OpAck sent → node retries forever.
+                // Skip the op permanently (record in node_op_log + advance cursor) so the
+                // node's outbox drains past the malformed op.
+                tracing::warn!(
+                    node_id = %node_id,
+                    seq = op.seq,
+                    status_raw,
+                    "op_batch: skip+advance (unknown status from node): {}", e
+                );
+                sqlx::query(
+                    r#"
+                    INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                    "#,
+                )
+                .bind(node_id)
+                .bind(&op.idempotency_key)
+                .bind(op.seq)
+                .bind(&op.op_type)
+                .bind(op.entity_id)
+                .execute(pool)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?;
+                applied_through_seq = op.seq;
+                continue;
+            }
+        };
 
         let title = op
             .payload
@@ -2070,7 +2258,7 @@ async fn handle_op_batch_apply(
                 let current = existing.status;
                 if status != current {
                     use crate::nodes::ws::status_machine::{
-                        author_of_transition, TransitionAuthor,
+                        TransitionAuthor, author_of_transition,
                     };
                     match author_of_transition(current, status) {
                         Some(TransitionAuthor::Node) => {
@@ -4151,10 +4339,9 @@ mod status_guard_tests {
             .await
             .expect("task exists pre-apply (a)");
 
-        let (seq_a, _revokes_a) =
-            handle_op_batch_apply(node_a, org_id, "node-a", &[op_a], &pool)
-                .await
-                .expect("apply (a)");
+        let (seq_a, _revokes_a) = handle_op_batch_apply(node_a, org_id, "node-a", &[op_a], &pool)
+            .await
+            .expect("apply (a)");
 
         assert_eq!(
             shared_task_status_by_id(&pool, shared_id).await,
@@ -4203,10 +4390,9 @@ mod status_guard_tests {
             .await
             .expect("task exists pre-apply (b)");
 
-        let (seq_b, revokes_b) =
-            handle_op_batch_apply(node_a, org_id, "node-a", &[op_b], &pool)
-                .await
-                .expect("apply (b)");
+        let (seq_b, revokes_b) = handle_op_batch_apply(node_a, org_id, "node-a", &[op_b], &pool)
+            .await
+            .expect("apply (b)");
 
         assert_eq!(
             shared_task_status_by_id(&pool, shared_id).await,
@@ -4223,7 +4409,10 @@ mod status_guard_tests {
             "(b) applied_through_seq MUST NOT advance past the rejected op (break)"
         );
         assert_eq!(revokes_b.len(), 1, "(b) exactly one LeaseRevoked emitted");
-        assert_eq!(revokes_b[0].0, claim_b.assignment_id, "(b) revoked assignment matches");
+        assert_eq!(
+            revokes_b[0].0, claim_b.assignment_id,
+            "(b) revoked assignment matches"
+        );
         assert_eq!(
             revokes_b[0].1, "stale fencing token",
             "(b) revoke reason matches the contract"
@@ -4279,10 +4468,9 @@ mod status_guard_tests {
             &key1,
         );
 
-        let (seq1, revokes1) =
-            handle_op_batch_apply(node_b, org_id, "node-b", &[op1], &pool)
-                .await
-                .expect("apply (1)");
+        let (seq1, revokes1) = handle_op_batch_apply(node_b, org_id, "node-b", &[op1], &pool)
+            .await
+            .expect("apply (1)");
 
         assert_eq!(
             seq1, 1,
@@ -4298,7 +4486,10 @@ mod status_guard_tests {
             Some("in-review".to_string()),
             "(1) shared_tasks.status stays 'in-review' (hive-authored-from-node rejected)"
         );
-        assert!(revokes1.is_empty(), "(1) no LeaseRevoked (this is a 303 reject, not a P2 reject)");
+        assert!(
+            revokes1.is_empty(),
+            "(1) no LeaseRevoked (this is a 303 reject, not a P2 reject)"
+        );
 
         // (2) in-review→done: also HIVE-authored (operator approve). A node may not author
         // it → REJECTED (SKIP+ADVANCE). Current status is still 'inreview'.
@@ -4313,10 +4504,9 @@ mod status_guard_tests {
             &key2,
         );
 
-        let (seq2, revokes2) =
-            handle_op_batch_apply(node_b, org_id, "node-b", &[op2], &pool)
-                .await
-                .expect("apply (2)");
+        let (seq2, revokes2) = handle_op_batch_apply(node_b, org_id, "node-b", &[op2], &pool)
+            .await
+            .expect("apply (2)");
 
         assert_eq!(
             seq2, 2,
@@ -4400,7 +4590,10 @@ mod status_guard_tests {
             Some("done".to_string()),
             "illegal transition MUST NOT change shared_tasks.status (stays 'done')"
         );
-        assert!(revokes.is_empty(), "no LeaseRevoked (303 reject, not a P2 reject)");
+        assert!(
+            revokes.is_empty(),
+            "no LeaseRevoked (303 reject, not a P2 reject)"
+        );
 
         cleanup_org(&pool, org_id).await;
     }
@@ -4681,7 +4874,8 @@ mod legacy_status_guard_tests {
         let swarm_project_id = create_swarm_project(&pool, org_id).await;
         let local_project_id = Uuid::new_v4();
         create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
-        let np = create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+        let np =
+            create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
 
         let creator_local_task_id = Uuid::new_v4();
         let shared_id = insert_shared_task(
@@ -4735,7 +4929,8 @@ mod legacy_status_guard_tests {
         let swarm_project_id = create_swarm_project(&pool, org_id).await;
         let local_project_id = Uuid::new_v4();
         create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
-        let np = create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+        let np =
+            create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
 
         let creator_local_task_id = Uuid::new_v4();
         let shared_id = insert_shared_task(

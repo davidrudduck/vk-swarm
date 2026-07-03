@@ -10,7 +10,6 @@
 use crate::db::tasks::TaskStatus;
 
 /// The party authorized to author a given status transition.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransitionAuthor {
     /// Hive-authored (operator / assignment lifecycle): `todo→in-progress` (the on-assign-and-start
@@ -25,14 +24,13 @@ pub(crate) enum TransitionAuthor {
 
 /// Return the sole authoritative author of `from → to`, or `None` if the transition is illegal
 /// (not in the matrix). A no-op (`from == to`) returns `None` — it is not an authored transition.
-#[allow(dead_code)]
 pub(crate) fn author_of_transition(from: TaskStatus, to: TaskStatus) -> Option<TransitionAuthor> {
     use TaskStatus::*;
     match (from, to) {
         // hive-authored lifecycle
         (Todo, InProgress) => Some(TransitionAuthor::Hive), // assign + start
         (InReview, InProgress) => Some(TransitionAuthor::Hive), // operator reopen
-        (InReview, Done) => Some(TransitionAuthor::Hive), // operator approve
+        (InReview, Done) => Some(TransitionAuthor::Hive),   // operator approve
         (_, Cancelled) if from != Cancelled => Some(TransitionAuthor::Hive),
         // node-reported work/terminal transitions
         (InProgress, Done) => Some(TransitionAuthor::Node),
@@ -45,7 +43,6 @@ pub(crate) fn author_of_transition(from: TaskStatus, to: TaskStatus) -> Option<T
 /// True iff a NODE report may author `from → to` (the predicate 303's enforcement calls before
 /// applying a node-reported status). False for hive-authored transitions, illegal transitions, and
 /// no-ops.
-#[allow(dead_code)]
 pub(crate) fn node_may_author(from: TaskStatus, to: TaskStatus) -> bool {
     matches!(author_of_transition(from, to), Some(TransitionAuthor::Node))
 }
@@ -58,7 +55,6 @@ pub(crate) fn node_may_author(from: TaskStatus, to: TaskStatus) -> bool {
 /// representations are reconciled (ADR-0010 "one canonical wire value", CONTRACT §D). Both forms are
 /// accepted (so a re-canonicalized value is idempotent); an UNKNOWN value returns `Err` and is NEVER
 /// coerced to `Todo` (tournament R1/F5 — the legacy default-to-`Todo` parse silently corrupts).
-#[allow(dead_code)]
 pub(crate) fn canonical_status_from_node(raw: &str) -> Result<TaskStatus, String> {
     match raw {
         "todo" => Ok(TaskStatus::Todo),
@@ -81,17 +77,53 @@ mod tests {
         // table: (from, to, expected_author)
         let cases: &[(TaskStatus, TaskStatus, TransitionAuthor)] = &[
             // hive-authored lifecycle (over the hive enum's actual variants — the reconciled matrix)
-            (TaskStatus::Todo, TaskStatus::InProgress, TransitionAuthor::Hive), // assign + start
-            (TaskStatus::InReview, TaskStatus::Done, TransitionAuthor::Hive), // operator approve
-            (TaskStatus::InReview, TaskStatus::InProgress, TransitionAuthor::Hive), // operator reopen
-            (TaskStatus::Todo, TaskStatus::Cancelled, TransitionAuthor::Hive),
-            (TaskStatus::InProgress, TaskStatus::Cancelled, TransitionAuthor::Hive),
-            (TaskStatus::InReview, TaskStatus::Cancelled, TransitionAuthor::Hive),
-            (TaskStatus::Done, TaskStatus::Cancelled, TransitionAuthor::Hive),
+            (
+                TaskStatus::Todo,
+                TaskStatus::InProgress,
+                TransitionAuthor::Hive,
+            ), // assign + start
+            (
+                TaskStatus::InReview,
+                TaskStatus::Done,
+                TransitionAuthor::Hive,
+            ), // operator approve
+            (
+                TaskStatus::InReview,
+                TaskStatus::InProgress,
+                TransitionAuthor::Hive,
+            ), // operator reopen
+            (
+                TaskStatus::Todo,
+                TaskStatus::Cancelled,
+                TransitionAuthor::Hive,
+            ),
+            (
+                TaskStatus::InProgress,
+                TaskStatus::Cancelled,
+                TransitionAuthor::Hive,
+            ),
+            (
+                TaskStatus::InReview,
+                TaskStatus::Cancelled,
+                TransitionAuthor::Hive,
+            ),
+            (
+                TaskStatus::Done,
+                TaskStatus::Cancelled,
+                TransitionAuthor::Hive,
+            ),
             // node-reported (rideable only with a valid lease+token — 303 enforces that; the matrix
             // only declares the AUTHOR)
-            (TaskStatus::InProgress, TaskStatus::Done, TransitionAuthor::Node),
-            (TaskStatus::InProgress, TaskStatus::InReview, TransitionAuthor::Node),
+            (
+                TaskStatus::InProgress,
+                TaskStatus::Done,
+                TransitionAuthor::Node,
+            ),
+            (
+                TaskStatus::InProgress,
+                TaskStatus::InReview,
+                TransitionAuthor::Node,
+            ),
         ];
         for (from, to, want) in cases {
             assert_eq!(
@@ -107,22 +139,43 @@ mod tests {
     #[test]
     fn illegal_transitions_have_no_author() {
         // A transition not in the matrix is rejected (no author) — illegal, never merged.
-        assert_eq!(author_of_transition(TaskStatus::Done, TaskStatus::InProgress), None);
-        assert_eq!(author_of_transition(TaskStatus::Cancelled, TaskStatus::InProgress), None);
-        assert_eq!(author_of_transition(TaskStatus::Done, TaskStatus::InReview), None);
+        assert_eq!(
+            author_of_transition(TaskStatus::Done, TaskStatus::InProgress),
+            None
+        );
+        assert_eq!(
+            author_of_transition(TaskStatus::Cancelled, TaskStatus::InProgress),
+            None
+        );
+        assert_eq!(
+            author_of_transition(TaskStatus::Done, TaskStatus::InReview),
+            None
+        );
         // a no-op (from == to) is not an authored transition
-        assert_eq!(author_of_transition(TaskStatus::Done, TaskStatus::Done), None);
+        assert_eq!(
+            author_of_transition(TaskStatus::Done, TaskStatus::Done),
+            None
+        );
     }
 
     #[test]
     fn node_may_author_only_node_transitions() {
         // The predicate 303 calls: may a NODE report author `from→to`?
         assert!(node_may_author(TaskStatus::InProgress, TaskStatus::Done));
-        assert!(node_may_author(TaskStatus::InProgress, TaskStatus::InReview));
+        assert!(node_may_author(
+            TaskStatus::InProgress,
+            TaskStatus::InReview
+        ));
         // a node may NOT author a hive transition (the core SC4 rejection)
         assert!(!node_may_author(TaskStatus::InReview, TaskStatus::Done));
-        assert!(!node_may_author(TaskStatus::InReview, TaskStatus::InProgress));
-        assert!(!node_may_author(TaskStatus::InProgress, TaskStatus::Cancelled));
+        assert!(!node_may_author(
+            TaskStatus::InReview,
+            TaskStatus::InProgress
+        ));
+        assert!(!node_may_author(
+            TaskStatus::InProgress,
+            TaskStatus::Cancelled
+        ));
         // no-op / illegal are not node-authored
         assert!(!node_may_author(TaskStatus::Done, TaskStatus::Done));
         assert!(!node_may_author(TaskStatus::Done, TaskStatus::InProgress));
@@ -133,10 +186,22 @@ mod tests {
         use crate::db::tasks::TaskStatus;
         // node TaskStatus serializes #[serde(rename_all="lowercase")] (db/.../task/mod.rs:25)
         // all five node wire forms canonicalize to their hive enum (representative subset below).
-        assert_eq!(canonical_status_from_node("inprogress").unwrap(), TaskStatus::InProgress);
-        assert_eq!(canonical_status_from_node("inreview").unwrap(), TaskStatus::InReview);
-        assert_eq!(canonical_status_from_node("done").unwrap(), TaskStatus::Done);
-        assert_eq!(canonical_status_from_node("cancelled").unwrap(), TaskStatus::Cancelled);
+        assert_eq!(
+            canonical_status_from_node("inprogress").unwrap(),
+            TaskStatus::InProgress
+        );
+        assert_eq!(
+            canonical_status_from_node("inreview").unwrap(),
+            TaskStatus::InReview
+        );
+        assert_eq!(
+            canonical_status_from_node("done").unwrap(),
+            TaskStatus::Done
+        );
+        assert_eq!(
+            canonical_status_from_node("cancelled").unwrap(),
+            TaskStatus::Cancelled
+        );
     }
 
     #[test]
@@ -144,8 +209,14 @@ mod tests {
         use crate::db::tasks::TaskStatus;
         // the one canonical wire value is the hive hyphenated form; accept it idempotently so a
         // re-canonicalized value round-trips (CONTRACT §D "node and hive serialize identically").
-        assert_eq!(canonical_status_from_node("in-progress").unwrap(), TaskStatus::InProgress);
-        assert_eq!(canonical_status_from_node("in-review").unwrap(), TaskStatus::InReview);
+        assert_eq!(
+            canonical_status_from_node("in-progress").unwrap(),
+            TaskStatus::InProgress
+        );
+        assert_eq!(
+            canonical_status_from_node("in-review").unwrap(),
+            TaskStatus::InReview
+        );
     }
 
     #[test]
