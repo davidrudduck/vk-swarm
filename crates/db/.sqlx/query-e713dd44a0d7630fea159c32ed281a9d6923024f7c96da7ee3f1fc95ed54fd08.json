@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS(\n                   SELECT 1 FROM node_outbox WHERE entity_id = ? AND acked_at IS NULL\n               ) as \"exists!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "exists!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e713dd44a0d7630fea159c32ed281a9d6923024f7c96da7ee3f1fc95ed54fd08"
+}
