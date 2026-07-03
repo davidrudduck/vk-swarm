@@ -2466,8 +2466,14 @@ async fn handle_digest_compare(
     //    A soft-deleted task is NOT "hive-lacks" — the hive HAS it (tombstoned); it goes to
     //    `pull_entities` instead, so it does NOT trigger a re-stream (which would be a no-op
     //    anyway — `handle_op_batch_apply` skips `seen` ops).
-    let resend_from_seq = if node_ids.difference(&hive_ids).next().is_some()
-        && node_ids.difference(&hive_deleted_ids).next().is_some()
+    //
+    //    The test must be a SINGLE intersection: one id absent from BOTH `hive_ids` and
+    //    `hive_deleted_ids`. Two independent `.difference().is_some()` checks (the prior code)
+    //    test different ids — e.g. {A(tombstoned), B(in-sync)} yields non-empty for both
+    //    differences but no id is genuinely missing. Round-4 tournament finding CF2.
+    let resend_from_seq = if node_ids
+        .iter()
+        .any(|id| !hive_ids.contains(id) && !hive_deleted_ids.contains(id))
     {
         Some(1i64)
     } else {
@@ -3638,6 +3644,78 @@ mod digest_tests {
         );
 
         cleanup_shared_task(&pool, node_id, sid).await;
+        let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM node_local_projects WHERE node_id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM swarm_projects WHERE id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(&pool)
+            .await;
+    }
+    #[tokio::test]
+    async fn digest_mixed_tombstoned_and_in_sync_no_spurious_restream() {
+        // CF2 (round-4 tournament): the prior two-independent-differences `&&` test produced a
+        // spurious `resend_from_seq = Some(1)` when the node has one tombstoned task (goes to
+        // pull_entities) AND one in-sync task. The fix requires a SINGLE id absent from both
+        // `hive_ids` and `hive_deleted_ids` (genuine hive-lacks).
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        // A = tombstoned on hive; B = active + in-sync on hive.
+        let sid_a = Uuid::new_v4();
+        let sid_b = Uuid::new_v4();
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, sid_a, 1).await;
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, sid_b, 1).await;
+        let _ = sqlx::query(
+            "UPDATE shared_tasks SET deleted_at = NOW() WHERE source_node_id = $1 AND source_task_id = $2",
+        )
+        .bind(node_id)
+        .bind(sid_a)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Node reports both A and B as active.
+        let entries = vec![
+            DigestEntry { entity_type: "task".into(), entity_id: sid_a, version: 1 },
+            DigestEntry { entity_type: "task".into(), entity_id: sid_b, version: 1 },
+        ];
+        let result = handle_digest_compare(&pool, node_id, &entries)
+            .await
+            .expect("compare");
+
+        // A is tombstoned → pull_entities (reconcile unlinks). B is in-sync → no action.
+        // No id is genuinely missing from the hive → NO re-stream.
+        assert!(
+            result.pull_entities.contains(&sid_a),
+            "tombstoned task A → pull_entities"
+        );
+        assert_eq!(
+            result.resend_from_seq, None,
+            "mixed tombstoned + in-sync → no spurious re-stream (CF2 fix)"
+        );
+
+        cleanup_shared_task(&pool, node_id, sid_a).await;
+        cleanup_shared_task(&pool, node_id, sid_b).await;
         let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
             .bind(swarm_project_id)
             .execute(&pool)

@@ -1089,6 +1089,19 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                     // (a) node-has/hive-lacks: re-stream the op-log from the hive's conservative cursor.
                     if let Some(mut from_seq) = resend_from_seq {
                         use db::models::node_outbox::OutboxRepository;
+                        // Re-stamp fencing tokens for task ops (mirrors the live-send path in
+                        // hive_sync.rs:231-241). Outbox rows are enqueued with fencing_token=None
+                        // (queries.rs:362); the live send path stamps the token in-memory from
+                        // active_assignments before sending. The re-stream path MUST do the same
+                        // or the hive's SC3 guard (session.rs:2123-2124) rejects every task op
+                        // as stale (None => true).
+                        let token_by_task: HashMap<Uuid, i64> = {
+                            let s = handle.state.read().await;
+                            s.active_assignments
+                                .values()
+                                .filter_map(|a| Some((a.local_task_id?, a.fencing_token?)))
+                                .collect()
+                        };
                         // Paginate: the floor is `Some(1)` so a node with >RESTREAM_LIMIT ops would
                         // never reach the lost op without cursor advancement (F2 fix). Loop until a
                         // batch returns < RESTREAM_LIMIT rows (exhausted). The hive apply is
@@ -1100,8 +1113,10 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                                 Ok(rows) if !rows.is_empty() => {
                                     let batch_size = rows.len() as i64;
                                     let last_seq = rows.last().unwrap().seq;
-                                    let ops: Vec<super::hive_client::OutboxOp> =
-                                        rows.into_iter().map(restream_row_to_ws_op).collect();
+                                    let ops: Vec<super::hive_client::OutboxOp> = rows
+                                        .into_iter()
+                                        .map(|r| restream_row_to_ws_op(r, &token_by_task))
+                                        .collect();
                                     if let Err(e) = command_tx
                                         .send(super::hive_client::NodeMessage::OpBatch { ops })
                                         .await
@@ -1163,12 +1178,19 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
 
 /// Map a db `OutboxOp` row into the WS `OutboxOp` wire shape for a digest heal re-stream.
 ///
-/// This is a REPLAY, not a fresh enqueue — copy `fencing_token` AS-IS from the row. Re-stamping
-/// the fencing token here would break the lease-fencing invariant (the hive must see the same
-/// token that the original op carried; task 107 stamps fencing_token only at fresh-enqueue time).
+/// This is a REPLAY, not a fresh enqueue — but the stored `fencing_token` is None for task ops
+/// (queries.rs:362 enqueues with None; the live send path stamps it in-memory from
+/// `active_assignments`). We must re-stamp task ops here too, mirroring hive_sync.rs:251-257,
+/// or the hive's SC3 guard rejects them as stale (session.rs:2123-2124: `None => true`).
 fn restream_row_to_ws_op(
     r: db::models::node_outbox::OutboxOp,
+    token_by_task: &HashMap<Uuid, i64>,
 ) -> super::hive_client::OutboxOp {
+    let fencing_token = if r.entity_type == "task" {
+        token_by_task.get(&r.entity_id).copied().or(r.fencing_token)
+    } else {
+        r.fencing_token
+    };
     super::hive_client::OutboxOp {
         seq: r.seq,
         op_type: r.op_type,
@@ -1176,7 +1198,7 @@ fn restream_row_to_ws_op(
         entity_id: r.entity_id,
         payload: r.payload,
         idempotency_key: r.idempotency_key,
-        fencing_token: r.fencing_token,
+        fencing_token,
     }
 }
 
@@ -1832,6 +1854,61 @@ pub async fn handle_backfill_attempt(
             }
             Ok(count)
         }
+    }
+}
+
+#[cfg(test)]
+mod restream_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn make_row(entity_type: &str, entity_id: Uuid, fencing_token: Option<i64>) -> db::models::node_outbox::OutboxOp {
+        db::models::node_outbox::OutboxOp {
+            id: Uuid::new_v4(),
+            seq: 1,
+            op_type: format!("{}.upsert", entity_type),
+            entity_type: entity_type.to_string(),
+            entity_id,
+            payload: serde_json::Value::String(String::new()),
+            idempotency_key: "k".into(),
+            fencing_token,
+            created_at: Utc::now(),
+            acked_at: None,
+        }
+    }
+
+    /// CF1 (round-4 tournament): outbox rows are enqueued with `fencing_token: None`
+    /// (queries.rs:362). The re-stream path MUST re-stamp task ops from `active_assignments`,
+    /// mirroring the live send path (hive_sync.rs:231-241), or the hive's SC3 guard rejects
+    /// every task op as stale (`None => true`, session.rs:2123-2124).
+    #[test]
+    fn restream_re_stamps_fencing_token_for_task_op() {
+        let task_id = Uuid::new_v4();
+        let mut token_by_task = HashMap::new();
+        token_by_task.insert(task_id, 7i64);
+
+        let row = make_row("task", task_id, None);
+        let op = restream_row_to_ws_op(row, &token_by_task);
+        assert_eq!(op.fencing_token, Some(7), "task op must be re-stamped from active_assignments");
+    }
+
+    /// Non-task ops (e.g. log) keep their stored fencing_token as-is (no assignment mapping).
+    #[test]
+    fn restream_preserves_stored_token_for_non_task_op() {
+        let token_by_task = HashMap::new();
+        let row = make_row("log", Uuid::new_v4(), Some(42));
+        let op = restream_row_to_ws_op(row, &token_by_task);
+        assert_eq!(op.fencing_token, Some(42), "non-task op keeps stored token");
+    }
+
+    /// Task op with no active assignment falls back to the stored token (None → None).
+    /// The hive will reject it as stale, which is correct — the node has no lease for that task.
+    #[test]
+    fn restream_falls_back_to_stored_token_when_no_assignment() {
+        let token_by_task = HashMap::new();
+        let row = make_row("task", Uuid::new_v4(), None);
+        let op = restream_row_to_ws_op(row, &token_by_task);
+        assert_eq!(op.fencing_token, None, "no assignment → stored None (hive will reject as stale)");
     }
 }
 
