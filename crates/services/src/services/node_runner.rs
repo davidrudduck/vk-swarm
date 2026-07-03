@@ -1087,29 +1087,45 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                     pull_entities,
                 }) => {
                     // (a) node-has/hive-lacks: re-stream the op-log from the hive's conservative cursor.
-                    if let Some(from_seq) = resend_from_seq {
+                    if let Some(mut from_seq) = resend_from_seq {
                         use db::models::node_outbox::OutboxRepository;
-                        match OutboxRepository::peek_from_seq(&db.pool, from_seq, RESTREAM_LIMIT)
-                            .await
-                        {
-                            Ok(rows) if !rows.is_empty() => {
-                                let ops: Vec<super::hive_client::OutboxOp> =
-                                    rows.into_iter().map(restream_row_to_ws_op).collect();
-                                if let Err(e) = command_tx
-                                    .send(super::hive_client::NodeMessage::OpBatch { ops })
-                                    .await
-                                {
+                        // Paginate: the floor is `Some(1)` so a node with >RESTREAM_LIMIT ops would
+                        // never reach the lost op without cursor advancement (F2 fix). Loop until a
+                        // batch returns < RESTREAM_LIMIT rows (exhausted). The hive apply is
+                        // idempotent (ON CONFLICT DO NOTHING), so the burst is safe.
+                        loop {
+                            match OutboxRepository::peek_from_seq(&db.pool, from_seq, RESTREAM_LIMIT)
+                                .await
+                            {
+                                Ok(rows) if !rows.is_empty() => {
+                                    let batch_size = rows.len() as i64;
+                                    let last_seq = rows.last().unwrap().seq;
+                                    let ops: Vec<super::hive_client::OutboxOp> =
+                                        rows.into_iter().map(restream_row_to_ws_op).collect();
+                                    if let Err(e) = command_tx
+                                        .send(super::hive_client::NodeMessage::OpBatch { ops })
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            error = ?e,
+                                            "Failed to re-stream op-log for digest heal"
+                                        );
+                                        break;
+                                    }
+                                    if batch_size < RESTREAM_LIMIT {
+                                        break;
+                                    }
+                                    from_seq = last_seq + 1;
+                                }
+                                Ok(_) => break,
+                                Err(e) => {
                                     tracing::warn!(
                                         error = ?e,
-                                        "Failed to re-stream op-log for digest heal"
+                                        "Failed to read op-log for digest re-stream"
                                     );
+                                    break;
                                 }
                             }
-                            Ok(_) => {}
-                            Err(e) => tracing::warn!(
-                                error = ?e,
-                                "Failed to read op-log for digest re-stream"
-                            ),
                         }
                     }
                     // (b) hive-has/node-lacks: pull via the bulk-snapshot reconcile leg

@@ -2431,21 +2431,42 @@ async fn handle_digest_compare(
         .map(|e| e.entity_id)
         .collect();
 
-    // 2. The hive's view: source_task_ids the hive holds for this node (non-deleted only —
-    //    ADR-0007 one-delete tombstone keeps a soft-deleted task out of the pull set).
-    let hive = SharedTaskRepository::new(pool)
+    // 2. The hive's view: source_task_ids the hive holds for this node.
+    //    ACTIVE rows — for the hive-has/node-lacks pull set.
+    //    SOFT-DELETED rows — tombstones the node must learn to unlink. Routing them through
+    //    `pull_entities` triggers the reconcile leg (`deleted_task_ids` → `unlink_by_shared_task_id`),
+    //    closing the digest convergence loop (F1 fix).
+    let repo = SharedTaskRepository::new(pool);
+    let hive = repo
         .list_source_task_versions_for_node(node_id)
         .await
         .map_err(|e| HandleError::Database(e.to_string()))?;
     let hive_ids: HashSet<Uuid> = hive.iter().map(|h| h.source_task_id).collect();
 
+    let hive_deleted_ids: HashSet<Uuid> = repo
+        .list_soft_deleted_source_task_ids_for_node(node_id)
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?
+        .into_iter()
+        .collect();
+
     // 3. hive-has / node-lacks → pull_entities (the node pulls what the hive has).
-    let pull_entities: Vec<Uuid> = hive_ids.difference(&node_ids).copied().collect();
+    //    PLUS: soft-deleted tasks the node still reports as active → also pull_entities
+    //    (the reconcile leg will unlink them via `deleted_task_ids`).
+    let mut pull_entities: Vec<Uuid> = hive_ids.difference(&node_ids).copied().collect();
+    for id in node_ids.intersection(&hive_deleted_ids) {
+        pull_entities.push(*id);
+    }
 
     // 4. node-has / hive-lacks → resend_from_seq = Some(1) (conservative floor). Any non-empty
     //    difference means the hive is missing at least one task the node has; re-stream all
     //    retained ops (idempotent ON CONFLICT DO NOTHING). Never MAX(seq) (R2/F4).
-    let resend_from_seq = if node_ids.difference(&hive_ids).next().is_some() {
+    //    A soft-deleted task is NOT "hive-lacks" — the hive HAS it (tombstoned); it goes to
+    //    `pull_entities` instead, so it does NOT trigger a re-stream (which would be a no-op
+    //    anyway — `handle_op_batch_apply` skips `seen` ops).
+    let resend_from_seq = if node_ids.difference(&hive_ids).next().is_some()
+        && node_ids.difference(&hive_deleted_ids).next().is_some()
+    {
         Some(1i64)
     } else {
         None
@@ -3545,6 +3566,73 @@ mod digest_tests {
         assert!(
             result.resend_from_seq.is_none() && result.pull_entities.is_empty(),
             "no divergence → no heal directives (idempotent: a converged sweep is a no-op)"
+        );
+
+        cleanup_shared_task(&pool, node_id, sid).await;
+        let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM node_local_projects WHERE node_id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM swarm_projects WHERE id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(&pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn digest_routes_soft_deleted_task_to_pull_not_restream() {
+        // F1 fix: a task the hive has SOFT-DELETED (tombstoned) but the node still reports as active
+        // must go to `pull_entities` (so the reconcile leg unlinks it), NOT trigger `resend_from_seq`
+        // (re-streaming would be a no-op — `handle_op_batch_apply` skips `seen` ops).
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        // Seed a shared_tasks row then SOFT-DELETE it (tombstone).
+        let sid = Uuid::new_v4();
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, sid, 1).await;
+        let _ = sqlx::query("UPDATE shared_tasks SET deleted_at = NOW() WHERE source_node_id = $1 AND source_task_id = $2")
+            .bind(node_id)
+            .bind(sid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Node still reports sid as active.
+        let entries = vec![DigestEntry {
+            entity_type: "task".into(),
+            entity_id: sid,
+            version: 1,
+        }];
+        let result = handle_digest_compare(&pool, node_id, &entries)
+            .await
+            .expect("compare");
+
+        // Soft-deleted → routed to pull_entities (reconcile leg unlinks it), NOT resend_from_seq.
+        assert!(
+            result.pull_entities.contains(&sid),
+            "soft-deleted task the node still has → pull_entities (reconcile unlinks it)"
+        );
+        assert_eq!(
+            result.resend_from_seq, None,
+            "soft-deleted task is NOT hive-lacks → no re-stream (would be a no-op)"
         );
 
         cleanup_shared_task(&pool, node_id, sid).await;
