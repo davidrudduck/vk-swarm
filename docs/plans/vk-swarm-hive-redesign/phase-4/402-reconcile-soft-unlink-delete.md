@@ -104,6 +104,37 @@ already imports `CreateProject`, `Project`, `CreateTask`, `setup_test_pool`):
         );
         assert!(Task::find_by_id(&pool, stale).await.unwrap().is_some(), "stale local row retained");
     }
+
+    #[tokio::test]
+    async fn unlink_stale_shared_tasks_clears_all_when_active_set_is_empty() {
+        // An empty active set means the hive dropped every shared task in this project — ALL linked
+        // tasks must be unlinked (not skipped, which would leave stale links).
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id).await.unwrap();
+
+        let stale = Uuid::new_v4();
+        let stale_shared = Uuid::new_v4();
+        Task::create(&pool, &CreateTask::from_title_description(project_id, "t".into(), None), stale)
+            .await.unwrap();
+        Task::set_shared_task_id(&pool, stale, Some(stale_shared)).await.unwrap();
+
+        // Empty active set → every linked task in the project is unlinked.
+        let n = Task::unlink_stale_shared_tasks(&pool, project_id, &[]).await.unwrap();
+        assert_eq!(n, 1, "the linked row is unlinked even when the active set is empty");
+        assert!(Task::find_by_id(&pool, stale).await.unwrap().unwrap().shared_task_id.is_none(),
+            "stale link cleared on empty active set");
+    }
 ```
 > `Task::find_by_id` lives in `task/queries.rs:166` (same `impl Task`, signature `(pool, id)`). The test
 > block already has all needed imports — add NO new `use` lines.
@@ -170,25 +201,32 @@ already imports `CreateProject`, `Project`, `CreateTask`, `setup_test_pool`):
         project_id: Uuid,
         active_shared_task_ids: &[Uuid],
     ) -> Result<u64, sqlx::Error> {
-        if active_shared_task_ids.is_empty() {
-            return Ok(0);
-        }
-
-        let placeholders: Vec<String> = active_shared_task_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 2))
-            .collect();
-        let placeholders_str = placeholders.join(", ");
-
-        let query = format!(
+        // NOTE: do NOT short-circuit when `active_shared_task_ids` is empty — an empty snapshot means
+        // EVERY linked task in this project is stale (the hive dropped them all), so all
+        // `shared_task_id` values for linked tasks must be cleared. The early-return that was here
+        // (`if active.is_empty() { return Ok(0); }`) skipped the unlink entirely, leaving stale links.
+        let query = if active_shared_task_ids.is_empty() {
+            // No active tasks → unlink ALL linked tasks in this project.
             r#"UPDATE tasks
                SET shared_task_id = NULL, updated_at = CURRENT_TIMESTAMP
                WHERE project_id = $1
-               AND shared_task_id IS NOT NULL
-               AND shared_task_id NOT IN ({})"#,
-            placeholders_str
-        );
+               AND shared_task_id IS NOT NULL"#.to_string()
+        } else {
+            let placeholders: Vec<String> = active_shared_task_ids
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("${}", i + 2))
+                .collect();
+            let placeholders_str = placeholders.join(", ");
+            format!(
+                r#"UPDATE tasks
+                   SET shared_task_id = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE project_id = $1
+                   AND shared_task_id IS NOT NULL
+                   AND shared_task_id NOT IN ({})"#,
+                placeholders_str
+            )
+        };
 
         let mut query_builder = sqlx::query(&query).bind(project_id);
         for id in active_shared_task_ids {
@@ -227,9 +265,11 @@ already imports `CreateProject`, `Project`, `CreateTask`, `setup_test_pool`):
     }
 
     // Soft-unlink stale shared tasks for this project (no longer present in the snapshot).
-    if !active_task_ids.is_empty() {
-        Task::unlink_stale_shared_tasks(pool, local_project_id, &active_task_ids).await?;
-    }
+    // NOTE: run UNCONDITIONALLY — an empty `active_task_ids` means the hive dropped every shared task
+    // in this project, so `unlink_stale_shared_tasks` clears ALL linked tasks (no `NOT IN` filter).
+    // The previous `if !active_task_ids.is_empty()` guard skipped the unlink on an empty snapshot,
+    // leaving stale links behind.
+    Task::unlink_stale_shared_tasks(pool, local_project_id, &active_task_ids).await?;
 ```
 
 ### 3. `crates/services/src/services/share/processor.rs` — WS leg uses the SAME helper

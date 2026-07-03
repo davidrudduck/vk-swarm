@@ -149,16 +149,26 @@ pub struct LeaseClaim {
         lease_ttl: chrono::Duration,
     ) -> Result<Option<LeaseClaim>, TaskAssignmentError> {
         // CONTRACT (executor finalizes the exact statement(s) against the live schema):
-        //  - UPDATE the active row IFF it is reclaimable:
+        //  ATOMIC ORDER (do NOT reorder — the UPDATE-then-INSERT split is race-safe only in this
+        //  sequence, guarded by the `idx_task_assignments_active` partial unique index):
+        //  - Step 1: attempt a conditional UPDATE on the EXISTING active row IFF it is reclaimable:
         //      WHERE task_id = $1 AND completed_at IS NULL
         //            AND (lease_expires_at IS NULL OR lease_expires_at < now())
         //      SET node_id = $2, node_project_id = $3,
         //          lease_expires_at = now() + ($interval from lease_ttl),
         //          fencing_token = nextval('node_fencing_token_seq')
         //      RETURNING id, node_id, task_id, fencing_token, lease_expires_at
-        //  - if 0 rows updated AND no active row exists at all → INSERT a fresh assignment with
-        //    lease_expires_at = now()+ttl and fencing_token = nextval(...) (same RETURNING).
-        //  - if 0 rows updated AND an active row exists with a LIVE lease → return Ok(None).
+        //    If a row is returned → claim granted (reclaim path). Two nodes can never both win the
+        //    UPDATE: it is atomic under the row lock, and only an expired/NULL lease matches.
+        //  - Step 2: if Step 1 updated 0 rows, check whether an active row exists AT ALL:
+        //      SELECT 1 FROM node_task_assignments WHERE task_id = $1 AND completed_at IS NULL
+        //  - Step 3: if an active row exists (with a LIVE lease, since Step 1 did not match it) →
+        //    return Ok(None) — a live lease blocks the claim; do NOT fall through to INSERT.
+        //  - Step 4: ONLY when no active row exists at all → INSERT a fresh assignment with
+        //    lease_expires_at = now()+ttl and fencing_token = nextval(...). The `idx_task_assignments_active`
+        //    partial unique index guarantees atomicity here too: a concurrent INSERT from another node
+        //    that also missed the UPDATE raises a unique-violation → treat that as Ok(None) (the other
+        //    node won the insert race); do NOT retry the INSERT.
         // Map the RETURNING into LeaseClaim with .get(...) like fail_node_assignments. fetch_optional.
         todo!("executor finalizes the CAS statement(s) per the contract above")
     }
@@ -185,6 +195,14 @@ pub struct LeaseClaim {
         todo!("executor finalizes the renew UPDATE per the contract above")
     }
 ```
+> **NOTE (implemented):** the shipped `renew_lease` (`crates/remote/src/db/task_assignments.rs:187-202`)
+> adds `AND lease_expires_at > NOW()` to the WHERE predicate alongside `id`, `node_id`, and
+> `completed_at IS NULL`. This closes the post-expiry extension gap: a lease that has already expired
+> cannot be renewed (renewal is not a reclaim — an expired lease must be reclaimed via `try_claim`,
+> which bumps the fencing token). The predicate is the load-bearing difference between "renew" (token
+> unchanged, lease still live) and "reclaim" (token bumped, lease was expired). The four tests above
+> still hold: the foreign-node renew test now also covers the expired-lease case (an expired lease
+> returns `None` exactly like a foreign-holder case).
 
 ## Allowed moves
 ONLY: add the `LeaseClaim` struct, the `try_claim` method, and the `renew_lease` method to

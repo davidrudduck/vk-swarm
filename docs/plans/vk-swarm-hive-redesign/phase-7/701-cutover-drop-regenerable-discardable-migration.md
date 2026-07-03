@@ -161,8 +161,10 @@ async fn cutover_seed_run_clears_regenerable_discardable_keeps_must_migrate() {
         .bind(attempt).bind(shared).bind(node).execute(&mut *tx).await.unwrap();
 
     // DISCARDABLE: an auth_sessions row (confirm columns against 20251001000000_shared_tasks_activity.sql).
+    // Fail-fast: use `.unwrap()` so a seed failure errors the transaction immediately (do NOT swallow
+    // via `.unwrap_or_default()` — that would mask a missing-column / FK failure and produce a hollow pass).
     sqlx::query("INSERT INTO auth_sessions (id, user_id) VALUES ($1, NULL)")
-        .bind(uuid::Uuid::new_v4()).execute(&mut *tx).await.unwrap_or_default();
+        .bind(uuid::Uuid::new_v4()).execute(&mut *tx).await.unwrap();
 
     // --- RUN the cutover SQL against the seeded rows ---
     for stmt in CUTOVER_SQL.split(';').map(str::trim).filter(|s| !s.is_empty()) {
@@ -193,23 +195,53 @@ async fn cutover_seed_run_clears_regenerable_discardable_keeps_must_migrate() {
 #[tokio::test]
 async fn cutover_keeps_regenerable_and_discardable_tables_present() {
     // Regression guard: the cutover must NOT DROP these tables (data-clear, not drop) — a DROP would
-    // break surviving query refs + the re-ingest path. This half is non-hollow on its own.
+    // break surviving query refs + the re-ingest path. Asserts a STABLE IDENTITY (table OID), not just
+    // the table name: a DROP+CREATE would produce a new table with the same NAME but a different OID
+    // (and a different relfilenode), so this test FAILS if the migration performs a DROP instead of a
+    // data-clear. Uses the same tx-based seed/run/rollback pattern as the test above so the OID is
+    // captured BEFORE the cutover SQL runs and re-checked AFTER.
     skip_without_db!();
     let pool = create_pool().await;
-    let exists = |n: &'static str| {
-        let pool = pool.clone();
-        async move {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
-                 WHERE table_schema='public' AND table_name=$1)")
-                .bind(n).fetch_one(&pool).await.unwrap()
-        }
-    };
-    for t in ["node_local_projects", "node_execution_processes", "node_task_output_logs",
-              "node_task_progress_events", "node_task_attempts", "project_activity_counters",
-              "activity", "auth_sessions", "oauth_handoffs", "revoked_refresh_tokens"] {
-        assert!(exists(t).await, "table {t} must SURVIVE cutover (data-clear, not drop)");
+    let mut tx = pool.begin().await.unwrap();
+
+    let tables = ["node_local_projects", "node_execution_processes", "node_task_output_logs",
+                  "node_task_progress_events", "node_task_attempts", "project_activity_counters",
+                  "activity", "auth_sessions", "oauth_handoffs", "revoked_refresh_tokens"];
+
+    // Capture the OID of each table BEFORE the cutover SQL runs.
+    let mut before: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for t in tables {
+        let oid: u32 = sqlx::query_scalar(
+            "SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE c.relname = $1 AND n.nspname = 'public'")
+            .bind(t).fetch_one(&mut *tx).await.unwrap();
+        before.insert(t, oid);
     }
+
+    // Run the cutover SQL (copy-identical to the migration body + the test above).
+    for stmt in CUTOVER_SQL.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        sqlx::query(stmt).execute(&mut *tx).await.unwrap();
+    }
+
+    // Re-read the OID AFTER the cutover: a DROP+CREATE would change it; a TRUNCATE keeps it.
+    for t in tables {
+        let oid_after: u32 = sqlx::query_scalar(
+            "SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE c.relname = $1 AND n.nspname = 'public'")
+            .bind(t).fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(oid_after, before[t],
+            "table {t} OID changed — cutover performed a DROP+CREATE, not a data-clear (TRUNCATE). \
+             A DROP breaks surviving query refs + the re-ingest path.");
+        // Also assert the table still EXISTS by name (belt-and-suspenders; the OID read above already
+        // proves existence, but the explicit name check makes the failure message self-explanatory).
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
+             WHERE table_schema='public' AND table_name=$1)")
+            .bind(t).fetch_one(&mut *tx).await.unwrap();
+        assert!(exists, "table {t} must SURVIVE cutover (data-clear, not drop)");
+    }
+
+    tx.rollback().await.unwrap(); // leave the shared test DB untouched
 }
 ```
 

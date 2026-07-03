@@ -99,6 +99,17 @@ This task's tests prove the **stale-token rejection** (the SC3 commit-effect gua
      - `find_by_source_task_id(node_id, payload.id)` is the **fallback ONLY** when `payload.shared_task_id`
        is `None` — i.e. the creator's first pre-link write. In that case no assignment exists yet, so the
        fence does not apply anyway; fall through to 106's normal apply.
+
+     > **NOTE (implemented):** the shipped fence (`session.rs:2078-2177`) consults **live assignment state**
+     > via a `shared_tasks.owner_node_id` lookup BEFORE the assignment query: when
+     > `owner_node_id == Some(node_id)` (the task was CREATED by the sending node — node-owned work), the
+     > fence is bypassed entirely (the owner needs no lease to write its own task, and a node-owned task
+     > has no `node_task_assignments` row). The live-assignment lookup (`SELECT id, fencing_token FROM
+     > node_task_assignments WHERE task_id = $shared_id AND completed_at IS NULL`) runs ONLY for
+     > hive-assigned tasks (`owner_node_id != node_id` or NULL). The `find_by_source_task_id` fallback
+     > applies only when `payload.shared_task_id` is `None` (the creator's first pre-link write — no
+     > assignment exists yet, so the fence does not apply). This resolves the stale-payload race the
+     > serialized `Task` payload could otherwise introduce.
   2. **Look up the active assignment by the shared id:**
      `SELECT id, fencing_token FROM node_task_assignments WHERE task_id = $shared_id AND completed_at IS NULL`
      (a narrow scalar/row read — do NOT use `NodeTaskAssignment` FromRow; the new column is not on that

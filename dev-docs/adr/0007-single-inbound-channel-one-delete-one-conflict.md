@@ -42,8 +42,11 @@ This is the §2.7 "broadcast fan-out double-delivery" item resolved in code (ana
    continuous channel alongside the WS stream. The dead `ElectricTaskSyncService` task-shape path is
    removed.
 2. **One delete semantic.** A hive soft-delete maps to **soft-unlink + tombstone on the node**
-   (clear `shared_task_id`, retain local `task_attempt`/run artifacts), applied **identically** on the
-   live channel and the reconcile. The hub owns the board; the node never loses local work it ran.
+   via a single helper, `Task::unlink_by_shared_task_id` (clears `shared_task_id`, retains local
+   `task_attempt`/run artifacts), with its stale-sweep companion `Task::unlink_stale_shared_tasks`
+   for the reconcile leg. Both legs route through the SAME helper, applied **identically** on the live
+   channel and the reconcile, so a hive soft-delete yields one node outcome regardless of which channel
+   applies it. The hub owns the board; the node never loses local work it ran.
 3. **One conflict policy.** The hive is authoritative for shared-task fields; node-local edits travel
    up the ordered outbox ([ADR-0008](./0008-node-hive-ordered-ack-outbox.md)). The node applies a
    **dirty-guard**: an inbound update never overwrites a field that has an unacked outbound op. No

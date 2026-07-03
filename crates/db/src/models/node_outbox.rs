@@ -42,7 +42,19 @@ struct OutboxOpRow {
 
 impl From<OutboxOpRow> for OutboxOp {
     fn from(r: OutboxOpRow) -> Self {
-        let payload = serde_json::from_str(&r.payload).unwrap_or(serde_json::Value::Null);
+        let payload = match serde_json::from_str(&r.payload) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    op_id = %r.id,
+                    seq = r.seq,
+                    idempotency_key = %r.idempotency_key,
+                    error = %e,
+                    "node_outbox: payload JSON decode failed — substituting Value::Null"
+                );
+                serde_json::Value::Null
+            }
+        };
         OutboxOp {
             id: r.id,
             seq: r.seq,

@@ -50,6 +50,7 @@ mod tests {
         // table: (from, to, expected_author)
         let cases: &[(TaskStatus, TaskStatus, TransitionAuthor)] = &[
             // hive-authored lifecycle (over the hive enum's actual variants — the reconciled matrix)
+            (TaskStatus::Todo, TaskStatus::Cancelled, TransitionAuthor::Hive),
             (TaskStatus::InReview, TaskStatus::Done, TransitionAuthor::Hive), // operator approve
             (TaskStatus::InReview, TaskStatus::InProgress, TransitionAuthor::Hive), // operator reopen
             (TaskStatus::InProgress, TaskStatus::Cancelled, TransitionAuthor::Hive),

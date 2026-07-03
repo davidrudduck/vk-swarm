@@ -145,10 +145,20 @@ async fn peek_from_seq_returns_acked_and_unacked_ops_at_or_after_seq() {
 ```rust
             HiveMessage::DigestResult { resend_from_seq, pull_entities } => {
                 tracing::trace!(?resend_from_seq, pull_count = pull_entities.len(), "received digest_result");
-                let _ = self
+                // Handle the send outcome (do NOT discard via `let _ =`): a send error means the
+                // consumer loop is gone (closed/dropped) — log at warn so the caller can reconnect /
+                // retry the digest heal on the next cycle. Mirrors 108's `OpAck` emission handling.
+                if let Err(e) = self
                     .event_tx
                     .send(HiveEvent::DigestResult { resend_from_seq, pull_entities })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(
+                        error = ?e,
+                        "failed to forward DigestResult to node_runner loop — consumer gone; \
+                         reconnect/retry will re-emit the digest next cycle"
+                    );
+                }
             }
 ```
   > `handle_hive_message` is `&self` and `HiveClient` holds NO pool/remote_client — so the heal CANNOT run

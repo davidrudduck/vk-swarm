@@ -152,9 +152,18 @@ mod status_guard_tests {
        `is_fenced_ok`/`assignment` binding above, gate on it; do NOT duplicate the stale-token comparison.
        If there is no valid lease+token, REJECT (SKIP+advance, warn). Only when lease+token are valid AND
        the transition is node-authored does the op proceed to `upsert_from_node`.
-  > Net: `upsert_from_node` is reached for an existing-row op ONLY when the transition is a no-op, OR is
-  > node-authored with a valid lease+token. Hive-authored-from-node and illegal transitions are rejected
-  > (SKIP+advance), never merged. This removes the field-level status conflict at the source (SC4).
+   > Net: `upsert_from_node` is reached for an existing-row op ONLY when the transition is a no-op, OR is
+   > node-authored with a valid lease+token. Hive-authored-from-node and illegal transitions are rejected
+   > (SKIP+advance), never merged. This removes the field-level status conflict at the source (SC4).
+   >
+   > **Atomicity (TOCTOU guard):** the legality check, the current/from-status lookup, and the
+   > `upsert_from_node` write MUST happen under one row lock or a single conditional UPDATE path —
+   > otherwise a concurrent op could change the `from` status between the guard's read and the write,
+   > turning a legal (A→B) decision into an illegal (C→B) apply. The implementation rejects illegal /
+   > wrong-author / no-lease ops via **SKIP+ADVANCE** (record in `node_op_log`, advance
+   > `applied_through_seq`, `continue`) — they do NOT park the op-log (PARK is 106's transient-only case).
+   > If the executor cannot make the guard+write atomic in one statement, wrap the read+guard+write in a
+   > `SELECT … FOR UPDATE` row lock on the shared task within the same transaction as the upsert.
 - Add `use super::status_machine;` (or `use crate::nodes::ws::status_machine;`) at the top of `session.rs`
   if not already present from 302.
 

@@ -113,7 +113,11 @@ impl<'a> TaskAssignmentRepository<'a> {
             SET node_id = $2,
                 node_project_id = $3,
                 lease_expires_at = $4,
-                fencing_token = nextval('node_fencing_token_seq')
+                fencing_token = nextval('node_fencing_token_seq'),
+                local_task_id = NULL,
+                local_attempt_id = NULL,
+                execution_status = 'pending',
+                started_at = NULL
             WHERE task_id = $1
               AND completed_at IS NULL
               AND (lease_expires_at IS NULL OR lease_expires_at < now())

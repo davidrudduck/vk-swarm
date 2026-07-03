@@ -50,11 +50,14 @@ outbox(seq INTEGER PK AUTOINCREMENT,   -- per-node monotonic
   the flag-clear-before-ack window is closed.
 - **Per-op monotonic version** replaces the hardcoded `version: 1`.
 - **Anti-entropy reconciliation (SC5)** rides this contract: on reconnect (and periodically) the node
-  re-streams from its unacked cursor, and a **digest exchange** (per-entity version/hash + outbox
-  high-water) detects silent divergence the cursor alone would miss; the hive replies with the ops/
-  pulls needed to heal. This *is* the replacement for the manual `reset_*` repair migrations — the
-  repurposed bulk-snapshot reconcile ([ADR-0007](./0007-single-inbound-channel-one-delete-one-conflict.md))
-  is its gap-fill leg.
+  re-streams from its unacked cursor, and a **digest exchange** over the frozen `Digest`/`DigestEntry`
+  contract shape (CONTRACT §A) detects silent divergence the cursor alone would miss. The
+  `DigestEntry` carries `entity_type`/`entity_id`/`version` per swarm-linked task; the per-entity
+  version/hash + outbox high-water are **local heal inputs** the node computes to drive its own
+  re-stream/pull decisions — they are NOT protocol payload fields beyond the frozen `DigestEntry`
+  shape, and they do NOT widen the contract. The hive replies with the ops/pulls needed to heal. This
+  *is* the replacement for the manual `reset_*` repair migrations — the repurposed bulk-snapshot
+  reconcile ([ADR-0007](./0007-single-inbound-channel-one-delete-one-conflict.md)) is its gap-fill leg.
 - An op **against a hive-assigned task** carries that task's current **fencing token**
   ([ADR-0009](./0009-lease-checkout-fencing.md)) so stale-lease writes are rejected at apply.
   Node-owned work (locally-created tasks + their attempts/execs/logs — the majority of ops) carries

@@ -28,7 +28,7 @@ async fn find_digest_entries_returns_only_swarm_linked_tasks_with_version() {
     // seed a project; one task WITH shared_task_id set (+ remote_version = 3), one task WITHOUT.
     // (use Task::create then set shared_task_id/remote_version via the existing sync update path, or a
     //  direct UPDATE in the test — whichever the sibling tests in this file already do.)
-    let entries = Task::find_digest_entries(&pool, 100).await.unwrap();
+    let entries = Task::find_digest_entries(&pool).await.unwrap();
     assert_eq!(entries.len(), 1, "only the swarm-linked (shared_task_id IS NOT NULL) task is in the digest");
     assert_eq!(entries[0].version, 3, "version is the task's remote_version");
     // entries[0].entity_id == the linked task's LOCAL id (the id-bridge key = hive source_task_id).
@@ -84,18 +84,22 @@ pub struct TaskDigestRow {
 
 impl Task {
     /// All swarm-linked tasks (`shared_task_id IS NOT NULL`) with their `remote_version`, for the SC5
-    /// anti-entropy digest. Read-only; ordered by `id` for a stable digest. `limit` bounds the batch.
+    /// anti-entropy digest. Read-only; ordered by `id` for a stable digest. NO `limit` cap — the digest
+    /// MUST cover EVERY swarm-linked task in one shot so the hive can detect divergence on any task
+    /// (a `limit` would silently truncate the digest and leave divergences undetected past the batch
+    /// boundary with no cursor/pagination to advance). The node's swarm-linked task count is bounded by
+    /// its local `tasks` table, so the unbounded read is acceptable. The `archived_at IS NULL` filter
+    /// was REMOVED to align with the "all swarm-linked tasks" requirement: an archived task that still
+    /// carries a `shared_task_id` is still part of the swarm link, and the hive must see it in the
+    /// digest to detect if the hive lost it (hive-has/node-lacks divergence includes archived tasks).
     pub async fn find_digest_entries(
         pool: &SqlitePool,
-        limit: i64,
     ) -> Result<Vec<TaskDigestRow>, sqlx::Error> {
         sqlx::query!(
             r#"SELECT id as "id!: Uuid", remote_version as "remote_version!: i64"
                FROM tasks
-               WHERE shared_task_id IS NOT NULL AND archived_at IS NULL
-               ORDER BY id ASC
-               LIMIT ?"#,
-            limit
+               WHERE shared_task_id IS NOT NULL
+               ORDER BY id ASC"#,
         )
         .fetch_all(pool)
         .await
@@ -166,7 +170,7 @@ use super::hive_client::{
     /// set sends nothing. Does NOT advance any cursor (it is divergence DETECTION, not sync).
     async fn sync_digest(&self) -> Result<(), HiveSyncError> {
         use db::models::task::Task;
-        let rows = Task::find_digest_entries(&self.pool, self.config.max_tasks_per_batch).await?;
+        let rows = Task::find_digest_entries(&self.pool).await?;
         if rows.is_empty() {
             return Ok(());
         }
@@ -187,7 +191,8 @@ use super::hive_client::{
 ```
 > `HiveSyncError::Send` already exists (107 used it). If the `Task` import path differs, align to this
 > crate's existing `use db::models::task::Task;` convention (the legacy `sync_tasks` helper already
-> imports `Task`). `max_tasks_per_batch` (config field reused by 107) bounds the digest batch.
+> imports `Task`). The digest reads ALL swarm-linked tasks unbounded (no `limit`/`max_tasks_per_batch`)
+> — see the `find_digest_entries` rationale above.
 
 ## Allowed moves
 ONLY: add `find_digest_entries` + the `TaskDigestRow` projection to `task/queries.rs`; add `DigestEntry`

@@ -74,14 +74,15 @@ pub mod log_migration;
 //! - [`log_migration`] - Migration from legacy JSONL logs to row-based log_entries
 ```
 - **Anchor C:** the deprecated-modules bullet (~L15) references the now-deleted module as a migration
-  target — fix the stale guidance so `forbid_after` passes.
+  target — fix the stale guidance so `forbid_after` passes and the `share` module is presented as the
+  live WebSocket activity stream path (not deprecated).
 - **Before:**
 ```rust
 //! - [`share`] - **DEPRECATED** - Use `electric_task_sync` instead
 ```
 - **After:**
 ```rust
-//! - [`share`] - **DEPRECATED** - WebSocket activity stream is the single live inbound channel (ADR-0007)
+//! - [`share`] - WebSocket activity stream — the single live inbound channel (ADR-0007)
 ```
 
 ### 3. `crates/services/src/services/share.rs` — drop the stale "See Also" pointer (~L15)

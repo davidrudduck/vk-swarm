@@ -54,15 +54,19 @@ rebuilt schema (P1–P3); **P6 (no fan-out)** is data-plane and independent.
    pushed shared-task state (SC1 data-plane half). Investigation found this is *already* true today —
    the node-facing channel carries only `ProjectSync`/`NodeRemoved` — so phase-6 asserts and fences the
    invariant against regression; it is NOT a large fan-out removal. Browser-facing shared-task fan-out
-   (electric_proxy/ActivityBroker) is the hive-UI data source and is OUT of scope. Depends P1, P2.
+   (electric_proxy/ActivityBroker) is the hive-UI data source and is OUT of scope. Depends P1, P2
+   (prerequisite tasks 103 — the `HiveMessage` enum drift fence — plus 202 and 501, whose
+   variant-adding tasks grow the enum 601's exhaustive `match` classifies).
 7. **phase-7-cutover** — one-time hive-only-state migration (migrate / regenerate / discard per
-   ADR-0011), preserving the node↔hive id bridge and remapping status enum values (SC6). Depends P1–P3.
+   ADR-0011), preserving the node↔hive id bridge and remapping status enum values (SC6). Depends P1–P3
+   (the rebuilt schema P1/P2 add — `node_op_log`, `node_task_assignments` lease columns — and the P3
+   status canonicalization must all be present before the cutover guards can assert them).
 
 ## Scope note — SC1 central-management UI CARVED to `vk-swarm-hive-ui`
 
 SC1 has two halves: (a) the **data-plane** guarantee "no node↔node / node↔hive↔node fan-out" (covered
 here, phase-6), and (b) the **hive web UI manages all** nodes/projects/tasks/attempts/executions.
-**User decision (2026-06-30): half (b) is carved into `vk-swarm-hive-ui`** (tracker seeded; rehost +
+**User decision (2026-06-30): half (b) is carved into `vk-swarm-hive-ui`** (tracker seeded; rehost
 rewire + net-new cross-node views — see that README and the decisions ledger). This plan covers SC2–SC7
 + SC1's data-plane half. SC1 stays in the frozen spec, claimed by phase-6; no spec edit was made.
 
