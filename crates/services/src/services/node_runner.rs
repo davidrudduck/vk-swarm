@@ -1135,7 +1135,7 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                             let s = handle.state.read().await;
                             (s.organization_id, s.node_id)
                         };
-                        if let (Some(ref client), Some(org_id), Some(nid)) =
+                        if let (Some(client), Some(org_id), Some(nid)) =
                             (remote_client.as_ref(), org_id, nid)
                             && let Err(e) =
                                 sync_remote_projects(&db.pool, client, org_id, nid).await
