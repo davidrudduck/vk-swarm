@@ -156,7 +156,7 @@ where
 **Returns:** Local task linked to the shared task.
 
 **Used By:**
-- `services/electric_sync.rs` - Task synchronization
+- `services/share/processor.rs` - WS activity stream task sync (ADR-0007)
 - `routes/shared_tasks.rs` - Task reassignment
 
 ---
@@ -423,7 +423,7 @@ where
 **Returns:** `true` if rows were affected.
 
 **Used By:**
-- `services/electric_sync.rs` - ElectricSQL updates
+- `services/share/processor.rs` - WS activity stream update (ADR-0007)
 
 ---
 
@@ -454,7 +454,7 @@ where
 **Returns:** Upserted task.
 
 **Used By:**
-- `services/electric_sync.rs` - Remote task sync
+- `services/share/processor.rs` - Remote task sync (ADR-0007)
 
 ---
 
@@ -481,7 +481,7 @@ async fn delete_stale_remote_tasks(
 **Returns:** Number of deleted tasks.
 
 **Used By:**
-- `services/electric_sync.rs` - Sync cleanup
+- `services/share/processor.rs` - Sync cleanup
 
 ---
 
