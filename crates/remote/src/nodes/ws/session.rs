@@ -2086,13 +2086,15 @@ async fn handle_op_batch_apply(
             // skip the lease+token fence (the owner does not need a lease to write its
             // own task). Only hive-assigned tasks (owner_node_id != node_id or NULL)
             // require the fence.
-            let owner_node_id: Option<Uuid> = sqlx::query_scalar(
-                r#"SELECT owner_node_id FROM shared_tasks WHERE id = $1 AND deleted_at IS NULL"#,
-            )
-            .bind(shared_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| HandleError::Database(e.to_string()))?;
+            let owner_node_id: Option<Uuid> =
+                sqlx::query_scalar::<_, Option<Uuid>>(
+                    r#"SELECT owner_node_id FROM shared_tasks WHERE id = $1 AND deleted_at IS NULL"#,
+                )
+                .bind(shared_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?
+                .flatten();
 
             if owner_node_id == Some(node_id) {
                 // Node-owned task — bypass the fence. Proceed to status mapping + upsert.
