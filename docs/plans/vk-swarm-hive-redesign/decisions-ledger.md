@@ -1533,3 +1533,17 @@ Spec `change_kind: behaviour` → mandatory. Evidence for SC7 (P4), SC5 (P5), SC
 - SC5: "bidirectional divergence → resend_from_seq=Some(1) + pull_entities contains hive-has-id" — the divergent-state-forever symptom (two inbound channels applying the same change differently) is eliminated by convergence through ONE digest reply.
 - SC1: "no HiveMessage variant classifies as TaskStatePush" — the fan-out symptom (hive pushing task state to nodes) is eliminated by construction.
 - SC6: "REGENERABLE cleared, MUST-MIGRATE retained, REGENERABLE refillable" — the hive-only-state symptom (nodes holding shared state they shouldn't) is eliminated by the cutover.
+
+## Round-3 Gemini goal-conformance review — F1 false positive (2026-07-03)
+
+Report: `.agents/reports/2026-07-03-round-3-gemini-goal-conformance.md`.
+
+Gemini verdict: DEVIATES — 1 blocker (F1: "node→hive `task.delete` not handled in `handle_op_batch_apply`"). **DISMISSED as false positive** — Gemini fabricated the SC7 criterion text.
+
+- **Gemini's quoted SC7:** "A task deleted on the hive is soft-deleted on the node; a task deleted on the node is soft-deleted on the hive. Each leg is idempotent and race-free." — **NOT in the spec.** `grep -niE "deleted on the node" docs/superpowers/specs/2026-06-26-vk-swarm-hive-redesign.md` → zero matches.
+- **Actual SC7 (spec L86-89):** "The two live inbound channels (REST bulk-snapshot reconcile + WS activity stream) are collapsed to one, with one delete semantic and one conflict policy applied uniformly." The "one delete semantic" (spec L195-196) is **HIVE→NODE only**: "hive soft-delete → node soft-unlink + tombstone, preserving local attempts". There is NO node→hive delete requirement.
+- **The node never enqueues `task.delete`:** `enqueue_task_upsert_op` (`crates/db/src/models/task/queries.rs:333-367`) enqueues ONLY `task.upsert` (called from `Task::create`/`update`). `Task::delete` (`queries.rs:369-377`) is a bare `DELETE FROM tasks WHERE id = $1` with NO outbox enqueue. So no `task.delete` op ever reaches the hive.
+- **The tracer guard is correct by design:** ledger L1492 documents "P1 shipped only `task.upsert` on the new outbox". The `handle_op_batch_apply` guard `if op.op_type != "task.upsert" { continue }` is the intended Phase-1 tracer scope, not a bug.
+- **SC7 is MET:** hive→node soft-unlink via `unlink_by_shared_task_id` on both legs (402); one conflict policy = dirty-guard (403); single live channel (401 guard + 602 fence); `task.reassigned` handled (404).
+
+**Verdict: MEETS.** All in-scope SCs (SC1, SC5, SC6, SC7) are satisfied by the merged code on the production path. SC4 is P3 (shipped in PR #450, out of scope). The 12 pre-existing `remote` lib test failures + 3 `tsc` errors are identical on baseline `3769a874` (pre-existing, not caused/worsened by this diff) — tracked separately.
