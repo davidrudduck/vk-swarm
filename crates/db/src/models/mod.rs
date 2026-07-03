@@ -25,6 +25,7 @@ pub mod executor_session;
 pub mod image;
 pub mod label;
 pub mod merge;
+pub mod node_outbox;
 pub mod project;
 pub mod task;
 pub mod task_attempt;

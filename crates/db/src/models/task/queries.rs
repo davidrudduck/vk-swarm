@@ -265,7 +265,7 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         task_id: Uuid,
     ) -> Result<Self, sqlx::Error> {
         let status = data.status.clone().unwrap_or_default();
-        sqlx::query_as!(
+        let task = sqlx::query_as!(
             Task,
             r#"INSERT INTO tasks (id, project_id, title, description, status, parent_task_id, shared_task_id)
                VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -288,7 +288,9 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
             data.shared_task_id
         )
         .fetch_one(pool)
-        .await
+        .await?;
+        Self::enqueue_task_upsert_op(pool, &task).await;
+        Ok(task)
     }
 
     pub async fn update(
@@ -300,7 +302,7 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         status: TaskStatus,
         parent_task_id: Option<Uuid>,
     ) -> Result<Self, sqlx::Error> {
-        sqlx::query_as!(
+        let task = sqlx::query_as!(
             Task,
             r#"UPDATE tasks
                SET title = $3, description = $4, status = $5, parent_task_id = $6
@@ -323,7 +325,45 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
             parent_task_id
         )
         .fetch_one(pool)
-        .await
+        .await?;
+        Self::enqueue_task_upsert_op(pool, &task).await;
+        Ok(task)
+    }
+
+    /// Enqueue a `task.upsert` op into node_outbox alongside the local write (SC2 tracer).
+    /// Runs ALONGSIDE the legacy hive_sync path (additive; hive apply is idempotent). Best-effort:
+    /// a failed enqueue is logged, NOT propagated — the legacy path remains the backstop, and the
+    /// enqueue is a separate statement from the task write (not one txn), so a crash between them is
+    /// covered by the legacy sync. (Threading a shared txn through all Task::create callers is OUT of
+    /// scope for the tracer — see decisions-ledger.)
+    async fn enqueue_task_upsert_op(pool: &SqlitePool, task: &Task) {
+        use crate::models::node_outbox::{NewOutboxOp, OutboxRepository};
+        let payload = match serde_json::to_value(task) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, task_id = %task.id, "skip outbox enqueue: serialize failed");
+                return;
+            }
+        };
+        // Per-write-unique idempotency key. DELIBERATELY NOT `task:{id}:{version}`: Task::update does
+        // NOT bump any version column (queries.rs UPDATE sets only title/description/status/parent_task_id),
+        // so a version-only key collides on every update and the UNIQUE(idempotency_key) constraint
+        // would silently drop the update op. A fresh Uuid suffix is assigned ONCE here and persisted
+        // with the row, so a re-transmit of the SAME outbox row reuses the SAME key and the hive dedups
+        // (node_op_log PK). The hive also applies idempotently on (source_node_id, source_task_id), so
+        // distinct keys across writes of the same task are safe. "Deterministic" is not an SC
+        // requirement — only per-write uniqueness + stable-per-row.
+        let op = NewOutboxOp {
+            op_type: "task.upsert".to_string(),
+            entity_type: "task".to_string(),
+            entity_id: task.id,
+            payload,
+            idempotency_key: format!("task:{}:{}", task.id, Uuid::new_v4()),
+            fencing_token: None,
+        };
+        if let Err(e) = OutboxRepository::enqueue_op(pool, op).await {
+            tracing::warn!(error = %e, task_id = %task.id, "failed to enqueue task.upsert op (legacy sync is the backstop)");
+        }
     }
 
     pub async fn delete<'e, E>(executor: E, id: Uuid) -> Result<u64, sqlx::Error>
@@ -484,5 +524,65 @@ mod tests {
             assert!(!task.has_merged_attempt);
             assert!(!task.last_attempt_failed);
         }
+    }
+}
+
+#[cfg(test)]
+mod outbox_enqueue_tests {
+    use super::*;
+    use crate::models::node_outbox::OutboxRepository;
+    use crate::test_utils::create_test_pool;
+
+    async fn seed_project(pool: &SqlitePool) -> Uuid {
+        let pid = Uuid::new_v4();
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (?, 'p', '/tmp/p')")
+            .bind(pid)
+            .execute(pool)
+            .await
+            .unwrap();
+        pid
+    }
+
+    #[tokio::test]
+    async fn create_then_update_enqueues_two_ordered_task_upsert_ops() {
+        let (pool, _tmp) = create_test_pool().await;
+        let project_id = seed_project(&pool).await;
+
+        let task_id = Uuid::new_v4();
+        let created = Task::create(
+            &pool,
+            &CreateTask {
+                project_id,
+                title: "t1".into(),
+                description: None,
+                status: None,
+                parent_task_id: None,
+                image_ids: None,
+                shared_task_id: None,
+            },
+            task_id,
+        )
+        .await
+        .unwrap();
+
+        Task::update(
+            &pool,
+            created.id,
+            project_id,
+            "t2".into(),
+            None,
+            TaskStatus::InProgress,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let ops = OutboxRepository::peek_unacked(&pool, 10).await.unwrap();
+        assert_eq!(ops.len(), 2, "create + update each enqueue one op");
+        assert!(ops.iter().all(|o| o.op_type == "task.upsert"));
+        assert!(ops.iter().all(|o| o.entity_type == "task"));
+        assert!(ops.iter().all(|o| o.entity_id == task_id));
+        assert!(ops[1].seq > ops[0].seq, "causal order preserved");
+        assert_ne!(ops[0].idempotency_key, ops[1].idempotency_key);
     }
 }

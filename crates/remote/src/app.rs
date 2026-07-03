@@ -15,7 +15,7 @@ use crate::{
     mail::LoopsMailer,
     nodes::{BackfillConfig, BackfillService, ConnectionManager},
     routes,
-    services::spawn_stale_cleanup_service,
+    services::{spawn_lease_sweep_service, spawn_stale_cleanup_service},
 };
 
 pub struct Server;
@@ -39,6 +39,9 @@ impl Server {
 
         // Spawn stale node local projects cleanup service
         spawn_stale_cleanup_service(pool.clone(), None);
+
+        // Spawn Hive lease-expiry sweep service (reclaim expired leases, bumping fencing token)
+        spawn_lease_sweep_service(pool.clone(), None);
 
         let broker = ActivityBroker::new(
             config.activity_broadcast_shards,

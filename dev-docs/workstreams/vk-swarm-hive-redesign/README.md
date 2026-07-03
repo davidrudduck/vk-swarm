@@ -4,6 +4,7 @@ doc_type: readme
 status: draft
 title: "Phase 2b — rebuild hive as hub-and-spoke central management (after node)"
 depends_on: [vk-swarm-node-foundations]
+adrs: [0007, 0008, 0009, 0010, 0011]
 staging_pointers:
   - docs/superpowers/specs/2026-06-26-vk-swarm-hive-redesign.md
 ---

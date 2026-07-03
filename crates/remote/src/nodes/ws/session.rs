@@ -22,10 +22,10 @@ use super::{
     message::{
         AttemptSyncMessage, AuthResultMessage, BackfillResponseMessage, DeregisterMessage,
         ExecutionSyncMessage, HeartbeatMessage, HiveMessage, LinkProjectMessage, LinkedProjectInfo,
-        LogsBatchMessage, NodeMessage, NodeRemovedMessage, PROTOCOL_VERSION, ProjectSyncMessage,
-        ProjectsSyncMessage, SwarmLabelInfo, TaskExecutionStatus, TaskOutputMessage,
-        TaskProgressMessage, TaskStatusMessage, TaskSyncMessage, TaskSyncResponseMessage,
-        UnlinkProjectMessage,
+        LogsBatchMessage, NodeMessage, NodeRemovedMessage, OutboxOp, PROTOCOL_VERSION,
+        ProjectSyncMessage, ProjectsSyncMessage, SwarmLabelInfo, TaskExecutionStatus,
+        TaskOutputMessage, TaskProgressMessage, TaskStatusMessage, TaskSyncMessage,
+        TaskSyncResponseMessage, UnlinkProjectMessage,
     },
 };
 use crate::{
@@ -40,6 +40,10 @@ use crate::{
 
 /// Heartbeat timeout - close connection if no heartbeat received.
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Lease TTL granted on renewal. Must exceed the node's heartbeat/renew cadence (task 206)
+/// so a renewing node never expires between heartbeats.
+const LEASE_TTL: chrono::Duration = chrono::Duration::seconds(60);
 
 /// Channel buffer size for outgoing messages.
 const OUTGOING_BUFFER_SIZE: usize = 64;
@@ -575,6 +579,12 @@ async fn handle_node_message(
         NodeMessage::BackfillResponse(response) => {
             handle_backfill_response(node_id, response, pool, tracker).await
         }
+        NodeMessage::OpBatch { ops } => {
+            handle_op_batch(node_id, organization_id, node_name, ops, pool, ws_sender).await
+        }
+        NodeMessage::LeaseHeartbeat { assignment_ids } => {
+            handle_lease_heartbeat(node_id, assignment_ids, pool, ws_sender).await
+        }
     }
 }
 
@@ -643,6 +653,30 @@ async fn handle_task_status(
         TaskExecutionStatus::Cancelled => "cancelled",
     };
 
+    // Guard the entire handler on an active, unexpired lease (tournament R1/A + R2/A).
+    // The legacy `find_by_id` filtered only on `id`, so any node that knew the
+    // assignment_id could mutate the assignment row AND propagate a shared-task status.
+    // `find_active_lease_for_node` guards on `node_id`, `completed_at IS NULL`, AND
+    // `lease_expires_at > NOW()` — only the current, unexpired lease-holder may write.
+    // This gate precedes the assignment-row writes below so a node whose lease has
+    // expired (or was never held) cannot mutate `execution_status` or `local_task_id`.
+    let assignment_repo = TaskAssignmentRepository::new(pool);
+    let assignment = match assignment_repo
+        .find_active_lease_for_node(status.assignment_id, node_id)
+        .await
+    {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            tracing::warn!(
+                node_id = %node_id,
+                assignment_id = %status.assignment_id,
+                "rejected task status update — no active lease for this node (ADR-0010 §D)"
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(HandleError::Database(e.to_string())),
+    };
+
     // Update local IDs if provided
     if status.local_task_id.is_some() || status.local_attempt_id.is_some() {
         service
@@ -662,11 +696,9 @@ async fn handle_task_status(
         .map_err(|e| HandleError::Database(e.to_string()))?;
 
     // Also update the shared task status
-    // First, get the task_id from the assignment
-    let assignment_repo = TaskAssignmentRepository::new(pool);
-    if let Ok(Some(assignment)) = assignment_repo.find_by_id(status.assignment_id).await {
-        // Map execution status to shared task status
-        let shared_status = match status.status {
+    {
+        // Map execution status to the proposed shared task status.
+        let proposed = match status.status {
             TaskExecutionStatus::Pending | TaskExecutionStatus::Starting => TaskStatus::Todo,
             TaskExecutionStatus::Running => TaskStatus::InProgress,
             TaskExecutionStatus::Completed => TaskStatus::InReview,
@@ -674,15 +706,39 @@ async fn handle_task_status(
         };
 
         let task_repo = SharedTaskRepository::new(pool);
-        if let Err(e) = task_repo
-            .update_status_from_node(assignment.task_id, shared_status)
-            .await
-        {
-            tracing::warn!(
-                task_id = %assignment.task_id,
-                error = %e,
-                "failed to update shared task status"
-            );
+        // Guard via the single-author matrix (ADR-0010 §D). The legacy path is node-reported, so only a
+        // no-op or a node-authored transition (with an active lease) may write — never a hive-authored
+        // or illegal transition (the old `*→Todo` clobber).
+        match task_repo.find_by_id(assignment.task_id).await {
+            Ok(Some(current_task)) if current_task.status == proposed => {
+                // no-op — nothing to write
+            }
+            Ok(Some(current_task))
+                if crate::nodes::ws::status_machine::node_may_author(
+                    current_task.status,
+                    proposed,
+                ) =>
+            {
+                if let Err(e) = task_repo
+                    .update_status_from_node(assignment.task_id, proposed)
+                    .await
+                {
+                    tracing::warn!(task_id = %assignment.task_id, error = %e,
+                        "failed to update shared task status");
+                }
+            }
+            Ok(Some(current_task)) => {
+                tracing::warn!(task_id = %assignment.task_id, from = ?current_task.status,
+                    to = ?proposed,
+                    "rejected non-node-authored status transition on legacy path (ADR-0010)");
+            }
+            Ok(None) => {
+                tracing::warn!(task_id = %assignment.task_id, "shared task not found for status update");
+            }
+            Err(e) => {
+                tracing::warn!(task_id = %assignment.task_id, error = %e,
+                    "failed to read shared task status");
+            }
         }
     }
 
@@ -1553,15 +1609,34 @@ async fn handle_task_sync(
     ws_sender: &mut futures::stream::SplitSink<WebSocket, Message>,
 ) -> Result<(), HandleError> {
     use crate::db::node_local_projects::NodeLocalProjectRepository;
-    use crate::db::tasks::{SharedTaskRepository, TaskStatus, UpsertTaskFromNodeData};
+    use crate::db::tasks::{SharedTaskRepository, UpsertTaskFromNodeData};
 
-    let status = match task_sync.status.as_str() {
-        "todo" => TaskStatus::Todo,
-        "in_progress" | "in-progress" => TaskStatus::InProgress,
-        "in_review" | "in-review" => TaskStatus::InReview,
-        "done" => TaskStatus::Done,
-        "cancelled" => TaskStatus::Cancelled,
-        _ => TaskStatus::Todo,
+    // Canonicalize the node-reported status via the single boundary helper (302 / tournament R1/B).
+    // The node serializes lowercase (`inprogress`/`inreview`); the old manual match only checked
+    // kebab-case forms and fell through to `Todo` — silently corrupting `InProgress`/`InReview`.
+    // An unknown wire value is a node-side serialization bug; we surface it as a `success: false`
+    // response rather than `?`-propagating (which would leave the node waiting on a response).
+    // This mirrors `handle_op_batch_apply`'s SKIP+ADVANCE for the identical failure class (R2/E).
+    let status = match crate::nodes::ws::status_machine::canonical_status_from_node(&task_sync.status)
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                node_id = %node_id,
+                local_task_id = %task_sync.local_task_id,
+                status = %task_sync.status,
+                error = %e,
+                "task_sync: rejected unknown status wire value"
+            );
+            let r = TaskSyncResponseMessage {
+                local_task_id: task_sync.local_task_id,
+                shared_task_id: Uuid::nil(),
+                success: false,
+                error: Some(format!("REJECTED: unknown status wire value: {}", e)),
+            };
+            let _ = send_message(ws_sender, &HiveMessage::TaskSyncResponse(r)).await;
+            return Ok(());
+        }
     };
 
     // First check if the node_local_projects record exists
@@ -1671,6 +1746,73 @@ async fn handle_task_sync(
     let sanitized_description = sanitize_option_string(task_sync.description.clone());
 
     let repo = SharedTaskRepository::new(pool);
+
+    // SC4 author guard (ADR-0010 §D / tournament R1/C): mirror the guard in
+    // `handle_op_batch_apply` — a node may not author hive-only status transitions
+    // (todo→in-progress, in-review→done, in-review→in-progress, *→cancelled) nor any
+    // out-of-matrix transition. `handle_task_sync` is the third write site (in addition
+    // to 303's `handle_op_batch_apply` and 304's `handle_task_status`); without this
+    // guard, a node could bypass the matrix via a TaskSync message.
+    if let Some(existing) = repo
+        .find_by_source_task_id(node_id, task_sync.local_task_id)
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?
+    {
+        let current = existing.status;
+        if status != current {
+            use crate::nodes::ws::status_machine::{TransitionAuthor, author_of_transition};
+            match author_of_transition(current, status) {
+                Some(TransitionAuthor::Node) => {
+                    // Node-authored transition; proceed to upsert.
+                }
+                Some(TransitionAuthor::Hive) => {
+                    tracing::warn!(
+                        node_id = %node_id,
+                        local_task_id = %task_sync.local_task_id,
+                        shared_task_id = %existing.id,
+                        from = ?current,
+                        to = ?status,
+                        "task_sync: reject (hive-authored transition reported by node)"
+                    );
+                    let r = TaskSyncResponseMessage {
+                        local_task_id: task_sync.local_task_id,
+                        shared_task_id: existing.id,
+                        success: false,
+                        error: Some(format!(
+                            "Status transition {:?}→{:?} is hive-only — not authorizable from a node",
+                            current, status
+                        )),
+                    };
+                    let _ = send_message(ws_sender, &HiveMessage::TaskSyncResponse(r)).await;
+                    return Ok(());
+                }
+                None => {
+                    tracing::warn!(
+                        node_id = %node_id,
+                        local_task_id = %task_sync.local_task_id,
+                        shared_task_id = %existing.id,
+                        from = ?current,
+                        to = ?status,
+                        "task_sync: reject (illegal status transition)"
+                    );
+                    let r = TaskSyncResponseMessage {
+                        local_task_id: task_sync.local_task_id,
+                        shared_task_id: existing.id,
+                        success: false,
+                        error: Some(format!(
+                            "Status transition {:?}→{:?} is not in the transition matrix",
+                            current, status
+                        )),
+                    };
+                    let _ = send_message(ws_sender, &HiveMessage::TaskSyncResponse(r)).await;
+                    return Ok(());
+                }
+            }
+        }
+        // incoming == current → no-op (metadata-only update); proceed to upsert.
+    }
+    // Task not found → creation path; no `from` status, no guard. Proceed to upsert.
+
     match repo
         .upsert_from_node(UpsertTaskFromNodeData {
             swarm_project_id,
@@ -1741,6 +1883,573 @@ async fn handle_task_sync(
             };
             let _ = send_message(ws_sender, &HiveMessage::TaskSyncResponse(r)).await;
         }
+    }
+    Ok(())
+}
+
+/// Apply a batch of node outbox ops to the hive op-log + `shared_tasks` and return the new
+/// `applied_through_seq` high-water (SC2). WS-free core so the unit test can exercise the apply
+/// path without constructing a `SplitSink` (see task 106 STOP note on ws_sender in test).
+///
+/// Park-vs-skip split mirrors `handle_task_sync`'s three-branch context resolution:
+/// - `node_local_projects` row absent → **PARK** (transient, ProjectsSync race): break, no advance.
+/// - row present but not swarm-linked, or swarm-link/org lookup absent → **SKIP + ADVANCE**
+///   (permanent): record the op in `node_op_log` and advance; do NOT call `upsert_from_node`.
+/// - otherwise → **APPLY** (apply-then-record): `upsert_from_node` first, then insert the dedup row.
+async fn handle_op_batch_apply(
+    node_id: Uuid,
+    organization_id: Uuid,
+    node_name: &str,
+    ops: &[OutboxOp],
+    pool: &PgPool,
+) -> Result<(i64, Vec<(Uuid, String)>), HandleError> {
+    use crate::db::node_local_projects::NodeLocalProjectRepository;
+    use crate::db::tasks::{SharedTaskRepository, UpsertTaskFromNodeData};
+
+    // Revoke queue (ws-free split, option (a)): (assignment_id, reason) pairs surfaced
+    // out of the apply loop for `handle_op_batch` to emit as `HiveMessage::LeaseRevoked`.
+    let mut revokes: Vec<(Uuid, String)> = Vec::new();
+
+    let mut applied_through_seq: i64 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM node_op_log WHERE node_id = $1")
+            .bind(node_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| HandleError::Database(e.to_string()))?;
+
+    for op in ops {
+        // (a) Tracer scope guard: only task.upsert is handled in this phase.
+        if op.op_type != "task.upsert" {
+            applied_through_seq = op.seq;
+            continue;
+        }
+
+        let local_project_id: Uuid = op
+            .payload
+            .get("project_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<Uuid>().ok())
+            .ok_or_else(|| {
+                HandleError::Database(format!(
+                    "op_batch: op seq {} missing payload.project_id",
+                    op.seq
+                ))
+            })?;
+        let local_task_id: Uuid = op
+            .payload
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<Uuid>().ok())
+            .ok_or_else(|| {
+                HandleError::Database(format!("op_batch: op seq {} missing payload.id", op.seq))
+            })?;
+
+        // (b) Resolve context — copy handle_task_sync's three-branch resolution exactly.
+        let local_project =
+            NodeLocalProjectRepository::find_by_node_and_project(pool, node_id, local_project_id)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?;
+
+        let local_project = match local_project {
+            Some(p) => p,
+            None => {
+                // TRANSIENT (ProjectsSync race) → PARK: break, do NOT advance, do NOT record.
+                tracing::debug!(
+                    node_id = %node_id,
+                    local_project_id = %local_project_id,
+                    local_task_id = %local_task_id,
+                    seq = op.seq,
+                    "op_batch: park (node_local_projects row absent, ProjectsSync race)"
+                );
+                break;
+            }
+        };
+
+        let swarm_project_id = match local_project.swarm_project_id {
+            Some(id) => id,
+            None => {
+                // PERMANENT (not swarm-linked) → SKIP + ADVANCE.
+                sqlx::query(
+                    r#"
+                    INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                    "#,
+                )
+                .bind(node_id)
+                .bind(&op.idempotency_key)
+                .bind(op.seq)
+                .bind(&op.op_type)
+                .bind(op.entity_id)
+                .execute(pool)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?;
+                applied_through_seq = op.seq;
+                tracing::debug!(
+                    node_id = %node_id,
+                    local_project_id = %local_project_id,
+                    seq = op.seq,
+                    "op_batch: skip+advance (project not swarm-linked)"
+                );
+                continue;
+            }
+        };
+
+        // Verify the swarm project belongs to this organization and node has a link.
+        let swarm_link: Option<SwarmProjectLink> = sqlx::query_as(
+            r#"
+            SELECT
+                sp.organization_id
+            FROM swarm_project_nodes spn
+            JOIN swarm_projects sp ON spn.swarm_project_id = sp.id
+            WHERE spn.node_id = $1
+              AND spn.local_project_id = $2
+              AND spn.swarm_project_id = $3
+              AND sp.organization_id = $4
+            "#,
+        )
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind(swarm_project_id)
+        .bind(organization_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?;
+
+        let org_id = match swarm_link {
+            Some(link) => link.organization_id,
+            None => {
+                // PERMANENT (bad link) → SKIP + ADVANCE.
+                sqlx::query(
+                    r#"
+                    INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                    "#,
+                )
+                .bind(node_id)
+                .bind(&op.idempotency_key)
+                .bind(op.seq)
+                .bind(&op.op_type)
+                .bind(op.entity_id)
+                .execute(pool)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?;
+                applied_through_seq = op.seq;
+                tracing::warn!(
+                    node_id = %node_id,
+                    local_project_id = %local_project_id,
+                    swarm_project_id = %swarm_project_id,
+                    seq = op.seq,
+                    "op_batch: skip+advance (swarm_project_nodes link missing or org mismatch)"
+                );
+                continue;
+            }
+        };
+
+        // (c) Idempotent apply — APPLY FIRST, RECORD SECOND (tournament R1/F1).
+        let seen: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2)",
+        )
+        .bind(node_id)
+        .bind(&op.idempotency_key)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?;
+
+        if seen {
+            // Already applied in a prior committed pass: skip the upsert, advance.
+            applied_through_seq = op.seq;
+            continue;
+        }
+
+        // (c.0) Fencing guard (CONTRACT §C / ADR-0009 SC3): for ops against a hive-assigned
+        // task, reject stale-token writes BEFORE applying. The assignment row is keyed on
+        // `node_task_assignments.task_id` = `shared_tasks.id`, so resolve the hive shared id
+        // from `payload.shared_task_id` DIRECTLY (the load-bearing, reassignment-proof key —
+        // a creator-keyed `find_by_source_task_id` would return None for a task ASSIGNED to
+        // the sender but CREATED elsewhere, silently disabling the fence = the SC3 bug).
+        let shared_id = op
+            .payload
+            .get("shared_task_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<Uuid>().ok());
+
+        if let Some(shared_id) = shared_id {
+            // Node-owned task bypass (tournament R1/G): a task created by THIS node
+            // (`owner_node_id == node_id`) has no `node_task_assignments` row — the
+            // fence lookup below would find no assignment and `break`, rejecting the
+            // owner's own writes. Query `owner_node_id` and if it matches `node_id`,
+            // skip the lease+token fence (the owner does not need a lease to write its
+            // own task). Only hive-assigned tasks (owner_node_id != node_id or NULL)
+            // require the fence.
+            let owner_node_id: Option<Uuid> = sqlx::query_scalar(
+                r#"SELECT owner_node_id FROM shared_tasks WHERE id = $1 AND deleted_at IS NULL"#,
+            )
+            .bind(shared_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| HandleError::Database(e.to_string()))?;
+
+            if owner_node_id == Some(node_id) {
+                // Node-owned task — bypass the fence. Proceed to status mapping + upsert.
+                tracing::trace!(
+                    node_id = %node_id,
+                    seq = op.seq,
+                    shared_task_id = %shared_id,
+                    "op_batch: node-owned task, skipping lease+token fence"
+                );
+            } else {
+                // Narrow read: do NOT use `NodeTaskAssignment` FromRow (the `fencing_token` column
+                // is not on that struct — 203's judgment call). Read only `id` + `fencing_token`.
+                let assignment: Option<(Uuid, i64)> = sqlx::query_as(
+                    r#"
+                SELECT id, fencing_token
+                FROM node_task_assignments
+                WHERE task_id = $1 AND completed_at IS NULL
+                "#,
+                )
+                .bind(shared_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?;
+
+                if let Some((assignment_id, current_token)) = assignment {
+                    let stale = match op.fencing_token {
+                        None => true,
+                        Some(tok) => tok < current_token,
+                    };
+                    if stale {
+                        // REJECT (permanent): do NOT upsert, do NOT record node_op_log, do NOT
+                        // advance applied_through_seq past this op. Mirror 106's PARK control-flow
+                        // of NOT advancing (break, not continue), but this is a permanent reject,
+                        // not a transient park. Emit LeaseRevoked so the partitioned writer learns
+                        // its lease is gone.
+                        tracing::warn!(
+                            node_id = %node_id,
+                            seq = op.seq,
+                            assignment_id = %assignment_id,
+                            op_token = ?op.fencing_token,
+                            current_token = current_token,
+                            "op_batch: reject (stale fencing token) — LeaseRevoked"
+                        );
+                        revokes.push((assignment_id, "stale fencing token".to_string()));
+                        break;
+                    }
+                } else {
+                    // No active assignment for a hive-managed task (shared_task_id present):
+                    // the lease was reclaimed or the task was completed/cancelled. A late write
+                    // from a partitioned node MUST NOT overwrite the completed task (SC3). Drop
+                    // the op and stop processing this batch — the node's self-fence watchdog
+                    // and the reclaim sweep's LeaseRevoked event will halt the node.
+                    //
+                    // Emit LeaseRevoked so the partitioned writer learns its lease is gone
+                    // (tournament R1/D — without this, the node retries unacked ops forever).
+                    // The active-lease query above filtered `completed_at IS NULL`, so we look
+                    // up the assignment WITHOUT that filter to obtain the `assignment_id` for
+                    // the revoke signal.
+                    tracing::warn!(
+                        node_id = %node_id,
+                        seq = op.seq,
+                        shared_task_id = %shared_id,
+                        op_token = ?op.fencing_token,
+                        "op_batch: reject (no active assignment for hive-managed task) — lease revoked or completed"
+                    );
+                    let assignment_id: Option<Uuid> = sqlx::query_scalar(
+                        r#"SELECT id FROM node_task_assignments
+                       WHERE task_id = $1 AND node_id = $2
+                       ORDER BY completed_at DESC NULLS LAST
+                       LIMIT 1"#,
+                    )
+                    .bind(shared_id)
+                    .bind(node_id)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| HandleError::Database(e.to_string()))?;
+                    if let Some(aid) = assignment_id {
+                        revokes.push((
+                            aid,
+                            "no active assignment (lease revoked or completed)".to_string(),
+                        ));
+                    }
+                    break;
+                }
+            }
+        }
+        // `shared_id` None → creator's first pre-link write / node-owned work: no fence.
+        // `shared_id` Some + owner_node_id == node_id → node-owned task, fence bypassed above.
+
+        // (d) Status value mapping (tournament R1/F5): node serializes lowercase
+        // (inprogress/inreview); canonicalize via the single boundary helper (302).
+        let status_raw = op
+            .payload
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let status = match crate::nodes::ws::status_machine::canonical_status_from_node(status_raw)
+        {
+            Ok(s) => s,
+            Err(e) => {
+                // Unknown status value → SKIP+ADVANCE (tournament R1/E): propagating `?`
+                // would return a Database error → no OpAck sent → node retries forever.
+                // Skip the op permanently (record in node_op_log + advance cursor) so the
+                // node's outbox drains past the malformed op.
+                tracing::warn!(
+                    node_id = %node_id,
+                    seq = op.seq,
+                    status_raw,
+                    "op_batch: skip+advance (unknown status from node): {}", e
+                );
+                sqlx::query(
+                    r#"
+                    INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                    "#,
+                )
+                .bind(node_id)
+                .bind(&op.idempotency_key)
+                .bind(op.seq)
+                .bind(&op.op_type)
+                .bind(op.entity_id)
+                .execute(pool)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?;
+                applied_through_seq = op.seq;
+                continue;
+            }
+        };
+
+        let title = op
+            .payload
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(sanitize_string)
+            .ok_or_else(|| {
+                HandleError::Database(format!("op_batch: op seq {} missing payload.title", op.seq))
+            })?;
+        let description = op
+            .payload
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(sanitize_string);
+
+        let repo = SharedTaskRepository::new(pool);
+
+        // (e) Status transition author guard (ADR-0010 §D / SC4): a hive-managed shared
+        // task's status may be changed ONLY by its sole authoritative author. Governs
+        // only ops carrying a `shared_task_id` (hive-managed) — node-owned work
+        // (`shared_id` None) skips the guard, mirroring P2's fence scope. A no-op
+        // (`incoming == current`) is NOT a transition: the metadata-only upsert proceeds.
+        // An illegal transition or a hive-authored-from-node transition is REJECTED via
+        // SKIP+ADVANCE (same node_op_log write + cursor advance as 106's permanent-skip
+        // branches above), so a rejected status does not wedge the op-log. Rides P2's
+        // lease+token fence above: by the time we reach here, a `shared_id`-bearing op
+        // has already passed the stale-token check (or broken out before this point).
+        if let Some(shared_id) = shared_id {
+            // Creation path: if the shared_task row does not yet exist, there is no `from`
+            // status — the matrix governs transitions of an EXISTING row. Skip the guard
+            // and let 106's upsert create it.
+            if let Some(existing) = repo
+                .find_by_id(shared_id)
+                .await
+                .map_err(|e| HandleError::Database(e.to_string()))?
+            {
+                let current = existing.status;
+                if status != current {
+                    use crate::nodes::ws::status_machine::{
+                        TransitionAuthor, author_of_transition,
+                    };
+                    match author_of_transition(current, status) {
+                        Some(TransitionAuthor::Node) => {
+                            // Node-authored transition; P2's lease+token fence already
+                            // validated above → proceed to upsert_from_node.
+                        }
+                        Some(TransitionAuthor::Hive) => {
+                            // A hive-authored transition arriving FROM A NODE → REJECT
+                            // (SKIP+ADVANCE): a node may not author `todo→in-progress`,
+                            // `in-review→done`, `in-review→in-progress`, or `*→cancelled`.
+                            tracing::warn!(
+                                node_id = %node_id,
+                                seq = op.seq,
+                                shared_task_id = %shared_id,
+                                from = ?current,
+                                to = ?status,
+                                "op_batch: skip+advance (hive-authored transition reported by node)"
+                            );
+                            sqlx::query(
+                                r#"
+                                INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                                VALUES ($1, $2, $3, $4, $5)
+                                ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                                "#,
+                            )
+                            .bind(node_id)
+                            .bind(&op.idempotency_key)
+                            .bind(op.seq)
+                            .bind(&op.op_type)
+                            .bind(op.entity_id)
+                            .execute(pool)
+                            .await
+                            .map_err(|e| HandleError::Database(e.to_string()))?;
+                            applied_through_seq = op.seq;
+                            continue;
+                        }
+                        None => {
+                            // Illegal transition (in no author's column) → REJECT
+                            // (SKIP+ADVANCE): do not merge an out-of-matrix status.
+                            tracing::warn!(
+                                node_id = %node_id,
+                                seq = op.seq,
+                                shared_task_id = %shared_id,
+                                from = ?current,
+                                to = ?status,
+                                "op_batch: skip+advance (illegal status transition)"
+                            );
+                            sqlx::query(
+                                r#"
+                                INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+                                VALUES ($1, $2, $3, $4, $5)
+                                ON CONFLICT (node_id, idempotency_key) DO NOTHING
+                                "#,
+                            )
+                            .bind(node_id)
+                            .bind(&op.idempotency_key)
+                            .bind(op.seq)
+                            .bind(&op.op_type)
+                            .bind(op.entity_id)
+                            .execute(pool)
+                            .await
+                            .map_err(|e| HandleError::Database(e.to_string()))?;
+                            applied_through_seq = op.seq;
+                            continue;
+                        }
+                    }
+                }
+                // incoming == current → no-op short-circuit: NOT a transition, proceed
+                // to upsert_from_node (metadata-only update; other fields may change).
+            }
+        }
+
+        repo.upsert_from_node(UpsertTaskFromNodeData {
+            swarm_project_id,
+            project_id: swarm_project_id,
+            organization_id: org_id,
+            origin_node_id: node_id,
+            local_task_id,
+            title,
+            description,
+            status,
+            version: 1,
+            owner_node_id: Some(node_id),
+            owner_name: Some(node_name.to_string()),
+            assignee_user_id: None,
+        })
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?;
+
+        // ONLY AFTER upsert succeeds → record the dedup row.
+        sqlx::query(
+            r#"
+            INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (node_id, idempotency_key) DO NOTHING
+            "#,
+        )
+        .bind(node_id)
+        .bind(&op.idempotency_key)
+        .bind(op.seq)
+        .bind(&op.op_type)
+        .bind(op.entity_id)
+        .execute(pool)
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?;
+        applied_through_seq = op.seq;
+    }
+
+    Ok((applied_through_seq, revokes))
+}
+
+/// Handle a `NodeMessage::OpBatch` (SC2): apply each op idempotently to `node_op_log` +
+/// `shared_tasks` and ack with `applied_through_seq`. Wraps `handle_op_batch_apply` (WS-free core)
+/// and sends the durable `HiveMessage::OpAck`.
+async fn handle_op_batch(
+    node_id: Uuid,
+    organization_id: Uuid,
+    node_name: &str,
+    ops: &[OutboxOp],
+    pool: &PgPool,
+    ws_sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+) -> Result<(), HandleError> {
+    let (applied_through_seq, revokes) =
+        handle_op_batch_apply(node_id, organization_id, node_name, ops, pool).await?;
+    // Emit LeaseRevoked for each rejected op (ws-free split, option (a)).
+    for (assignment_id, reason) in revokes {
+        send_message(
+            ws_sender,
+            &HiveMessage::LeaseRevoked {
+                assignment_id,
+                reason,
+            },
+        )
+        .await
+        .map_err(|_| HandleError::Send)?;
+    }
+    send_message(
+        ws_sender,
+        &HiveMessage::OpAck {
+            applied_through_seq,
+        },
+    )
+    .await
+    .map_err(|_| HandleError::Send)?;
+    Ok(())
+}
+
+/// Renew held leases for the given assignment_ids (pure DB, no WebSocket send).
+///
+/// Returns the `LeaseClaim` for each assignment this node still holds (renew_lease Some).
+/// Foreign/missing assignments are skipped (renew_lease None → no entry).
+async fn handle_lease_heartbeat_renew(
+    node_id: Uuid,
+    assignment_ids: &[Uuid],
+    pool: &PgPool,
+) -> Result<Vec<crate::db::task_assignments::LeaseClaim>, HandleError> {
+    let repo = crate::db::task_assignments::TaskAssignmentRepository::new(pool);
+    let mut grants = Vec::new();
+    for assignment_id in assignment_ids {
+        match repo.renew_lease(*assignment_id, node_id, LEASE_TTL).await {
+            Ok(Some(claim)) => grants.push(claim),
+            Ok(None) => {} // not held by this node — skip, no grant
+            Err(e) => return Err(HandleError::Database(e.to_string())),
+        }
+    }
+    Ok(grants)
+}
+
+/// Handle a lease heartbeat: renew held leases and reply LeaseGrant per assignment.
+///
+/// For each assignment_id, renews the lease via `TaskAssignmentRepository::renew_lease`.
+/// Replies `HiveMessage::LeaseGrant` only for assignments the node actually holds
+/// (renew_lease returns Some); skips foreign/missing assignments (no grant).
+async fn handle_lease_heartbeat(
+    node_id: Uuid,
+    assignment_ids: &[Uuid],
+    pool: &PgPool,
+    ws_sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+) -> Result<(), HandleError> {
+    let grants = handle_lease_heartbeat_renew(node_id, assignment_ids, pool).await?;
+    for claim in grants {
+        send_message(
+            ws_sender,
+            &HiveMessage::LeaseGrant {
+                assignment_id: claim.assignment_id,
+                fencing_token: claim.fencing_token,
+                lease_expires_at: claim.lease_expires_at,
+            },
+        )
+        .await
+        .map_err(|_| HandleError::Send)?;
     }
     Ok(())
 }
@@ -2005,4 +2714,2261 @@ async fn handle_backfill_response(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod op_batch_tests {
+    use super::*;
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    use crate::nodes::ws::message::OutboxOp;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+    async fn create_pool() -> PgPool {
+        sqlx::PgPool::connect(&database_url().unwrap())
+            .await
+            .expect("connect")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, last_heartbeat_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+        node_id
+    }
+
+    async fn create_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm project");
+        sp_id
+    }
+
+    async fn create_node_local_project(
+        pool: &PgPool,
+        node_id: Uuid,
+        local_project_id: Uuid,
+        swarm_project_id: Option<Uuid>,
+    ) {
+        let res = sqlx::query(
+            r#"
+            INSERT INTO node_local_projects (node_id, local_project_id, name, git_repo_path, swarm_project_id)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("local-proj")
+        .bind("/repo/path")
+        .bind(swarm_project_id)
+        .execute(pool)
+        .await;
+        if let Err(e) = res {
+            eprintln!("create_node_local_project (non-fatal): {}", e);
+        }
+    }
+
+    async fn create_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+        local_project_id: Uuid,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("/repo/path")
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm_project_nodes link");
+    }
+
+    async fn cleanup_node_op_log(pool: &PgPool, node_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM node_op_log WHERE node_id = $1")
+            .bind(node_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn cleanup_shared_task(pool: &PgPool, source_node_id: Uuid, source_task_id: Uuid) {
+        let _ = sqlx::query(
+            "DELETE FROM shared_tasks WHERE source_node_id = $1 AND source_task_id = $2",
+        )
+        .bind(source_node_id)
+        .bind(source_task_id)
+        .execute(pool)
+        .await;
+    }
+
+    async fn cleanup_node_local_projects(pool: &PgPool, node_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM node_local_projects WHERE node_id = $1")
+            .bind(node_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn cleanup_swarm_project_nodes(pool: &PgPool, swarm_project_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
+            .bind(swarm_project_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn cleanup_swarm_project(pool: &PgPool, swarm_project_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM swarm_projects WHERE id = $1")
+            .bind(swarm_project_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn cleanup_node(pool: &PgPool, node_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn node_op_log_count_for_key(pool: &PgPool, node_id: Uuid, key: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2",
+        )
+        .bind(node_id)
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .expect("count")
+    }
+
+    async fn node_op_log_max_seq(pool: &PgPool, node_id: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM node_op_log WHERE node_id = $1")
+            .bind(node_id)
+            .fetch_one(pool)
+            .await
+            .expect("max seq")
+    }
+
+    async fn shared_task_status(
+        pool: &PgPool,
+        source_node_id: Uuid,
+        source_task_id: Uuid,
+    ) -> String {
+        sqlx::query_scalar("SELECT status::text FROM shared_tasks WHERE source_node_id = $1 AND source_task_id = $2")
+            .bind(source_node_id)
+            .bind(source_task_id)
+            .fetch_one(pool)
+            .await
+            .expect("shared task status")
+    }
+
+    fn make_op(
+        seq: i64,
+        local_task_id: Uuid,
+        local_project_id: Uuid,
+        status: &str,
+        idempotency_key: &str,
+    ) -> OutboxOp {
+        OutboxOp {
+            seq,
+            op_type: "task.upsert".to_string(),
+            entity_type: "task".to_string(),
+            entity_id: local_task_id,
+            payload: serde_json::json!({
+                "id": local_task_id,
+                "project_id": local_project_id,
+                "title": "t",
+                "description": null,
+                "status": status,
+            }),
+            idempotency_key: idempotency_key.to_string(),
+            fencing_token: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn op_batch_applies_swarm_linked_task_idempotently_and_acks() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        let local_task_id = Uuid::new_v4();
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        let key = format!("task:{}:{}", local_project_id, local_task_id);
+        let op = make_op(1, local_task_id, local_project_id, "done", &key);
+        let ops = vec![op.clone()];
+
+        let (seq, _revokes) = handle_op_batch_apply(node_id, org_id, "node-name", &ops, &pool)
+            .await
+            .expect("first apply");
+        assert_eq!(
+            seq, 1,
+            "applied_through_seq advances to 1 after first apply"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_id, &key).await,
+            1,
+            "exactly one node_op_log row after first apply"
+        );
+        assert_eq!(
+            shared_task_status(&pool, node_id, local_task_id).await,
+            "done",
+            "shared_tasks has the task with mapped status"
+        );
+        assert_eq!(
+            node_op_log_max_seq(&pool, node_id).await,
+            1,
+            "max seq in node_op_log is 1"
+        );
+
+        let (seq2, _revokes2) = handle_op_batch_apply(node_id, org_id, "node-name", &ops, &pool)
+            .await
+            .expect("second apply");
+        assert_eq!(seq2, 1, "applied_through_seq stays at 1 after duplicate");
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_id, &key).await,
+            1,
+            "still ONE node_op_log row (ON CONFLICT DO NOTHING)"
+        );
+
+        cleanup_shared_task(&pool, node_id, local_task_id).await;
+        cleanup_node_op_log(&pool, node_id).await;
+        cleanup_swarm_project_nodes(&pool, swarm_project_id).await;
+        cleanup_node_local_projects(&pool, node_id).await;
+        cleanup_swarm_project(&pool, swarm_project_id).await;
+        cleanup_node(&pool, node_id).await;
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    #[allow(non_snake_case)]
+    async fn op_batch_PARKS_when_local_project_link_absent() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        let local_task_id = Uuid::new_v4();
+
+        let key = format!("task:{}:{}", local_project_id, local_task_id);
+        let op = make_op(1, local_task_id, local_project_id, "done", &key);
+        let ops = vec![op.clone()];
+
+        let (seq, _revokes) = handle_op_batch_apply(node_id, org_id, "node-name", &ops, &pool)
+            .await
+            .expect("apply should not error on park");
+        assert_eq!(
+            seq, 0,
+            "applied_through_seq does NOT advance to 1 (stays at high-water 0) on PARK"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_id, &key).await,
+            0,
+            "NO node_op_log row for the key → node re-sends"
+        );
+
+        cleanup_node_op_log(&pool, node_id).await;
+        cleanup_node(&pool, node_id).await;
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    #[allow(non_snake_case)]
+    async fn op_batch_SKIPS_AND_ADVANCES_when_project_present_but_not_swarm_linked() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        let local_task_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, None).await;
+
+        let key = format!("task:{}:{}", local_project_id, local_task_id);
+        let op = make_op(1, local_task_id, local_project_id, "done", &key);
+        let ops = vec![op.clone()];
+
+        let (seq, _revokes) = handle_op_batch_apply(node_id, org_id, "node-name", &ops, &pool)
+            .await
+            .expect("apply should not error on skip+advance");
+        assert_eq!(
+            seq, 1,
+            "applied_through_seq DOES advance to 1 (op acked/skipped, NOT parked)"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_id, &key).await,
+            1,
+            "node_op_log records the skipped op (cursor + dedup consistent)"
+        );
+
+        cleanup_node_op_log(&pool, node_id).await;
+        cleanup_node_local_projects(&pool, node_id).await;
+        cleanup_node(&pool, node_id).await;
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn op_batch_maps_node_lowercase_status_explicitly() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        let local_task_id_1 = Uuid::new_v4();
+        let key_1 = format!("task:{}:{}", local_project_id, local_task_id_1);
+        let op_1 = make_op(1, local_task_id_1, local_project_id, "inprogress", &key_1);
+        let (seq, _revokes) = handle_op_batch_apply(node_id, org_id, "node-name", &[op_1], &pool)
+            .await
+            .expect("apply inprogress");
+        assert_eq!(seq, 1);
+        assert_eq!(
+            shared_task_status(&pool, node_id, local_task_id_1).await,
+            "in-progress",
+            "node 'inprogress' maps to hive 'in-progress', NOT the wrong fallback"
+        );
+
+        let local_task_id_2 = Uuid::new_v4();
+        let key_2 = format!("task:{}:{}", local_project_id, local_task_id_2);
+        let op_2 = make_op(2, local_task_id_2, local_project_id, "inreview", &key_2);
+        let (seq, _revokes) = handle_op_batch_apply(node_id, org_id, "node-name", &[op_2], &pool)
+            .await
+            .expect("apply inreview");
+        assert_eq!(seq, 2);
+        assert_eq!(
+            shared_task_status(&pool, node_id, local_task_id_2).await,
+            "in-review",
+            "node 'inreview' maps to hive 'in-review', NOT the wrong fallback"
+        );
+
+        cleanup_shared_task(&pool, node_id, local_task_id_1).await;
+        cleanup_shared_task(&pool, node_id, local_task_id_2).await;
+        cleanup_node_op_log(&pool, node_id).await;
+        cleanup_swarm_project_nodes(&pool, swarm_project_id).await;
+        cleanup_node_local_projects(&pool, node_id).await;
+        cleanup_swarm_project(&pool, swarm_project_id).await;
+        cleanup_node(&pool, node_id).await;
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn op_batch_does_not_lose_apply_when_upsert_fails_then_retried() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        let local_task_id = Uuid::new_v4();
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        let key = format!("task:{}:{}", local_project_id, local_task_id);
+        let op = make_op(1, local_task_id, local_project_id, "done", &key);
+
+        // Weaker invariant (per task note): a node_op_log row exists ONLY for ops whose
+        // shared_tasks apply is present — never a dedup row without its task. Injecting an
+        // upsert failure is impractical at this seam (upsert_from_node lives in tasks.rs and
+        // is not mockable here without touching an unlisted file). Apply-then-record ordering
+        // guarantees this invariant structurally: the dedup INSERT runs only after upsert Ok.
+        let (seq, _revokes) = handle_op_batch_apply(node_id, org_id, "node-name", &[op], &pool)
+            .await
+            .expect("apply");
+        assert_eq!(seq, 1);
+
+        let log_count = node_op_log_count_for_key(&pool, node_id, &key).await;
+        let task_status = shared_task_status(&pool, node_id, local_task_id).await;
+        assert_eq!(log_count, 1, "dedup row present");
+        assert_eq!(task_status, "done", "task apply present");
+    }
+}
+
+#[cfg(test)]
+mod fencing_tests {
+    use super::*;
+    use crate::db::task_assignments::TaskAssignmentRepository;
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    use crate::nodes::ws::message::OutboxOp;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping test: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+    async fn create_pool() -> PgPool {
+        let url = database_url().expect("DATABASE_URL must be set");
+        sqlx::PgPool::connect(&url)
+            .await
+            .expect("Failed to connect to database")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, last_heartbeat_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+        node_id
+    }
+
+    async fn create_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm project");
+        sp_id
+    }
+
+    async fn create_node_local_project(
+        pool: &PgPool,
+        node_id: Uuid,
+        local_project_id: Uuid,
+        swarm_project_id: Option<Uuid>,
+    ) {
+        let res = sqlx::query(
+            r#"
+            INSERT INTO node_local_projects (node_id, local_project_id, name, git_repo_path, swarm_project_id)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("local-proj")
+        .bind("/repo/path")
+        .bind(swarm_project_id)
+        .execute(pool)
+        .await;
+        if let Err(e) = res {
+            eprintln!("create_node_local_project (non-fatal): {}", e);
+        }
+    }
+
+    async fn create_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+        local_project_id: Uuid,
+    ) -> Uuid {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("/repo/path")
+        .fetch_one(pool)
+        .await
+        .expect("Failed to create swarm_project_nodes link");
+        sqlx::Row::get(&row, "id")
+    }
+
+    async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn node_op_log_count_for_key(pool: &PgPool, node_id: Uuid, key: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2",
+        )
+        .bind(node_id)
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .expect("count")
+    }
+
+    async fn shared_task_status_by_id(pool: &PgPool, shared_id: Uuid) -> Option<String> {
+        sqlx::query_scalar("SELECT status::text FROM shared_tasks WHERE id = $1")
+            .bind(shared_id)
+            .fetch_optional(pool)
+            .await
+            .expect("shared task status by id")
+    }
+
+    async fn shared_task_status_by_source(
+        pool: &PgPool,
+        source_node_id: Uuid,
+        source_task_id: Uuid,
+    ) -> String {
+        sqlx::query_scalar(
+            "SELECT status::text FROM shared_tasks WHERE source_node_id = $1 AND source_task_id = $2",
+        )
+        .bind(source_node_id)
+        .bind(source_task_id)
+        .fetch_one(pool)
+        .await
+        .expect("shared task status by source")
+    }
+
+    /// Insert a shared_tasks row directly (created by `creator_node` with local id
+    /// `creator_local_task_id`), returning the shared task id. Used to seed a task the
+    /// sender did NOT create (the ASSIGNED-NOT-CREATED reassignment scenario, R2/F2).
+    async fn insert_shared_task(
+        pool: &PgPool,
+        org_id: Uuid,
+        swarm_project_id: Uuid,
+        creator_node: Uuid,
+        creator_local_task_id: Uuid,
+        status: &str,
+    ) -> Uuid {
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO shared_tasks (
+                id, organization_id, project_id, swarm_project_id,
+                source_node_id, source_task_id,
+                title, status, version, shared_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $3, $4, $5, $6, $7::task_status, 1, $8, $8, $8)
+            "#,
+        )
+        .bind(id)
+        .bind(org_id)
+        .bind(swarm_project_id)
+        .bind(creator_node)
+        .bind(creator_local_task_id)
+        .bind("seeded task")
+        .bind(status)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("insert shared task");
+        id
+    }
+
+    /// Build an OutboxOp literally (make_op in op_batch_tests does not set shared_task_id
+    /// or fencing_token; build the struct directly here to avoid changing make_op, which
+    /// 4 existing tests depend on).
+    fn make_fence_op(
+        seq: i64,
+        local_task_id: Uuid,
+        local_project_id: Uuid,
+        shared_task_id: Option<Uuid>,
+        fencing_token: Option<i64>,
+        status: &str,
+        idempotency_key: &str,
+    ) -> OutboxOp {
+        let payload = match shared_task_id {
+            Some(sid) => serde_json::json!({
+                "id": local_task_id,
+                "project_id": local_project_id,
+                "shared_task_id": sid,
+                "title": "t",
+                "description": null,
+                "status": status,
+            }),
+            None => serde_json::json!({
+                "id": local_task_id,
+                "project_id": local_project_id,
+                "title": "t",
+                "description": null,
+                "status": status,
+            }),
+        };
+        OutboxOp {
+            seq,
+            op_type: "task.upsert".to_string(),
+            entity_type: "task".to_string(),
+            entity_id: local_task_id,
+            payload,
+            idempotency_key: idempotency_key.to_string(),
+            fencing_token,
+        }
+    }
+
+    #[tokio::test]
+    async fn op_against_assigned_task_with_stale_token_is_rejected_not_applied() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_c = create_test_node(&pool, org_id).await; // CREATOR
+        let node_a = create_test_node(&pool, org_id).await; // first holder (stale)
+        let node_b = create_test_node(&pool, org_id).await; // current holder
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        // Each node needs a swarm_project_nodes link (provides node_project_id for try_claim)
+        // and a node_local_projects row (context resolution in handle_op_batch_apply).
+        let local_proj_c = Uuid::new_v4();
+        let local_proj_a = Uuid::new_v4();
+        let local_proj_b = Uuid::new_v4();
+        create_node_local_project(&pool, node_c, local_proj_c, Some(swarm_project_id)).await;
+        create_node_local_project(&pool, node_a, local_proj_a, Some(swarm_project_id)).await;
+        create_node_local_project(&pool, node_b, local_proj_b, Some(swarm_project_id)).await;
+        let _np_c = create_swarm_project_node(&pool, swarm_project_id, node_c, local_proj_c).await;
+        let np_a = create_swarm_project_node(&pool, swarm_project_id, node_a, local_proj_a).await;
+        let _np_b = create_swarm_project_node(&pool, swarm_project_id, node_b, local_proj_b).await;
+
+        // Shared task CREATED BY node_c (source_node_id = node_c). node_a did NOT create it,
+        // so find_by_source_task_id(node_a, a_local) resolves NOTHING — only payload.shared_task_id
+        // resolves the assignment (the SC3 guard).
+        let c_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_c,
+            c_local_task_id,
+            "todo",
+        )
+        .await;
+
+        // node_a claims (T1) with a PAST TTL so the lease is already expired.
+        let claim_a = repo
+            .try_claim(shared_id, node_a, np_a, chrono::Duration::seconds(-300))
+            .await
+            .expect("claim a")
+            .expect("node_a claimed");
+        let t1 = claim_a.fencing_token;
+        assert!(t1 > 0, "first claim bumps a positive token");
+
+        // node_b reclaims (T2 > T1) — the expired lease lets try_claim bump the token.
+        let claim_b = repo
+            .try_claim(shared_id, node_b, _np_b, chrono::Duration::seconds(300))
+            .await
+            .expect("claim b")
+            .expect("node_b reclaimed");
+        let t2 = claim_b.fencing_token;
+        assert!(t2 > t1, "reassignment bumps the fencing token (T2 > T1)");
+
+        // Sanity: node_a's old assignment row is the SAME row, now held by node_b. Its id is
+        // claim_b.assignment_id (the row was UPDATEd in place by try_claim). This is the id
+        // the LeaseRevoked must reference.
+        let assignment_id = claim_b.assignment_id;
+
+        // node_a (partitioned-but-alive) sends a stale op stamped fencing_token = T1.
+        let a_local_task_id = Uuid::new_v4();
+        let key = format!("task:{}:{}", local_proj_a, a_local_task_id);
+        let op = make_fence_op(
+            1,
+            a_local_task_id,
+            local_proj_a,
+            Some(shared_id),
+            Some(t1),
+            "done",
+            &key,
+        );
+
+        let pre_status = shared_task_status_by_id(&pool, shared_id)
+            .await
+            .expect("task exists pre-apply");
+
+        let (seq, revokes) = handle_op_batch_apply(node_a, org_id, "node-a", &[op], &pool)
+            .await
+            .expect("apply");
+
+        // (a) shared_tasks NOT updated by the stale op (status unchanged).
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some(pre_status),
+            "stale-token op MUST NOT update shared_tasks"
+        );
+        // (b) node_op_log has NO row for the op's idempotency_key.
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_a, &key).await,
+            0,
+            "rejected op MUST NOT record a node_op_log dedup row"
+        );
+        // (c) returned seq does NOT advance past the rejected op's seq (high-water stays at
+        // the pre-reject value — break, not continue).
+        assert_eq!(
+            seq, 0,
+            "applied_through_seq MUST NOT advance past the rejected op (break, not continue)"
+        );
+        // (d) the revoke vec contains (assignment_id, "stale fencing token").
+        assert_eq!(revokes.len(), 1, "exactly one LeaseRevoked emitted");
+        assert_eq!(revokes[0].0, assignment_id, "revoked assignment_id matches");
+        assert_eq!(
+            revokes[0].1, "stale fencing token",
+            "revoke reason matches the contract"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn op_with_current_token_against_assigned_task_applies_normally() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        // node_b is BOTH the creator AND the current holder — so its op's upsert keys on
+        // (source_node_id=node_b, source_task_id=b_local) and UPDATEs the existing row (not
+        // a new INSERT). This isolates the test to the fence behavior, not 106's source-key
+        // semantics. The fence still guards: an active assignment exists, the op carries the
+        // current token T2, so it MUST apply.
+        let node_b = create_test_node(&pool, org_id).await;
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_proj_b = Uuid::new_v4();
+        create_node_local_project(&pool, node_b, local_proj_b, Some(swarm_project_id)).await;
+        let np_b = create_swarm_project_node(&pool, swarm_project_id, node_b, local_proj_b).await;
+
+        let b_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_b,
+            b_local_task_id,
+            "in-progress",
+        )
+        .await;
+
+        // node_b claims (T2) — the rightful current holder.
+        let claim_b = repo
+            .try_claim(shared_id, node_b, np_b, chrono::Duration::seconds(300))
+            .await
+            .expect("claim b")
+            .expect("node_b claimed");
+        let t2 = claim_b.fencing_token;
+        assert!(t2 > 0, "claim bumps a positive token");
+
+        // node_b sends an op stamped fencing_token = T2 (current) → applies. The transition
+        // in-progress→done is node-authored (ADR-0010 §D), so 303's author guard also
+        // accepts it (seeding as 'in-progress' rather than 'todo' keeps this fence test
+        // matrix-compliant after 303 landed).
+        let key = format!("task:{}:{}", local_proj_b, b_local_task_id);
+        let op = make_fence_op(
+            1,
+            b_local_task_id,
+            local_proj_b,
+            Some(shared_id),
+            Some(t2),
+            "done",
+            &key,
+        );
+
+        let (seq, revokes) = handle_op_batch_apply(node_b, org_id, "node-b", &[op], &pool)
+            .await
+            .expect("apply");
+
+        assert_eq!(
+            seq, 1,
+            "applied_through_seq advances to op.seq on a current-token apply"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_b, &key).await,
+            1,
+            "current-token op records a node_op_log dedup row"
+        );
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("done".to_string()),
+            "shared_tasks is updated by the current-token op"
+        );
+        assert!(revokes.is_empty(), "no LeaseRevoked for a current-token op");
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn op_with_null_token_node_owned_work_is_unaffected_by_the_fence() {
+        skip_without_db!();
+        let pool = create_pool().await;
+
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        let local_task_id = Uuid::new_v4();
+        let key = format!("task:{}:{}", local_project_id, local_task_id);
+        // No shared_task_id, no fencing_token — node-owned work (CONTRACT §C / ADR-0009).
+        // No active assignment exists for this task, so the fence does not apply.
+        let op = make_fence_op(1, local_task_id, local_project_id, None, None, "done", &key);
+
+        let (seq, revokes) = handle_op_batch_apply(node_id, org_id, "node-name", &[op], &pool)
+            .await
+            .expect("apply");
+
+        assert_eq!(
+            seq, 1,
+            "node-owned op applies and advances applied_through_seq"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_id, &key).await,
+            1,
+            "node-owned op records a node_op_log dedup row"
+        );
+        // shared_tasks row is created by the apply (origin_node_id = node_id).
+        assert_eq!(
+            shared_task_status_by_source(&pool, node_id, local_task_id).await,
+            "done",
+            "node-owned shared_tasks row is created with the mapped status"
+        );
+        assert!(revokes.is_empty(), "no LeaseRevoked for node-owned work");
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn op_for_completed_task_with_no_active_assignment_is_rejected_not_applied() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await; // partitioned writer (stale)
+        let node_b = create_test_node(&pool, org_id).await; // rightful holder who completed
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_proj_a = Uuid::new_v4();
+        let local_proj_b = Uuid::new_v4();
+        create_node_local_project(&pool, node_a, local_proj_a, Some(swarm_project_id)).await;
+        create_node_local_project(&pool, node_b, local_proj_b, Some(swarm_project_id)).await;
+        let np_a = create_swarm_project_node(&pool, swarm_project_id, node_a, local_proj_a).await;
+        let np_b = create_swarm_project_node(&pool, swarm_project_id, node_b, local_proj_b).await;
+
+        let a_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_a,
+            a_local_task_id,
+            "todo",
+        )
+        .await;
+
+        // node_a claims (T1), then its lease expires and node_b reclaims (T2 > T1).
+        let claim_a = repo
+            .try_claim(shared_id, node_a, np_a, chrono::Duration::seconds(-300))
+            .await
+            .expect("claim a")
+            .expect("node_a claimed");
+        let t1 = claim_a.fencing_token;
+
+        let claim_b = repo
+            .try_claim(shared_id, node_b, np_b, chrono::Duration::seconds(300))
+            .await
+            .expect("claim b")
+            .expect("node_b reclaimed");
+        let t2 = claim_b.fencing_token;
+        assert!(t2 > t1, "reassignment bumps token");
+
+        // node_b COMPLETES the task → completed_at is set on the assignment row.
+        repo.complete(claim_b.assignment_id, "done")
+            .await
+            .expect("complete");
+
+        // Now there is NO active assignment (completed_at IS NULL returns nothing).
+        // node_a (partitioned, late) sends an op stamped with its stale token T1.
+        let key = format!("task:{}:{}", local_proj_a, a_local_task_id);
+        let op = make_fence_op(
+            1,
+            a_local_task_id,
+            local_proj_a,
+            Some(shared_id),
+            Some(t1),
+            "done",
+            &key,
+        );
+
+        let pre_status = shared_task_status_by_id(&pool, shared_id)
+            .await
+            .expect("task exists pre-apply");
+
+        let (seq, _revokes) = handle_op_batch_apply(node_a, org_id, "node-a", &[op], &pool)
+            .await
+            .expect("apply");
+
+        // (a) shared_tasks NOT updated — the late op must not overwrite the completed task.
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some(pre_status),
+            "late op for completed task MUST NOT update shared_tasks (SC3)"
+        );
+        // (b) node_op_log has NO row for the op's idempotency_key.
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_a, &key).await,
+            0,
+            "rejected op MUST NOT record a node_op_log dedup row"
+        );
+        // (c) seq does NOT advance past the rejected op.
+        assert_eq!(
+            seq, 0,
+            "applied_through_seq MUST NOT advance past the rejected op (break, not continue)"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
+}
+
+#[cfg(test)]
+mod lease_heartbeat_tests {
+    use super::*;
+    use crate::db::task_assignments::TaskAssignmentRepository;
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use sqlx::Row;
+    use uuid::Uuid;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping test: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+    async fn create_pool() -> PgPool {
+        let url = database_url().expect("DATABASE_URL must be set");
+        sqlx::PgPool::connect(&url)
+            .await
+            .expect("Failed to connect to database")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, status, capabilities, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, 'online', '{}'::jsonb, $5, $6)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+
+        node_id
+    }
+
+    async fn create_test_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test swarm project");
+
+        sp_id
+    }
+
+    async fn create_test_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+    ) -> Uuid {
+        let local_project_id = Uuid::new_v4();
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("test-repo")
+        .fetch_one(pool)
+        .await
+        .expect("Failed to create test swarm project node");
+
+        row.get("id")
+    }
+
+    async fn create_test_shared_task(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let task_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO shared_tasks (id, organization_id, title, status, created_at, updated_at)
+            VALUES ($1, $2, $3, 'todo'::task_status, $4, $5)
+            "#,
+        )
+        .bind(task_id)
+        .bind(org_id)
+        .bind(format!("Test Task {}", task_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test shared task");
+
+        task_id
+    }
+
+    async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn renew_extends_held_leases_and_returns_a_grant_per_assignment() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await;
+        let swarm_project = create_test_swarm_project(&pool, org_id).await;
+        let np_id = create_test_swarm_project_node(&pool, swarm_project, node_a).await;
+        let task_1 = create_test_shared_task(&pool, org_id).await;
+        let task_2 = create_test_shared_task(&pool, org_id).await;
+
+        let claim_1 = repo
+            .try_claim(task_1, node_a, np_id, chrono::Duration::seconds(30))
+            .await
+            .unwrap()
+            .expect("claim 1");
+        let claim_2 = repo
+            .try_claim(task_2, node_a, np_id, chrono::Duration::seconds(30))
+            .await
+            .unwrap()
+            .expect("claim 2");
+
+        let pre_token_1 = claim_1.fencing_token;
+        let pre_token_2 = claim_2.fencing_token;
+
+        let grants = handle_lease_heartbeat_renew(
+            node_a,
+            &[claim_1.assignment_id, claim_2.assignment_id],
+            &pool,
+        )
+        .await
+        .expect("renew");
+
+        assert_eq!(grants.len(), 2, "one grant per held assignment");
+        for g in &grants {
+            assert!(
+                g.lease_expires_at > chrono::Utc::now(),
+                "renewed lease in the future"
+            );
+            assert!(g.fencing_token > 0, "token present");
+        }
+        let grant_1 = grants
+            .iter()
+            .find(|g| g.assignment_id == claim_1.assignment_id)
+            .expect("grant 1");
+        let grant_2 = grants
+            .iter()
+            .find(|g| g.assignment_id == claim_2.assignment_id)
+            .expect("grant 2");
+        assert_eq!(
+            grant_1.fencing_token, pre_token_1,
+            "renewal does NOT bump fencing token (1)"
+        );
+        assert_eq!(
+            grant_2.fencing_token, pre_token_2,
+            "renewal does NOT bump fencing token (2)"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn renew_skips_assignments_not_held_by_this_node() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await;
+        let node_b = create_test_node(&pool, org_id).await;
+        let swarm_project = create_test_swarm_project(&pool, org_id).await;
+        let np_id_a = create_test_swarm_project_node(&pool, swarm_project, node_a).await;
+        let _np_id_b = create_test_swarm_project_node(&pool, swarm_project, node_b).await;
+        let task_1 = create_test_shared_task(&pool, org_id).await;
+
+        let claim_a = repo
+            .try_claim(task_1, node_a, np_id_a, chrono::Duration::seconds(300))
+            .await
+            .unwrap()
+            .expect("node_a claims");
+
+        let grants = handle_lease_heartbeat_renew(node_b, &[claim_a.assignment_id], &pool)
+            .await
+            .expect("renew");
+        assert!(grants.is_empty(), "no grant for a foreign assignment");
+
+        cleanup_org(&pool, org_id).await;
+    }
+}
+
+#[cfg(test)]
+mod status_guard_tests {
+    use super::*;
+    use crate::db::task_assignments::TaskAssignmentRepository;
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    use crate::nodes::ws::message::OutboxOp;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping test: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+    async fn create_pool() -> PgPool {
+        let url = database_url().expect("DATABASE_URL must be set");
+        sqlx::PgPool::connect(&url)
+            .await
+            .expect("Failed to connect to database")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, last_heartbeat_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+        node_id
+    }
+
+    async fn create_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm project");
+        sp_id
+    }
+
+    async fn create_node_local_project(
+        pool: &PgPool,
+        node_id: Uuid,
+        local_project_id: Uuid,
+        swarm_project_id: Option<Uuid>,
+    ) {
+        let res = sqlx::query(
+            r#"
+            INSERT INTO node_local_projects (node_id, local_project_id, name, git_repo_path, swarm_project_id)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("local-proj")
+        .bind("/repo/path")
+        .bind(swarm_project_id)
+        .execute(pool)
+        .await;
+        if let Err(e) = res {
+            eprintln!("create_node_local_project (non-fatal): {}", e);
+        }
+    }
+
+    async fn create_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+        local_project_id: Uuid,
+    ) -> Uuid {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("/repo/path")
+        .fetch_one(pool)
+        .await
+        .expect("Failed to create swarm_project_nodes link");
+        sqlx::Row::get(&row, "id")
+    }
+
+    async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn node_op_log_count_for_key(pool: &PgPool, node_id: Uuid, key: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2",
+        )
+        .bind(node_id)
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .expect("count")
+    }
+
+    async fn node_op_log_max_seq(pool: &PgPool, node_id: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM node_op_log WHERE node_id = $1")
+            .bind(node_id)
+            .fetch_one(pool)
+            .await
+            .expect("max seq")
+    }
+
+    async fn shared_task_status_by_id(pool: &PgPool, shared_id: Uuid) -> Option<String> {
+        sqlx::query_scalar("SELECT status::text FROM shared_tasks WHERE id = $1")
+            .bind(shared_id)
+            .fetch_optional(pool)
+            .await
+            .expect("shared task status by id")
+    }
+
+    /// Insert a shared_tasks row directly (created by `creator_node` with local id
+    /// `creator_local_task_id`), returning the shared task id. Used to seed a task the
+    /// sender did NOT create (the ASSIGNED-NOT-CREATED reassignment scenario, R2/F2).
+    async fn insert_shared_task(
+        pool: &PgPool,
+        org_id: Uuid,
+        swarm_project_id: Uuid,
+        creator_node: Uuid,
+        creator_local_task_id: Uuid,
+        status: &str,
+    ) -> Uuid {
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO shared_tasks (
+                id, organization_id, project_id, swarm_project_id,
+                source_node_id, source_task_id,
+                title, status, version, shared_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $3, $4, $5, $6, $7::task_status, 1, $8, $8, $8)
+            "#,
+        )
+        .bind(id)
+        .bind(org_id)
+        .bind(swarm_project_id)
+        .bind(creator_node)
+        .bind(creator_local_task_id)
+        .bind("seeded task")
+        .bind(status)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("insert shared task");
+        id
+    }
+
+    /// Build an OutboxOp literally (make_op in op_batch_tests does not set shared_task_id
+    /// or fencing_token; build the struct directly here to avoid changing make_op, which
+    /// 4 existing tests depend on).
+    fn make_fence_op(
+        seq: i64,
+        local_task_id: Uuid,
+        local_project_id: Uuid,
+        shared_task_id: Option<Uuid>,
+        fencing_token: Option<i64>,
+        status: &str,
+        idempotency_key: &str,
+    ) -> OutboxOp {
+        let payload = match shared_task_id {
+            Some(sid) => serde_json::json!({
+                "id": local_task_id,
+                "project_id": local_project_id,
+                "shared_task_id": sid,
+                "title": "t",
+                "description": null,
+                "status": status,
+            }),
+            None => serde_json::json!({
+                "id": local_task_id,
+                "project_id": local_project_id,
+                "title": "t",
+                "description": null,
+                "status": status,
+            }),
+        };
+        OutboxOp {
+            seq,
+            op_type: "task.upsert".to_string(),
+            entity_type: "task".to_string(),
+            entity_id: local_task_id,
+            payload,
+            idempotency_key: idempotency_key.to_string(),
+            fencing_token,
+        }
+    }
+
+    #[tokio::test]
+    async fn node_reported_in_progress_to_done_accepted_with_valid_lease_and_token() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        // node_b is BOTH the creator AND the current holder — so its op's upsert keys on
+        // (source_node_id=node_b, source_task_id=b_local) and UPDATEs the seeded row
+        // (isolating the test to the guard's behavior, not 106's source-key semantics).
+        let node_b = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_proj_b = Uuid::new_v4();
+        create_node_local_project(&pool, node_b, local_proj_b, Some(swarm_project_id)).await;
+        let np_b = create_swarm_project_node(&pool, swarm_project_id, node_b, local_proj_b).await;
+
+        let b_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_b,
+            b_local_task_id,
+            "in-progress",
+        )
+        .await;
+
+        // node_b holds an active assignment with token T.
+        let claim_b = repo
+            .try_claim(shared_id, node_b, np_b, chrono::Duration::seconds(300))
+            .await
+            .expect("claim b")
+            .expect("node_b claimed");
+        let t = claim_b.fencing_token;
+        assert!(t > 0, "claim bumps a positive token");
+
+        // node→hive op: in-progress→done (node-authored), stamped with the current token T.
+        let key = format!("task:{}:{}", local_proj_b, b_local_task_id);
+        let op = make_fence_op(
+            1,
+            b_local_task_id,
+            local_proj_b,
+            Some(shared_id),
+            Some(t),
+            "done",
+            &key,
+        );
+
+        let (seq, revokes) = handle_op_batch_apply(node_b, org_id, "node-b", &[op], &pool)
+            .await
+            .expect("apply");
+
+        assert_eq!(
+            seq, 1,
+            "applied_through_seq advances to op.seq on an accepted node-authored transition"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_b, &key).await,
+            1,
+            "accepted transition records a node_op_log dedup row"
+        );
+        assert_eq!(
+            node_op_log_max_seq(&pool, node_b).await,
+            1,
+            "max seq in node_op_log is 1"
+        );
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("done".to_string()),
+            "shared_tasks.status is updated by the accepted op"
+        );
+        assert!(revokes.is_empty(), "no LeaseRevoked for an accepted op");
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn node_reported_done_rejected_without_lease_or_current_token() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_a = create_test_node(&pool, org_id).await; // partitioned writer (stale)
+        let node_b = create_test_node(&pool, org_id).await; // current holder
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_proj_a = Uuid::new_v4();
+        let local_proj_b = Uuid::new_v4();
+        create_node_local_project(&pool, node_a, local_proj_a, Some(swarm_project_id)).await;
+        create_node_local_project(&pool, node_b, local_proj_b, Some(swarm_project_id)).await;
+        let np_a = create_swarm_project_node(&pool, swarm_project_id, node_a, local_proj_a).await;
+        let np_b = create_swarm_project_node(&pool, swarm_project_id, node_b, local_proj_b).await;
+
+        let a_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_a,
+            a_local_task_id,
+            "in-progress",
+        )
+        .await;
+
+        // (a) NO active assignment: P2's fence breaks before 303's guard runs.
+        let key_a = format!("task:{}:{}", local_proj_a, a_local_task_id);
+        let op_a = make_fence_op(
+            1,
+            a_local_task_id,
+            local_proj_a,
+            Some(shared_id),
+            None,
+            "done",
+            &key_a,
+        );
+
+        let pre_status = shared_task_status_by_id(&pool, shared_id)
+            .await
+            .expect("task exists pre-apply (a)");
+
+        let (seq_a, _revokes_a) = handle_op_batch_apply(node_a, org_id, "node-a", &[op_a], &pool)
+            .await
+            .expect("apply (a)");
+
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some(pre_status.clone()),
+            "(a) no-assignment op MUST NOT update shared_tasks (P2 fence reject)"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_a, &key_a).await,
+            0,
+            "(a) rejected op MUST NOT record a node_op_log dedup row"
+        );
+        assert_eq!(
+            seq_a, 0,
+            "(a) applied_through_seq MUST NOT advance past the rejected op (break)"
+        );
+
+        // (b) Stale token: node_a claims (T1), node_b reclaims (T2 > T1). node_a sends an
+        // op stamped T1 → P2's stale-token check breaks before 303's guard runs.
+        let claim_a = repo
+            .try_claim(shared_id, node_a, np_a, chrono::Duration::seconds(-300))
+            .await
+            .expect("claim a")
+            .expect("node_a claimed");
+        let t1 = claim_a.fencing_token;
+
+        let claim_b = repo
+            .try_claim(shared_id, node_b, np_b, chrono::Duration::seconds(300))
+            .await
+            .expect("claim b")
+            .expect("node_b reclaimed");
+        let t2 = claim_b.fencing_token;
+        assert!(t2 > t1, "reassignment bumps the fencing token (T2 > T1)");
+
+        let key_b = format!("task:{}:{}-b", local_proj_a, a_local_task_id);
+        let op_b = make_fence_op(
+            2,
+            a_local_task_id,
+            local_proj_a,
+            Some(shared_id),
+            Some(t1),
+            "done",
+            &key_b,
+        );
+
+        let pre_status_b = shared_task_status_by_id(&pool, shared_id)
+            .await
+            .expect("task exists pre-apply (b)");
+
+        let (seq_b, revokes_b) = handle_op_batch_apply(node_a, org_id, "node-a", &[op_b], &pool)
+            .await
+            .expect("apply (b)");
+
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some(pre_status_b),
+            "(b) stale-token op MUST NOT update shared_tasks (P2 fence reject)"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_a, &key_b).await,
+            0,
+            "(b) rejected op MUST NOT record a node_op_log dedup row"
+        );
+        assert_eq!(
+            seq_b, 0,
+            "(b) applied_through_seq MUST NOT advance past the rejected op (break)"
+        );
+        assert_eq!(revokes_b.len(), 1, "(b) exactly one LeaseRevoked emitted");
+        assert_eq!(
+            revokes_b[0].0, claim_b.assignment_id,
+            "(b) revoked assignment matches"
+        );
+        assert_eq!(
+            revokes_b[0].1, "stale fencing token",
+            "(b) revoke reason matches the contract"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn hive_authored_transition_rejected_when_reported_by_node() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_b = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_proj_b = Uuid::new_v4();
+        create_node_local_project(&pool, node_b, local_proj_b, Some(swarm_project_id)).await;
+        let np_b = create_swarm_project_node(&pool, swarm_project_id, node_b, local_proj_b).await;
+
+        let b_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_b,
+            b_local_task_id,
+            "in-review",
+        )
+        .await;
+
+        // Active assignment with a current token — the fence passes; only the author
+        // guard (303) decides the rejection.
+        let claim_b = repo
+            .try_claim(shared_id, node_b, np_b, chrono::Duration::seconds(300))
+            .await
+            .expect("claim b")
+            .expect("node_b claimed");
+        let t = claim_b.fencing_token;
+        assert!(t > 0, "claim bumps a positive token");
+
+        // (1) in-review→cancelled: `*→cancelled` is HIVE-authored. A node may not author
+        // it even with a valid lease+token → REJECTED (SKIP+ADVANCE).
+        let key1 = format!("task:{}:{}-cancel", local_proj_b, b_local_task_id);
+        let op1 = make_fence_op(
+            1,
+            b_local_task_id,
+            local_proj_b,
+            Some(shared_id),
+            Some(t),
+            "cancelled",
+            &key1,
+        );
+
+        let (seq1, revokes1) = handle_op_batch_apply(node_b, org_id, "node-b", &[op1], &pool)
+            .await
+            .expect("apply (1)");
+
+        assert_eq!(
+            seq1, 1,
+            "(1) rejected hive-authored transition SKIP+ADVANCEs the cursor (no wedge)"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_b, &key1).await,
+            1,
+            "(1) rejected transition records a node_op_log dedup row (SKIP+ADVANCE)"
+        );
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("in-review".to_string()),
+            "(1) shared_tasks.status stays 'in-review' (hive-authored-from-node rejected)"
+        );
+        assert!(
+            revokes1.is_empty(),
+            "(1) no LeaseRevoked (this is a 303 reject, not a P2 reject)"
+        );
+
+        // (2) in-review→done: also HIVE-authored (operator approve). A node may not author
+        // it → REJECTED (SKIP+ADVANCE). Current status is still 'inreview'.
+        let key2 = format!("task:{}:{}-done", local_proj_b, b_local_task_id);
+        let op2 = make_fence_op(
+            2,
+            b_local_task_id,
+            local_proj_b,
+            Some(shared_id),
+            Some(t),
+            "done",
+            &key2,
+        );
+
+        let (seq2, revokes2) = handle_op_batch_apply(node_b, org_id, "node-b", &[op2], &pool)
+            .await
+            .expect("apply (2)");
+
+        assert_eq!(
+            seq2, 2,
+            "(2) rejected hive-authored transition SKIP+ADVANCEs the cursor"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_b, &key2).await,
+            1,
+            "(2) rejected transition records a node_op_log dedup row"
+        );
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("in-review".to_string()),
+            "(2) shared_tasks.status still 'in-review' (in-review→done is hive-authored)"
+        );
+        assert!(revokes2.is_empty(), "(2) no LeaseRevoked");
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn illegal_transition_rejected_from_either_party() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_b = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_proj_b = Uuid::new_v4();
+        create_node_local_project(&pool, node_b, local_proj_b, Some(swarm_project_id)).await;
+        let np_b = create_swarm_project_node(&pool, swarm_project_id, node_b, local_proj_b).await;
+
+        let b_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_b,
+            b_local_task_id,
+            "done",
+        )
+        .await;
+
+        let claim_b = repo
+            .try_claim(shared_id, node_b, np_b, chrono::Duration::seconds(300))
+            .await
+            .expect("claim b")
+            .expect("node_b claimed");
+        let t = claim_b.fencing_token;
+        assert!(t > 0, "claim bumps a positive token");
+
+        // done→in-progress is in NO author's column (illegal). Even with a valid
+        // lease+token, the node may not author it → REJECTED (SKIP+ADVANCE).
+        let key = format!("task:{}:{}-illegal", local_proj_b, b_local_task_id);
+        let op = make_fence_op(
+            1,
+            b_local_task_id,
+            local_proj_b,
+            Some(shared_id),
+            Some(t),
+            "inprogress",
+            &key,
+        );
+
+        let (seq, revokes) = handle_op_batch_apply(node_b, org_id, "node-b", &[op], &pool)
+            .await
+            .expect("apply");
+
+        assert_eq!(
+            seq, 1,
+            "illegal transition SKIP+ADVANCEs the cursor (no wedge)"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_b, &key).await,
+            1,
+            "illegal transition records a node_op_log dedup row (SKIP+ADVANCE)"
+        );
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("done".to_string()),
+            "illegal transition MUST NOT change shared_tasks.status (stays 'done')"
+        );
+        assert!(
+            revokes.is_empty(),
+            "no LeaseRevoked (303 reject, not a P2 reject)"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn noop_same_status_is_not_a_rejected_transition() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_b = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_proj_b = Uuid::new_v4();
+        create_node_local_project(&pool, node_b, local_proj_b, Some(swarm_project_id)).await;
+        let np_b = create_swarm_project_node(&pool, swarm_project_id, node_b, local_proj_b).await;
+
+        let b_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_b,
+            b_local_task_id,
+            "in-progress",
+        )
+        .await;
+
+        let claim_b = repo
+            .try_claim(shared_id, node_b, np_b, chrono::Duration::seconds(300))
+            .await
+            .expect("claim b")
+            .expect("node_b claimed");
+        let t = claim_b.fencing_token;
+        assert!(t > 0, "claim bumps a positive token");
+
+        // from==to (in-progress→in-progress): a no-op is NOT a transition. The guard's
+        // short-circuit lets the upsert proceed (metadata-only), the cursor advances, and
+        // the status stays 'in-progress'. A no-op must NOT be treated as an illegal
+        // transition that wedges the op-log.
+        let key = format!("task:{}:{}-noop", local_proj_b, b_local_task_id);
+        let op = make_fence_op(
+            1,
+            b_local_task_id,
+            local_proj_b,
+            Some(shared_id),
+            Some(t),
+            "inprogress",
+            &key,
+        );
+
+        let (seq, revokes) = handle_op_batch_apply(node_b, org_id, "node-b", &[op], &pool)
+            .await
+            .expect("apply");
+
+        assert_eq!(
+            seq, 1,
+            "no-op op advances the cursor (applied as idempotent upsert)"
+        );
+        assert_eq!(
+            node_op_log_count_for_key(&pool, node_b, &key).await,
+            1,
+            "no-op op records a node_op_log dedup row"
+        );
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("in-progress".to_string()),
+            "no-op op leaves status as 'in-progress' (from==to, not a transition)"
+        );
+        assert!(revokes.is_empty(), "no LeaseRevoked for a no-op");
+
+        cleanup_org(&pool, org_id).await;
+    }
+}
+
+#[cfg(test)]
+mod legacy_status_guard_tests {
+    use super::*;
+    use crate::db::task_assignments::TaskAssignmentRepository;
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping test: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+    async fn create_pool() -> PgPool {
+        let url = database_url().expect("DATABASE_URL must be set");
+        sqlx::PgPool::connect(&url)
+            .await
+            .expect("Failed to connect to database")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, last_heartbeat_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+        node_id
+    }
+
+    async fn create_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm project");
+        sp_id
+    }
+
+    async fn create_node_local_project(
+        pool: &PgPool,
+        node_id: Uuid,
+        local_project_id: Uuid,
+        swarm_project_id: Option<Uuid>,
+    ) {
+        let res = sqlx::query(
+            r#"
+            INSERT INTO node_local_projects (node_id, local_project_id, name, git_repo_path, swarm_project_id)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("local-proj")
+        .bind("/repo/path")
+        .bind(swarm_project_id)
+        .execute(pool)
+        .await;
+        if let Err(e) = res {
+            eprintln!("create_node_local_project (non-fatal): {}", e);
+        }
+    }
+
+    async fn create_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+        local_project_id: Uuid,
+    ) -> Uuid {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("/repo/path")
+        .fetch_one(pool)
+        .await
+        .expect("Failed to create swarm_project_nodes link");
+        sqlx::Row::get(&row, "id")
+    }
+
+    async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(pool)
+            .await;
+    }
+
+    #[allow(dead_code)]
+    async fn node_op_log_count_for_key(pool: &PgPool, node_id: Uuid, key: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM node_op_log WHERE node_id = $1 AND idempotency_key = $2",
+        )
+        .bind(node_id)
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .expect("count")
+    }
+
+    async fn shared_task_status_by_id(pool: &PgPool, shared_id: Uuid) -> Option<String> {
+        sqlx::query_scalar("SELECT status::text FROM shared_tasks WHERE id = $1")
+            .bind(shared_id)
+            .fetch_optional(pool)
+            .await
+            .expect("shared task status by id")
+    }
+
+    async fn insert_shared_task(
+        pool: &PgPool,
+        org_id: Uuid,
+        swarm_project_id: Uuid,
+        creator_node: Uuid,
+        creator_local_task_id: Uuid,
+        status: &str,
+    ) -> Uuid {
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO shared_tasks (
+                id, organization_id, project_id, swarm_project_id,
+                source_node_id, source_task_id,
+                title, status, version, shared_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $3, $4, $5, $6, $7::task_status, 1, $8, $8, $8)
+            "#,
+        )
+        .bind(id)
+        .bind(org_id)
+        .bind(swarm_project_id)
+        .bind(creator_node)
+        .bind(creator_local_task_id)
+        .bind("seeded task")
+        .bind(status)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("insert shared task");
+        id
+    }
+
+    #[tokio::test]
+    async fn legacy_path_applies_node_authored_transition_with_lease() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        let np =
+            create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        let creator_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_id,
+            creator_local_task_id,
+            "in-progress",
+        )
+        .await;
+
+        // Active assignment (valid lease) held by node_id — the legacy path's lease context.
+        let claim = repo
+            .try_claim(shared_id, node_id, np, chrono::Duration::seconds(300))
+            .await
+            .expect("claim")
+            .expect("node claimed");
+
+        // Completed → InReview. in-progress→in-review is node-authored (ADR-0010 §D) → APPLIED.
+        let msg = TaskStatusMessage {
+            assignment_id: claim.assignment_id,
+            local_task_id: Some(creator_local_task_id),
+            local_attempt_id: None,
+            status: TaskExecutionStatus::Completed,
+            message: None,
+            timestamp: Utc::now(),
+        };
+        handle_task_status(node_id, org_id, &msg, &pool)
+            .await
+            .expect("handle_task_status");
+
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("in-review".to_string()),
+            "node-authored in-progress→in-review transition is applied on the legacy path"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_path_rejects_hive_authored_or_illegal_transition_from_node() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let repo = TaskAssignmentRepository::new(&pool);
+
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        let np =
+            create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        let creator_local_task_id = Uuid::new_v4();
+        let shared_id = insert_shared_task(
+            &pool,
+            org_id,
+            swarm_project_id,
+            node_id,
+            creator_local_task_id,
+            "done",
+        )
+        .await;
+
+        let claim = repo
+            .try_claim(shared_id, node_id, np, chrono::Duration::seconds(300))
+            .await
+            .expect("claim")
+            .expect("node claimed");
+
+        // Failed → Todo. done→todo is illegal (no author) → REJECTED: status stays 'done'.
+        // This is the concrete clobber the old `*→Todo` map caused (Failed/Cancelled reset).
+        let msg = TaskStatusMessage {
+            assignment_id: claim.assignment_id,
+            local_task_id: Some(creator_local_task_id),
+            local_attempt_id: None,
+            status: TaskExecutionStatus::Failed,
+            message: None,
+            timestamp: Utc::now(),
+        };
+        handle_task_status(node_id, org_id, &msg, &pool)
+            .await
+            .expect("handle_task_status");
+
+        assert_eq!(
+            shared_task_status_by_id(&pool, shared_id).await,
+            Some("done".to_string()),
+            "illegal done→todo reset MUST NOT clobber shared_tasks.status (ADR-0010)"
+        );
+
+        cleanup_org(&pool, org_id).await;
+    }
 }

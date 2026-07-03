@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use super::hive_client::{
     AttemptSyncMessage, ExecutionSyncMessage, LocalProjectSyncInfo, LogsBatchMessage, NodeMessage,
-    ProjectsSyncMessage, SyncLogEntry, TaskOutputType, TaskSyncMessage,
+    OutboxOp, ProjectsSyncMessage, SyncLogEntry, TaskOutputType, TaskSyncMessage,
 };
 
 /// Configuration for the Hive sync service.
@@ -106,6 +106,10 @@ pub struct HiveSyncService {
     pool: SqlitePool,
     command_tx: mpsc::Sender<NodeMessage>,
     config: HiveSyncConfig,
+    /// Optional node runner state, attached only in the running node so outbox ops for
+    /// hive-assigned tasks are stamped with the current lease fencing token (SC3).
+    node_state:
+        Option<std::sync::Arc<tokio::sync::RwLock<crate::services::node_runner::NodeRunnerState>>>,
 }
 
 impl HiveSyncService {
@@ -119,7 +123,18 @@ impl HiveSyncService {
             pool,
             command_tx,
             config,
+            node_state: None,
         }
+    }
+
+    /// Attach the node runner state so outbox ops against hive-assigned tasks can be stamped with the
+    /// current fencing token (SC3). Without it, ops pass through unstamped (tracer/back-compat).
+    pub fn with_node_state(
+        mut self,
+        state: std::sync::Arc<tokio::sync::RwLock<crate::services::node_runner::NodeRunnerState>>,
+    ) -> Self {
+        self.node_state = Some(state);
+        self
     }
 
     /// Run the sync service in a loop.
@@ -184,6 +199,60 @@ impl HiveSyncService {
 
         // Labels are NOT synced from nodes to hive - they flow hive->nodes only
 
+        // Drain the node_outbox op-log (SC2 tracer): send unacked ops in seq order as a single
+        // OpBatch. Does NOT mark them acked — the cursor advances only on the hive's durable OpAck
+        // (task 108). Runs ALONGSIDE the legacy sync above (additive; hive apply is idempotent).
+        if let Err(e) = self.sync_outbox().await {
+            warn!(error = ?e, "Failed to drain node_outbox op-log");
+        }
+
+        Ok(())
+    }
+
+    /// Drain unacked node_outbox ops and push them to the hive as one ordered `OpBatch`.
+    /// Best-effort: an empty outbox sends nothing. Does NOT advance the ack cursor (108 owns that).
+    async fn sync_outbox(&self) -> Result<(), HiveSyncError> {
+        use db::models::node_outbox::OutboxRepository;
+        let rows =
+            OutboxRepository::peek_unacked(&self.pool, self.config.max_tasks_per_batch).await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        // Build a local_task_id -> fencing_token lookup from active assignments, if the node runner
+        // state is attached. Only task-type ops are mapped; the tracer is task-only today.
+        let token_by_task: Option<HashMap<Uuid, i64>> = if let Some(state) = &self.node_state {
+            let s = state.read().await;
+            Some(
+                s.active_assignments
+                    .values()
+                    .filter_map(|a| Some((a.local_task_id?, a.fencing_token?)))
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        let ops: Vec<OutboxOp> = rows
+            .into_iter()
+            .map(|r| OutboxOp {
+                seq: r.seq,
+                op_type: r.op_type.clone(),
+                entity_type: r.entity_type.clone(),
+                entity_id: r.entity_id,
+                payload: r.payload,
+                idempotency_key: r.idempotency_key,
+                fencing_token: if r.entity_type == "task" {
+                    token_by_task
+                        .as_ref()
+                        .and_then(|m| m.get(&r.entity_id).copied())
+                } else {
+                    r.fencing_token
+                },
+            })
+            .collect();
+        self.command_tx
+            .send(NodeMessage::OpBatch { ops })
+            .await
+            .map_err(|e| HiveSyncError::Send(e.to_string()))?;
         Ok(())
     }
 
@@ -650,7 +719,153 @@ pub fn spawn_hive_sync_service(
     pool: SqlitePool,
     command_tx: mpsc::Sender<NodeMessage>,
     config: Option<HiveSyncConfig>,
+    node_state: Option<
+        std::sync::Arc<tokio::sync::RwLock<crate::services::node_runner::NodeRunnerState>>,
+    >,
 ) -> tokio::task::JoinHandle<()> {
-    let service = HiveSyncService::new(pool, command_tx, config.unwrap_or_default());
+    let mut service = HiveSyncService::new(pool, command_tx, config.unwrap_or_default());
+    if let Some(state) = node_state {
+        service = service.with_node_state(state);
+    }
     service.spawn()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HiveSyncConfig;
+    use super::HiveSyncService;
+    use crate::services::hive_client::{NodeMessage, TaskExecutionStatus};
+    use crate::services::node_runner::{ActiveAssignment, NodeRunnerState};
+
+    #[tokio::test]
+    async fn sync_outbox_sends_unacked_ops_as_op_batch_in_seq_order() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        use db::models::node_outbox::{NewOutboxOp, OutboxRepository};
+        let mk = |k: &str| NewOutboxOp {
+            op_type: "task.upsert".into(),
+            entity_type: "task".into(),
+            entity_id: uuid::Uuid::new_v4(),
+            payload: serde_json::json!({}),
+            idempotency_key: k.into(),
+            fencing_token: None,
+        };
+        OutboxRepository::enqueue_op(&pool, mk("task:a:1"))
+            .await
+            .unwrap();
+        OutboxRepository::enqueue_op(&pool, mk("task:b:1"))
+            .await
+            .unwrap();
+
+        let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(8);
+        let service = HiveSyncService::new(pool.clone(), command_tx, HiveSyncConfig::default());
+        service.sync_outbox().await.unwrap();
+
+        let msg = command_rx.try_recv().expect("an OpBatch was sent");
+        match msg {
+            NodeMessage::OpBatch { ops } => {
+                assert_eq!(ops.len(), 2);
+                assert!(ops[1].seq > ops[0].seq, "seq order preserved");
+                assert!(ops.iter().all(|o| o.op_type == "task.upsert"));
+            }
+            other => panic!("expected OpBatch, got {other:?}"),
+        }
+
+        assert_eq!(
+            OutboxRepository::peek_unacked(&pool, 10)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_outbox_stamps_fencing_token_for_hive_assigned_tasks_only() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        use db::models::node_outbox::{NewOutboxOp, OutboxRepository};
+
+        let assigned_task = uuid::Uuid::new_v4();
+        let owned_task = uuid::Uuid::new_v4();
+        let mk = |tid: uuid::Uuid, k: &str| NewOutboxOp {
+            op_type: "task.upsert".into(),
+            entity_type: "task".into(),
+            entity_id: tid,
+            payload: serde_json::json!({}),
+            idempotency_key: k.into(),
+            fencing_token: None,
+        };
+        OutboxRepository::enqueue_op(&pool, mk(assigned_task, "task:a:1"))
+            .await
+            .unwrap();
+        OutboxRepository::enqueue_op(&pool, mk(owned_task, "task:b:1"))
+            .await
+            .unwrap();
+
+        let state = std::sync::Arc::new(tokio::sync::RwLock::new(NodeRunnerState::default()));
+        {
+            let aid = uuid::Uuid::new_v4();
+            state.write().await.active_assignments.insert(
+                aid,
+                ActiveAssignment {
+                    assignment_id: aid,
+                    task_id: uuid::Uuid::new_v4(),
+                    local_task_id: Some(assigned_task),
+                    local_attempt_id: None,
+                    status: TaskExecutionStatus::Pending,
+                    fencing_token: Some(5),
+                    lease_expires_at: Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+                },
+            );
+        }
+
+        let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(8);
+        let service = HiveSyncService::new(pool.clone(), command_tx, HiveSyncConfig::default())
+            .with_node_state(state.clone());
+        service.sync_outbox().await.unwrap();
+
+        match command_rx.try_recv().expect("an OpBatch was sent") {
+            NodeMessage::OpBatch { ops } => {
+                let assigned = ops.iter().find(|o| o.entity_id == assigned_task).unwrap();
+                let owned = ops.iter().find(|o| o.entity_id == owned_task).unwrap();
+                assert_eq!(
+                    assigned.fencing_token,
+                    Some(5),
+                    "hive-assigned op carries the lease token"
+                );
+                assert_eq!(
+                    owned.fencing_token, None,
+                    "node-owned op carries no token (CONTRACT §C)"
+                );
+            }
+            other => panic!("expected OpBatch, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_outbox_without_node_state_passes_token_through_unchanged() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        use db::models::node_outbox::{NewOutboxOp, OutboxRepository};
+        OutboxRepository::enqueue_op(
+            &pool,
+            NewOutboxOp {
+                op_type: "task.upsert".into(),
+                entity_type: "task".into(),
+                entity_id: uuid::Uuid::new_v4(),
+                payload: serde_json::json!({}),
+                idempotency_key: "task:c:1".into(),
+                fencing_token: None,
+            },
+        )
+        .await
+        .unwrap();
+        let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(8);
+        HiveSyncService::new(pool.clone(), command_tx, HiveSyncConfig::default())
+            .sync_outbox()
+            .await
+            .unwrap();
+        match command_rx.try_recv().unwrap() {
+            NodeMessage::OpBatch { ops } => assert_eq!(ops[0].fencing_token, None),
+            other => panic!("expected OpBatch, got {other:?}"),
+        }
+    }
 }
