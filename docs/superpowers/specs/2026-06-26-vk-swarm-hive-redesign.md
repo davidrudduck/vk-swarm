@@ -80,8 +80,9 @@ not solve them).
 - SC5: Node↔hive divergence **self-heals** via an anti-entropy reconciliation sweep — **no manual
   `reset_*` migration** is ever required. → US5
 - SC6: A **migration inventory** of all state that lives *only* in the hive today (cross-node
-  assignments, board organization, manual hive-UI edits) is complete, and that state is migrated or
-  explicitly handled on cutover to the rebuilt hive. → US6
+  assignments, manual hive-UI edits) is complete, and that state is migrated or
+  explicitly handled on cutover to the rebuilt hive. (Board ordering is derived, not stored —
+  per ADR-0011, no board-ordering migration is required.) → US6
 - SC7: The two live inbound channels (REST bulk-snapshot reconcile + WS activity stream) are
   **collapsed to one**, with **one delete semantic and one conflict policy** applied uniformly. (The
   Electric SQL `shared_tasks` shape poll named in analysis §2.3 is **dead in code** — no Rust caller;
