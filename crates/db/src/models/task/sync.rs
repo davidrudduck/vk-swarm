@@ -265,6 +265,15 @@ impl Task {
         activity_at: Option<DateTime<Utc>>,
         archived_at: Option<DateTime<Utc>>,
     ) -> Result<Self, sqlx::Error> {
+        // Dirty-guard (ADR-0007 one conflict policy): if the local task linked to this shared_task_id
+        // has an UNACKED outbound op, an inbound update must NOT overwrite it — the local edit travels
+        // up the ordered outbox first (ADR-0008). Skip the apply and return the retained local row.
+        if let Some(existing) = Task::find_by_shared_task_id(pool, shared_task_id).await?
+            && crate::models::node_outbox::OutboxRepository::has_unacked_for_entity(pool, existing.id)
+                .await?
+        {
+            return Ok(existing);
+        }
         let now = Utc::now();
         let result = sqlx::query_as!(
             Task,
@@ -1603,5 +1612,78 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].id, synced_task_id);
         assert_eq!(tasks[0].title, "Synced Task");
+    }
+
+    #[tokio::test]
+    async fn upsert_remote_task_skips_when_local_op_unacked() {
+        use crate::models::node_outbox::{NewOutboxOp, OutboxRepository};
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id).await.unwrap();
+
+        let local_id = Uuid::new_v4();
+        let shared_id = Uuid::new_v4();
+        Task::upsert_remote_task(
+            &pool, local_id, project_id, shared_id, "remote-title".into(), None,
+            TaskStatus::InReview, None, None, None, 1, None, None,
+        ).await.unwrap();
+        let row = Task::find_by_shared_task_id(&pool, shared_id).await.unwrap().unwrap();
+
+        OutboxRepository::enqueue_op(&pool, NewOutboxOp {
+            op_type: "task.upsert".into(), entity_type: "task".into(), entity_id: row.id,
+            payload: serde_json::json!({}), idempotency_key: format!("task:{}:1", row.id),
+            fencing_token: None,
+        }).await.unwrap();
+
+        let returned = Task::upsert_remote_task(
+            &pool, Uuid::new_v4(), project_id, shared_id, "HIVE-CLOBBER".into(), None,
+            TaskStatus::Done, None, None, None, 2, None, None,
+        ).await.unwrap();
+
+        let after = Task::find_by_shared_task_id(&pool, shared_id).await.unwrap().unwrap();
+        assert_eq!(after.title, "remote-title", "local edit not clobbered (apply skipped)");
+        assert_eq!(after.remote_version, 1, "version not advanced while dirty");
+        assert_eq!(returned.title, "remote-title", "returns the retained local row");
+    }
+
+    #[tokio::test]
+    async fn upsert_remote_task_applies_when_clean() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id).await.unwrap();
+
+        let shared_id = Uuid::new_v4();
+        Task::upsert_remote_task(
+            &pool, Uuid::new_v4(), project_id, shared_id, "v1".into(), None,
+            TaskStatus::InReview, None, None, None, 1, None, None,
+        ).await.unwrap();
+        Task::upsert_remote_task(
+            &pool, Uuid::new_v4(), project_id, shared_id, "v2".into(), None,
+            TaskStatus::InReview, None, None, None, 2, None, None,
+        ).await.unwrap();
+
+        let after = Task::find_by_shared_task_id(&pool, shared_id).await.unwrap().unwrap();
+        assert_eq!(after.title, "v2", "clean path still applies");
+        assert_eq!(after.remote_version, 2);
     }
 }

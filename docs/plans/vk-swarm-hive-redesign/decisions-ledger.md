@@ -1391,3 +1391,6 @@ tracking state was not reconciled post-merge. Reconciliation performed in worktr
    way, but the full correct path is now in the spec text).
 
 Ready set for `/wai:execute`: Phase 4 (401–405), independent of the spine.
+
+## Task 403
+(none — task fully dictated)

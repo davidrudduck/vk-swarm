@@ -111,6 +111,27 @@ impl OutboxRepository {
         Ok(rows.into_iter().map(OutboxOp::from).collect())
     }
 
+    /// True if `entity_id` has at least one UNACKED outbound op (ADR-0007 dirty-guard).
+    ///
+    /// Used by the inbound apply path to skip applying a hive update while the node still has a
+    /// pending, not-yet durably-acked outbound op for that entity. Reuses `peek_unacked`'s exact
+    /// "unacked" predicate (`acked_at IS NULL`, the same one the partial index covers), scoped to one
+    /// entity. `entity_id` is a BLOB UUID (same bind idiom as `enqueue_op`).
+    pub async fn has_unacked_for_entity(
+        pool: &sqlx::SqlitePool,
+        entity_id: uuid::Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let exists = sqlx::query_scalar!(
+            r#"SELECT EXISTS(
+                   SELECT 1 FROM node_outbox WHERE entity_id = ? AND acked_at IS NULL
+               ) as "exists!: i64""#,
+            entity_id
+        )
+        .fetch_one(pool)
+        .await?;
+        Ok(exists != 0)
+    }
+
     pub async fn mark_acked_through(pool: &SqlitePool, seq: i64) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"UPDATE node_outbox
