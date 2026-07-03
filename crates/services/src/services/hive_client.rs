@@ -115,6 +115,12 @@ pub enum NodeMessage {
     },
     #[serde(rename = "backfill_response")]
     BackfillResponse(BackfillResponseMessage),
+    /// Ordered batch of outbox ops (node→hive op-log, SC2). Tracer scope: op_type = "task.upsert".
+    #[serde(rename = "op_batch")]
+    OpBatch { ops: Vec<OutboxOp> },
+    /// Periodic lease renewal: the node's in-flight hive-assignment ids to keep alive (SC3, CONTRACT §A).
+    #[serde(rename = "lease_heartbeat")]
+    LeaseHeartbeat { assignment_ids: Vec<Uuid> },
 }
 
 /// Messages sent from hive to node.
@@ -148,6 +154,19 @@ pub enum HiveMessage {
     LabelSync(LabelSyncBroadcastMessage),
     #[serde(rename = "backfill_request")]
     BackfillRequest(BackfillRequestMessage),
+    /// Durable ack of the node op-log: all ops with seq <= applied_through_seq are persisted (SC2c).
+    #[serde(rename = "op_ack")]
+    OpAck { applied_through_seq: i64 },
+    /// Lease granted/renewed: the assignment's current fencing token + lease expiry (SC3, CONTRACT §A).
+    #[serde(rename = "lease_grant")]
+    LeaseGrant {
+        assignment_id: Uuid,
+        fencing_token: i64,
+        lease_expires_at: chrono::DateTime<Utc>,
+    },
+    /// Lease revoked: the hive reclaimed/expired this assignment; the node must self-fence (SC3).
+    #[serde(rename = "lease_revoked")]
+    LeaseRevoked { assignment_id: Uuid, reason: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +284,18 @@ pub struct NodeRemovedMessage {
     pub node_id: Uuid,
     /// Reason for removal
     pub reason: String,
+}
+
+/// A single node→hive op-log operation (SC2). Mirrors the `node_outbox` row shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboxOp {
+    pub seq: i64,
+    pub op_type: String,
+    pub entity_type: String,
+    pub entity_id: Uuid,
+    pub payload: serde_json::Value,
+    pub idempotency_key: String,
+    pub fencing_token: Option<i64>,
 }
 
 /// Message for syncing project info between nodes.
@@ -685,6 +716,16 @@ pub enum HiveEvent {
     BackfillRequest(BackfillRequestMessage),
     /// Error from hive
     Error { message: String },
+    /// Durable op-log ack: all node_outbox ops with seq <= applied_through_seq are persisted (SC2c).
+    OpAck { applied_through_seq: i64 },
+    /// Lease granted/renewed by the hive (assignment's current fencing token + expiry).
+    LeaseGranted {
+        assignment_id: Uuid,
+        fencing_token: i64,
+        lease_expires_at: chrono::DateTime<Utc>,
+    },
+    /// Lease revoked by the hive — the node must self-fence the assignment's agent.
+    LeaseRevoked { assignment_id: Uuid, reason: String },
 }
 
 /// State of the hive connection.
@@ -1057,6 +1098,45 @@ impl HiveClient {
                 let _ = self
                     .event_tx
                     .send(HiveEvent::BackfillRequest(request))
+                    .await;
+            }
+            HiveMessage::OpAck {
+                applied_through_seq,
+            } => {
+                tracing::trace!(applied_through_seq, "received op_ack");
+                let _ = self
+                    .event_tx
+                    .send(HiveEvent::OpAck {
+                        applied_through_seq,
+                    })
+                    .await;
+            }
+            HiveMessage::LeaseGrant {
+                assignment_id,
+                fencing_token,
+                lease_expires_at,
+            } => {
+                tracing::debug!(%assignment_id, fencing_token, "lease granted");
+                let _ = self
+                    .event_tx
+                    .send(HiveEvent::LeaseGranted {
+                        assignment_id,
+                        fencing_token,
+                        lease_expires_at,
+                    })
+                    .await;
+            }
+            HiveMessage::LeaseRevoked {
+                assignment_id,
+                reason,
+            } => {
+                tracing::warn!(%assignment_id, %reason, "lease revoked by hive");
+                let _ = self
+                    .event_tx
+                    .send(HiveEvent::LeaseRevoked {
+                        assignment_id,
+                        reason,
+                    })
                     .await;
             }
             _ => {
