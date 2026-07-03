@@ -214,6 +214,13 @@ pub enum SharedTaskError {
     Serialization(#[from] serde_json::Error),
 }
 
+/// One (source_task_id, version) the hive holds for a node — the hive side of the SC5 digest compare.
+#[derive(Debug, Clone)]
+pub struct NodeSourceTaskVersion {
+    pub source_task_id: Uuid,
+    pub version: i64,
+}
+
 pub struct SharedTaskRepository<'a> {
     pool: &'a PgPool,
 }
@@ -395,6 +402,29 @@ impl<'a> SharedTaskRepository<'a> {
         .await?;
 
         Ok(task)
+    }
+
+    /// All non-deleted shared_tasks the hive holds for `source_node_id`, keyed by the id bridge
+    /// (`source_task_id` = the node's local task id). Used by `handle_digest` to compute the
+    /// hive-has/node-lacks set (SC5).
+    pub async fn list_source_task_versions_for_node(
+        &self,
+        source_node_id: Uuid,
+    ) -> Result<Vec<NodeSourceTaskVersion>, SharedTaskError> {
+        let rows = sqlx::query!(
+            r#"SELECT source_task_id AS "source_task_id!: Uuid", version AS "version!"
+               FROM shared_tasks
+               WHERE source_node_id = $1
+                 AND source_task_id IS NOT NULL
+                 AND deleted_at IS NULL"#,
+            source_node_id
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| NodeSourceTaskVersion { source_task_id: r.source_task_id, version: r.version })
+            .collect())
     }
 
     /// Update the source tracking fields on a task.

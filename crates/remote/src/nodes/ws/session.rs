@@ -21,11 +21,11 @@ use super::{
     connection::ConnectionManager,
     message::{
         AttemptSyncMessage, AuthResultMessage, BackfillResponseMessage, DeregisterMessage,
-        ExecutionSyncMessage, HeartbeatMessage, HiveMessage, LinkProjectMessage, LinkedProjectInfo,
-        LogsBatchMessage, NodeMessage, NodeRemovedMessage, OutboxOp, PROTOCOL_VERSION,
-        ProjectSyncMessage, ProjectsSyncMessage, SwarmLabelInfo, TaskExecutionStatus,
-        TaskOutputMessage, TaskProgressMessage, TaskStatusMessage, TaskSyncMessage,
-        TaskSyncResponseMessage, UnlinkProjectMessage,
+        DigestEntry, ExecutionSyncMessage, HeartbeatMessage, HiveMessage, LinkProjectMessage,
+        LinkedProjectInfo, LogsBatchMessage, NodeMessage, NodeRemovedMessage, OutboxOp,
+        PROTOCOL_VERSION, ProjectSyncMessage, ProjectsSyncMessage, SwarmLabelInfo,
+        TaskExecutionStatus, TaskOutputMessage, TaskProgressMessage, TaskStatusMessage,
+        TaskSyncMessage, TaskSyncResponseMessage, UnlinkProjectMessage,
     },
 };
 use crate::{
@@ -586,10 +586,7 @@ async fn handle_node_message(
             handle_lease_heartbeat(node_id, assignment_ids, pool, ws_sender).await
         }
         NodeMessage::Digest { entries } => {
-            // STUB — filled by task 503 (compare against shared_tasks + node_op_log, reply DigestResult).
-            // Logs so the exhaustive match compiles now; 503 replaces the body with handle_digest(...).
-            tracing::debug!(node_id = %node_id, entry_count = entries.len(), "received digest (compare TODO: task 503)");
-            Ok(())
+            handle_digest(node_id, entries, pool, ws_sender).await
         }
     }
 }
@@ -2376,6 +2373,87 @@ async fn handle_op_batch_apply(
     Ok((applied_through_seq, revokes))
 }
 
+/// Pure compare result for the SC5 digest handler — the heal directives the hive replies with.
+/// Split out of `handle_digest` so tests can drive the compare ws-free.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DigestResultParts {
+    /// `Some(seq)` directs the node to re-stream its `node_op_log` from `seq` (inclusive) when the
+    /// hive detects a task the node has but the hive lacks (node-has/hive-lacks). The conservative
+    /// floor `Some(1)` re-streams all retained ops; the hive apply is idempotent
+    /// (`ON CONFLICT DO NOTHING`), so a replay never harms a converged set. `None` when in sync.
+    /// Do NOT use `MAX(seq)` (tournament R2/F4: a lost op at seq 3 while high-water is 10 would be
+    /// missed by a high-water replay).
+    resend_from_seq: Option<i64>,
+    /// `source_task_id`s the hive holds but the node's digest omitted (hive-has/node-lacks) — the
+    /// node pulls these via the reconcile leg. Empty when in sync.
+    pull_entities: Vec<Uuid>,
+}
+
+/// Handle a `NodeMessage::Digest` (SC5): compare the node's digest entries against the hive's
+/// `shared_tasks` for that node and reply with a `HiveMessage::DigestResult` directing
+/// convergence (resend + pull). Heal signal is entity EXISTENCE (set-difference on `entity_id`),
+/// NOT version equality — `remote_version` is noisy (advisor #3). Tracer scope:
+/// `entity_type == "task"` only. Always replies, even when both directives are empty/None
+/// (a converged sweep is a no-op ack).
+async fn handle_digest(
+    node_id: Uuid,
+    entries: &[DigestEntry],
+    pool: &PgPool,
+    ws_sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+) -> Result<(), HandleError> {
+    let parts = handle_digest_compare(pool, node_id, entries).await?;
+    send_message(
+        ws_sender,
+        &HiveMessage::DigestResult {
+            resend_from_seq: parts.resend_from_seq,
+            pull_entities: parts.pull_entities,
+        },
+    )
+    .await
+    .map_err(|_| HandleError::Send)?;
+    Ok(())
+}
+
+/// WS-free compare core: returns the heal directives for the given digest without sending.
+/// Tests call this directly. Tracer scope: `entity_type == "task"` only.
+async fn handle_digest_compare(
+    pool: &PgPool,
+    node_id: Uuid,
+    entries: &[DigestEntry],
+) -> Result<DigestResultParts, HandleError> {
+    use std::collections::HashSet;
+    use crate::db::tasks::SharedTaskRepository;
+
+    // 1. The node's view: entity_ids of task entries (the id bridge — node local task id).
+    let node_ids: HashSet<Uuid> = entries
+        .iter()
+        .filter(|e| e.entity_type == "task")
+        .map(|e| e.entity_id)
+        .collect();
+
+    // 2. The hive's view: source_task_ids the hive holds for this node (non-deleted only —
+    //    ADR-0007 one-delete tombstone keeps a soft-deleted task out of the pull set).
+    let hive = SharedTaskRepository::new(pool)
+        .list_source_task_versions_for_node(node_id)
+        .await
+        .map_err(|e| HandleError::Database(e.to_string()))?;
+    let hive_ids: HashSet<Uuid> = hive.iter().map(|h| h.source_task_id).collect();
+
+    // 3. hive-has / node-lacks → pull_entities (the node pulls what the hive has).
+    let pull_entities: Vec<Uuid> = hive_ids.difference(&node_ids).copied().collect();
+
+    // 4. node-has / hive-lacks → resend_from_seq = Some(1) (conservative floor). Any non-empty
+    //    difference means the hive is missing at least one task the node has; re-stream all
+    //    retained ops (idempotent ON CONFLICT DO NOTHING). Never MAX(seq) (R2/F4).
+    let resend_from_seq = if node_ids.difference(&hive_ids).next().is_some() {
+        Some(1i64)
+    } else {
+        None
+    };
+
+    Ok(DigestResultParts { resend_from_seq, pull_entities })
+}
+
 /// Handle a `NodeMessage::OpBatch` (SC2): apply each op idempotently to `node_op_log` +
 /// `shared_tasks` and ack with `applied_through_seq`. Wraps `handle_op_batch_apply` (WS-free core)
 /// and sends the durable `HiveMessage::OpAck`.
@@ -3160,6 +3238,336 @@ mod op_batch_tests {
         let task_status = shared_task_status(&pool, node_id, local_task_id).await;
         assert_eq!(log_count, 1, "dedup row present");
         assert_eq!(task_status, "done", "task apply present");
+    }
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::*;
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    use crate::nodes::ws::message::DigestEntry;
+
+    fn database_url() -> Option<String> {
+        std::env::var("DATABASE_URL").ok()
+    }
+    macro_rules! skip_without_db {
+        () => {
+            if database_url().is_none() {
+                eprintln!("Skipping: DATABASE_URL not set");
+                return;
+            }
+        };
+    }
+    async fn create_pool() -> PgPool {
+        sqlx::PgPool::connect(&database_url().unwrap())
+            .await
+            .expect("connect")
+    }
+
+    async fn create_test_organization(pool: &PgPool) -> Uuid {
+        let org_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO organizations (id, name, slug, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(format!("Test Org {}", org_id))
+        .bind(format!("test-org-{}", org_id))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test organization");
+        org_id
+    }
+
+    async fn create_test_node(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let node_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, organization_id, name, machine_id, last_heartbeat_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(node_id)
+        .bind(org_id)
+        .bind(format!("node-{}", node_id))
+        .bind(format!("machine-{}", node_id))
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("Failed to create test node");
+        node_id
+    }
+
+    async fn create_swarm_project(pool: &PgPool, org_id: Uuid) -> Uuid {
+        let sp_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_projects (id, organization_id, name)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(sp_id)
+        .bind(org_id)
+        .bind(format!("Swarm Project {}", sp_id))
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm project");
+        sp_id
+    }
+
+    async fn create_node_local_project(
+        pool: &PgPool,
+        node_id: Uuid,
+        local_project_id: Uuid,
+        swarm_project_id: Option<Uuid>,
+    ) {
+        let res = sqlx::query(
+            r#"
+            INSERT INTO node_local_projects (node_id, local_project_id, name, git_repo_path, swarm_project_id)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("local-proj")
+        .bind("/repo/path")
+        .bind(swarm_project_id)
+        .execute(pool)
+        .await;
+        if let Err(e) = res {
+            eprintln!("create_node_local_project (non-fatal): {}", e);
+        }
+    }
+
+    async fn create_swarm_project_node(
+        pool: &PgPool,
+        swarm_project_id: Uuid,
+        node_id: Uuid,
+        local_project_id: Uuid,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO swarm_project_nodes (swarm_project_id, node_id, local_project_id, git_repo_path)
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(swarm_project_id)
+        .bind(node_id)
+        .bind(local_project_id)
+        .bind("/repo/path")
+        .execute(pool)
+        .await
+        .expect("Failed to create swarm_project_nodes link");
+    }
+
+    async fn cleanup_node_op_log(pool: &PgPool, node_id: Uuid) {
+        let _ = sqlx::query("DELETE FROM node_op_log WHERE node_id = $1")
+            .bind(node_id)
+            .execute(pool)
+            .await;
+    }
+
+    async fn cleanup_shared_task(pool: &PgPool, source_node_id: Uuid, source_task_id: Uuid) {
+        let _ = sqlx::query(
+            "DELETE FROM shared_tasks WHERE source_node_id = $1 AND source_task_id = $2",
+        )
+        .bind(source_node_id)
+        .bind(source_task_id)
+        .execute(pool)
+        .await;
+    }
+
+    /// Insert a `shared_tasks` row the hive holds for `node_id` with the given `source_task_id`
+    /// and `version`. project_id is NULL (swarm_project_id is the source of truth post-P4).
+    async fn seed_hive_task(
+        pool: &PgPool,
+        org_id: Uuid,
+        swarm_project_id: Uuid,
+        source_node_id: Uuid,
+        source_task_id: Uuid,
+        version: i64,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO shared_tasks
+                (organization_id, swarm_project_id, source_node_id, source_task_id,
+                 title, status, version)
+            VALUES ($1, $2, $3, $4, 'seed', 'todo', $5)
+            "#,
+        )
+        .bind(org_id)
+        .bind(swarm_project_id)
+        .bind(source_node_id)
+        .bind(source_task_id)
+        .bind(version)
+        .execute(pool)
+        .await
+        .expect("seed shared_tasks row");
+    }
+
+    /// Seed a `node_op_log` row for the R2/F4 high-water scenario: a lost op at `lost_seq`
+    /// while `MAX(seq) = high_seq`. The digest compare does not read node_op_log, but the row
+    /// proves the scenario the conservative floor defends against (a MAX(seq) replay would miss
+    /// the older lost op).
+    async fn seed_node_op_log_row(
+        pool: &PgPool,
+        node_id: Uuid,
+        idempotency_key: &str,
+        seq: i64,
+        entity_id: Uuid,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO node_op_log (node_id, idempotency_key, seq, op_type, entity_id)
+            VALUES ($1, $2, $3, 'task.upsert', $4)
+            "#,
+        )
+        .bind(node_id)
+        .bind(idempotency_key)
+        .bind(seq)
+        .bind(entity_id)
+        .execute(pool)
+        .await
+        .expect("seed node_op_log row");
+    }
+
+    #[tokio::test]
+    async fn digest_detects_bidirectional_divergence_and_replies_resend_and_pull() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        // HIVE-HAS / NODE-LACKS: a shared_tasks row the hive holds for this node that the node's
+        // digest will NOT mention.
+        let hid = Uuid::new_v4();
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, hid, 1).await;
+
+        // NODE-HAS / HIVE-LACKS: the node's digest WILL include NID, for which NO shared_tasks row
+        // exists (source_node_id=node, source_task_id=NID absent).
+        let nid = Uuid::new_v4();
+
+        // Seed node_op_log with a HIGH high-water (seq=10) but the lost entity NID's op was an
+        // OLDER seq (3) the hive never durably applied — the tournament R2/F4 case: a replay from
+        // the high-water would MISS seq 3.
+        seed_node_op_log_row(&pool, node_id, &format!("lost:{}", nid), 3, nid).await;
+        seed_node_op_log_row(&pool, node_id, "high-water", 10, Uuid::new_v4()).await;
+
+        let entries = vec![DigestEntry {
+            entity_type: "task".into(),
+            entity_id: nid,
+            version: 1,
+        }];
+        let result = handle_digest_compare(&pool, node_id, &entries)
+            .await
+            .expect("compare");
+
+        // NODE-HAS/HIVE-LACKS → re-stream from the floor (<= any lost op's seq), NOT MAX(seq).
+        assert_eq!(
+            result.resend_from_seq,
+            Some(1),
+            "node-has/hive-lacks → re-stream from the floor (<= any lost op's seq), NOT MAX(seq)"
+        );
+        // HIVE-HAS/NODE-LACKS → the hive lists HID for the node to PULL via the reconcile leg.
+        assert!(
+            result.pull_entities.contains(&hid),
+            "hive-has/node-lacks → node pulls this entity"
+        );
+        assert!(
+            !result.pull_entities.contains(&nid),
+            "an entity the node already has is NOT pulled"
+        );
+
+        // Cleanup. No manual reset_*/repair step — convergence is purely the DigestResult.
+        cleanup_shared_task(&pool, node_id, hid).await;
+        cleanup_node_op_log(&pool, node_id).await;
+        let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM node_local_projects WHERE node_id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM swarm_projects WHERE id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(&pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn digest_in_sync_replies_empty() {
+        skip_without_db!();
+        let pool = create_pool().await;
+        let org_id = create_test_organization(&pool).await;
+        let node_id = create_test_node(&pool, org_id).await;
+        let swarm_project_id = create_swarm_project(&pool, org_id).await;
+        let local_project_id = Uuid::new_v4();
+        create_node_local_project(&pool, node_id, local_project_id, Some(swarm_project_id)).await;
+        create_swarm_project_node(&pool, swarm_project_id, node_id, local_project_id).await;
+
+        // Seed one shared_tasks row (source_task_id = SID) AND a digest entry for SID at the same
+        // version → in sync.
+        let sid = Uuid::new_v4();
+        seed_hive_task(&pool, org_id, swarm_project_id, node_id, sid, 1).await;
+
+        let entries = vec![DigestEntry {
+            entity_type: "task".into(),
+            entity_id: sid,
+            version: 1,
+        }];
+        let result = handle_digest_compare(&pool, node_id, &entries)
+            .await
+            .expect("compare");
+        assert!(
+            result.resend_from_seq.is_none() && result.pull_entities.is_empty(),
+            "no divergence → no heal directives (idempotent: a converged sweep is a no-op)"
+        );
+
+        cleanup_shared_task(&pool, node_id, sid).await;
+        let _ = sqlx::query("DELETE FROM swarm_project_nodes WHERE swarm_project_id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM node_local_projects WHERE node_id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM swarm_projects WHERE id = $1")
+            .bind(swarm_project_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .execute(&pool)
+            .await;
     }
 }
 

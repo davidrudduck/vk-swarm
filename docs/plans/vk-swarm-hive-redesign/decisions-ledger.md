@@ -1471,3 +1471,8 @@ test-DB pattern for `ActivityProcessor` (which 404's task explicitly forbade). T
 scope limitation, not a deferral — the assertion IS verified, just not via the named test. The spec
 TS5 "assert `task.reassigned` is applied on the single channel" is satisfied by the static proof
 that the event type routes to the upsert handler (not dropped into `_ =>`).
+
+- [Task 503] Added `DigestEntry` to the existing `use super::message::{...}` import block in session.rs (it was not imported; needed for the `handle_digest`/`handle_digest_compare` signatures) — session.rs:24.
+- [Task 503] Test seed uses a minimal `shared_tasks` INSERT (organization_id, swarm_project_id, source_node_id, source_task_id, title, status, version) against the verified nullable-`project_id` schema — session.rs (`seed_hive_task`).
+- [Task 503] `seed_node_op_log_row` inserts only the columns the verified `node_op_log` schema has (node_id, idempotency_key, seq, op_type, entity_id) — the task's prose mentioned a `payload` column that does not exist in the migrated table — session.rs.
+- [Task 503] Heal path contains zero manual `reset_*`/migration step — convergence is produced purely by the `DigestResultParts` the compare returns (TS4 structural no-reset assertion) — session.rs `digest_tests`.
