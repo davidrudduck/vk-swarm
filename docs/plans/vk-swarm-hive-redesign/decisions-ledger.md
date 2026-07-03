@@ -1490,3 +1490,46 @@ Report: `.agents/reports/2026-07-03-round-1-opencode-phase5-anti-entropy.md` (pa
 - [Task 702] Lowercase-rejection assertion (`'inprogress'::task_status`) wrapped in `SAVEPOINT`/`ROLLBACK TO SAVEPOINT` — the cast error (code 25P02) aborts the surrounding transaction, making subsequent statements fail. Savepoint isolates the expected error then restores tx health for the round-trip seed. Assertion semantics unchanged (still asserts `.is_err()`). — tests/hive_cutover_must_migrate.rs.
 - [Task 703] `organizations` seed added `slug` (NOT NULL UNIQUE, same correction as 701/702) — the task file's minimal INSERT omitted it. Confirmed against `20251001000000_shared_tasks_activity.sql:16`. No other seed column changes needed: `shared_tasks.project_id` is nullable (20260124100000), `swarm_projects`/`nodes` minimal sets match the cited migrations, and the `node_task_attempts` INSERT column list matches the minimal NOT-NULL-without-default set at `crates/remote/src/db/node_task_attempts.rs:52` (sync_state defaults to `'partial'`; assignment_id/executor_variant/container_ref/setup_completed_at nullable). — tests/hive_cutover_reingest.rs.
 - [Task 703] Fidelity flag (ratified tracer limitation, recorded per task file): the test drives the EXISTING `NodeTaskAttemptRepository::upsert` shape via raw `INSERT INTO node_task_attempts (...) ON CONFLICT (id) DO UPDATE` SQL — NOT the new ADR-0008 op-log (which does not exist yet; P1 shipped only `task.upsert` on the new outbox). `NodeTaskAttemptRepository::upsert` (node_task_attempts.rs:46) accepts only `&PgPool`, no `&mut Transaction` overload, so raw SQL is the correct fallback per the task's STOP trigger to keep the whole test in one rollback-able tx. This proves the schema is refillable post-cutover, not the op-log mechanism. — tests/hive_cutover_reingest.rs.
+
+## Reachability gate (Phase 4-7 close — inbound collapse, anti-entropy, no fan-out, cutover)
+
+Spec `change_kind: behaviour` → mandatory. Evidence for SC7 (P4), SC5 (P5), SC1 (P6), SC6 (P7).
+
+### (a) Call-path traces (cited file:line against merged code)
+
+**SC7 — one delete semantic (P4):**
+- Production entry: `ActivityProcessor::process_event` (`crates/services/src/services/share/processor.rs:57`).
+- `task.deleted` → `process_task_deleted_event` → `Task::unlink_by_shared_task_id(tx.as_mut(), hive_task.id)` (`processor.rs:440`).
+- `task.reassigned` routes through `process_task_upsert_event` (`processor.rs:71` — same arm as `task.created`/`task.updated`).
+- Cold-start reconcile: `sync_remote_project_tasks` → `Task::unlink_by_shared_task_id(pool, deleted_id)` (`node_runner.rs:1281`) + `Task::unlink_stale_shared_tasks(pool, ...)` (unconditional).
+- Dirty-guard: `upsert_remote_task` (`sync.rs:253`) → `find_by_shared_task_id` + `OutboxRepository::has_unacked_for_entity` (`sync.rs:272`) → early-return `Ok(existing)`.
+- Both inbound legs funnel through ONE `unlink_by_shared_task_id` (ADR-0007 one-delete semantic).
+
+**SC5 — anti-entropy digest self-heal (P5):**
+- Node side: `HiveSync::sync_once` → `sync_digest()` (`hive_sync.rs:213`) → `Task::find_digest_entries` (`hive_sync.rs:272`) → `NodeMessage::Digest` send.
+- Hive side: `handle_node_message` → `NodeMessage::Digest` arm (`session.rs:589`) → `handle_digest` (`session.rs:2398`) → `handle_digest_compare` (`session.rs:2419`) → `SharedTaskRepository::list_source_task_versions_for_node` (`session.rs:2441`) + `list_soft_deleted_source_task_ids_for_node` (`session.rs:2447`) → `HiveMessage::DigestResult` send.
+- Node heal: `run_node_runner` loop → `HiveEvent::DigestResult` arm (`node_runner.rs:1085`) → re-stream via `peek_from_seq` + `restream_row_to_ws_op` + `OpBatch` (paginated, `node_runner.rs:1092-1104`) + pull via `sync_remote_projects` (`node_runner.rs:1117+`).
+
+**SC1 — no fan-out (P6):**
+- Compile-time fence: `classify(&HiveMessage) -> Delivery` exhaustive match (`crates/remote/tests/no_fanout_invariant.rs:41`) — no `_ =>` catch-all → a new `HiveMessage` variant that fails to classify is a compile error.
+- Send-site comment fence: `crates/remote/src/nodes/ws/connection.rs` module doc points at the test.
+- Verified: node-facing channel carries only `ProjectSync`/`NodeRemoved` (project metadata), never task state fan-out.
+
+**SC6 — hive-only-state cutover (P7):**
+- Migration `20260201000000` (`crates/remote/migrations/`): 2 TRUNCATE (REGENERABLE + DISCARDABLE) + 1 DELETE (completed assignments). No DROP, no CASCADE, no MUST-MIGRATE table touched.
+- MUST-MIGRATE id bridge + status canonical verified by `hive_cutover_must_migrate.rs` (kebab accepted, lowercase rejected, round-trip both directions).
+- REGENERABLE re-ingest verified by `hive_cutover_reingest.rs` (schema refillable post-cutover via existing upsert shape).
+
+### (b) Real-seam tests
+
+- SC7: `ts5_one_delete_outcome_both_legs_attempt_retained` (`sync.rs`) drives BOTH legs (reconcile `&SqlitePool` + WS `&mut Transaction`) — not the inner unit in isolation.
+- SC5: `digest_detects_bidirectional_divergence_and_replies_resend_and_pull` (`session.rs digest_tests`) drives `handle_digest_compare` (the real hive-side seam); `sync_digest_sends_one_entry_per_swarm_linked_task` (`hive_sync.rs`) drives the real `sync_digest` → `command_tx.send`.
+- SC1: `no_hive_message_variant_is_task_state_fanout` (`no_fanout_invariant.rs`) drives the exhaustive match — removing the test removes the compile-time fence.
+- SC6: `cutover_seed_run_clears_regenerable_discardable_keeps_must_migrate` drives the real `CUTOVER_SQL` (byte-identical to migration body); `must_migrate_id_bridge_and_status_round_trip` drives the real `shared_tasks` id-bridge; `regenerable_node_attempt_repopulates_from_reingest` drives the real `INSERT INTO node_task_attempts ON CONFLICT` upsert shape.
+
+### (c) Incident-symptom assertions
+
+- SC7: "local row RETAINED + shared_task_id cleared + task_attempt RETAINED" — the `reset_*` repair-migration symptom (maintainers hard-deleting + re-syncing) is eliminated.
+- SC5: "bidirectional divergence → resend_from_seq=Some(1) + pull_entities contains hive-has-id" — the divergent-state-forever symptom (two inbound channels applying the same change differently) is eliminated by convergence through ONE digest reply.
+- SC1: "no HiveMessage variant classifies as TaskStatePush" — the fan-out symptom (hive pushing task state to nodes) is eliminated by construction.
+- SC6: "REGENERABLE cleared, MUST-MIGRATE retained, REGENERABLE refillable" — the hive-only-state symptom (nodes holding shared state they shouldn't) is eliminated by the cutover.
