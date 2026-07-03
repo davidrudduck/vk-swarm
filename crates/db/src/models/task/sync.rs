@@ -1657,6 +1657,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ts5_one_delete_outcome_both_legs_attempt_retained() {
+        use crate::models::task_attempt::{CreateTaskAttempt, TaskAttempt};
+        use executors::executors::BaseCodingAgent;
+
+        // Helper: build a project + a hive-linked task that has a local task_attempt.
+        async fn linked_task_with_attempt(pool: &sqlx::SqlitePool) -> (uuid::Uuid, uuid::Uuid) {
+            let project_id = Uuid::new_v4();
+            let project_data = CreateProject {
+                name: "Test Project".to_string(),
+                git_repo_path: format!("/tmp/test-repo-{}", project_id),
+                use_existing_repo: true,
+                clone_url: None,
+                setup_script: None,
+                dev_script: None,
+                cleanup_script: None,
+                copy_files: None,
+            };
+            Project::create(pool, &project_data, project_id).await.unwrap();
+            let local_id = Uuid::new_v4();
+            let shared_id = Uuid::new_v4();
+            Task::create(pool, &CreateTask::from_title_description(project_id, "t".into(), None), local_id)
+                .await.unwrap();
+            Task::set_shared_task_id(pool, local_id, Some(shared_id)).await.unwrap();
+            // TaskAttempt::create(pool, &data, attempt_id, task_id) — 4 args (see task_attempt.rs:870).
+            TaskAttempt::create(
+                pool,
+                &CreateTaskAttempt {
+                    executor: BaseCodingAgent::ClaudeCode,
+                    base_branch: "main".into(),
+                    branch: "vk/x".into(),
+                    origin_node_id: None,
+                },
+                Uuid::new_v4(),
+                local_id,
+            ).await.unwrap();
+            (local_id, shared_id)
+        }
+
+        // LEG A — reconcile path (&SqlitePool).
+        let (pool, _t1) = setup_test_pool().await;
+        let (local_a, shared_a) = linked_task_with_attempt(&pool).await;
+        let n = Task::unlink_by_shared_task_id(&pool, shared_a).await.unwrap();
+        assert_eq!(n, 1);
+
+        // LEG B — WS path (&mut Transaction), SAME helper.
+        let (local_b, shared_b) = linked_task_with_attempt(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let n = Task::unlink_by_shared_task_id(tx.as_mut(), shared_b).await.unwrap();
+        assert_eq!(n, 1);
+        tx.commit().await.unwrap();
+
+        // IDENTICAL outcome on both legs: row retained, shared_task_id cleared, attempt retained.
+        for local_id in [local_a, local_b] {
+            let task = Task::find_by_id(&pool, local_id).await.unwrap();
+            assert!(task.is_some(), "local task RETAINED (soft-unlink, not hard-delete)");
+            assert!(task.unwrap().shared_task_id.is_none(), "shared_task_id cleared (tombstone)");
+            let attempts = TaskAttempt::fetch_all(&pool, Some(local_id)).await.unwrap();
+            assert_eq!(attempts.len(), 1, "local task_attempt RETAINED — node never loses work it ran");
+        }
+    }
+
+    #[tokio::test]
     async fn upsert_remote_task_applies_when_clean() {
         let (pool, _temp_dir) = setup_test_pool().await;
         let project_id = Uuid::new_v4();

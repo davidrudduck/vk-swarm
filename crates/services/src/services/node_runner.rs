@@ -793,7 +793,11 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                     linked_projects,
                     swarm_labels,
                 }) => {
-                    // Sync remote projects into unified schema on connect
+                    // ADR-0007 SINGLE LIVE INBOUND CHANNEL: the bulk-snapshot reconcile runs ONLY here,
+                    // on (re)connect — it is cold-start / gap-fill, NOT a second continuous channel.
+                    // The WS activity stream (project_watcher_task → ActivityProcessor::process_event)
+                    // is the single LIVE inbound path. Do NOT call sync_remote_projects on a timer / in a
+                    // periodic loop — that re-introduces the double-delivery class SC7 eliminates.
                     if let Some(ref client) = remote_client
                         && let Err(e) =
                             sync_remote_projects(&db.pool, client, organization_id, node_id).await
