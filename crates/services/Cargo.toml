@@ -3,6 +3,9 @@ name = "services"
 version = "0.0.125"
 edition = "2024"
 
+[lib]
+doctest = false
+
 [features]
 default = []
 cloud = []

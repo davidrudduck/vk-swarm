@@ -96,6 +96,38 @@ async fn setup_db() -> (SqlitePool, TempDir) {
     .await
     .unwrap();
 
+    // node_outbox (SC2 op-log) — required by upsert_remote_task's dirty-guard
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS node_outbox (
+            id              BLOB PRIMARY KEY,
+            seq             INTEGER NOT NULL UNIQUE,
+            op_type         TEXT NOT NULL,
+            entity_type     TEXT NOT NULL,
+            entity_id       BLOB NOT NULL,
+            payload         TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            fencing_token   INTEGER,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now', 'subsec')),
+            acked_at        TEXT
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_node_outbox_unacked_seq
+            ON node_outbox(seq)
+            WHERE acked_at IS NULL
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     (pool, temp_dir)
 }
 
