@@ -120,27 +120,20 @@ Illegal transitions are rejected with a `success: false` response — they are n
 
 ### Guarded Write Sites
 
-Three write sites can mutate `shared_tasks.status` from a node. All three are gated by the
-single-author guard (`status_machine::author_of_transition`):
-
-1. **`handle_op_batch_apply`** (the durable op-log path) — gated by P2's fence (stale-token check)
-   + the SC4 author guard. Node-owned tasks (where `shared_tasks.owner_node_id == node_id`) bypass
-   the fence (the owner doesn't need a lease to write its own task).
-2. **`handle_task_status`** (the legacy TaskStatusMessage path) — gated by `find_active_lease_for_node`
-   which checks `node_id`, `completed_at IS NULL`, and `lease_expires_at > NOW()`. The guard runs
-   **before** any assignment-row writes, so a stale holder cannot mutate `execution_status` or
-   `local_task_id`.
-3. **`handle_task_sync`** (the TaskSyncMessage path) — gated by the SC4 author guard, which looks up
-   the existing task via `find_by_source_task_id(node_id, local_task_id)` and rejects hive-authored
-   or illegal transitions with a `TaskSyncResponse { success: false }`.
+The single write site that can mutate `shared_tasks.status` from a node is
+`handle_op_batch_apply` (the durable op-log path). It is gated by P2's fence (stale-token check)
+and the SC4 author guard (`status_machine::author_of_transition`). Node-owned tasks (where
+`shared_tasks.owner_node_id == node_id`) bypass the fence (the owner doesn't need a lease to write
+its own task). All inbound task updates arrive exclusively via the WS activity stream
+(ADR-0007 / SC7); the legacy `handle_task_status` and `handle_task_sync` paths were removed.
 
 ### Unknown Wire Values
 
-If a node sends an unrecognized status wire value (e.g. due to a serialization bug), the hive:
-- In `handle_op_batch_apply`: **SKIP+ADVANCE** — writes the op to `node_op_log`, advances the cursor,
-  and continues. The op is permanently consumed (no infinite retry).
-- In `handle_task_sync`: returns `TaskSyncResponse { success: false, error: "REJECTED: unknown
-  status wire value" }` — the node is informed, not left hanging.
+If a node sends an unrecognized status wire value (e.g. due to a serialization bug), the hive
+**SKIP+ADVANCE** in `handle_op_batch_apply` — writes the op to `node_op_log`, advances the cursor
+(`applied_through_seq`), and continues. The op is permanently consumed (no infinite retry).
+All permanent rejects in the apply loop use SKIP+ADVANCE to prevent `peek_unacked`'s head-of-line
+ordering from wedging the outbox (round-5 CF1 fix).
 
 ### Lease Revocation on Reassignment
 
@@ -151,28 +144,35 @@ reaches the correct node (a task may have multiple historical assignment rows fr
 
 ## Data Model Overview
 
-The swarm architecture uses a hub-and-spoke model where the hive (PostgreSQL) serves as the central source of truth, and nodes (SQLite) maintain local caches with bidirectional sync.
+The swarm architecture uses a hub-and-spoke model where the hive (PostgreSQL) serves as the central source of truth, and nodes (SQLite) maintain local caches with bidirectional sync. Task sync uses a durable outbox + op-log + ack model (ADR-0007); other entities (projects, labels) sync via REST and WS broadcast.
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              HIVE (PostgreSQL)                          │
-├─────────────────────────────────────────────────────────────────────────┤
-│  swarm_projects          │  swarm_labels           │  swarm_templates   │
-│  ├─ id                   │  ├─ id                  │  ├─ id             │
-│  ├─ organization_id      │  ├─ organization_id     │  ├─ organization_id│
-│  ├─ name                 │  ├─ name, icon, color   │  ├─ name, content  │
-│  └─ created_at           │  └─ created_at          │  └─ created_at     │
-│                          │                         │                    │
-│  swarm_project_nodes     │  swarm_tasks            │  execution_logs    │
-│  ├─ swarm_project_id     │  ├─ swarm_project_id    │  ├─ assignment_id  │
-│  ├─ node_id              │  ├─ title, description  │  ├─ output_type    │
-│  ├─ local_project_id     │  ├─ status, version     │  ├─ content        │
-│  ├─ git_repo_path        │  └─ created_at          │  └─ timestamp      │
-│  └─ os_type              │                         │                    │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              HIVE (PostgreSQL)                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  swarm_projects          │  shared_tasks           │  swarm_templates      │
+│  ├─ id                   │  ├─ id (source_task_id) │  ├─ id                │
+│  ├─ organization_id      │  ├─ swarm_project_id    │  ├─ organization_id   │
+│  ├─ name                 │  ├─ title, description  │  ├─ name, content     │
+│  └─ created_at           │  ├─ status, version     │  └─ created_at        │
+│                          │  ├─ owner_node_id       │                       │
+│  swarm_project_nodes     │  ├─ source_node_id      │  node_task_assignments│
+│  ├─ swarm_project_id     │  └─ created_at          │  ├─ id                │
+│  ├─ node_id              │                         │  ├─ task_id           │
+│  ├─ local_project_id     │  labels                 │  ├─ node_id           │
+│  ├─ git_repo_path        │  ├─ id                  │  ├─ fencing_token      │
+│  └─ os_type              │  ├─ organization_id     │  ├─ lease_expires_at   │
+│                          │  ├─ name, icon, color   │  └─ completed_at      │
+│  nodes                   │  └─ created_at          │                       │
+│  ├─ id                   │                         │  activity             │
+│  ├─ organization_id      │  node_op_log            │  ├─ id, seq           │
+│  └─ name                 │  ├─ node_id             │  ├─ project_id         │
+│                          │  ├─ idempotency_key     │  └─ event_type, payload│
+└─────────────────────────────────────────────────────────────────────────────┘
                                     │
                     ┌───────────────┼───────────────┐
                     │ WebSocket     │  WebSocket    │ WebSocket
+                    │ (op-batch/ack)│  (broadcast)  │ (digest/heal)
                     ▼               ▼               ▼
 ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐
 │    NODE A (SQLite)  │  │    NODE B (SQLite)  │  │    NODE C (SQLite)  │
@@ -182,8 +182,14 @@ The swarm architecture uses a hub-and-spoke model where the hive (PostgreSQL) se
 │ └─ (NULL = local)   │  │ └─ (NULL = local)   │  │ └─ (NULL = local)   │
 │                     │  │                     │  │                     │
 │ tasks (CACHE)       │  │ tasks (CACHE)       │  │ tasks (CACHE)       │
-│ ├─ swarm_task_id    │  │ ├─ swarm_task_id    │  │ ├─ swarm_task_id    │
+│ ├─ shared_task_id   │  │ ├─ shared_task_id   │  │ ├─ shared_task_id   │
 │ └─ (NULL = local)   │  │ └─ (NULL = local)   │  │ └─ (NULL = local)   │
+│                     │  │                     │  │                     │
+│ node_outbox         │  │ node_outbox         │  │ node_outbox         │
+│ ├─ seq, op_type     │  │ ├─ seq, op_type     │  │ ├─ seq, op_type     │
+│ ├─ entity_type/id   │  │ ├─ entity_type/id   │  │ ├─ entity_type/id   │
+│ ├─ fencing_token    │  │ ├─ fencing_token    │  │ ├─ fencing_token    │
+│ └─ acked_at         │  │ └─ acked_at         │  │ └─ acked_at         │
 │                     │  │                     │  │                     │
 │ labels              │  │ labels              │  │ labels              │
 │ ├─ swarm_label_id   │  │ ├─ swarm_label_id   │  │ ├─ swarm_label_id   │
@@ -380,12 +386,12 @@ Extended with swarm linking and sync tracking:
 ```sql
 ALTER TABLE tasks ADD COLUMN shared_task_id TEXT;
 -- NULL shared_task_id = local task, UUID = linked to hive task
--- ElectricSQL syncs tasks directly to this table via shared_task_id
+-- The WS activity stream syncs tasks via shared_task_id (ADR-0007 / SC7)
 ```
 
-> **Note**: The legacy `shared_tasks` cache table has been removed. ElectricSQL now syncs
-> tasks directly to the `tasks` table using the `shared_task_id` foreign key for
-> upsert conflict resolution.
+> **Note**: The legacy `shared_tasks` cache table has been removed. Tasks are synced via the
+> WS activity stream (op-batch/ack/digest model) to the `tasks` table using the `shared_task_id`
+> foreign key for upsert conflict resolution.
 
 ### labels
 
@@ -401,47 +407,52 @@ ALTER TABLE labels ADD COLUMN synced_at TEXT;
 
 ### WebSocket Message Types
 
-Nodes and hive communicate via WebSocket with these message types:
+Nodes and hive communicate via WebSocket. Task sync uses a durable outbox + op-log + ack model
+(ADR-0007). The full variant set is defined identically in both crates (CONTRACT.md §A):
 
 ```rust
-enum NodeToHive {
+// Node → Hive
+enum NodeMessage {
     // Connection
     Authenticate { api_key: String },
     Heartbeat,
 
     // Project linking
-    LinkProject { swarm_project_id: Uuid, local_project_id: Uuid, git_path: String },
-    UnlinkProject { swarm_project_id: Uuid, local_project_id: Uuid },
+    LinkProject { swarm_project_id, local_project_id, git_path },
+    UnlinkProject { swarm_project_id, local_project_id },
 
-    // Task sync
-    TaskCreated { task: SwarmTask },
-    TaskUpdated { task: SwarmTask },
-    TaskDeleted { task_id: Uuid },
+    // Durable op-log (P1)
+    OpBatch { ops: Vec<OutboxOp> },
 
-    // Label sync
+    // Lease management (P2)
+    LeaseHeartbeat { assignment_ids: Vec<Uuid> },
+
+    // Anti-entropy / digest (P5)
+    Digest { entries: Vec<DigestEntry> },
+
+    // Label sync (legacy, still active)
     LabelSync { labels: Vec<Label> },
-
-    // Execution sync
-    AttemptCreated { attempt: TaskAttempt },
-    AttemptUpdated { attempt: TaskAttempt },
-    LogBatch { logs: Vec<LogEntry> },
 }
 
-enum HiveToNode {
+// Hive → Node
+enum HiveMessage {
     // Connection
     Authenticated { node_id: Uuid },
     Error { message: String },
 
-    // Task broadcast
-    TaskCreated { task: SwarmTask },
-    TaskUpdated { task: SwarmTask },
-    TaskDeleted { task_id: Uuid },
+    // Op-log ack (P1)
+    OpAck { applied_through_seq: i64 },
 
-    // Label broadcast
+    // Lease management (P2)
+    LeaseGrant { assignment_id, fencing_token, lease_expires_at },
+    LeaseRevoked { assignment_id, reason: String },
+
+    // Anti-entropy reply (P5)
+    DigestResult { resend_from_seq: Option<i64>, pull_entities: Vec<Uuid> },
+
+    // Broadcast (labels, templates — NOT shared tasks; SC6/P6 invariant)
     LabelUpdated { label: Label },
     LabelDeleted { label_id: Uuid },
-
-    // Template broadcast
     TemplateUpdated { template: SwarmTemplate },
     TemplateDeleted { template_id: Uuid },
 
@@ -450,48 +461,60 @@ enum HiveToNode {
 }
 ```
 
+Each `OutboxOp` in an `OpBatch` carries: `seq`, `op_type`, `entity_type`, `entity_id`,
+`payload` (JSON: title, description, status), `idempotency_key`, `fencing_token`, `created_at`.
+
 ### Task Sync Flow
 
-**Create Task (Node → Hive → All Nodes)**
+Task sync uses a durable outbox on the node side and an idempotent apply + ack on the hive side:
 
-```text
-┌──────────┐         ┌──────────┐         ┌──────────┐
-│  Node A  │         │   Hive   │         │  Node B  │
-└────┬─────┘         └────┬─────┘         └────┬─────┘
-     │                    │                    │
-     │ TaskCreated(task)  │                    │
-     │───────────────────►│                    │
-     │                    │                    │
-     │   Ack(swarm_id)    │                    │
-     │◄───────────────────│                    │
-     │                    │                    │
-     │                    │ TaskCreated(task)  │
-     │                    │───────────────────►│
-     │                    │                    │
-```
-
-**Update Task (Conflict Resolution)**
+**Node → Hive (op-batch)**
 
 ```text
 ┌──────────┐         ┌──────────┐
 │  Node A  │         │   Hive   │
 └────┬─────┘         └────┬─────┘
      │                    │
-     │ TaskUpdated        │
-     │ (version: 3)       │
+     │ OpBatch(ops)       │
+     │ (from node_outbox) │
      │───────────────────►│
      │                    │
-     │   IF hive.version  │
-     │      == 3          │
-     │   Accept, version  │
-     │      = 4           │
+     │                    │ handle_op_batch_apply:
+     │                    │   1. fence check (stale token → skip+advance)
+     │                    │   2. status author guard (SC4)
+     │                    │   3. upsert shared_tasks
+     │                    │   4. record node_op_log (dedup)
+     │                    │   5. advance applied_through_seq
+     │                    │
+     │  OpAck(seq)        │
      │◄───────────────────│
      │                    │
-     │   ELSE             │
-     │   Conflict, send   │
-     │   current version  │
-     │◄───────────────────│
+     │ node clears        │
+     │ acked_at on ops    │
+     │ through seq        │
 ```
+
+The node's `node_outbox` is a durable append-only log. `peek_unacked` returns ops where
+`acked_at IS NULL`, ordered by `seq` (head-of-line). On `OpAck`, the node sets `acked_at` on all
+ops up to `applied_through_seq`, advancing the outbox cursor. An entity-level dirty guard
+(`has_unacked_for_entity`) blocks inbound reconcile for a task that has pending outbound ops —
+preventing a hive update from overwriting an unacked local change.
+
+**Hive → Node (activity stream / reconcile)**
+
+Inbound task updates flow exclusively through the WS activity stream (ADR-0007 / SC7). The hive
+broadcasts `task.*` activity events to connected nodes. The node's `share` module consumes these
+and applies them to the local `tasks` table (upsert via `shared_task_id`). Soft-deletes (unlink)
+clear `shared_task_id` but preserve the local task and its execution history.
+
+**Anti-entropy (digest)**
+
+Periodically (or on reconnect), the node sends a `Digest` message listing its task entity IDs.
+The hive compares against `shared_tasks` and replies with `DigestResult`:
+- `resend_from_seq: Some(1)` — the node should re-stream its op-log from the beginning (conservative
+  floor; the apply is idempotent via `ON CONFLICT DO NOTHING`).
+- `pull_entities: Vec<Uuid>` — the node should pull these tasks via the reconcile leg (hive-has /
+  node-lacks, or soft-deleted tasks the node still reports as active).
 
 ### Label Sync Flow
 
@@ -506,30 +529,10 @@ Labels sync bidirectionally with version tracking:
 
 ### Execution Log Sync
 
-Logs sync via background service (HiveSyncService):
-
-```rust
-// Every 5 seconds
-async fn sync_to_hive() {
-    // 1. Find unsynced task attempts
-    let attempts = db.find_attempts_where(hive_synced_at IS NULL);
-
-    // 2. Sync attempts to hive
-    for attempt in attempts {
-        hive.sync_attempt(attempt).await?;
-        db.mark_attempt_synced(attempt.id).await?;
-    }
-
-    // 3. Find unsynced log entries (batched)
-    let logs = db.find_logs_where(hive_synced_at IS NULL LIMIT 1000);
-
-    // 4. Batch sync logs
-    if !logs.is_empty() {
-        hive.sync_log_batch(logs).await?;
-        db.mark_logs_synced(logs.iter().map(|l| l.id)).await?;
-    }
-}
-```
+Execution logs (task attempts, output logs, progress events) are persisted locally in the node's
+SQLite database. They are synced to the hive via the durable outbox (`node_outbox`) as
+`entity_type = "attempt"` / `"log"` ops. On reconnect, unsynced ops are replayed through the
+op-batch/ack model — no separate polling service is needed.
 
 ## Merge Operations
 
@@ -550,7 +553,7 @@ SET swarm_project_id = $target_id
 WHERE swarm_project_id = $source_id;
 
 -- Move tasks
-UPDATE swarm_tasks
+UPDATE shared_tasks
 SET swarm_project_id = $target_id
 WHERE swarm_project_id = $source_id;
 
@@ -625,11 +628,13 @@ When a node disconnects from the hive (network partition or shutdown):
 1. WebSocket connection closes
 2. Node status updated to `offline` on hive
 3. Node continues serving cached data locally
-4. Write operations are queued locally (op-log) for replay on reconnect
+4. Write operations are queued in the durable `node_outbox` (op-log) for replay on reconnect
 5. The node's task **leases begin expiring** — if the lease TTL passes without renewal,
    the hive reclaims the assignments and may reassign the tasks to other nodes with higher
    fencing tokens (see [Lease Fencing & Status Guards](#lease-fencing--status-guards))
 6. A partitioned-but-alive node that cannot renew its lease **self-fences** (halts the agent)
+7. The hive's lease-expiry sweep (`stale_cleanup.rs`) reclaims assignments whose
+   `lease_expires_at < now()`, bumping `fencing_token = nextval(node_fencing_token_seq)`
 
 ### Reconnection
 
@@ -638,23 +643,24 @@ When a node reconnects:
 1. Authenticate with API key
 2. Hive sends current sync state + any `LeaseRevoked` signals for tasks that were reassigned
    during the partition
-3. Node reconciles local cache with hive state
+3. Node reconciles local cache with hive state via the digest anti-entropy protocol (SC5):
+   sends a `Digest` of its task entity IDs, receives `DigestResult` directing re-stream
+   (`resend_from_seq`) and pull (`pull_entities`)
 4. Node re-registers all linked projects
-5. Background sync service resumes
-6. Queued ops are replayed through the op-log; stale-token ops (for reassigned tasks) are
-   rejected by the fence
+5. Queued ops in `node_outbox` are replayed via `OpBatch`; stale-token ops (for reassigned
+   tasks) are SKIP+ADVANCE'd by the fence (recorded in `node_op_log` + cursor advanced, not
+   wedged at head-of-line)
 
 ### Queued Operations
 
-During disconnection, these operations are queued locally:
-- Execution logs (stored locally, synced on reconnect)
-- Task attempts (created locally, synced on reconnect)
-- Task updates (queued in the op-log, replayed on reconnect — subject to fencing)
+During disconnection, these operations are queued in `node_outbox`:
+- Task create/update/delete (as `entity_type = "task"` ops, replayed via `OpBatch`)
+- Execution logs and task attempts (as ops, replayed on reconnect)
+- Label create/update/delete (as ops, replayed on reconnect)
 
-These operations are blocked until reconnection:
-- Task create/update/delete
-- Label create/update/delete
-- Template create/update/delete
+The outbox is durable (SQLite). `peek_unacked` returns ops where `acked_at IS NULL`, ordered by
+`seq`. On `OpAck`, ops up to `applied_through_seq` are marked `acked_at`, draining the cursor.
+An entity-level dirty guard blocks inbound reconcile for a task with pending outbound ops.
 
 ## Performance Considerations
 
@@ -698,22 +704,21 @@ These operations are blocked until reconnection:
 
 ## Migration Notes (v0.0.125+)
 
-### Legacy Fields Removed
+### Hive-Redesign (ADR-0007 / SC7)
 
-The following legacy fields have been removed as part of the ElectricSQL migration:
+The inbound task sync path was consolidated from ElectricSQL shape subscriptions to a single
+durable WS activity stream (op-batch/ack/digest model):
 
-| Table | Field Removed | Reason |
-|-------|--------------|--------|
-| `tasks` | `is_remote` | Task origin no longer matters; execution location is tracked via attempts |
-| - | `shared_tasks` table | ElectricSQL syncs tasks directly to `tasks` table |
-
-### ElectricSQL Task Sync
-
-Tasks are now synced via ElectricSQL instead of WebSocket polling:
-
-1. **Hive → Node**: ElectricSQL shapes push task changes in real-time
-2. **Node → Hive**: Task create/update messages sent via WebSocket
-3. **Conflict Resolution**: `shared_task_id` column used for upsert on sync
+1. **Hive → Node**: task updates flow through the WS activity stream — activity events are
+   consumed by the node's `share` module and applied to the local `tasks` table
+2. **Node → Hive**: task create/update/delete are enqueued in the durable `node_outbox` and
+   sent as `OpBatch`; the hive applies idempotently and replies `OpAck`
+3. **Anti-entropy**: periodic `Digest` / `DigestResult` exchange detects divergence and directs
+   healing (re-stream + pull)
+4. **Fencing**: lease-based fencing tokens (P2) prevent stale writes from partitioned nodes
+5. **Legacy fields removed**: the `ElectricTaskSyncService` (task-specific ElectricSQL sync)
+   was deleted; general ElectricSQL (`electric_sync.rs`) is retained for non-task sync
+   (projects, logs)
 
 ### git_repo_path Constraint Handling
 

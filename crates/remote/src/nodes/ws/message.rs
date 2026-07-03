@@ -91,6 +91,9 @@ pub enum NodeMessage {
     /// Periodic lease renewal: the node's in-flight hive-assignment ids to keep alive (SC3, CONTRACT §A).
     #[serde(rename = "lease_heartbeat")]
     LeaseHeartbeat { assignment_ids: Vec<Uuid> },
+    /// Anti-entropy digest (SC5, CONTRACT §A). Tracer scope: entity_type "task".
+    #[serde(rename = "digest")]
+    Digest { entries: Vec<DigestEntry> },
 }
 
 /// Messages sent from the hive to a node.
@@ -163,6 +166,9 @@ pub enum HiveMessage {
     /// Lease revoked: the hive reclaimed/expired this assignment; the node must self-fence (SC3).
     #[serde(rename = "lease_revoked")]
     LeaseRevoked { assignment_id: Uuid, reason: String },
+    /// Reply to a node Digest (SC5, CONTRACT §A).
+    #[serde(rename = "digest_result")]
+    DigestResult { resend_from_seq: Option<i64>, pull_entities: Vec<Uuid> },
 }
 
 /// Authentication message from node to hive.
@@ -778,6 +784,16 @@ pub struct BackfillResponseMessage {
     pub error: Option<String>,
     /// Number of entities sent
     pub entities_sent: u32,
+}
+
+/// One entry in a node→hive anti-entropy Digest (SC5, CONTRACT §A). `entity_id` is the node's local
+/// task id (= `shared_tasks.source_task_id` for this node — the id bridge); `version` mirrors the node's
+/// `Task::remote_version`. Mirrors the node's `hive_client.rs` copy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestEntry {
+    pub entity_type: String,
+    pub entity_id: Uuid,
+    pub version: i64,
 }
 
 /// Current protocol version.

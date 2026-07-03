@@ -5,7 +5,7 @@ description: PostgreSQL functions for shared task management in the Hive
 
 # Shared Task Functions
 
-Functions for managing shared tasks in the PostgreSQL Hive database. Shared tasks are the central task registry that nodes sync with via ElectricSQL.
+Functions for managing shared tasks in the PostgreSQL Hive database. Shared tasks are the central task registry that nodes sync with via the WS activity stream (ADR-0007).
 
 **Source:** `crates/remote/src/db/tasks.rs`
 
@@ -250,7 +250,7 @@ async fn delete_task(
 **Notes:**
 - Sets `deleted_at` and `deleted_by_user_id`
 - Task excluded from normal queries
-- ElectricSQL syncs deletion to nodes
+- WS activity stream syncs soft-delete to nodes (ADR-0007)
 
 ---
 
@@ -285,24 +285,18 @@ async fn delete_task(
 
 ---
 
-## ElectricSQL Integration
+## WebSocket Activity Stream (ADR-0007)
 
-The `shared_tasks` table is enabled for ElectricSQL sync:
+The `shared_tasks` table is synced to nodes via the WS activity stream, not ElectricSQL.
+Task sync flows through the durable outbox + op-batch/ack model:
 
-```sql
-SELECT electric_sync_table('public', 'shared_tasks');
-```
+1. Task created/updated/deleted in Hive → activity row appended
+2. Node connects via WS and sends `OpBatch` ops from its `node_outbox`
+3. Hive applies ops via `handle_op_batch_apply`, replies with `OpAck`
+4. Node advances `applied_through_seq` on ack
+5. Digest anti-entropy (`Digest`/`DigestResult`) heals divergence on reconnect
 
-### Sync Flow
+### Non-Task ElectricSQL Sync
 
-1. Task created/updated in Hive
-2. PostgreSQL logical replication captures change
-3. Electric shapes stream to connected nodes
-4. Nodes upsert to local `tasks` table via `sync_from_shared_task`
-
-### Shape Subscription
-
-Nodes subscribe with project filter:
-```text
-GET /v1/shape/shared_tasks?where=project_id=:id
-```
+Non-task data (projects, nodes, log entries) still uses ElectricSQL shapes.
+The `shared_tasks` table is NOT registered with `electric_sync_table`.

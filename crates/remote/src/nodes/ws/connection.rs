@@ -2,6 +2,27 @@
 //!
 //! This module provides a centralized registry of connected nodes and their
 //! WebSocket channels for sending messages.
+//!
+//! # SC1 no-fanout invariant (vk-swarm-hive-redesign, phase-6 — data plane)
+//!
+//! The four send primitives below — [`ConnectionManager::send_to_node`],
+//! [`ConnectionManager::broadcast_to_org`], [`ConnectionManager::broadcast_to_org_except`],
+//! and [`ConnectionManager::send_to_nodes`] — are the ONLY paths by which the hive pushes a
+//! [`HiveMessage`] to a node (the per-node handshake/control replies in `session.rs` use the
+//! socket sink directly). The data-plane contract is: **a shared task owned by node X is never
+//! pushed to a different node Y.** Every `HiveMessage` variant that flows through here is one of:
+//! a per-node control/ack reply, the recipient's OWN assignment/cancel, the recipient's OWN
+//! backfill request, or project/label METADATA — NEVER another node's shared-*task* state for
+//! relay. Cross-node task/attempt/execution state is served by the hive's own web UI reading
+//! Postgres directly (and the browser-facing `electric_proxy`/`ActivityBroker` fan-out), NOT by
+//! pushing it to nodes.
+//!
+//! Do NOT add a `broadcast`/`send_to_nodes` call that relays one node's shared-task state to other
+//! nodes. The exhaustive `HiveMessage` classification in
+//! `crates/remote/tests/no_fanout_invariant.rs` (test `no_hive_message_variant_is_task_state_fanout`)
+//! is the regression fence: a new task-state-push variant breaks that test's exhaustive match or its
+//! assertion. If you genuinely need cross-node task fan-out, that is a spec change (escalate), not a
+//! new send call here.
 
 use std::{collections::HashMap, sync::Arc};
 

@@ -262,7 +262,7 @@ Links executor sessions (e.g., Claude session IDs) to execution processes.
 
 ## Remote Sync Tables (Deprecated)
 
-These tables support legacy polling-based sync and are being replaced by ElectricSQL.
+These tables supported legacy polling-based sync. Task sync now uses the WS activity stream + durable outbox (ADR-0007).
 
 ### shared_tasks
 
@@ -285,7 +285,7 @@ Remote tasks from the hive server.
 | `created_at` | DATETIME | Creation timestamp |
 | `updated_at` | DATETIME | Last update timestamp |
 
-**Status:** Deprecated - Being replaced by ElectricSQL-based sync
+**Status:** Deprecated - Replaced by WS activity stream + durable outbox (ADR-0007)
 
 ---
 
@@ -321,7 +321,7 @@ Cache of nodes from the hive server.
 | `updated_at` | DATETIME | Last update timestamp |
 | `last_synced_at` | DATETIME | Last sync from hive |
 
-**Status:** Deprecated - Will sync via ElectricSQL shapes
+**Status:** Deprecated - Will sync via ElectricSQL shapes (non-task data)
 
 ---
 

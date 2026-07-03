@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tasks\n               SET shared_task_id = NULL, updated_at = CURRENT_TIMESTAMP\n               WHERE shared_task_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "48a4df10182444a1044a41a988dac08756a27143aa240459d2c2f8639bc9c40c"
+}

@@ -793,7 +793,7 @@ mod integration_tests {
         sqlx::query(
             r#"
             INSERT INTO organization_member_metadata (organization_id, user_id, role, joined_at)
-            VALUES ($1, $2, $3, $4)
+            VALUES ($1, $2, $3::member_role, $4)
             "#,
         )
         .bind(org_id)

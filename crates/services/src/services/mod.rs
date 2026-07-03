@@ -1,21 +1,14 @@
 //! Service modules for Vibe Kanban.
 //!
-//! # Electric SQL Integration (New)
+//! # Inbound Sync (WebSocket Activity Stream)
 //!
-//! The following modules provide ElectricSQL-based real-time sync:
+//! The following modules provide WebSocket-based real-time sync (ADR-0007 / hive-redesign):
 //!
-//! - [`electric_sync`] - Electric Shape API client for parsing NDJSON responses
-//! - [`electric_task_sync`] - Task sync service using Electric shapes
-//! - [`log_migration`] - Migration from legacy JSONL logs to row-based log_entries
-//!
-//! # Legacy Sync Modules (Deprecated)
-//!
-//! The following modules use WebSocket/REST-based sync and are being replaced:
-//!
-//! - [`share`] - **DEPRECATED** - Use `electric_task_sync` instead
+//! - [`share`] - WebSocket activity stream — the single live inbound channel (ADR-0007).
+//!   Pushes local tasks to the Hive and syncs labels via the WS activity stream.
 //! - [`node_cache`] - **DEPRECATED** - Will be replaced by Electric node shapes
 //!
-//! See individual module documentation for migration guidance.
+//! See individual module documentation for details.
 
 pub mod approvals;
 pub mod assignment_handler;
@@ -56,7 +49,6 @@ pub mod worktree_manager;
 
 // === Electric SQL Integration (New) ===
 pub mod electric_sync;
-pub mod electric_task_sync;
 pub mod log_migration;
 
 // === Legacy Sync Modules (Deprecated) ===

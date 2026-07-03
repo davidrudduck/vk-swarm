@@ -6,14 +6,11 @@
 //!
 //! # Note
 //!
-//! Task sync from Hive to local is now handled by ElectricSQL. This module only:
+//! Task sync from Hive to local is now handled by the WebSocket activity stream
+//! (ADR-0007 / hive-redesign SC7). This module only:
 //! - Pushes local tasks to the Hive (via `SharePublisher`)
 //! - Syncs labels via WebSocket activity stream (via `RemoteSync`)
 //!
-//! ## See Also
-//!
-//! - `crates/services/src/services/electric_task_sync.rs` - Electric-based task sync from Hive
-
 mod config;
 mod label_publisher;
 mod processor;

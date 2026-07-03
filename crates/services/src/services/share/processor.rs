@@ -64,8 +64,11 @@ impl ActivityProcessor {
             }
             "label.deleted" => self.process_label_deleted_event(&mut tx, &event).await?,
 
-            // Task events - sync version and metadata to keep local cache fresh
-            "task.created" | "task.updated" => {
+            // Task events - sync version and metadata to keep local cache fresh.
+            // `task.reassigned` carries the same SharedTaskActivityPayload { task, user } as
+            // `task.updated` (the new assignee is a field on `task`), so it routes through the same
+            // upsert handler — no dropped event type (ADR-0007). It must NOT fall through to the `_` arm.
+            "task.created" | "task.updated" | "task.reassigned" => {
                 self.process_task_upsert_event(&mut tx, &event).await?
             }
             "task.deleted" => {
@@ -430,14 +433,13 @@ impl ActivityProcessor {
 
         let hive_task = task_payload.task;
 
-        // Find local task by shared_task_id and unlink it
-        if let Some(existing) = Task::find_by_shared_task_id(tx.as_mut(), hive_task.id).await? {
-            // Clear the shared_task_id to unlink from Hive
-            // We don't delete the local task - just unlink it
-            Task::set_shared_task_id(tx.as_mut(), existing.id, None).await?;
-
+        // Soft-unlink via the SAME helper the reconcile leg uses (ADR-0007 one delete semantic):
+        // clear shared_task_id, keep the local row + its task_attempt. Keyed on the hive id so both
+        // legs are identical by construction (set_shared_task_id-by-id with NULL was a no-op for a
+        // linked row — SQLite `= NULL` three-valued logic; see ledger).
+        let unlinked = Task::unlink_by_shared_task_id(tx.as_mut(), hive_task.id).await?;
+        if unlinked > 0 {
             debug!(
-                local_task_id = %existing.id,
                 shared_task_id = %hive_task.id,
                 "Unlinked local task from deleted Hive task"
             );

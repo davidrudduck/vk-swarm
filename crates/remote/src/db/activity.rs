@@ -197,8 +197,8 @@ mod integration_tests {
 
         sqlx::query(
             r#"
-            INSERT INTO activity (event_id, swarm_project_id, seq, event_type, created_at, payload)
-            VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)
+            INSERT INTO activity (event_id, project_id, swarm_project_id, seq, event_type, created_at, payload)
+            VALUES ($1, $2, $2, $3, $4, $5, '{}'::jsonb)
             "#,
         )
         .bind(event_id)

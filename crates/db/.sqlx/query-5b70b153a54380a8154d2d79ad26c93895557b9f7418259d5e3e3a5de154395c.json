@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!: Uuid\", remote_version as \"remote_version!: i64\"\n               FROM tasks\n               WHERE shared_task_id IS NOT NULL\n               ORDER BY id ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "remote_version!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "5b70b153a54380a8154d2d79ad26c93895557b9f7418259d5e3e3a5de154395c"
+}

@@ -31,6 +31,16 @@ Code review findings — from adversarial panels, Gemini review, `/dr:pr`, the W
 
 This rule exists because deferred findings compound: the next session inherits stale context, the fix is harder without the original reasoning, and PR review history becomes misleading.
 
+### Pre-existing debt discovered during a session (no carry-forward)
+
+When a session discovers pre-existing failures (tests, lint, typecheck, or any gate red on the baseline before the session's changes) — whether surfaced by a review panel, the mandatory gate, or ad-hoc investigation — they are **not** silently handed to the next session. The session that finds them MUST do one of the following before it ends:
+
+1. **Fix now** — remediate the pre-existing failure in this session, even if it falls outside the session's primary workstream; OR
+2. **Split as a legitimate scope split** — explicitly named, with a tracked follow-up workstream (`dev-docs/workstreams/<name>/README.md`) created in THIS session, and documented in the decisions-ledger before the PR is submitted; OR
+3. **Escalate to the user** — if the fix is architecturally entangled or requires a decision the agent cannot make.
+
+A remediation prompt written for "the next session" does NOT satisfy this rule. "We finish what we start" means the debt is resolved (fixed, split, or escalated) before the session closes — never carried forward silently. The next session must inherit a clean ledger, not a backlog of "fix this later" notes.
+
 ## Post-Phase Integrated Adversarial Review (mandatory)
 
 Per-task adversarial panels verify each task in isolation. They **cannot** catch cross-task
