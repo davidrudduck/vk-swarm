@@ -2,7 +2,7 @@
 id: "702"
 phase: 7
 title: Cutover guard — MUST-MIGRATE tables round-trip with id bridge intact + status remapped
-status: ready
+status: done
 depends_on: ["701"]
 parallel: false
 conflicts_with: []

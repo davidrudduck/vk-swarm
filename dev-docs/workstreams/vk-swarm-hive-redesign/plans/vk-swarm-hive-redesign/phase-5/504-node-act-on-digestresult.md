@@ -2,7 +2,7 @@
 id: "504"
 phase: 5
 title: Node acts on DigestResult — re-stream from resend_from_seq + pull via reconcile leg
-status: ready
+status: done
 depends_on: ["501", "502"]
 parallel: false
 conflicts_with: ["501"]

@@ -2,7 +2,7 @@
 id: "404"
 phase: 4
 title: Handle task.reassigned in the activity processor — no dropped event types
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: ["402"]
