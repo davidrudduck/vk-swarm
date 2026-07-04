@@ -10,6 +10,10 @@ files:
   - frontend/src/pages/Nodes.tsx
   - remote-frontend/src/pages/Nodes.tsx
   - remote-frontend/src/AppRouter.tsx
+  - remote-frontend/src/lib/api/organizations.ts
+  - remote-frontend/src/hooks/useOrganizations.ts
+  - remote-frontend/src/lib/api/index.ts
+  - remote-frontend/src/pages/Nodes.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/pages/Nodes.test.tsx"
 allowed_change: create

@@ -13,6 +13,9 @@ export {
 // Nodes API (swarm/hive architecture)
 export { nodesApi } from './nodes';
 
+// Organizations API
+export { organizationsApi } from './organizations';
+
 // Swarm Projects API
 export { swarmProjectsApi } from './swarmProjects';
 

@@ -1,5 +1,5 @@
 import { createBrowserRouter, RouterProvider, Navigate, useSearchParams } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { useProfile } from '@/components/ProfileProvider'
 import { NormalLayout } from '@/components/layout/NormalLayout'
 import InvitationPage from './pages/InvitationPage'
@@ -10,6 +10,8 @@ import { retrieveVerifier, clearVerifier } from '@/pkce'
 import type { OAuthProvider } from '@/api'
 import { generateVerifier, generateChallenge, storeVerifier } from '@/pkce'
 import { initOAuth } from '@/api'
+
+const Nodes = lazy(() => import('./pages/Nodes').then(m => ({ default: m.Nodes })))
 
 function RootRedirect() {
   const { isSignedIn, isLoaded } = useProfile()
@@ -145,14 +147,6 @@ function OAuthCallbackPage() {
   )
 }
 
-function NodesContent() {
-  return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold">Nodes (coming in phase 2)</h1>
-    </div>
-  )
-}
-
 function TasksContent() {
   return (
     <div className="p-4">
@@ -171,7 +165,7 @@ export function createRoutes() {
     {
       element: <NormalLayout />,
       children: [
-        { path: '/nodes', element: <NodesContent /> },
+        { path: '/nodes', element: <Suspense fallback={<div className="p-8">Loading nodes...</div>}><Nodes /></Suspense> },
         { path: '/tasks', element: <TasksContent /> },
         { path: '*', element: <NotFoundPage /> },
       ],
