@@ -2,7 +2,7 @@
 id: "201"
 phase: 2
 title: "Rehost setup: add @/* and shared/* path aliases + copy shared types into remote-frontend"
-status: ready
+status: done
 depends_on: ["106"]
 parallel: false
 conflicts_with: []
