@@ -67,6 +67,9 @@ top of the existing auth shell. The node frontend is untouched (HA fallback).
 - **US5:** As an operator, when I sign into the hive console, I expect the existing auth shell
   (from `vk-swarm-hive-ui` phase 1) wrapped in the Midnight Terminal chrome (Navbar with logo,
   theme toggle, nav tabs).
+- **US6:** As an operator, during a hive outage, I expect the node frontend's existing UI to keep
+  working as the HA fallback — the design system lands in the hive only, the node frontend is
+  untouched.
 
 ## Success criteria
 
@@ -100,7 +103,7 @@ top of the existing auth shell. The node frontend is untouched (HA fallback).
   Midnight Terminal chrome — the existing AppRouter/NormalLayout/Navbar is restyled or replaced
   with the design system's Chrome. → US5
 - **SC9:** The node frontend (`frontend/`) is **unmodified** — no regression to the HA fallback.
-  → (gap-analysis finding 11/12: NodeCard/StatusBadge in node frontend stay as-is)
+  → US6
 
 ## Constraints
 
