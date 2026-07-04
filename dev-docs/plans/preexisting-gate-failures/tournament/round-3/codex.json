@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "codex",
+    "exec",
+    "-C",
+    "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river",
+    "--sandbox",
+    "read-only",
+    "-c",
+    "model_reasoning_effort=high",
+    "--json",
+    "-"
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river",
+  "exit_code": 0,
+  "finished_at": "2026-07-04T03:36:25.198132+00:00",
+  "notes": [],
+  "prompt_file": "/tmp/opencode/plan-adherence-codex.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river/docs/plans/preexisting-gate-failures/tournament/round-3/codex.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river/.agents/reports/2026-07-04-adversarial-round-3-codex-plan-adherence.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-04T03:30:17.900394+00:00",
+  "status": "ok",
+  "task": "codebase-review",
+  "tool": "codex",
+  "tool_version": "codex-cli 0.142.5"
+}

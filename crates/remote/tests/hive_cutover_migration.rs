@@ -1,6 +1,11 @@
 //! SC6 / TS6 — seed → run the cutover SQL → assert: REGENERABLE + DISCARDABLE rows are cleared (schema
 //! kept), MUST-MIGRATE rows (incl. the active assignment) survive, completed assignments are purged.
 //! (702 round-trips the id-bridge + status; 703 the regenerable re-ingest into the surviving tables.)
+//!
+//! Both tests use `file_serial` because they run `TRUNCATE TABLE` (acquiring `ACCESS EXCLUSIVE`
+//! locks) on tables that other test binaries (backfill_e2e) access concurrently. File-based
+//! serialization prevents cross-binary lock conflicts on the shared Postgres test DB.
+use serial_test::file_serial;
 use sqlx::PgPool;
 
 // Inlined verbatim from crates/remote/tests/backfill_e2e.rs (no shared `common` module exists).
@@ -29,6 +34,7 @@ where
 }
 
 #[tokio::test]
+#[file_serial]
 async fn cutover_seed_run_clears_regenerable_discardable_keeps_must_migrate() {
     skip_without_db!(); // Trap 2b: a real migrated PG MUST be set or this is a hollow pass
     let pool = create_pool().await;
@@ -112,6 +118,7 @@ async fn cutover_seed_run_clears_regenerable_discardable_keeps_must_migrate() {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn cutover_keeps_regenerable_and_discardable_tables_present() {
     // Regression guard: the cutover must NOT DROP these tables (data-clear, not drop) — a DROP would
     // break surviving query refs + the re-ingest path. Asserts a STABLE IDENTITY (table OID), not just

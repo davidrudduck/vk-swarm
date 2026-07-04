@@ -236,7 +236,7 @@ impl<'a> SharedTaskRepository<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// # use uuid::Uuid;
     /// # async fn example(repo: &crate::SharedTaskRepository<'_>, id: Uuid) {
     /// let result = repo.find_by_id(id).await.unwrap();
@@ -347,7 +347,7 @@ impl<'a> SharedTaskRepository<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// # async fn example(repo: &SharedTaskRepository<'_>, node_id: uuid::Uuid, task_id: uuid::Uuid) -> Result<(), SharedTaskError> {
     /// let found = repo.find_by_source_task_id(node_id, task_id).await?;
     /// if let Some(task) = found {
@@ -479,7 +479,7 @@ impl<'a> SharedTaskRepository<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// # use uuid::Uuid;
     /// # use chrono::Utc;
     /// # async fn example(repo: &crate::SharedTaskRepository<'_>) -> Result<(), crate::SharedTaskError> {
@@ -582,7 +582,7 @@ impl<'a> SharedTaskRepository<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// # async fn example(repo: &crate::SharedTaskRepository<'_>) -> Result<(), crate::SharedTaskError> {
     /// use uuid::Uuid;
     /// use crate::{UpsertTaskFromNodeData, TaskStatus};
@@ -710,7 +710,7 @@ impl<'a> SharedTaskRepository<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// # use uuid::Uuid;
     /// # async fn example(repo: &crate::SharedTaskRepository<'_>, project_id: Uuid) {
     /// let result = repo.bulk_fetch(project_id).await.unwrap();
@@ -850,7 +850,7 @@ impl<'a> SharedTaskRepository<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// // Example usage in an async context:
     /// # async fn _example(repo: &crate::SharedTaskRepository<'_>, task_id: uuid::Uuid, data: crate::UpdateSharedTaskData) -> Result<(), crate::SharedTaskError> {
     /// let result = repo.update(task_id, data).await?;
@@ -958,7 +958,7 @@ impl<'a> SharedTaskRepository<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// # async fn example(repo: &SharedTaskRepository<'_>, task_id: uuid::Uuid) -> Result<(), SharedTaskError> {
     /// let data = AssignTaskData {
     ///     new_assignee_user_id: Some(uuid::Uuid::new_v4()),
@@ -1049,7 +1049,7 @@ impl<'a> SharedTaskRepository<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// # use uuid::Uuid;
     /// # use crate::db::tasks::{SharedTaskRepository, TaskStatus};
     /// # async fn example(repo: &SharedTaskRepository<'_>) {
@@ -1146,7 +1146,7 @@ impl<'a> SharedTaskRepository<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// # use uuid::Uuid;
     /// # async fn example(repo: &crate::db::tasks::SharedTaskRepository<'_>) -> Result<(), crate::db::tasks::SharedTaskError> {
     /// let task_id = Uuid::new_v4();

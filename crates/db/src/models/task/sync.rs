@@ -648,8 +648,10 @@ impl Task {
     /// # Examples
     ///
     /// ```
-    /// # async fn _example(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
-    /// let unsynced = crate::models::task::Task::count_unsynced(pool).await?;
+    /// # use sqlx::SqlitePool;
+    /// # use db::models::task::Task;
+    /// # async fn _example(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    /// let unsynced = Task::count_unsynced(pool).await?;
     /// assert!(unsynced >= 0);
     /// # Ok(()) }
     /// ```
@@ -675,10 +677,11 @@ impl Task {
     /// ```no_run
     /// # use sqlx::SqlitePool;
     /// # use uuid::Uuid;
+    /// # use db::models::task::Task;
     /// # async fn example() -> Result<(), sqlx::Error> {
     /// let pool = SqlitePool::connect("sqlite::memory:").await?;
     /// let project_id = Uuid::new_v4();
-    /// let tasks = crate::models::task::Task::find_synced_tasks_for_project(&pool, project_id).await?;
+    /// let tasks = Task::find_synced_tasks_for_project(&pool, project_id).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -749,9 +752,10 @@ impl Task {
     ///
     /// ```
     /// # use sqlx::SqlitePool;
+    /// # use db::models::task::Task;
     /// # async fn _example() -> Result<(), sqlx::Error> {
     /// let pool = SqlitePool::connect(":memory:").await?;
-    /// let tasks = crate::models::task::Task::find_needing_resync(&pool, 50).await?;
+    /// let tasks = Task::find_needing_resync(&pool, 50).await?;
     /// // `tasks` is a Vec<Task> of records needing resync (may be empty).
     /// # Ok(()) }
     /// ```

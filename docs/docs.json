@@ -96,6 +96,8 @@
       {
         "group": "Architecture",
         "pages": [
+          "development/dev-server-lifecycle",
+          "development/testing",
           "architecture/ui-responsive-design",
           "architecture/frontend/file-viewer-components",
           "architecture/storage-paths",
