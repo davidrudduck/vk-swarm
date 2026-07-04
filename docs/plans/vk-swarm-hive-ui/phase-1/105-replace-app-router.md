@@ -2,7 +2,7 @@
 id: "105"
 phase: 1
 title: "Hive app shell: replace 4-page auth stub AppRouter with full console route tree"
-status: ready
+status: done
 depends_on: ["101", "102", "103", "104"]
 parallel: false
 conflicts_with: []
