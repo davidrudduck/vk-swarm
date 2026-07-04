@@ -8,10 +8,15 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/src/components/swarm/
+  - remote-frontend/src/components/labels/
+  - remote-frontend/src/components/ui/
+  - remote-frontend/src/hooks/
   - remote-frontend/src/lib/api/nodes.ts
   - remote-frontend/src/lib/api/swarmProjects.ts
   - remote-frontend/src/lib/api/swarmLabels.ts
   - remote-frontend/src/lib/api/swarmTemplates.ts
+  - remote-frontend/src/lib/api/templates.ts
+  - remote-frontend/src/lib/api/index.ts
   - remote-frontend/src/types/nodes.ts
   - remote-frontend/src/types/swarm.ts
   - remote-frontend/src/components/swarm/index.test.tsx
@@ -51,8 +56,8 @@ Copy the following files from `frontend/src/` to `remote-frontend/src/` (verbati
 - **API base URL adjustment (DO NOT change `/api/` — adjust to `/v1/` instead):** the node `nodesApi.list(orgId)` calls `GET /api/nodes?organization_id=...`. The hive routes nest under `/v1` (`crates/remote/src/routes/mod.rs:112-113`). Edit the copied `nodes.ts`, `swarmProjects.ts`, `swarmLabels.ts`, `swarmTemplates.ts` to use `/v1/` prefixes instead of `/api/`. Record the exact before/after for each file in the ledger.
 
 ## Allowed moves
-- Create files under `remote-frontend/src/{components/swarm,lib/api,types}/`.
-- Read-only reference to `frontend/src/components/swarm/*`, `frontend/src/types/*`.
+- Create files under `remote-frontend/src/{components/swarm,components/labels,components/ui,lib/api,types,hooks}/`.
+- Read-only reference to `frontend/src/{components/swarm,components/labels,components/ui,hooks,lib/api,types}/*` for the copy sources.
 
 ## STOP triggers
 - If any copied component imports from a path NOT covered by `@/*`, `shared/*`, or relative — STOP, copy the missing dependency, record in ledger.
