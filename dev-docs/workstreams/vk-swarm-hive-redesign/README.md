@@ -6,8 +6,8 @@ title: "Phase 2b — rebuild hive as hub-and-spoke central management (after nod
 depends_on: [vk-swarm-node-foundations]
 adrs: [0007, 0008, 0009, 0010, 0011]
 staging_pointers:
-  - docs/plans/vk-swarm-hive-redesign
-  - docs/superpowers/specs/2026-06-26-vk-swarm-hive-redesign.md
+  - dev-docs/workstreams/vk-swarm-hive-redesign/plans/vk-swarm-hive-redesign
+  - dev-docs/workstreams/vk-swarm-hive-redesign/spec/2026-06-26-vk-swarm-hive-redesign.md
 ---
 
 # vk-swarm-hive-redesign
