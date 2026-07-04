@@ -8,10 +8,11 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/src/pages/Tasks.tsx
+  - remote-frontend/src/pages/Tasks.test.tsx
   - remote-frontend/src/AppRouter.tsx
 irreversible: false
 scope_test: "remote-frontend/src/pages/Tasks.test.tsx"
-allowed_change: edit
+allowed_change: mixed
 covers_criteria: [SC2, SC5]
 ---
 ## Failing test (write first)

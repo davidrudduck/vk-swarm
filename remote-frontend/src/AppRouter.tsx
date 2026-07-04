@@ -12,6 +12,7 @@ import { generateVerifier, generateChallenge, storeVerifier } from '@/pkce'
 import { initOAuth } from '@/api'
 
 const Nodes = lazy(() => import('./pages/Nodes').then(m => ({ default: m.Nodes })))
+const TasksBoard = lazy(() => import('./pages/Tasks').then(m => ({ default: m.TasksBoard })))
 
 function RootRedirect() {
   const { isSignedIn, isLoaded } = useProfile()
@@ -147,13 +148,7 @@ function OAuthCallbackPage() {
   )
 }
 
-function TasksContent() {
-  return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold">Tasks (coming in phase 3)</h1>
-    </div>
-  )
-}
+
 
 export function createRoutes() {
   return [
@@ -166,7 +161,7 @@ export function createRoutes() {
       element: <NormalLayout />,
       children: [
         { path: '/nodes', element: <Suspense fallback={<div className="p-8">Loading nodes...</div>}><Nodes /></Suspense> },
-        { path: '/tasks', element: <TasksContent /> },
+        { path: '/tasks', element: <Suspense fallback={<div className="p-8">Loading tasks...</div>}><TasksBoard /></Suspense> },
         { path: '*', element: <NotFoundPage /> },
       ],
     },

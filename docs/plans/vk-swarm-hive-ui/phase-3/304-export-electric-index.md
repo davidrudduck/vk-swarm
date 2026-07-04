@@ -2,7 +2,7 @@
 id: "304"
 phase: 3
 title: Export 3 new collections + types from electric/index.ts
-status: ready
+status: done
 depends_on: ["301", "302", "303"]
 parallel: false
 conflicts_with: []
