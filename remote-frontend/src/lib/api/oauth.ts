@@ -1,4 +1,4 @@
-import { makeRequest, handleApiResponse } from './utils';
+import { makeRequest, ApiError } from './utils';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -29,7 +29,14 @@ export const oauthApi = {
       }),
     });
 
-    return handleApiResponse<HandoffInitResponse>(response);
+    if (!response.ok) {
+      throw new ApiError(
+        `oauth init failed: ${response.status}`,
+        response.status,
+        response
+      );
+    }
+    return (await response.json()) as HandoffInitResponse;
   },
 
   async redeem(
@@ -46,7 +53,14 @@ export const oauthApi = {
       }),
     });
 
-    return handleApiResponse<HandoffRedeemResponse>(response);
+    if (!response.ok) {
+      throw new ApiError(
+        `oauth redeem failed: ${response.status}`,
+        response.status,
+        response
+      );
+    }
+    return (await response.json()) as HandoffRedeemResponse;
   },
 
   async logout(): Promise<void> {

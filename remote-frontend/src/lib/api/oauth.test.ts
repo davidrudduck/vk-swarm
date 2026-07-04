@@ -49,10 +49,7 @@ describe('OAuth API', () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: async () => ({
-        success: true,
-        data: mockResponse,
-      }),
+      json: async () => mockResponse,
       url: 'http://localhost/v1/oauth/web/init',
     } as Response);
 
@@ -83,10 +80,7 @@ describe('OAuth API', () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: async () => ({
-        success: true,
-        data: mockResponse,
-      }),
+      json: async () => mockResponse,
       url: 'http://localhost/v1/oauth/web/redeem',
     } as Response);
 
@@ -149,10 +143,7 @@ describe('OAuth API', () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: async () => ({
-        success: true,
-        data: mockResponse,
-      }),
+      json: async () => mockResponse,
       url: 'http://localhost/v1/profile',
     } as Response);
 
@@ -164,5 +155,19 @@ describe('OAuth API', () => {
     expect((call[1].headers as Headers).get('Authorization')).toBe('Bearer test-token-abc');
 
     expect(result).toEqual(mockResponse);
+  });
+
+  it('oauthApi.init() throws ApiError when response.ok is false', async () => {
+    const mockFetch = vi.mocked(g.fetch) as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: async () => ({ message: 'bad challenge' }),
+      url: 'http://localhost/v1/oauth/web/init',
+    } as Response);
+
+    await expect(
+      oauthApi.init('github', 'http://localhost/callback', 'invalid-challenge')
+    ).rejects.toThrow();
   });
 });

@@ -1,4 +1,4 @@
-import { makeRequest, handleApiResponse } from './utils';
+import { makeRequest, ApiError } from './utils';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -31,6 +31,13 @@ export const profileApi = {
       },
     });
 
-    return handleApiResponse<ProfileResponse>(response);
+    if (!response.ok) {
+      throw new ApiError(
+        `profile fetch failed: ${response.status}`,
+        response.status,
+        response
+      );
+    }
+    return (await response.json()) as ProfileResponse;
   },
 };
