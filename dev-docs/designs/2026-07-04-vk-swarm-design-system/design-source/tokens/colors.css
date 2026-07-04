@@ -1,0 +1,156 @@
+/* ==========================================================================
+   VK-Swarm — "Midnight Terminal" color system
+   Source of truth: frontend/tailwind.config.js + frontend/src/styles/index.css
+   in davidrudduck/vk-swarm. Values are HSL channels exposed both as raw
+   `<h> <s>% <l>%` triplets (for hsl(var(--x) / a) composition) and as
+   ready-to-use hex aliases.
+   ========================================================================== */
+
+:root {
+  /* --- Raw HSL channel triplets (compose with hsl(var(--x) / <alpha>)) --- */
+  --vks-void-hsl: 240 33% 15%; /* @kind color */
+  --vks-surface-hsl: 240 18% 19%; /* @kind color */
+  --vks-surface-bright-hsl: 240 14% 22%; /* @kind color */
+  --vks-cyan-hsl: 193 100% 50%; /* @kind color */
+  --vks-amber-hsl: 43 100% 50%; /* @kind color */
+  --vks-emerald-hsl: 152 100% 50%; /* @kind color */
+  --vks-coral-hsl: 0 100% 71%; /* @kind color */
+  --vks-violet-hsl: 270 91% 65%; /* @kind color */
+  --vks-text-hsl: 240 6% 90%; /* @kind color */
+  --vks-text-muted-hsl: 240 4% 46%; /* @kind color */
+  --vks-text-dim-hsl: 240 3% 26%; /* @kind color */
+
+  /* --- Brand surfaces (hex) — lifted off pure black so the dark theme reads
+     as "midnight", not "void". (Console/terminal stays true-black below.) --- */
+  --vks-void: #1a1a33;
+  --vks-surface: #282839;
+  --vks-surface-bright: #303040;
+
+  /* --- Accent ramp (hex) --- */
+  --vks-cyan: #00d4ff;
+  --vks-amber: #ffb800;
+  --vks-emerald: #00ff88;
+  --vks-coral: #ff6b6b;
+  --vks-violet: #a855f7;
+
+  /* --- Text (hex) --- */
+  --vks-text: #e4e4e7;
+  --vks-text-muted: #71717a;
+  --vks-text-dim: #3f3f46;
+
+  /* ----------------------------------------------------------------------
+     Semantic aliases — reach for these in product UI, not raw brand names.
+     ---------------------------------------------------------------------- */
+  --background: var(--vks-void);
+  --foreground: var(--vks-text);
+
+  --surface-card: var(--vks-surface);
+  --surface-raised: var(--vks-surface-bright);
+  --surface-overlay: color-mix(in srgb, var(--vks-void) 80%, transparent);
+
+  --text-body: var(--vks-text);
+  --text-muted: var(--vks-text-muted);
+  --text-dim: var(--vks-text-dim);
+  --text-on-accent: var(--vks-void);
+
+  --primary: var(--vks-cyan);
+  --primary-foreground: var(--vks-void);
+  --accent: var(--vks-violet);
+  --accent-foreground: var(--vks-text);
+
+  --border: var(--vks-surface-bright);
+  --border-strong: #3f3f55;
+  --input: var(--vks-surface);
+  --ring: var(--vks-cyan);
+
+  /* Semantic feedback */
+  --success: var(--vks-emerald);
+  --success-foreground: var(--vks-void);
+  --warning: var(--vks-amber);
+  --warning-foreground: var(--vks-void);
+  --danger: var(--vks-coral);
+  --danger-foreground: var(--vks-void);
+  --info: var(--vks-cyan);
+  --info-foreground: var(--vks-void);
+
+  /* ----------------------------------------------------------------------
+     Kanban task-status palette (board columns + card strips)
+     todo → neutral · inprogress → blue · inreview → amber · done → emerald
+     cancelled → coral
+     ---------------------------------------------------------------------- */
+  --status-todo: #a1a1aa;
+  --status-inprogress: #3b82f6;
+  --status-inreview: var(--vks-amber);
+  --status-done: var(--vks-emerald);
+  --status-cancelled: var(--vks-coral);
+
+  /* Console / terminal — stays true-black in BOTH themes (log viewers read best
+     on near-black), independent of the lifted brand surfaces above. */
+  --console-bg: #0a0a0f;
+  --console-fg: var(--vks-text);
+  --console-muted: var(--vks-text-muted);
+  --console-success: var(--vks-emerald);
+  --console-error: var(--vks-coral);
+  --console-accent: var(--vks-cyan);
+}
+
+/* Re-assert dark scheme when a dark region is nested inside a light one. */
+[data-theme='dark'],
+.theme-dark {
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   LIGHT MODE — opt in via [data-theme="light"] or .theme-light on a wrapper
+   (or <html>). Clean cool-paper surfaces; cyan deepened to a teal so it holds
+   AA contrast on white. Brand identity stays dark-first; this is the alternate.
+   The console/terminal tokens intentionally remain dark.
+   ========================================================================== */
+[data-theme='light'],
+.theme-light {
+  color-scheme: light;
+
+  --background: #f5f6f9;
+  --foreground: #15171c;
+
+  --surface-card: #ffffff;
+  --surface-raised: #eceef3;
+  --surface-overlay: color-mix(in srgb, #15171c 40%, transparent);
+
+  --text-body: #15171c;
+  --text-muted: #5b6271;
+  --text-dim: #99a0ad;
+  --text-on-accent: #ffffff;
+
+  /* Cyan is too light on white — use a deepened teal for primary fills/text. */
+  --primary: #0091b5;
+  --primary-foreground: #ffffff;
+  --accent: #7c3aed;
+  --accent-foreground: #ffffff;
+
+  --border: #e2e5ea;
+  --border-strong: #ccd1da;
+  --input: #ffffff;
+  --ring: #0091b5;
+
+  --success: #0a8f57;
+  --success-foreground: #ffffff;
+  --warning: #b06f00;
+  --warning-foreground: #ffffff;
+  --danger: #d23b3b;
+  --danger-foreground: #ffffff;
+  --info: #0091b5;
+  --info-foreground: #ffffff;
+
+  /* Status hues deepened for legibility on light surfaces. */
+  --status-todo: #6b7280;
+  --status-inprogress: #2563eb;
+  --status-inreview: #b06f00;
+  --status-done: #0a8f57;
+  --status-cancelled: #d23b3b;
+}
+
+/* To follow the OS preference automatically, set the theme from JS on load:
+   document.documentElement.dataset.theme =
+     matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+   (kept out of CSS so every token resolves under :root or a [data-theme] scope.) */

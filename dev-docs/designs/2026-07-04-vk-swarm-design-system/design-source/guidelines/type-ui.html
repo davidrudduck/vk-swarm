@@ -1,0 +1,21 @@
+<!-- @dsCard group="Type" viewport="700x220" name="UI — Inter" subtitle="Interface text across the product" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 24px; font-family: var(--font-ui); }
+  .row { display: flex; align-items: baseline; gap: 14px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+  .row:last-child { border-bottom: 0; }
+  .spec { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-dim); width: 130px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+  <div class="row"><span style="font-size:var(--text-xl);font-weight:600">Section heading</span><span class="spec">xl · 18 / 600</span></div>
+  <div class="row"><span style="font-size:var(--text-lg);font-weight:600">Card title</span><span class="spec">lg · 16 / 600</span></div>
+  <div class="row"><span style="font-size:var(--text-base)">Body — default interface text</span><span class="spec">base · 14 / 400</span></div>
+  <div class="row"><span style="font-size:var(--text-sm);color:var(--text-muted)">Secondary / muted label</span><span class="spec">sm · 12 / 400</span></div>
+  <div class="row"><span style="font-size:var(--text-xs);color:var(--text-muted)">Caption & metadata</span><span class="spec">xs · 10 / 400</span></div>
+</body>
+</html>

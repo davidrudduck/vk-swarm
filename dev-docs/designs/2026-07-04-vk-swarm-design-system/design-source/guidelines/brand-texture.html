@@ -1,0 +1,70 @@
+<!-- @dsCard group="Brand" viewport="700x230" name="Backdrops" subtitle="ANSI/BBS textures for empty states & hero panels" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 18px; background: var(--vks-void); }
+  .grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; }
+  .panel {
+    position: relative; height: 168px; border: 2px solid var(--vks-cyan);
+    border-radius: 6px; overflow: hidden;
+    box-shadow: 0 0 18px -6px hsl(var(--vks-cyan-hsl) / 0.45), inset 0 0 50px -22px hsl(var(--vks-cyan-hsl) / 0.3);
+  }
+  .panel.small { border-color: var(--border-strong); box-shadow: none; }
+  /* the hero shade-block field, drawn with real ANSI chars */
+  .ansi-field {
+    position: absolute; inset: 0; margin: 0; color: hsl(var(--vks-cyan-hsl) / 0.32);
+    font-family: var(--font-code); font-size: 13px; line-height: 0.92;
+    white-space: pre; user-select: none; overflow: hidden;
+    -webkit-mask-image: radial-gradient(120% 100% at 50% 50%, transparent 18%, #000 62%);
+            mask-image: radial-gradient(120% 100% at 50% 50%, transparent 18%, #000 62%);
+  }
+  .tag {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    font-family: var(--font-code); font-size: 12px; letter-spacing: 0.06em;
+    color: var(--vks-cyan); background: color-mix(in srgb, var(--vks-void) 78%, transparent);
+    border: 1px solid hsl(var(--vks-cyan-hsl) / 0.5); padding: 6px 12px; border-radius: 4px;
+    text-shadow: 0 0 8px hsl(var(--vks-cyan-hsl) / 0.5); white-space: nowrap;
+  }
+  .cap {
+    position: absolute; left: 8px; bottom: 7px; font-family: var(--font-code);
+    font-size: 9.5px; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+    color: var(--text-muted); background: color-mix(in srgb, var(--vks-void) 70%, transparent);
+    padding: 2px 6px; border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <!-- Hero: real ANSI shade-block dither + scanlines -->
+    <div class="panel vks-scanlines">
+<pre class="ansi-field">░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░
+▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓
+░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒
+▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓░▒
+░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░
+▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓
+░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒
+▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒
+░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░
+▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░
+░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒
+▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓▒░░▒░▓░▒░░▒▓░▒░░▒░▓░▒</pre>
+      <span class="tag">▓▒░ EMPTY · DROP A TASK HERE ░▒▓</span>
+      <span class="cap">.vks-ansi-dither + .vks-scanlines</span>
+    </div>
+
+    <!-- Half-block weave -->
+    <div class="panel small vks-ansi-weave">
+      <span class="cap">.vks-ansi-weave</span>
+    </div>
+
+    <!-- Character-cell grid -->
+    <div class="panel small vks-ansi-grid">
+      <span class="cap">.vks-ansi-grid</span>
+    </div>
+  </div>
+</body>
+</html>
