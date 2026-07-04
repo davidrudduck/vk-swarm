@@ -31,7 +31,7 @@ Uses `createMemoryRouter` (or `render` with a MemoryRouter) to test routes:
   - **After:** a full route tree:
     - `/` — index, redirects to `/nodes` if authenticated, `/login` if not.
     - `/login` — OAuth provider picker page (uses `oauthApi.init` from task 102).
-    - `/oauth/callback` — OAuth callback handler (calls `oauthApi.redeem` then redirects to `/nodes`).
+    - `/oauth/callback` — OAuth callback handler: reads `handoff_id`, `app_code` (the authorization code returned by the provider), and the stored PKCE `app_verifier` from the location (query string or router state — record which in the ledger); calls `oauthApi.redeem(handoffId, appCode, appVerifier)`; stores the returned `access_token` via `localStorage.setItem('access_token', token)`; then redirects to `/nodes` (or `returnTo` if present). On redeem failure → redirect to `/login` with an error query param.
     - `/invitations/:id` — `InvitationPage` (preserved from auth stub).
     - `/invitations/:id/complete` — `InvitationCompletePage` (preserved).
     - `/nodes` — lazy `Nodes` page (rehosted in phase 2; for now a placeholder `<div>Nodes (coming in phase 2)</div>` is fine — the route exists so the shell is testable).

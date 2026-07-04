@@ -25,8 +25,8 @@ File: `remote-frontend/src/lib/api/oauth.test.ts`
 Tests mock global `fetch` and assert:
 1. `oauthApi.init(provider, returnTo, appChallenge)` POSTs `/v1/oauth/web/init` with `{ provider, return_to: returnTo, app_challenge: appChallenge }` and returns `HandoffInitResponse` shape `{ handoff_id: string, authorize_url: string }`.
 2. `oauthApi.redeem(handoffId, appCode, appVerifier)` POSTs `/v1/oauth/web/redeem` with `{ handoff_id: handoffId, app_code: appCode, app_verifier: appVerifier }` and returns `HandoffRedeemResponse` shape `{ access_token: string, refresh_token: string }`.
-3. `oauthApi.logout()` POSTs `/v1/oauth/logout` with credentials.
-4. `profileApi.get()` GETs `/v1/profile` and returns `ProfileResponse` (with nullable `username` + nullable `ProviderProfile` fields per `crates/utils/src/api/oauth.rs:49-63`).
+3. `oauthApi.logout()` POSTs `/v1/oauth/logout` with `Authorization: Bearer <localStorage.getItem('access_token')>` and then clears `localStorage.removeItem('access_token')`.
+4. `profileApi.get()` GETs `/v1/profile` with `Authorization: Bearer <localStorage.getItem('access_token')>` (NOT `credentials: include` — the hive uses Bearer token auth, see task 101 "Token storage contract") and returns `ProfileResponse` (with nullable `username` + nullable `ProviderProfile` fields per `crates/utils/src/api/oauth.rs:49-63`).
 
 **Contract source:** `crates/utils/src/api/oauth.rs:7-33` defines `HandoffInitRequest{provider, return_to, app_challenge}`, `HandoffInitResponse{handoff_id, authorize_url}`, `HandoffRedeemRequest{handoff_id, app_code, app_verifier}`, `HandoffRedeemResponse{access_token, refresh_token}`. The existing `remote-frontend/src/api.ts:13-21,37-55` already implements this correctly — read it as the reference sibling. The `/v1` prefix is required (`crates/remote/src/routes/mod.rs:112-113`).
 
@@ -38,14 +38,14 @@ Tests mock global `fetch` and assert:
 
 - **File:** `remote-frontend/src/lib/api/profile.ts` (CREATE)
   - **Before:** (file does not exist)
-  - **After:** `profileApi.get()` → `GET /v1/profile` (credentials: include). Returns `ProfileResponse`. Uses `makeRequest`/`handleApiResponse` from `./utils`.
+  - **After:** `profileApi.get()` → `GET /v1/profile` with header `Authorization: Bearer <localStorage.getItem('access_token')>` (NOT `credentials: include` — the hive auth middleware reads only the Bearer header, `crates/remote/src/auth/middleware.rs:46-53`). Returns `ProfileResponse`. Uses `makeRequest`/`handleApiResponse` from `./utils`.
 
 - **File:** `remote-frontend/src/lib/api/oauth.ts` (CREATE)
   - **Before:** (file does not exist)
   - **After:** `oauthApi` namespace with:
     - `init(provider: string, returnTo: string, appChallenge: string)` → POST `/v1/oauth/web/init` body `{ provider, return_to: returnTo, app_challenge: appChallenge }` → returns `{ handoff_id: string, authorize_url: string }`.
     - `redeem(handoffId: string, appCode: string, appVerifier: string)` → POST `/v1/oauth/web/redeem` body `{ handoff_id: handoffId, app_code: appCode, app_verifier: appVerifier }` → returns `{ access_token: string, refresh_token: string }`.
-    - `logout()` → POST `/v1/oauth/logout` (credentials: include).
+    - `logout()` → POST `/v1/oauth/logout` with header `Authorization: Bearer <localStorage.getItem('access_token')>`; on success (or any outcome) clear `localStorage.removeItem('access_token')` (the session is gone client-side regardless of server response).
   - **Sibling alignment:** Read `frontend/src/lib/api/oauth.ts`. It targets the NODE server (`/api/auth/handoff/init`, `/api/auth/status`, `/api/auth/logout`). The hive client targets the HIVE server (`/v1/oauth/web/init`, `/v1/oauth/web/redeem`, `/v1/oauth/logout`) — different paths, different request bodies (`app_challenge`/`app_verifier` not `code`/`state`), different response bodies (`handoff_id`/`authorize_url`/`access_token`/`refresh_token` not `redirect_url`/`profile`). Record all divergences in the ledger. `status()` is dropped (the hive has no `/oauth/status`; login state is derived from `/v1/profile` fetch success in task 101). ALSO read `remote-frontend/src/api.ts:13-55` — it already implements the correct PKCE handoff contract; this task extracts it into `lib/api/oauth.ts` and re-exports from `api.ts` for backwards compat.
 
 - **File:** `remote-frontend/src/api.ts` (EDIT — absorb)
