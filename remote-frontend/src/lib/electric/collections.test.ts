@@ -20,6 +20,7 @@ import {
   createNodesCollection,
   createProjectsCollection,
   createNodeProjectsCollection,
+  createTaskAssignmentsCollection,
   type ElectricCollectionConfig,
 } from './collections';
 import { createCollection } from '@tanstack/react-db';
@@ -101,6 +102,30 @@ describe('Electric Collections', () => {
       expect(config.getKey({ id: 'node-project-uuid' })).toBe(
         'node-project-uuid'
       );
+    });
+  });
+
+  describe('createTaskAssignmentsCollection', () => {
+    it('creates a collection with correct shape URL', () => {
+      const collection = createTaskAssignmentsCollection();
+
+      expect(electricCollectionOptions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          shapeOptions: expect.objectContaining({
+            url: '/api/electric/v1/shape/node_task_assignments',
+          }),
+        })
+      );
+      expect(createCollection).toHaveBeenCalled();
+      expect(collection).toBeDefined();
+    });
+
+    it('uses id as the key extractor', () => {
+      createTaskAssignmentsCollection();
+
+      const config = (electricCollectionOptions as ReturnType<typeof vi.fn>)
+        .mock.calls[0][0] as ElectricCollectionConfig<{ id: string }>;
+      expect(config.getKey({ id: 'assignment-uuid' })).toBe('assignment-uuid');
     });
   });
 });

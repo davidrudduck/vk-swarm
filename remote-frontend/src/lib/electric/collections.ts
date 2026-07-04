@@ -119,3 +119,30 @@ export function createNodeProjectsCollection() {
     })
   );
 }
+
+export type ElectricTaskAssignment = ElectricRow & {
+  id: string;
+  task_id: string;
+  node_id: string;
+  node_project_id: string;
+  local_task_id: string | null;
+  local_attempt_id: string | null;
+  execution_status: string;
+  assigned_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  lease_expires_at: string | null;
+  fencing_token: number;
+};
+
+export function createTaskAssignmentsCollection() {
+  return createCollection(
+    electricCollectionOptions<ElectricTaskAssignment>({
+      shapeOptions: {
+        url: createShapeUrl('node_task_assignments'),
+      },
+      getKey: (item) => item.id,
+    })
+  );
+}
