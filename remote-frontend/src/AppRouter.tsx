@@ -83,30 +83,29 @@ function LoginPage() {
 
 function OAuthCallbackPage() {
   const [searchParams] = useSearchParams()
-  const [error, setError] = useState<string | null>(null)
   const [isRedirecting, setIsRedirecting] = useState(false)
 
   useEffect(() => {
     const completeOAuth = async () => {
       const handoffId = searchParams.get('handoff_id')
-      const appCode = searchParams.get('code')
+      const appCode = searchParams.get('app_code')
       const oauthError = searchParams.get('error')
       const returnTo = searchParams.get('return_to') || '/nodes'
 
       if (oauthError) {
-        setError(`OAuth error: ${oauthError}`)
+        window.location.assign(`/login?error=${encodeURIComponent(`OAuth error: ${oauthError}`)}`)
         return
       }
 
       if (!handoffId || !appCode) {
-        setError('Missing OAuth parameters')
+        window.location.assign(`/login?error=${encodeURIComponent('Missing OAuth parameters')}`)
         return
       }
 
       try {
         const appVerifier = retrieveVerifier()
         if (!appVerifier) {
-          setError('OAuth session lost. Please try again.')
+          window.location.assign(`/login?error=${encodeURIComponent('OAuth session lost. Please try again.')}`)
           return
         }
 
@@ -118,7 +117,8 @@ function OAuthCallbackPage() {
         setIsRedirecting(true)
         window.location.assign(returnTo)
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to complete OAuth')
+        const errorMsg = err instanceof Error ? err.message : 'Failed to complete OAuth'
+        window.location.assign(`/login?error=${encodeURIComponent(errorMsg)}`)
         clearVerifier()
       }
     }
@@ -131,23 +131,6 @@ function OAuthCallbackPage() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <div className="text-gray-600">Redirecting...</div>
-        </div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
-        <div className="max-w-md w-full bg-white shadow rounded-lg p-6">
-          <h2 className="text-lg font-semibold text-red-600">Authentication Error</h2>
-          <p className="text-gray-600 mt-2">{error}</p>
-          <a
-            href="/login"
-            className="mt-4 inline-block px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-          >
-            Back to login
-          </a>
         </div>
       </div>
     )
