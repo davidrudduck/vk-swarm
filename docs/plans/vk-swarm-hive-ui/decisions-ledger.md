@@ -1,0 +1,44 @@
+# Decisions Ledger — vk-swarm-hive-ui
+
+> Append-only. Every undictated choice the implementer makes goes here with a one-line
+> rationale and the task id that prompted it.
+
+## Pre-remediation baseline (decompose round 1)
+
+- **Tournament round 1:** 3 cross-model competitors (Codex/gpt-5.2-fallback, Gemini, Claude)
+  reviewed the breakdown. TALLY: Codex 11 (7B,4M), Gemini 8 (3B,1M,4m), Claude 12 (5B,4M,3m).
+  Reports at `docs/plans/vk-swarm-hive-ui/reviews/r1-{codex,gemini,claude}-breakdown.md`.
+- **6 high-confidence findings (≥2 reviewers) — all confirmed + remediated in-session:**
+  1. `/v1` prefix missing on all hive REST paths — fixed in tasks 101, 102, 307 (+ 202 API base URL adjustment).
+  2. OAuth contract wrong (`app_challenge`/`handoff_id`/`app_code`/`app_verifier`/`access_token`/`refresh_token`, not `code`/`state`/`redirect_url`/`profile`) — fixed in task 102.
+  3. `remote-frontend` missing toolchain (vitest/eslint/@tanstack/react-db/testing-library) — fixed by new task 100.
+  4. Electric module unreachable from `remote-frontend/` (no `lib/` dir) — fixed by new task 300 (copy bridge) + retargeting 301-304 to `remote-frontend/src/lib/electric/`.
+  5. Task 307 `POST /tasks/{id}/assign` with `{node_id}` wrong route — fixed: use `PATCH /v1/tasks/{id}/executing-node` with `{node_id}`; `/assign` is for human assignee (`{new_assignee_user_id, version}`), out of scope.
+  6. ProfileResponse nullability (`username` + all `ProviderProfile` fields are `Option<String>`) — fixed in task 101.
+- **1 dismissed finding (false positive):** Missing attempts/executions collections — `node_task_attempts`/`node_execution_processes` tables exist but are NOT synced to Electric (`electric_sync_table` not called for them). Spec correctly scopes SC2 to already-published shapes (the 6 in `ELECTRIC_SHAPE_TABLES`). Adding collections for unsynced tables would require server-side work (out of scope).
+- **Single-reviewer findings remediated:**
+  - Codex F1 (plan gate rewrites AGENTS.md commands) — fixed: plan gate now lists the 4 exact AGENTS.md commands + supplemental remote-frontend checks.
+  - Codex F8 (`remote-frontend` lacks `@tanstack/react-db` deps) — fixed by task 100.
+  - Codex F9 (task 201 files: list mismatch) — fixed: frontmatter now lists tsconfig.json, vite.config.ts, types/shared/types.ts.
+  - Codex F10 (task 308 green-on-arrival) — fixed: reclassified as regression guard (verification-only), not a red-first TDD test.
+  - Codex F11 (post-phase review gate missing) — fixed: added "Post-phase integrated adversarial review" section to plan.md (execute-time gate).
+  - Gemini F1 (task 202 missing transitive deps) — fixed: added "Known likely transitive deps" note (UI lib, hooks, lib/utils) + strengthened STOP trigger.
+  - Gemini F4 (plan Phase 2 titles stale) — fixed: 201 title updated in plan.md.
+  - Gemini F5 (task 103 scope_test .ts vs .tsx) — fixed: `.tsx`.
+  - Gemini F6 (task 104 files: omits Navbar/BottomNav) — fixed: added to frontmatter.
+  - Gemini F7 (task 202 URL-adj ambiguous) — fixed: concrete `/api/` → `/v1/` edit instruction.
+  - Claude F6 (ProfileResponse nullability) — fixed in task 101.
+  - Claude F7 (plan 201 title mismatch) — fixed in plan.md.
+  - Claude F8 (spec field names diverge from DB) — fixed: added spec-divergence note to tasks 301-303 recording that tasks use DB-accurate field names.
+  - Claude F10 (task 304 covers_criteria empty) — fixed: set to `[SC5]`.
+  - Claude F11 (BIGSERIAL PKs as string) — fixed: added BIGSERIAL note to tasks 302-303 (default to `id: string | number` until verified).
+  - Claude F12 (SC4 enforcement absent from Done-when gate) — fixed: all phase-2/3 tasks now include `cd frontend && npx tsc --noEmit` in manual verification (SC4 check).
+
+## Design refinements (decompose-time, pre-tournament)
+
+- **ProfileProvider vs ConfigProvider:** the spec's `## Design` says "port ConfigProvider fetching hive `/profile` as `UserSystemInfo`". This is inaccurate — the shapes differ. Node `ConfigProvider` fetches `/api/config` → `UserSystemInfo { config, environment, profiles, capabilities, analytics_user_id, login_status }`. Hive `/profile` returns `ProfileResponse { user_id, username (nullable), email, providers (each field nullable) }`. Resolution: port the PATTERN (React context + useAuth hook + oauthApi client) but implement a NEW, SIMPLER `ProfileProvider` fetching `/v1/profile`. The spec's intent (SC3: net-new app shell with session-as-app auth) is satisfied; the design detail is refined here. Does NOT contradict the frozen spec (the spec says "session/auth model ported from the node frontend" — the pattern is ported, not the verbatim implementation).
+
+## Task-authoring decisions
+
+- (tasks 100, 300 created as remediation for toolchain gap + Electric alias bridge)
+- (task 307 retitled "set executing node / delete" from "assign/reassign/delete" to match the actual route contract)
