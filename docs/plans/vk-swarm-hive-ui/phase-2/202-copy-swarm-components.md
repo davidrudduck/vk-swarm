@@ -7,10 +7,10 @@ depends_on: ["201"]
 parallel: false
 conflicts_with: []
 files:
-  - remote-frontend/src/components/swarm/
-  - remote-frontend/src/components/labels/
-  - remote-frontend/src/components/ui/
-  - remote-frontend/src/hooks/
+  - remote-frontend/src/components/swarm
+  - remote-frontend/src/components/labels
+  - remote-frontend/src/components/ui
+  - remote-frontend/src/hooks
   - remote-frontend/src/lib/api/nodes.ts
   - remote-frontend/src/lib/api/swarmProjects.ts
   - remote-frontend/src/lib/api/swarmLabels.ts
