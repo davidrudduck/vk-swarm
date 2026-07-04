@@ -20,11 +20,10 @@ Create `remote-frontend/src/styles/tokens/textures.test.tsx`:
 
 ```tsx
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { render } from '@testing-library/react';
 
-const base = readFileSync(join(__dirname, 'base.css'), 'utf8');
+const modules = import.meta.glob('./base.css', { as: 'raw', eager: true });
+const base = modules['./base.css'] as string;
 
 describe('texture utilities (SC3)', () => {
   it('defines all 8 texture utility classes in base.css', () => {

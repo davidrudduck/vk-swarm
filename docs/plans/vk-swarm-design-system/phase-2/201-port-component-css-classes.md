@@ -21,10 +21,9 @@ Create `remote-frontend/src/styles/components.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-const css = readFileSync(join(__dirname, 'components.css'), 'utf8');
+const modules = import.meta.glob('./components.css', { as: 'raw', eager: true });
+const css = modules['./components.css'] as string;
 
 describe('component CSS classes (SC1)', () => {
   it('defines the primary component classes', () => {

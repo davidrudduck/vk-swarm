@@ -22,11 +22,11 @@ Create `remote-frontend/src/styles/tokens/base.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-const fonts = readFileSync(join(__dirname, 'fonts.css'), 'utf8');
-const base = readFileSync(join(__dirname, 'base.css'), 'utf8');
+const fmods = import.meta.glob('./fonts.css', { as: 'raw', eager: true });
+const fonts = fmods['./fonts.css'] as string;
+const bmods = import.meta.glob('./base.css', { as: 'raw', eager: true });
+const base = bmods['./base.css'] as string;
 
 describe('fonts (SC2)', () => {
   it('imports the 5 font families from Google Fonts', () => {

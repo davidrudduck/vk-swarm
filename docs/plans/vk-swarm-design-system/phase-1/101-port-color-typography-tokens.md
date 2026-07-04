@@ -24,10 +24,11 @@ Create `remote-frontend/src/styles/tokens/colors.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-const colors = readFileSync(join(__dirname, 'colors.css'), 'utf8');
+// Vite's import.meta.glob with { as: 'raw' } loads CSS as a string at build time —
+// works in jsdom/browser env without Node.js types. Avoids fs.readFileSync/__dirname.
+const modules = import.meta.glob('./colors.css', { as: 'raw', eager: true });
+const colors = modules['./colors.css'] as string;
 
 describe('color tokens (SC2)', () => {
   it('defines dark-first HSL triplets + hex aliases for the 11 vks primitives', () => {
@@ -68,10 +69,9 @@ Create `remote-frontend/src/styles/tokens/typography.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-const typography = readFileSync(join(__dirname, 'typography.css'), 'utf8');
+const modules = import.meta.glob('./typography.css', { as: 'raw', eager: true });
+const typography = modules['./typography.css'] as string;
 
 describe('typography tokens (SC2)', () => {
   it('defines the 5 font families', () => {

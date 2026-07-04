@@ -21,10 +21,9 @@ Create `remote-frontend/src/styles/tokens/spacing.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-const spacing = readFileSync(join(__dirname, 'spacing.css'), 'utf8');
+const modules = import.meta.glob('./spacing.css', { as: 'raw', eager: true });
+const spacing = modules['./spacing.css'] as string;
 
 describe('spacing tokens (SC2)', () => {
   it('defines the 4px-grid scale (--space-0..--space-16)', () => {

@@ -21,10 +21,9 @@ Create `remote-frontend/src/styles/tokens/index.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-const indexCss = readFileSync(join(__dirname, '..', '..', 'index.css'), 'utf8');
+const mods = import.meta.glob('../../index.css', { as: 'raw', eager: true });
+const indexCss = mods['../../index.css'] as string;
 
 describe('index.css wires the token files (SC2/SC3)', () => {
   it('@imports fonts.css before colors/typography/spacing/base', () => {

@@ -21,14 +21,13 @@ Create `remote-frontend/src/components/render-parity.test.tsx`:
 
 ```tsx
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { render } from '@testing-library/react';
 import { Button, Badge, Card, CardHeader, CardTitle, CardContent, Input, Switch, Checkbox, Tabs, Select, Loader } from '@/components/core';
 import { StatusBadge, TaskCard, NodeCard } from '@/components/board';
 import { SettingsSection, SettingsRow } from '@/components/settings';
 
-const indexCss = readFileSync(join(__dirname, '..', 'index.css'), 'utf8');
+const mods = import.meta.glob('../index.css', { as: 'raw', eager: true });
+const indexCss = mods['../index.css'] as string;
 
 describe('index.css wires components.css (SC1)', () => {
   it("@imports components.css", () => {

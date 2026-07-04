@@ -8,9 +8,11 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/src/styles/tokens/smoke.test.ts
+  - remote-frontend/package.json
+  - remote-frontend/tsconfig.json
 irreversible: false
 scope_test: "remote-frontend/src/styles/tokens/smoke.test.ts"
-allowed_change: create
+allowed_change: mixed
 covers_criteria: [SC2, SC3]
 ---
 
@@ -19,6 +21,7 @@ covers_criteria: [SC2, SC3]
 Create `remote-frontend/src/styles/tokens/smoke.test.ts`:
 
 ```ts
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { execSync } from 'node:child_process';
 
@@ -43,6 +46,12 @@ describe('phase 1 integration smoke (SC2/SC3)', () => {
 Create exactly as written above. The test exercises the three supplemental gate commands from `plan.md`'s Gate section: `npm run build` (Vite compiles the CSS through PostCSS + token @imports resolve), `tsc --noEmit` (token test files type-check), and `eslint` on the tokens dir (lint cleanliness). This is the phase-1 integration smoke that proves the token layer is wired end-to-end.
 
 NOTE: no `cwd` is passed to `execSync` because vitest already runs from `remote-frontend/` (the `WAI_TEST_CMD` `cd`s there); the spawned `npm run build` / `npx tsc --noEmit` / `npx eslint` inherit vitest's cwd (`remote-frontend/`) where `package.json` / `tsconfig.json` live. Do NOT add `cwd: '..'` (would resolve to the worktree root which has no package.json build script).
+
+### File: `remote-frontend/package.json` (EDIT)
+Add `"@types/node": "^22.10.0"` to `devDependencies` (matching the node version used by vitest). Run `npm install --save-dev @types/node@^22.10.0` to install.
+
+### File: `remote-frontend/tsconfig.json` (EDIT)
+Add `"node"` to the `types` array: `"types": ["vitest/globals", "@testing-library/jest-dom", "node"]`. This lets the smoke test import `node:child_process` without TS2307 errors.
 
 ## Allowed moves
 
