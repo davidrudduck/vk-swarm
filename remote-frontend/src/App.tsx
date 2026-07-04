@@ -1,12 +1,15 @@
-function App() {
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { ProfileProvider } from '@/components/ProfileProvider'
+import AppRouter from './AppRouter'
+
+const queryClient = new QueryClient()
+
+export default function App() {
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-4">Vibe Kanban Remote</h1>
-        <p className="text-gray-400">Frontend coming soon...</p>
-      </div>
-    </div>
+    <QueryClientProvider client={queryClient}>
+      <ProfileProvider>
+        <AppRouter />
+      </ProfileProvider>
+    </QueryClientProvider>
   )
 }
-
-export default App
