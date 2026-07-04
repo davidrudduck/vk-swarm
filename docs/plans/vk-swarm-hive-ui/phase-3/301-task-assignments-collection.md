@@ -2,7 +2,7 @@
 id: "301"
 phase: 3
 title: Add ElectricTaskAssignment type + createTaskAssignmentsCollection
-status: ready
+status: done
 depends_on: ["300"]
 parallel: false
 conflicts_with: ["302", "303"]
