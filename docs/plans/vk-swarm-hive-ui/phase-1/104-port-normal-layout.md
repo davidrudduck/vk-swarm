@@ -2,7 +2,7 @@
 id: "104"
 phase: 1
 title: "Hive app shell: NormalLayout (Navbar + Outlet + BottomNav) ported"
-status: ready
+status: done
 depends_on: ["101"]
 parallel: false
 conflicts_with: []
