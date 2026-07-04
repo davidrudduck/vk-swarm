@@ -2,7 +2,7 @@
 id: "703"
 phase: 7
 title: Cutover guard — REGENERABLE tables repopulate from a simulated node re-ingest
-status: ready
+status: done
 depends_on: ["701"]
 parallel: false
 conflicts_with: []

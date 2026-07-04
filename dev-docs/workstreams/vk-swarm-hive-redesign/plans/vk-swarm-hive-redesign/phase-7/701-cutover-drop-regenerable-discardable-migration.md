@@ -2,7 +2,7 @@
 id: "701"
 phase: 7
 title: Cutover migration — data-clear REGENERABLE + DISCARDABLE hive-only state (in-place rebuild)
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: []

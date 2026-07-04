@@ -2,7 +2,7 @@
 id: "402"
 phase: 4
 title: One delete semantic — both inbound legs soft-unlink via a single shared helper
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: ["401", "403", "404"]

@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "gemini",
+    "--skip-trust",
+    "--approval-mode=plan",
+    "--output-format=json",
+    "-p",
+    ""
+  ],
+  "cwd": "/data/Code/vk-swarm",
+  "exit_code": 0,
+  "finished_at": "2026-07-04T01:45:07.435638+00:00",
+  "notes": [],
+  "prompt_file": "/tmp/opencode/layer5-prompt.md",
+  "raw_log": "/data/Code/vk-swarm/.agents/reports/2026-07-04-layer5-gemini.raw.log",
+  "report": "/data/Code/vk-swarm/.agents/reports/2026-07-04-layer5-gemini-hive-redesign-verification.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-04T01:40:51.644022+00:00",
+  "status": "ok",
+  "task": "codebase-audit",
+  "tool": "gemini",
+  "tool_version": "0.49.0"
+}

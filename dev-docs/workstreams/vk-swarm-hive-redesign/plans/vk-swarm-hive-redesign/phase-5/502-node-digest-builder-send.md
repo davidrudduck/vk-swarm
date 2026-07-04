@@ -2,7 +2,7 @@
 id: "502"
 phase: 5
 title: Node digest builder — emit NodeMessage::Digest of swarm-linked tasks each sync cycle
-status: ready
+status: done
 depends_on: ["501"]
 parallel: false
 conflicts_with: []
