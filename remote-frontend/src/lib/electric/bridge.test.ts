@@ -5,7 +5,8 @@ import { createNodesCollection, createProjectsCollection, createNodeProjectsColl
 describe('electric bridge', () => {
   it('config is importable from remote-frontend', () => {
     expect(typeof ELECTRIC_PROXY_BASE).toBe('string');
-    expect(Array.isArray(ELECTRIC_SHAPE_TABLES)).toBe(true);
+    expect(typeof ELECTRIC_SHAPE_TABLES).toBe('object');
+    expect(ELECTRIC_SHAPE_TABLES.nodes).toBeDefined();
     expect(typeof createShapeUrl).toBe('function');
   });
   it('existing collections are importable', () => {
