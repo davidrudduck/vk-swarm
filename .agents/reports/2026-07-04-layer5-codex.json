@@ -1,0 +1,9 @@
+{
+  "schema": "dr.executor.panel.v1",
+  "executor": "codex",
+  "task": "codebase-audit",
+  "cwd": "/data/Code/vk-swarm",
+  "model": null,
+  "exit_code": 0,
+  "note": "Codex sandbox rejected writing the report file; the report content was emitted to stdout and captured by the wrapper operator. Report file written post-hoc by the orchestrator from the stdout content."
+}
