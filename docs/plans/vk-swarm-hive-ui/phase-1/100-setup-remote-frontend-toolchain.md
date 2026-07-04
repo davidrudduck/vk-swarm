@@ -8,10 +8,12 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/package.json
+  - remote-frontend/package-lock.json
   - remote-frontend/eslint.config.js
   - remote-frontend/vite.config.ts
   - remote-frontend/tsconfig.json
   - remote-frontend/src/setupTests.ts
+  - remote-frontend/src/toolchain.test.ts
 irreversible: false
 scope_test: "remote-frontend/src/toolchain.test.ts"
 allowed_change: mixed
