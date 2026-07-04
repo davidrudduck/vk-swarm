@@ -146,3 +146,45 @@ export function createTaskAssignmentsCollection() {
     })
   );
 }
+
+export type ElectricTaskOutputLog = ElectricRow & {
+  id: string;
+  assignment_id: string;
+  output_type: string;
+  content: string;
+  timestamp: string;
+  created_at: string;
+  execution_process_id: string | null;
+};
+
+export function createTaskOutputLogsCollection() {
+  return createCollection(
+    electricCollectionOptions<ElectricTaskOutputLog>({
+      shapeOptions: {
+        url: createShapeUrl('node_task_output_logs'),
+      },
+      getKey: (item) => item.id,
+    })
+  );
+}
+
+export type ElectricTaskProgressEvent = ElectricRow & {
+  id: string;
+  assignment_id: string;
+  event_type: string;
+  message: string | null;
+  metadata: unknown | null;
+  timestamp: string;
+  created_at: string;
+};
+
+export function createTaskProgressEventsCollection() {
+  return createCollection(
+    electricCollectionOptions<ElectricTaskProgressEvent>({
+      shapeOptions: {
+        url: createShapeUrl('node_task_progress_events'),
+      },
+      getKey: (item) => item.id,
+    })
+  );
+}

@@ -21,6 +21,8 @@ import {
   createProjectsCollection,
   createNodeProjectsCollection,
   createTaskAssignmentsCollection,
+  createTaskOutputLogsCollection,
+  createTaskProgressEventsCollection,
   type ElectricCollectionConfig,
 } from './collections';
 import { createCollection } from '@tanstack/react-db';
@@ -126,6 +128,54 @@ describe('Electric Collections', () => {
       const config = (electricCollectionOptions as ReturnType<typeof vi.fn>)
         .mock.calls[0][0] as ElectricCollectionConfig<{ id: string }>;
       expect(config.getKey({ id: 'assignment-uuid' })).toBe('assignment-uuid');
+    });
+  });
+
+  describe('createTaskOutputLogsCollection', () => {
+    it('creates a collection with correct shape URL', () => {
+      const collection = createTaskOutputLogsCollection();
+
+      expect(electricCollectionOptions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          shapeOptions: expect.objectContaining({
+            url: '/api/electric/v1/shape/node_task_output_logs',
+          }),
+        })
+      );
+      expect(createCollection).toHaveBeenCalled();
+      expect(collection).toBeDefined();
+    });
+
+    it('uses id as the key extractor', () => {
+      createTaskOutputLogsCollection();
+
+      const config = (electricCollectionOptions as ReturnType<typeof vi.fn>)
+        .mock.calls[0][0] as ElectricCollectionConfig<{ id: string }>;
+      expect(config.getKey({ id: 'log-1' })).toBe('log-1');
+    });
+  });
+
+  describe('createTaskProgressEventsCollection', () => {
+    it('creates a collection with correct shape URL', () => {
+      const collection = createTaskProgressEventsCollection();
+
+      expect(electricCollectionOptions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          shapeOptions: expect.objectContaining({
+            url: '/api/electric/v1/shape/node_task_progress_events',
+          }),
+        })
+      );
+      expect(createCollection).toHaveBeenCalled();
+      expect(collection).toBeDefined();
+    });
+
+    it('uses id as the key extractor', () => {
+      createTaskProgressEventsCollection();
+
+      const config = (electricCollectionOptions as ReturnType<typeof vi.fn>)
+        .mock.calls[0][0] as ElectricCollectionConfig<{ id: string }>;
+      expect(config.getKey({ id: 'event-1' })).toBe('event-1');
     });
   });
 });
