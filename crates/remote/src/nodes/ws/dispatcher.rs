@@ -31,7 +31,7 @@ impl TaskDispatcher {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```,ignore
     /// # use uuid::Uuid;
     /// # use crate::nodes::ws::{TaskDispatcher, TaskDetails};
     /// # async fn example(dispatcher: &TaskDispatcher) -> Result<(), Box<dyn std::error::Error>> {
@@ -73,7 +73,7 @@ impl TaskDispatcher {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```,ignore
     /// use uuid::Uuid;
     /// # async fn example(dispatcher: &crate::nodes::ws::TaskDispatcher, node: &crate::db::swarm_projects::SwarmProjectNodeForDispatch) {
     /// let task_id = Uuid::new_v4();
@@ -139,7 +139,7 @@ impl TaskDispatcher {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```,ignore
     /// # use uuid::Uuid;
     /// # async fn example(dispatcher: &crate::nodes::ws::dispatcher::TaskDispatcher) -> Result<(), ()> {
     /// let swarm_project_id = Uuid::new_v4();
@@ -204,7 +204,7 @@ impl TaskDispatcher {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```,ignore
     /// # use uuid::Uuid;
     /// # use crate::nodes::ws::dispatcher::TaskDispatcher;
     /// # use crate::nodes::ws::dispatcher::AssignResult;

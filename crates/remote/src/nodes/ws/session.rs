@@ -54,7 +54,7 @@ const OUTGOING_BUFFER_SIZE: usize = 64;
 ///
 /// # Examples
 ///
-/// ```
+/// ```,ignore
 /// assert_eq!(extract_project_name("https://example.com/org/repo.git"), "repo.git");
 /// assert_eq!(extract_project_name("C:\\path\\to\\project\\"), "project");
 /// assert_eq!(extract_project_name("/single_component"), "single_component");
@@ -969,7 +969,7 @@ async fn handle_link_project(
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```,ignore
 /// use uuid::Uuid;
 /// # async fn doc() {
 /// let pool = /* PgPool */ todo!();
@@ -1099,7 +1099,7 @@ async fn handle_unlink_project(
 ///
 /// # Examples
 ///
-/// ```
+/// ```,ignore
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// # // placeholders for required values
 /// # let pool = todo!("PgPool instance");
@@ -1217,7 +1217,7 @@ async fn send_message(
 ///
 /// # Examples
 ///
-/// ```
+/// ```,ignore
 /// # async fn example(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
 /// use uuid::Uuid;
 /// use chrono::Utc;

@@ -41,6 +41,8 @@ When a session discovers pre-existing failures (tests, lint, typecheck, or any g
 
 A remediation prompt written for "the next session" does NOT satisfy this rule. "We finish what we start" means the debt is resolved (fixed, split, or escalated) before the session closes — never carried forward silently. The next session must inherit a clean ledger, not a backlog of "fix this later" notes.
 
+Globally disabling a quality gate, linter, or entire test category via configuration (e.g. `doctest = false` in `Cargo.toml`, `#[cfg_attr(..., skip)]` on a whole module, or removing a test from the workspace) to bypass compilation or execution errors is itself a **silent deferral** and is prohibited unless paired with a tracked follow-up workstream created in THIS session or explicit user approval. Broken tests or documentation examples must be resolved at the source level — fixed, or selectively marked with the standard per-item attributes (e.g. `#[ignore]`, `rust,ignore`, `no_run`) so the remaining tests in the category continue to run and catch regressions.
+
 ## Post-Phase Integrated Adversarial Review (mandatory)
 
 Per-task adversarial panels verify each task in isolation. They **cannot** catch cross-task

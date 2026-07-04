@@ -9,9 +9,6 @@ edition = "2024"
 publish = false
 default-run = "vks-hive-server"
 
-[lib]
-doctest = false
-
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }

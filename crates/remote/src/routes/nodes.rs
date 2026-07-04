@@ -36,7 +36,7 @@ const API_KEY_HEADER: &str = "x-api-key";
 ///
 /// # Examples
 ///
-/// ```
+/// ```,ignore
 /// let router = api_key_router();
 /// // router now contains POST /nodes/register and POST /nodes/{node_id}/heartbeat
 /// ```
@@ -240,7 +240,7 @@ pub struct RegisterNodeResponse {
 ///
 /// # Examples
 ///
-/// ```
+/// ```,ignore
 /// # use axum::http::HeaderMap;
 /// # use axum::extract::State;
 /// # use axum::Json;

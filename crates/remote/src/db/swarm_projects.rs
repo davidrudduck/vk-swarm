@@ -256,7 +256,7 @@ impl SwarmProjectRepository {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```,ignore
     /// # async fn doc_example(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
     /// use uuid::Uuid;
     /// let org_id = Uuid::new_v4();
@@ -870,7 +870,7 @@ impl SwarmProjectRepository {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```,ignore
     /// use uuid::Uuid;
     /// // construct or obtain a PgPool named `pool`
     /// let pool = unimplemented!();

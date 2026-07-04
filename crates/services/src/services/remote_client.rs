@@ -896,7 +896,7 @@ impl RemoteClient {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```,ignore
     /// # use uuid::Uuid;
     /// # use remote::RemoteClient;
     /// # use remote::auth::AuthContext;

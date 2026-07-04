@@ -188,7 +188,7 @@ pub async fn get_shared_task(
 ///
 /// # Examples
 ///
-/// ```
+/// ```,ignore
 /// use uuid::Uuid;
 ///
 /// let req = CreateSharedTaskRequest {

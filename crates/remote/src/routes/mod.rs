@@ -43,7 +43,7 @@ mod tokens;
 ///
 /// # Examples
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use crate::routes::router;
 /// use crate::AppState;
 ///

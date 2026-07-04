@@ -102,7 +102,7 @@ impl From<NodeApiKeyError> for NodeError {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```,ignore
     /// use uuid::Uuid;
     /// // construct an example variant
     /// let api_err = crate::nodes::NodeApiKeyError::NotFound;
@@ -131,7 +131,7 @@ impl From<SwarmProjectError> for NodeError {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```,ignore
     /// use uuid::Uuid;
     /// // example variants; adjust imports to actual module paths in real code
     /// let ne: crate::nodes::service::NodeError = crate::swarm_projects::SwarmProjectError::NotFound.into();
@@ -518,7 +518,7 @@ impl NodeServiceImpl {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```,ignore
     /// use uuid::Uuid;
     ///
     /// # async fn _example(service: &crate::nodes::NodeServiceImpl) {
@@ -724,7 +724,7 @@ impl NodeServiceImpl {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use uuid::Uuid;
     /// # use crate::nodes::{NodeServiceImpl, NodeStatus};
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -775,7 +775,7 @@ impl NodeServiceImpl {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```,ignore
     /// # use uuid::Uuid;
     /// # async fn example(svc: &crate::nodes::service::NodeServiceImpl) -> Result<(), Box<dyn std::error::Error>> {
     /// let node_id = Uuid::new_v4();
