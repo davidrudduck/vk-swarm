@@ -36,7 +36,9 @@ const API_KEY_HEADER: &str = "x-api-key";
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```
+/// use remote::routes::nodes::api_key_router;
+///
 /// let router = api_key_router();
 /// // router now contains POST /nodes/register and POST /nodes/{node_id}/heartbeat
 /// ```

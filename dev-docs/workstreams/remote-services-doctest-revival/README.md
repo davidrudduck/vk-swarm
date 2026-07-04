@@ -2,7 +2,7 @@
 workstream: remote-services-doctest-revival
 doc_type: readme
 status: active
-title: "Bring 35 rust,ignore'd doctests in remote + services crates back to live"
+title: "Bring 32 rust,ignore'd doctests in remote + services crates back to live"
 originated_in: fix/preexisting-gate-failures
 originated_commit: 9e20efb4
 adrs: []
@@ -21,11 +21,16 @@ environment unavailable in the doctest harness. Three zero-I/O doctests
 (`NodeApiKeyError`, `SwarmProjectError`, `HiveSyncConfig::default`) were promoted to live in
 the same session; the remaining 35 require real infrastructure or re-export refactoring.
 
+In a subsequent code-review pass, 3 more were promoted: `api_key_router` and
+`create_shared_task` (struct literal, no I/O) were made live, and `router` was promoted to
+`no_run` (compile-only, since `unimplemented!()` panics at runtime). The remaining 32 require
+real infrastructure or re-export refactoring.
+
 This workstream tracks the debt so it is invisible to no future session.
 
 ## Inventory
 
-### remote crate (30 ignored doctests)
+### remote crate (27 ignored doctests)
 
 | File | Line | Symbol | Why ignored | Path to live |
 |------|------|--------|--------------|---------------|
@@ -52,12 +57,9 @@ This workstream tracks the debt so it is invisible to no future session.
 | `nodes/ws/session.rs` | 1102 | `handle_deregister` | Requires WS session state | `no_run` or integration test |
 | `nodes/ws/session.rs` | 1220 | `handle_attempt_sync` | Requires WS session state | `no_run` or integration test |
 | `routes/error.rs` | 50 | `task_error_response` | Requires axum router context | `no_run` or integration test |
-| `routes/mod.rs` | 46 | `router` | Requires axum router + DB pool | `no_run` or integration test |
-| `routes/nodes.rs` | 39 | `api_key_router` | Requires axum router + DB pool | `no_run` or integration test |
 | `routes/nodes.rs` | 243 | `register_node` | Requires axum router + DB pool | `no_run` or integration test |
 | `routes/organization_members.rs` | 510 | `ensure_admin_access` | Requires axum extractor + DB pool | `no_run` or integration test |
 | `routes/organization_members.rs` | 542 | `ensure_project_access` | Requires axum extractor + DB pool | `no_run` or integration test |
-| `routes/tasks.rs` | 191 | `create_shared_task` | Requires axum router + DB pool | `no_run` or integration test |
 | `validated_where.rs` | 27 | `ValidatedWhere::new` | Compilation issue in doctest context | Fix import paths or `no_run` |
 
 ### services crate (5 ignored doctests)
@@ -72,7 +74,7 @@ This workstream tracks the debt so it is invisible to no future session.
 
 ## Acceptance criteria
 
-- [ ] All 35 doctests are either made live, converted to `no_run` (compiles but doesn't run), or removed if the symbol is private and covered by unit tests.
+- [ ] All 32 doctests are either made live, converted to `no_run` (compiles but doesn't run), or removed if the symbol is private and covered by unit tests.
 - [ ] `cargo test --doc -p remote` and `cargo test --doc -p services` report 0 ignored.
 - [ ] No regression in the mandatory gate (clippy, test, lint, tsc).
 

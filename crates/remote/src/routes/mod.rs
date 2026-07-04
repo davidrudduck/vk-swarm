@@ -43,9 +43,9 @@ mod tokens;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
-/// use crate::routes::router;
-/// use crate::AppState;
+/// ```rust,no_run
+/// use remote::routes::router;
+/// use remote::AppState;
 ///
 /// let state: AppState = unimplemented!();
 /// let app_router = router(state);

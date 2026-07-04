@@ -29,9 +29,11 @@ in each category continue to run and catch regressions.
   change the documentation's intended examples).
 - **Source-level markers:** Each broken doctest's opening fence was changed from ` ``` ` to
   ` ```rust,ignore ` (30 remote + 5 services). 3 fixable doctests (NodeApiKey, SwarmProject,
-  HiveSyncConfig) were made LIVE in the same session (commit `9e20efb4`). The doctest category is
-  NOT entirely dead: `cargo test --doc -p remote` runs 4 live + 32 ignored; `cargo test --doc -p
-  services` runs 0 live + 6 ignored (the 6 share the same root cause and are tracked together).
+  HiveSyncConfig) were made LIVE in the same session (commit `9e20efb4`). In a subsequent
+  code-review pass (commit pending), 3 more were promoted — `api_key_router` and
+  `create_shared_task` made live, `router` promoted to `no_run` — leaving 27 remote + 5 services =
+  32 ignored. The doctest category is NOT entirely dead: `cargo test --doc -p remote` runs 9 live +
+  27 ignored; `cargo test --doc -p services` runs 1 live + 5 ignored.
 - **Acceptance criteria for revival:** 0 ignored doctests in remote + services; no test regressions.
 
 ### 2. `terminal-session-pty-tests` — 5 PTY-spawning tests in `terminal_session.rs`
