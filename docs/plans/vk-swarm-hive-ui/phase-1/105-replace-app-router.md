@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - remote-frontend/src/AppRouter.tsx
   - remote-frontend/src/App.tsx
+  - remote-frontend/src/AppRouter.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/AppRouter.test.tsx"
 allowed_change: edit
