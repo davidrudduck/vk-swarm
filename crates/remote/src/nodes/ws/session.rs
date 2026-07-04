@@ -54,7 +54,7 @@ const OUTGOING_BUFFER_SIZE: usize = 64;
 ///
 /// # Examples
 ///
-/// ```,ignore
+/// ```rust,ignore
 /// assert_eq!(extract_project_name("https://example.com/org/repo.git"), "repo.git");
 /// assert_eq!(extract_project_name("C:\\path\\to\\project\\"), "project");
 /// assert_eq!(extract_project_name("/single_component"), "single_component");
@@ -969,7 +969,7 @@ async fn handle_link_project(
 ///
 /// # Examples
 ///
-/// ```,ignore
+/// ```rust,ignore
 /// use uuid::Uuid;
 /// # async fn doc() {
 /// let pool = /* PgPool */ todo!();
@@ -1099,7 +1099,7 @@ async fn handle_unlink_project(
 ///
 /// # Examples
 ///
-/// ```,ignore
+/// ```rust,ignore
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// # // placeholders for required values
 /// # let pool = todo!("PgPool instance");
@@ -1217,7 +1217,7 @@ async fn send_message(
 ///
 /// # Examples
 ///
-/// ```,ignore
+/// ```rust,ignore
 /// # async fn example(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
 /// use uuid::Uuid;
 /// use chrono::Utc;
@@ -5589,5 +5589,46 @@ mod legacy_status_guard_tests {
         );
 
         cleanup_org(&pool, org_id).await;
+    }
+}
+
+#[cfg(test)]
+mod extract_project_name_tests {
+    use super::extract_project_name;
+
+    #[test]
+    fn test_url_with_git_suffix() {
+        assert_eq!(
+            extract_project_name("https://example.com/org/repo.git"),
+            "repo.git"
+        );
+    }
+
+    #[test]
+    fn test_windows_path_trailing_backslash() {
+        assert_eq!(
+            extract_project_name("C:\\path\\to\\project\\"),
+            "project"
+        );
+    }
+
+    #[test]
+    fn test_single_component() {
+        assert_eq!(extract_project_name("/single_component"), "single_component");
+    }
+
+    #[test]
+    fn test_empty_string() {
+        assert_eq!(extract_project_name(""), "");
+    }
+
+    #[test]
+    fn test_trailing_slash() {
+        assert_eq!(extract_project_name("/path/to/project/"), "project");
+    }
+
+    #[test]
+    fn test_no_separators() {
+        assert_eq!(extract_project_name("myproject"), "myproject");
     }
 }

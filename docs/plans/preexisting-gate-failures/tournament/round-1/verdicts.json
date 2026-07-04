@@ -1,0 +1,65 @@
+{
+  "verdicts": {
+    "claude:F001": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "codex",
+      "decider_note": "Neutral decider confirms: 34 non-standard ',ignore' fences verified (29 remote + 5 services). Issue is valid; remediation (replace with rust,ignore or ignore) is correct and standard. Codex's peer review accurate."
+    },
+    "claude:F002": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "codex",
+      "decider_note": "Neutral decider confirms: service.rs:105 doctest uses stale crate:: paths. Public paths remote::db::node_api_keys::NodeApiKeyError and remote::nodes::NodeError verified as pub. Zero-I/O assertion, can be made live. Remediation correct."
+    },
+    "claude:F003": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "gemini",
+      "decider_note": "Neutral decider confirms: service.rs:134 doctest uses stale crate:: paths. Public paths remote::db::swarm_projects::SwarmProjectError and remote::nodes::NodeError verified. Gemini's peer review confirmed both paths and zero-I/O status. Remediation correct."
+    },
+    "claude:F004": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "codex",
+      "decider_note": "Neutral decider confirms: hive_sync.rs:70 doctest is a pure zero-I/O invariant check. services::services::hive_sync::HiveSyncConfig path verified, all fields pub. Can be made live. Remediation correct."
+    },
+    "claude:F005": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "codex",
+      "decider_note": "Neutral decider confirms: extract_project_name at session.rs:57 is private, doctest correctly ignored, but no #[test] equivalent exists. Adding a unit test is a reasonable improvement. Remediation (add #[test]) is actionable."
+    },
+    "codex:F001": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "claude",
+      "decider_note": "Neutral decider confirms: same as claude:F004. HiveSyncConfig doctest can be made live. Claude's peer review verified the import path."
+    },
+    "codex:F002": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "claude",
+      "decider_note": "Neutral decider confirms: same as claude:F002. NodeApiKeyError doctest can be made live. Claude's peer review verified external crate paths."
+    },
+    "codex:F003": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "claude",
+      "decider_note": "Neutral decider confirms: same as claude:F003. SwarmProjectError doctest can be made live. Claude's peer review confirmed."
+    },
+    "gemini:F001": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "codex",
+      "decider_note": "Neutral decider confirms: same issue as claude:F001. Codex noted Gemini's count of 37 is overstated (actual 34), but underlying issue and remediation are valid. Remediation passes."
+    },
+    "gemini:F002": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "claude",
+      "steal": "Replace setup_db() in electric_task_sync.rs with db::test_utils::create_test_pool_with_migrations() which already exists (crates/db/src/test_utils.rs:108), runs all SQLite migrations, and eliminates ALL duplicated schemas — not just node_outbox.",
+      "decider_note": "Neutral decider confirms: schema duplication is valid. Gemini's remediation too vague (no specific helper named). Claude's steal is concrete — create_test_pool_with_migrations() exists at db/src/test_utils.rs:108 and runs sqlx::migrate!('./migrations'). Steal awarded to Claude. However, steal needs verification during remediation (full schema may add constraints the test doesn't expect)."
+    }
+  }
+}

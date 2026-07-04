@@ -6,130 +6,11 @@
 use db::models::task::Task;
 use serde_json::json;
 use services::services::electric_sync::{ElectricClient, ShapeConfig, ShapeOperation, ShapeState};
-use sqlx::{
-    SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode},
-};
-use std::str::FromStr;
-use tempfile::TempDir;
 use uuid::Uuid;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path_regex, query_param},
 };
-
-/// Set up an in-memory SQLite database with minimal test schema.
-async fn setup_db() -> (SqlitePool, TempDir) {
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test.db");
-
-    let options =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))
-            .unwrap()
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal);
-
-    let pool = SqlitePool::connect_with(options).await.unwrap();
-
-    // Create minimal schema for testing Electric sync
-    // Projects table
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS projects (
-            id                       BLOB PRIMARY KEY,
-            name                     TEXT NOT NULL,
-            git_repo_path            TEXT,
-            default_branch           TEXT,
-            is_remote                INTEGER NOT NULL DEFAULT 0,
-            remote_project_id        BLOB,
-            remote_organization_id   BLOB,
-            remote_name              TEXT,
-            remote_last_synced_at    TEXT,
-            created_at               TEXT NOT NULL DEFAULT (datetime('now', 'subsec')),
-            updated_at               TEXT NOT NULL DEFAULT (datetime('now', 'subsec'))
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    // Tasks table with all columns needed for Electric sync
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS tasks (
-            id                          BLOB PRIMARY KEY,
-            project_id                  BLOB NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-            title                       TEXT NOT NULL,
-            description                 TEXT,
-            status                      TEXT NOT NULL DEFAULT 'todo'
-                                        CHECK (status IN ('todo','inprogress','done','cancelled','inreview')),
-            parent_task_id              BLOB REFERENCES tasks(id) ON DELETE SET NULL,
-            shared_task_id              BLOB,
-            remote_assignee_user_id     BLOB,
-            remote_assignee_name        TEXT,
-            remote_assignee_username    TEXT,
-            remote_version              INTEGER NOT NULL DEFAULT 0,
-            remote_last_synced_at       TEXT,
-            remote_stream_node_id       BLOB,
-            remote_stream_url           TEXT,
-            archived_at                 TEXT,
-            activity_at                 TEXT,
-            created_at                  TEXT NOT NULL DEFAULT (datetime('now', 'subsec')),
-            updated_at                  TEXT NOT NULL DEFAULT (datetime('now', 'subsec'))
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    // Index on shared_task_id for upsert operations
-    sqlx::query(
-        r#"
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_shared_task_unique
-            ON tasks(shared_task_id)
-            WHERE shared_task_id IS NOT NULL
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    // node_outbox (SC2 op-log) — required by upsert_remote_task's dirty-guard
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS node_outbox (
-            id              BLOB PRIMARY KEY,
-            seq             INTEGER NOT NULL UNIQUE,
-            op_type         TEXT NOT NULL,
-            entity_type     TEXT NOT NULL,
-            entity_id       BLOB NOT NULL,
-            payload         TEXT NOT NULL,
-            idempotency_key TEXT NOT NULL UNIQUE,
-            fencing_token   INTEGER,
-            created_at      TEXT NOT NULL DEFAULT (datetime('now', 'subsec')),
-            acked_at        TEXT
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    sqlx::query(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_node_outbox_unacked_seq
-            ON node_outbox(seq)
-            WHERE acked_at IS NULL
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    (pool, temp_dir)
-}
 
 /// Create a mock NDJSON response for Electric Shape API.
 fn create_ndjson_response(operations: &[&str]) -> String {
@@ -400,7 +281,7 @@ async fn test_electric_client_must_refetch() {
 
 #[tokio::test]
 async fn test_apply_insert_creates_task() {
-    let (pool, _temp_dir) = setup_db().await;
+    let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
 
     // Create a test project first
     let project_id = Uuid::new_v4();
@@ -444,7 +325,7 @@ async fn test_apply_insert_creates_task() {
 
 #[tokio::test]
 async fn test_apply_update_modifies_task() {
-    let (pool, _temp_dir) = setup_db().await;
+    let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
 
     // Create a test project
     let project_id = Uuid::new_v4();
@@ -508,7 +389,7 @@ async fn test_apply_update_modifies_task() {
 
 #[tokio::test]
 async fn test_apply_delete_removes_task() {
-    let (pool, _temp_dir) = setup_db().await;
+    let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
 
     // Create a test project
     let project_id = Uuid::new_v4();
@@ -599,7 +480,7 @@ fn extract_uuid_from_key(key: &str) -> Option<Uuid> {
 #[tokio::test]
 async fn test_full_sync_cycle() {
     let mock_server = MockServer::start().await;
-    let (pool, _temp_dir) = setup_db().await;
+    let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
 
     // Create a test project
     let project_id = Uuid::new_v4();

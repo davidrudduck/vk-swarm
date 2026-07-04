@@ -46,7 +46,7 @@ impl SharePublisher {
     ///
     /// # Examples
     ///
-    /// ```,ignore
+    /// ```rust,ignore
     /// # use uuid::Uuid;
     /// # use futures::executor::block_on;
     /// # async fn example(publisher: &crate::SharePublisher, task_id: Uuid) {
