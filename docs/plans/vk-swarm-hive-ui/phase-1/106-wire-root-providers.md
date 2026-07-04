@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - remote-frontend/src/App.tsx
   - remote-frontend/src/main.tsx
+  - remote-frontend/src/App.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/App.test.tsx"
 allowed_change: edit
