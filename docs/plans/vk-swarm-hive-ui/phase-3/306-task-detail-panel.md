@@ -2,7 +2,7 @@
 id: "306"
 phase: 3
 title: Add TaskDetail panel showing attempts (output logs) + progress events
-status: ready
+status: done
 depends_on: ["304", "305"]
 parallel: false
 conflicts_with: []

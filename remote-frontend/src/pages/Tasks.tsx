@@ -8,6 +8,7 @@ import {
   createProjectsCollection,
   type ElectricTaskAssignment,
 } from '@/lib/electric';
+import { tasksApi } from '@/lib/api/tasks';
 
 const assignmentsCollection = createTaskAssignmentsCollection();
 const outputLogsCollection = createTaskOutputLogsCollection();
@@ -23,8 +24,20 @@ export function TasksBoard() {
   const { data: projects = [] } = useLiveQuery(projectsCollection);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
 
+  const [selectedNodeId, setSelectedNodeId] = useState<string>('');
+
   const nodeNames = new Map(nodes.map((n: { id: string; name: string }) => [n.id, n.name]));
   const projectNames = new Map(projects.map((p: { id: string; name: string }) => [p.id, p.name]));
+
+  const handleAssign = async (taskId: string) => {
+    if (!selectedNodeId) return;
+    try { await tasksApi.setExecutingNode(taskId, selectedNodeId); } catch {}
+  };
+
+  const handleDelete = async (taskId: string) => {
+    if (!confirm('Delete this task?')) return;
+    try { await tasksApi.delete(taskId); } catch {}
+  };
 
   const byStatus = new Map<string, ElectricTaskAssignment[]>();
   for (const status of STATUS_COLUMNS) byStatus.set(status, []);
@@ -39,13 +52,23 @@ export function TasksBoard() {
         {STATUS_COLUMNS.map((status) => (
           <div key={status} className="flex-1">
             <h2 className="text-lg font-semibold capitalize">{status.replace('_', ' ')}</h2>
+            <select value={selectedNodeId} onChange={(e) => setSelectedNodeId(e.target.value)} className="border p-1 text-sm w-full">
+              <option value="">Select node...</option>
+              {nodes.map((n: { id: string; name: string }) => (
+                <option key={n.id} value={n.id}>{n.name}</option>
+              ))}
+            </select>
             <ul>
               {(byStatus.get(status) ?? []).map((a) => (
                 <li key={a.id} className="border p-2 my-2" onClick={() => setSelectedAssignmentId(a.id)}>
                   <div>task {a.task_id}</div>
                   <div>{nodeNames.get(a.node_id) ?? a.node_id}</div>
-                  <div>{projectNames.get(a.node_project_id) ?? a.node_project_id}</div>
-                </li>
+<div>{projectNames.get(a.node_project_id) ?? a.node_project_id}</div>
+                <div className="flex gap-2 mt-1">
+                  <button className="text-xs px-2 py-1 border" onClick={(e) => { e.stopPropagation(); handleAssign(a.task_id); }} aria-label="Assign">Assign</button>
+                  <button className="text-xs px-2 py-1 border text-red-500" onClick={(e) => { e.stopPropagation(); handleDelete(a.task_id); }} aria-label="Delete">Delete</button>
+                </div>
+              </li>
               ))}
             </ul>
           </div>

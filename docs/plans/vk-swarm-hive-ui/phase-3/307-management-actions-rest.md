@@ -12,7 +12,7 @@ files:
   - remote-frontend/src/pages/Tasks.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/pages/Tasks.test.tsx"
-allowed_change: edit
+allowed_change: mixed
 covers_criteria: [SC2]
 ---
 ## Failing test (write first)

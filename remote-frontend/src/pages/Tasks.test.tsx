@@ -33,8 +33,8 @@ describe('TasksBoard', () => {
     render(<TasksBoard />);
     expect(screen.getByText(/pending/i)).toBeInTheDocument();
     expect(screen.getByText(/in progress/i)).toBeInTheDocument();
-    expect(screen.getByText('node-alpha')).toBeInTheDocument();
-    expect(screen.getByText('node-beta')).toBeInTheDocument();
+    expect(screen.queryAllByText('node-alpha').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('node-beta').length).toBeGreaterThan(0);
   });
 });
 
@@ -49,5 +49,13 @@ describe('TaskDetail', () => {
   it('renders an empty state when no logs or events exist', () => {
     render(<TaskDetail assignmentId="a-nonexistent" />);
     expect(screen.getByText(/no activity yet/i)).toBeInTheDocument();
+  });
+});
+
+describe('TasksBoard management actions', () => {
+  it('renders Assign and Delete buttons', () => {
+    render(<TasksBoard />);
+    expect(screen.getAllByRole('button', { name: /assign/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /delete/i }).length).toBeGreaterThan(0);
   });
 });
