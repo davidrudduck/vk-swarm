@@ -2,7 +2,7 @@
 id: "303"
 phase: 3
 title: Add ElectricTaskProgressEvent type + createTaskProgressEventsCollection
-status: ready
+status: done
 depends_on: ["300"]
 parallel: false
 conflicts_with: ["301", "302"]

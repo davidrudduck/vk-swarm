@@ -2,7 +2,7 @@
 id: "302"
 phase: 3
 title: Add ElectricTaskOutputLog type + createTaskOutputLogsCollection
-status: ready
+status: done
 depends_on: ["300"]
 parallel: false
 conflicts_with: ["301", "303"]
