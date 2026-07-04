@@ -13,6 +13,7 @@ files:
   - remote-frontend/src/lib/api/profile.ts
   - remote-frontend/src/lib/api/oauth.ts
   - remote-frontend/src/lib/api/utils.ts
+  - remote-frontend/src/lib/api/oauth.test.ts
   - remote-frontend/src/api.ts
 irreversible: false
 scope_test: "remote-frontend/src/lib/api/oauth.test.ts"
