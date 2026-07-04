@@ -1,1 +1,0 @@
-{"task_id": "101", "status": "stopped", "attempts": 4, "executor": "anthropic", "stop_reason": "retry-exhausted:worker-stopped"}

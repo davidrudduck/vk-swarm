@@ -15,6 +15,9 @@ files:
   - remote-frontend/src/lib/electric/config.ts
   - remote-frontend/src/lib/electric/collections.ts
   - remote-frontend/src/lib/electric/index.ts
+  - remote-frontend/src/lib/electric/config.test.ts
+  - remote-frontend/src/lib/electric/collections.test.ts
+  - remote-frontend/src/lib/electric/bridge.test.ts
 irreversible: false
 scope_test: "remote-frontend/src/lib/electric/bridge.test.ts"
 allowed_change: create

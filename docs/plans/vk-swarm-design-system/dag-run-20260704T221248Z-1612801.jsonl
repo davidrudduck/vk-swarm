@@ -1,2 +1,0 @@
-{"task_id": "101", "status": "blocked", "attempts": 0, "executor": "anthropic", "stop_reason": "orchestrator-continue:worker-stopped"}
-{"task_id": "102", "status": "failed", "attempts": 0, "executor": "anthropic", "stop_reason": "orchestrator-abort:deadlock"}
