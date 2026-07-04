@@ -100,3 +100,58 @@
 - [Task 103] Test mocking: follows ProfileProvider.test.tsx pattern (vi.stubGlobal fetch + localStorage, renderHook with wrapper, waitFor loading state). Three test cases: (1) fetch 200 → signed-in + userId; (2) fetch 401 → signed-out + null userId; (3) no wrapper → throws.
 - [Task 103] Files: created `remote-frontend/src/hooks/auth/useAuth.ts` (wraps useProfile, 8 lines), created `remote-frontend/src/hooks/auth/useAuth.test.tsx` (3 tests, mocks fetch+localStorage).
 - [Task 103] Verification: `cd remote-frontend && npx vitest run src/hooks/auth/useAuth.test.tsx` exits 0 (3 tests pass), `cd remote-frontend && npx tsc --noEmit` exits 0 (zero errors), `cd remote-frontend && npm run lint` exits 0 (zero warnings).
+
+## Task 104: Hive app shell NormalLayout
+
+- [Task 104] **Dropped features from node Navbar:**
+  1. `view=preview|diffs` URL param hiding (hive has no preview/diffs routes) — NormalLayout unconditionally renders Navbar.
+  2. `DevBanner` component (depends on `ConfigProvider`/`useUserSystem` which hive doesn't have) — dropped entirely.
+  3. `ProjectSwitcher` (node concept; hive console has no per-project context) — dropped.
+  4. `SearchBar` + mobile search dialog (node concept; hive v1 has no search) — dropped.
+  5. Archive toggle (node task-list feature; not in hive scope) — dropped.
+  6. `ActivityFeed` component (depends on `useUserSystem`) — dropped.
+  7. `OpenInIdeButton` (node-frontend feature; hive has no IDE integration) — dropped.
+  8. `ThemeToggle` (node feature; hive inherits app theme) — dropped.
+  9. Dropdown menu for OAuth/settings (node pattern) — Logout is direct button instead.
+  10. Task creation button (hive console has no task creation from navbar) — dropped.
+  11. i18next translations (hive v1 not localized yet) — all labels hardcoded.
+  12. `useProject`, `useSearch`, `useUserSystem` hooks (node-frontend local state) — not imported.
+
+- [Task 104] **Nav structure changes:**
+  - Node INTERNAL_NAV: `/projects`, `/processes`. Hive nav: `/nodes`, `/tasks`, `/settings` (console-specific routes).
+  - Nav items in Navbar second row mirror the BottomNav structure (3 items, icon + label).
+  - Active link detection: exact path match (`location.pathname === item.to`) for hive, vs node's prefix matching (`startsWith`) for project-context scoped routes.
+
+- [Task 104] **Navbar implementation:**
+  - Slim Navbar (~60 lines including NavItem extraction): text logo "VK Swarm" linking to `/nodes`, nav row with 3 items (Nodes, Tasks, Settings), Logout button in top-right.
+  - Logout: calls `oauthApi.logout()` then `window.location.reload()` (no `reloadSystem()` available; hive handles session via localStorage token).
+  - Icons: `FolderOpen` (Nodes), `ListTodo` (Tasks), `Settings` (Settings), `LogOut` (Logout) — all from lucide-react.
+  - Active link styling: `border-b-2 border-primary py-2 text-foreground` (exact match to node Navbar.tsx:345-346).
+  - Used `data-testid="navbar"` on the nav wrapper for test assertion (undictated, required for test).
+
+- [Task 104] **BottomNav implementation:**
+  - Slim BottomNav (~40 lines): fixed bottom nav, `sm:hidden`, 3 items (Nodes, Tasks, Settings).
+  - NavItem sub-component inlined (not a separate file) — contains icon, label, active state, onClick handler.
+  - Icons: `FolderOpen`, `ListTodo`, `Settings` matching Navbar.
+  - Active detection: exact path match for each item.
+
+- [Task 104] **NormalLayout simplification:**
+  - Dropped `useSearchParams` hook and `view=preview|diffs` ternary (node has conditional Navbar hiding; hive always shows nav).
+  - Dropped `DevBanner` import entirely.
+  - Structure: `<> <Navbar /> <div className="flex-1 min-h-0 overflow-hidden pb-14 sm:pb-0"><Outlet /></div> <BottomNav /> </>` — verbatim from node, minus DevBanner.
+
+- [Task 104] **Test implementation:**
+  - Single test case: renders `NormalLayout` via `createMemoryRouter` with a test route containing a child `<div data-testid="outlet-child" />`.
+  - Assertions: (1) navbar renders (`getByTestId('navbar')`); (2) outlet child renders (`getByTestId('outlet-child')`); (3) bottom nav renders (check `getAllByRole('navigation').length > 0`).
+  - No `useProfile()` mocking needed — `NormalLayout` is a pure layout component with no state reads; both Navbar and BottomNav use `useLocation`/`useNavigate` which work inside `RouterProvider`.
+
+- [Task 104] **Utils and dependencies:**
+  - Created `remote-frontend/src/lib/utils.ts` with `cn()` helper (clsx + tailwind-merge) — verbatim from node frontend (no changes).
+  - Added `lucide-react@^1.7.0` to `remote-frontend/package.json` dependencies (matching node frontend major version).
+  - `npm install` ran locally to verify dependency resolution succeeded (344 packages); lock file not committed (task spec files list does not include it, unlike task 100).
+
+- [Task 104] **Verification:**
+  - `cd remote-frontend && npx tsc --noEmit` exits 0 (zero type errors).
+  - `cd remote-frontend && npx vitest run src/components/layout/NormalLayout.test.tsx` exits 0 (1 test passes).
+  - `cd remote-frontend && npm run lint` exits 0 (zero warnings, max-warnings 0).
+  - `WAI_TYPECHECK_CMD="cd remote-frontend && npx tsc --noEmit" WAI_TEST_CMD="cd remote-frontend && npx vitest run src/components/layout/NormalLayout.test.tsx" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-ui 104` exits 0 (CONFORMS).
