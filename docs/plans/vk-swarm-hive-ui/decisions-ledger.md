@@ -231,3 +231,47 @@
   - `cd remote-frontend && npm run lint` exits 0 (zero warnings introduced by this task; pre-existing warning in swarm/index.test.tsx:130 unrelated).
   - `cd frontend && npx tsc --noEmit` exits 0 (reference page still compiles, SC4 check).
   - `WAI_TYPECHECK_CMD="cd remote-frontend && npx tsc --noEmit" WAI_TEST_CMD="cd remote-frontend && npx vitest run src/pages/Nodes.parity.test.tsx" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-ui 204` exits 0 (CONFORMS: file-set OK, create A recorded, tests green).
+
+## Reachability gate
+
+### (a) Call-path trace
+
+**Entry point:** `remote-frontend/src/main.tsx:6-9` — `ReactDOM.createRoot(...).render(<App />)`
+
+**Full call chain:**
+1. `App.tsx:11-17` — `QueryClientProvider > ProfileProvider > AppRouter`
+2. `AppRouter.tsx:171-174` — `createBrowserRouter(createRoutes())` → `RouterProvider`
+3. `AppRouter.tsx:153-168` — `createRoutes()` returns route array:
+   - `/` → `RootRedirect` (`:17-25`): `useProfile()` from `ProfileProvider` → checks `localStorage.getItem('access_token')` (`ProfileProvider.tsx:46-85`)
+   - `/login` → `LoginPage` (`:27-84`): PKCE flow → `oauthApi.init()` (`lib/api/oauth.ts`) → POST `/v1/oauth/web/init` → `window.location.assign(authorize_url)`
+   - `/oauth/callback` → `OAuthCallbackPage` (`:87-149`): reads `handoff_id`+`app_code` from searchParams → `retrieveVerifier()` from sessionStorage → `oauthApi.redeem()` → `localStorage.setItem('access_token', ...)` → redirect
+   - `/nodes` → lazy `Nodes` page (`pages/Nodes.tsx`): `useOrganizations()` → `organizationsApi.list()` → `GET /v1/organizations` (bare JSON, Bearer auth)
+   - `/tasks` → lazy `TasksBoard` (`pages/Tasks.tsx`): `useLiveQuery()` → Electric sync via `taskAssignmentCollection` (`lib/electric/collections.ts`)
+
+**Every entry point verified by grep on the real merged code:**
+- `main.tsx:6-9` — `createRoot(...).render(<App />)` confirmed
+- `App.tsx:11-17` — Provider chain confirmed
+- `ProfileProvider.tsx:46-85` — Bearer auth from `localStorage.getItem('access_token')`, GET `/v1/profile`, 401→removeItem
+- `lib/api/oauth.ts` — `init()` POST `/v1/oauth/web/init` with `{provider, return_to, app_challenge}`, `redeem()` with `{handoff_id, app_code, app_verifier}` both bare JSON → matching `crates/remote/src/routes/oauth.rs:41-80`
+- `lib/api/organizations.ts` — `list()` GET `/v1/organizations` bare JSON
+- `lib/api/nodes.ts` — `list(orgId)` GET `/v1/nodes?organization_id=...` bare JSON
+- `lib/api/tasks.ts` — `setExecutingNode(taskId, nodeId)` PATCH `/v1/tasks/{id}/executing-node` with `{node_id}` — matching `crates/remote/src/routes/tasks.rs:617-647`
+- `lib/electric/collections.ts` — 6 collection functions with `shapeOptions: { url: createShapeUrl(...) }` + `getKey` — matching `@tanstack/electric-db-collection` API
+
+**No dead paths.** Every module is reachable from its route definition in `createRoutes()`.
+
+### (b) Real-seam test
+
+**`AppRouter.test.tsx` (`:27-40`)** drives `createRoutes()` via `createMemoryRouter(createRoutes(), ...)` — the real route definitions, not a mock. Tests exercise `/`→redirect, authenticated `/nodes`, and LoginPage rendering. This is a real-seam test: it exercises the ACTUAL route tree the browser router uses.
+
+**`App.test.tsx` (`:74-90`)** renders `<App />` directly — the real `main.tsx` entry component. Mocks `./AppRouter` (to probe provider context without route coupling) but exercises the real `QueryClientProvider > ProfileProvider` chain. The mock is appropriate: it substitutes the router leaf, not the providers under test.
+
+**`ProfileProvider.test.tsx`** drives the real `ProfileProvider` with real fetch mocks — tests no-token, signed-in, 401, and network-error paths on the actual React component.
+
+**`Nodes.test.tsx`** drives the real `Nodes` component through the real `useOrganizations` hook + `organizationsApi.list()` fetch pattern.
+
+### (c) Incident-symptom assertion
+
+**N/A — new feature.** No documented incident exists for vk-swarm-hive-ui. The workstream is a new hive-hosted console (rehosting swarm components + adding cross-node views). The real-seam tests in (b) exercise the actual production route tree and provider chain, confirming the new console shell is reachable end-to-end.
+
+VERDICT: PASS
