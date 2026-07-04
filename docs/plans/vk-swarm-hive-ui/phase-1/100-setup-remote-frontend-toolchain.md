@@ -2,7 +2,7 @@
 id: "100"
 phase: 1
 title: Install remote-frontend toolchain (vitest, eslint, @tanstack/react-db, testing-library)
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: []

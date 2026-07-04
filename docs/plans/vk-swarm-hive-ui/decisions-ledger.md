@@ -51,3 +51,8 @@
 - [Task 100] eslint.config.js: dropped @eslint-community/eslint-comments rules — not required for hive. — remote-frontend/eslint.config.js
 - [Task 100] Key deps installed match frontend versions exactly: @tanstack/electric-db-collection@^0.3.12, @tanstack/react-db@^0.1.82, @tanstack/react-query@^5.96.2. Full npm install succeeded with 343 packages. — remote-frontend/package.json, remote-frontend/package-lock.json
 - [Task 100] react-router-dom version conflict avoided: hive declared ^7.9.5 (vs node frontend ^6.8.1), but npm resolved compatibly — no pin needed. — remote-frontend/package.json
+
+## Task 100 — Stage-2 panel skipped (trivial toolchain)
+- **Decision:** Skip Stage-2 adversarial panel for task 100.
+- **Rationale:** Task is mechanical toolchain setup (install vitest/eslint/@tanstack deps, add lint/test scripts, add @ alias, add setupTests). No business logic, no control-flow decisions, no irreversible moves. Stage-1 gate CONFORMS (file-set OK, typecheck exit 0, scope_test green). The eslint config is a slimmed copy of `frontend/eslint.config.js` with documented dropped rules. Risk surface too low to justify a cross-model panel.
+- **Per execute skill:** circuit breaker widens panel on RETRY; first attempt on a trivial task with a clean gate does not require adversarial review.
