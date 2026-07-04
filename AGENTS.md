@@ -43,6 +43,16 @@ A remediation prompt written for "the next session" does NOT satisfy this rule. 
 
 Globally disabling a quality gate, linter, or entire test category via configuration (e.g. `doctest = false` in `Cargo.toml`, `#[cfg_attr(..., skip)]` on a whole module, or removing a test from the workspace) to bypass compilation or execution errors is itself a **silent deferral** and is prohibited unless paired with a tracked follow-up workstream created in THIS session or explicit user approval. Broken tests or documentation examples must be resolved at the source level — fixed, or selectively marked with the standard per-item attributes (e.g. `#[ignore]`, `rust,ignore`, `no_run`) so the remaining tests in the category continue to run and catch regressions.
 
+Per-item `#[ignore]` or `rust,ignore` markers are the sanctioned source-level path for tests that cannot currently run (e.g., requiring a live database, network endpoint, or PTY device unavailable in CI). Their use is legitimate PROVIDED the session either: (a) makes at least one test in the category live so the suite is not entirely dead; AND (b) creates a tracked follow-up workstream (`dev-docs/workstreams/<name>/README.md`) documenting which tests remain ignored and what is required to bring them live. Marking tests ignored without (b) is a deferred deferral — it satisfies the letter of "source-level per-item attribute" while violating the spirit of "clean ledger."
+
+## Testing standards
+
+When a test requires a populated SQLite database, use one of:
+- `db::test_utils::create_test_pool()` — fast template-copy approach; prefer for the majority of tests.
+- `db::test_utils::create_test_pool_with_migrations()` — fresh migrations per test; use when the test exercises migration behavior itself or needs the full production schema.
+
+Never manually duplicate `CREATE TABLE` SQL in test helpers (e.g., `setup_db()`-style functions). Schema defined outside `crates/db/migrations/` will drift from production and produce false-green tests that mask real regressions.
+
 ## Post-Phase Integrated Adversarial Review (mandatory)
 
 Per-task adversarial panels verify each task in isolation. They **cannot** catch cross-task
