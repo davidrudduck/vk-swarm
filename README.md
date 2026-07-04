@@ -96,6 +96,19 @@ This enables safe process management and helps executors discover which instance
 
 </details>
 
+### Testing
+
+Every PR must pass a four-check mandatory gate:
+
+```bash
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo test --workspace
+cd frontend && npm run lint
+cd frontend && npx tsc --noEmit
+```
+
+Hive (Postgres) tests in `crates/remote/` require a live migrated Postgres — set `DATABASE_URL` or tests silently skip (hollow pass). See [Testing & Quality Gate](docs/development/testing.mdx) for testing standards, test serialization, doctest handling, and the `#[ignore]` workstream requirement.
+
 ### Building the frontend
 
 To build just the frontend:
