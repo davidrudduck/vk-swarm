@@ -2,7 +2,7 @@
 id: "307"
 phase: 3
 title: Wire management actions (set executing node / delete) to hive REST routes
-status: ready
+status: done
 depends_on: ["305"]
 parallel: false
 conflicts_with: ["306"]
