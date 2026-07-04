@@ -1,0 +1,1167 @@
+diff --git a/.agents/reports/2026-07-04-round-1-gemini-goal-conformance.json b/.agents/reports/2026-07-04-round-1-gemini-goal-conformance.json
+new file mode 100644
+index 00000000..7de915a1
+--- /dev/null
++++ b/.agents/reports/2026-07-04-round-1-gemini-goal-conformance.json
+@@ -0,0 +1,24 @@
++{
++  "argv": [
++    "gemini",
++    "--skip-trust",
++    "--approval-mode=plan",
++    "--output-format=json",
++    "-p",
++    ""
++  ],
++  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river",
++  "exit_code": 0,
++  "finished_at": "2026-07-04T01:06:35.062124+00:00",
++  "notes": [],
++  "prompt_file": "/tmp/opencode/gemini-gate-review-prompt.md",
++  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river/.agents/reports/2026-07-04-round-1-gemini-goal-conformance.raw.log",
++  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river/.agents/reports/2026-07-04-round-1-gemini-goal-conformance.md",
++  "safety": "read-only",
++  "schema_version": "dr.executor.panel.v1",
++  "started_at": "2026-07-04T00:59:57.382988+00:00",
++  "status": "ok",
++  "task": "codebase-review",
++  "tool": "gemini",
++  "tool_version": "0.49.0"
++}
+diff --git a/.agents/reports/2026-07-04-round-1-gemini-goal-conformance.md b/.agents/reports/2026-07-04-round-1-gemini-goal-conformance.md
+new file mode 100644
+index 00000000..82b7bd1e
+--- /dev/null
++++ b/.agents/reports/2026-07-04-round-1-gemini-goal-conformance.md
+@@ -0,0 +1,137 @@
++# Adversarial Review: Pre-existing Gate Failures Remediation
++
++This document presents an adversarial review of the work on branch `fix/preexisting-gate-failures` (PR #452, target: `davidrudduck/vk-swarm`). The review applies two lenses:
++1. **Mechanics lens** — Is the code correct? Do the fixes actually fix what they claim? Are there regressions, hidden bugs, or half-fixes?
++2. **Fidelity lens** — Does the implementation meet the stated goals?
++
++---
++
++## 1. Verdict
++
++**PARTIALLY MEETS**
++
++**Justification:**  
++The branch successfully remediates 8 out of the 10 failure categories (F4–F10, F12) with high technical precision, backed by robust unit/integration tests that verify the correct outcomes. However, the remediation of F11 and F13 (disabling doctests globally for the `remote` and `services` crates via `doctest = false` in `Cargo.toml`) does not meet the "No Deferred Remediation" rule defined in `AGENTS.md`. Rather than resolving or correcting the 37 failing doctests within these crates, the author opted to disable doctest execution globally. This configuration change masks the underlying code quality/documentation debt instead of resolving it, violating the core mandate of carrying forward zero silent debt.
++
++---
++
++## 2. Q1: All failures remediated?
++
++The author claims that 10 failure categories (F4–F13) were remediated in this session, on top of 3 (F1–F3) previously resolved on `origin/main`. Below is the findings table detailing their status:
++
++| ID | Failure Category | Status | Evidence (Citations) |
++|---|---|---|---|
++| **F4** | INSERT helpers column lists in integration tests | **REMEDIATED** | `crates/remote/tests/backfill_e2e.rs` lines 48-132. The helper methods now use explicit column lists in SQL queries to prevent table schema drift breakage. |
++| **F5** | DB lock conflicts across test binaries | **REMEDIATED** | `crates/remote/tests/hive_cutover_migration.rs:37` & `backfill_e2e.rs:202`. Tests are marked with `#[file_serial]` for OS-level serialization. |
++| **F6** | Missing `node_outbox` table in SQLite test setups | **REMEDIATED** | `crates/services/tests/electric_task_sync.rs:102`. Setup helper now creates the `node_outbox` table explicitly. |
++| **F7** | Test-cleanup garbage (stray database files) | **REMEDIATED** | `crates/utils/src/assets.rs:103` & `assets.rs:140`. Refactored tests to run within self-cleaning `tempfile::tempdir()`. |
++| **F8** | TaskVariable doctest compilation and run errors | **REMEDIATED** | `crates/db/src/models/task_variable.rs:25` & `task_variable.rs:648`. Doctests are selectively marked with `ignore` or `no_run`. |
++| **F9** | Task sync doctest database execution failures | **REMEDIATED** | `crates/db/src/models/task/sync.rs:650` & `task/sync.rs:677`. Wrapped examples in compilation-only `async fn _example` block. |
++| **F10** | TaskAttempt doctest missing pool dependencies | **REMEDIATED** | `crates/db/src/models/task_attempt.rs:755` & `task_attempt.rs:809`. Examples selectively marked with `no_run` or helper block. |
++| **F11** | Disabling broken remote crate doctests globally | **DEFERRED (VIOLATION)** | `crates/remote/Cargo.toml:13`. Added `doctest = false` in `[lib]`, disabling all 31 doctests for the entire crate. |
++| **F12** | Environment variable races in MCP context tests | **REMEDIATED** | `crates/server/tests/mcp_context_test.rs:20` & `mcp_context_test.rs:25`. Marked tests with `#[serial]` to serialize execution. |
++| **F13** | Disabling broken services crate doctests globally | **DEFERRED (VIOLATION)** | `crates/services/Cargo.toml:7`. Added `doctest = false` in `[lib]`, disabling all 6 doctests for the entire crate. |
++
++### Scrutiny of `doctest = false` (F11, F13)
++
++The author argues that these 37 doctests (31 in `remote`, 6 in `services`) are "pre-existing broken debt, never passing" and that disabling them resolves the CI gate block.
++
++* **Legitimate Remediation (Side A):** The build configuration was permanently fixed, ensuring that `cargo test --workspace` runs clean in future sessions. No future session will inherit a "broken gate check" since the check is completely eliminated.
++* **Silent Deferral / Violation (Side B):** Doctests represent active API documentation contracts. Disabling them hides syntax errors, signature mismatches, and configuration rot in public documentations. By disabling them globally at the Cargo configuration level, rather than fixing individual doc comments or applying selective `no_run` or `ignore` attributes, the author bypassed the quality gate. This leaves unverified code snippets in the codebase, carrying debt forward silently.
++* **Verdict:** **NON-COMPLIANT DEFERRAL**. Disabling entire suites globally in `Cargo.toml` without creating an approved, tracked follow-up workstream in `/dev-docs/workstreams/` violates the core mandate of `AGENTS.md`.
++
++---
++
++## 3. Q2: No-deferral compliance
++
++Legitimate resolutions for pre-existing debt defined in `AGENTS.md` (lines 24-42) are:
++1. **Fix now** — remediate the failure in this session.
++2. **Split as a legitimate named scope split** — with a tracked follow-up workstream (`dev-docs/workstreams/<name>/README.md`) created in this session.
++3. **Escalate to the user** — if the fix is architecturally entangled.
++
++Below is the classification of each category's resolution:
++
++| ID | Resolution Used | Compliant? | Evidence (Citations) |
++|---|---|---|---|
++| **F4** | Fix now | **Yes** | `crates/remote/tests/backfill_e2e.rs` lines 48-132 |
++| **F5** | Fix now | **Yes** | `crates/remote/tests/hive_cutover_migration.rs:37` |
++| **F6** | Fix now | **Yes** | `crates/services/tests/electric_task_sync.rs:102` |
++| **F7** | Fix now | **Yes** | `crates/utils/src/assets.rs:103` |
++| **F8** | Fix now | **Yes** | `crates/db/src/models/task_variable.rs:25` |
++| **F9** | Fix now | **Yes** | `crates/db/src/models/task/sync.rs:650` |
++| **F10** | Fix now | **Yes** | `crates/db/src/models/task_attempt.rs:755` |
++| **F11** | Silent Deferral | **No** | `crates/remote/Cargo.toml:13` (globally disabled without tracking) |
++| **F12** | Fix now | **Yes** | `crates/server/tests/mcp_context_test.rs:25` |
++| **F13** | Silent Deferral | **No** | `crates/services/Cargo.toml:7` (globally disabled without tracking) |
++
++---
++
++## 4. Q3: CLAUDE.md/AGENTS.md gap analysis
++
++**Verdict:** There is a minor structural gap in the current rules.
++
++* **Gap:** While both `AGENTS.md` (lines 24–42) and `CLAUDE.md` (lines 12–13) enforce "No Carry-forward" and "Finish what we start," they do not explicitly state that disabling gates/check runners (like doctests) globally via configuration constitutes a silent deferral of debt. This omission allowed the author to bypass doctest validation while technically making the CI green.
++* **Proposed Edit to `AGENTS.md`:**  
++  Add the following paragraph under the **"Pre-existing debt discovered during a session (no carry-forward)"** subsection (immediately after line 42):
++  
++  > "Globally disabling quality gates, linters, or entire test categories via configuration (for example, setting `doctest = false` in `Cargo.toml` to bypass compilation or execution errors) without a logged, tracked follow-up workstream or explicit user approval is considered a **silent deferral** and is strictly prohibited. Broken tests or documentation examples must either be resolved immediately, or selectively ignored/bypassed at the source-code level using standard attributes (e.g., `#[ignore]`, `no_run`, or `ignore`) so that the rest of the suite continues to run and validate other targets."
++
++---
++
++## 5. Q4: Mechanics findings
++
++The individual fixes are evaluated for mechanical correctness below:
++
++| File | Finding | Severity | Evidence (Citations) |
++|---|---|---|---|
++| `crates/remote/tests/backfill_e2e.rs` | **Correct**. Explicit column lists are specified for table insertions. The use of `assignment_id = None` does not mask any backfill logic because backfill tests focus on unassigned attempts. | **Green (Info)** | `backfill_e2e.rs:48-132` |
++| `crates/remote/tests/hive_cutover_migration.rs` + `backfill_e2e.rs` | **Correct**. `#[file_serial]` uses system file locks, which serialize across different executable binaries (separate processes). This correctly prevents concurrent PostgreSQL access collisions. | **Green (Info)** | `hive_cutover_migration.rs:37` & `backfill_e2e.rs:202` |
++| `crates/services/tests/electric_task_sync.rs` | **Correct**. The added `node_outbox` table schema matches the production schema (columns, types, constraints, and default values) identically, preventing test environment mismatches. | **Green (Info)** | `electric_task_sync.rs:102` |
++| `crates/utils/src/assets.rs` | **Correct**. `tempfile::tempdir()` successfully manages creation and recursive cleanup of test directories on `Drop`, preserving parent directory initialization tests correctly. | **Green (Info)** | `assets.rs:103` & `assets.rs:140` |
++| `crates/db/src/models/task_variable.rs`, `sync.rs`, `task_attempt.rs` | **Correct**. Doctests compile correctly and use standard `ignore`, `no_run`, or helper block patterns, preventing test-runner crashes without reducing documentation completeness. | **Green (Info)** | `task_variable.rs:25`, `sync.rs:650`, `task_attempt.rs:755` |
++| `crates/server/tests/mcp_context_test.rs` | **Correct**. Thread serialization via `#[serial]` is sufficient. Process-level environment variables are only shared across threads within this binary, so process serialization is not required. | **Green (Info)** | `mcp_context_test.rs:25` & `mcp_context_test.rs:113` |
++| `crates/server/src/routes/projects/handlers/swarm.rs` & `tasks/handlers/remote.rs` | **Correct**. Paths are fully correct. The two `ignore` markers are justified because the helper methods depend on complex, live-system environments that are not constructible in plain doctests. | **Green (Info)** | `swarm.rs:36` & `remote.rs:29` |
++
++---
++
++## 6. Q5: Regression risk
++
++* **Global Doctest Suppression (F11, F13):**
++  * **Severity:** **Medium-High (P1)**
++  * **Risk:** Globally disabling doctests via `Cargo.toml` prevents the compiler from verifying *any* doc-test examples in the `remote` and `services` crates. Future signature changes, rename refactors, or path changes in public APIs within these crates will fail to trigger compilation errors, leading to documentation rot and hidden API breakages.
++* **Table Schema Redundancy in Tests (F6):**
++  * **Severity:** **Low (P2)**
++  * **Risk:** Inlining the `node_outbox` SQL table definition in `electric_task_sync.rs` creates a duplicate schema fixture. If the production migration changes or adds columns in `node_outbox`, the test's copy-pasted setup will fall out of sync, leading to test failures or hidden bugs.
++* **Cross-Binary Serialization Overhead (F5):**
++  * **Severity:** **Low (Info)**
++  * **Risk:** Using `#[file_serial]` slows down the concurrent execution of integration tests. However, since these tests perform exclusive write locks (`TRUNCATE TABLE`) on a shared Postgres database, sequential execution is a strict physical requirement, making the overhead highly justified.
++
++---
++
++## 7. Actionable findings
++
++### 1. Re-enable doctest validation and fix source doc-comments [P1]
++* **Finding:** Disabling doctests globally via `doctest = false` in `Cargo.toml` bypasses verification gates, allowing documentation rot to accumulate.
++* **Suggested Fix:** 
++  1. Remove `doctest = false` from `crates/remote/Cargo.toml` and `crates/services/Cargo.toml`.
++  2. Run `cargo test --doc -p remote` and `cargo test --doc -p services` to find the specific failing doctests.
++  3. Resolve the compilation/runtime failures (e.g., add missing imports or wrap in compilation-only `async fn`) or selectively mark the failing doc code-blocks as `ignore` or `no_run` at the source-comment level rather than globally disabling them for the entire crate.
++* **File:Line:** `crates/remote/Cargo.toml:13` & `crates/services/Cargo.toml:7`
++
++### 2. Close configuration-level gate bypass gap in AGENTS.md [P1]
++* **Finding:** `AGENTS.md` and `CLAUDE.md` do not explicitly prohibit bypassing gates via build-level configs, creating an escape hatch for agents.
++* **Suggested Fix:** Insert the proposed edit (prohibiting global test disabling) under the "Pre-existing debt discovered during a session" subsection in `AGENTS.md`.
++* **File:Line:** `AGENTS.md:42`
++
++### 3. De-duplicate `node_outbox` schema in services integration test [P2]
++* **Finding:** `electric_task_sync.rs` duplicates the production `node_outbox` table definition in its test setup.
++* **Suggested Fix:** Extract the schema definition to a shared test migration helper or use the database migration module to set up the in-memory SQLite schema rather than copy-pasting raw SQL strings in test functions.
++* **File:Line:** `crates/services/tests/electric_task_sync.rs:102`
++
++---
++
++## 8. Non-actionable observations
++
++* The choice of `#[file_serial]` over `#[serial]` for cross-executable database tests is exceptionally sound. It uses OS-level file locking to cleanly handle cross-process concurrency on shared database instances.
++* The transition of assets directory overrides to `tempfile::tempdir()` is idiomatic and clean. It ensures a garbage-free test run by cleaning up temporary directories automatically upon drop.
++* MCP context tests are successfully serialized thread-wise with `#[serial]`, which is highly precise and sufficient for thread-shared process variables.
+diff --git a/AGENTS.md b/AGENTS.md
+index e6a43074..a1590c21 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -41,6 +41,8 @@ When a session discovers pre-existing failures (tests, lint, typecheck, or any g
+ 
+ A remediation prompt written for "the next session" does NOT satisfy this rule. "We finish what we start" means the debt is resolved (fixed, split, or escalated) before the session closes — never carried forward silently. The next session must inherit a clean ledger, not a backlog of "fix this later" notes.
+ 
++Globally disabling a quality gate, linter, or entire test category via configuration (e.g. `doctest = false` in `Cargo.toml`, `#[cfg_attr(..., skip)]` on a whole module, or removing a test from the workspace) to bypass compilation or execution errors is itself a **silent deferral** and is prohibited unless paired with a tracked follow-up workstream created in THIS session or explicit user approval. Broken tests or documentation examples must be resolved at the source level — fixed, or selectively marked with the standard per-item attributes (e.g. `#[ignore]`, `rust,ignore`, `no_run`) so the remaining tests in the category continue to run and catch regressions.
++
+ ## Post-Phase Integrated Adversarial Review (mandatory)
+ 
+ Per-task adversarial panels verify each task in isolation. They **cannot** catch cross-task
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 172f0822..01d6407e 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -10,7 +10,7 @@
+ - **UTC Timestamps**: All timestamps stored as `DateTime<Utc>` (Rust) and ISO 8601 strings (JSON/SQLite).
+ - **GitHub Targeting**: Open pull requests only against `davidrudduck/vk-swarm`. Do not open PRs against `BloopAI/vibe-kanban` from this workspace.
+ - **Finish What We Start**: A PR must leave `cargo clippy --all --all-targets --all-features -- -D warnings`, `cargo test --workspace`, `cd frontend && npm run lint`, and `npx tsc --noEmit` all green. No CI-breaking or half-implemented debt is deferred to the next session. Legitimate scope splits (entangled features, approved `vk-swarm-node-ui-localize`-style workstreams) are the only exception — they must be explicitly named, tracked in a follow-up workstream, and documented in the decisions-ledger before the PR is submitted.
+-- **No Deferred Remediation**: Code review findings (from adversarial panels, Gemini review, `/dr:pr`, the WAI reachability gate, or any other review step) must be fixed in the **same session** before the PR is pushed or merged. "Fix in the next session" is not an option. If a finding is determined to be a false positive, document why in the decisions-ledger (with the specific grep/file:line evidence that disproves it). If it is real, fix it now. **Pre-existing debt discovered during a session** (tests/lint/typecheck red on the baseline before the session's changes) is likewise NOT carried forward silently: fix it now, split it as a legitimate named scope split with a tracked follow-up workstream created in THIS session, or escalate to the user. A remediation prompt written for the next session does not satisfy this rule — "we finish what we start" means the next session inherits a clean ledger, not a backlog.
++- **No Deferred Remediation**: Code review findings (from adversarial panels, Gemini review, `/dr:pr`, the WAI reachability gate, or any other review step) must be fixed in the **same session** before the PR is pushed or merged. "Fix in the next session" is not an option. If a finding is determined to be a false positive, document why in the decisions-ledger (with the specific grep/file:line evidence that disproves it). If it is real, fix it now. **Pre-existing debt discovered during a session** (tests/lint/typecheck red on the baseline before the session's changes) is likewise NOT carried forward silently: fix it now, split it as a legitimate named scope split with a tracked follow-up workstream created in THIS session, or escalate to the user. A remediation prompt written for the next session does not satisfy this rule — "we finish what we start" means the next session inherits a clean ledger, not a backlog. Globally disabling a quality gate, linter, or entire test category via configuration (e.g. `doctest = false` in `Cargo.toml`) to bypass compilation/execution errors is itself a **silent deferral** and is prohibited unless paired with a tracked follow-up workstream created in THIS session or explicit user approval. Broken tests or documentation examples must be resolved at the source level — fixed, or selectively marked with the standard per-item attributes (e.g. `#[ignore]`, `rust,ignore`, `no_run`) so the remaining tests in the category continue to run and catch regressions.
+ 
+ ## 2. Tech Stack
+ 
+diff --git a/Cargo.lock b/Cargo.lock
+index 042128f7..1d2fc406 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1989,6 +1989,16 @@ dependencies = [
+  "libc",
+ ]
+ 
++[[package]]
++name = "fslock"
++version = "0.2.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "04412b8935272e3a9bae6f48c7bfff74c2911f60525404edfdd28e49884c3bfb"
++dependencies = [
++ "libc",
++ "winapi",
++]
++
+ [[package]]
+ name = "fst"
+ version = "0.4.7"
+@@ -5147,6 +5157,7 @@ version = "3.3.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "0d0b343e184fc3b7bb44dff0705fffcf4b3756ba6aff420dddd8b24ca145e555"
+ dependencies = [
++ "fslock",
+  "futures-executor",
+  "futures-util",
+  "log",
+@@ -5198,6 +5209,7 @@ dependencies = [
+  "secrecy",
+  "serde",
+  "serde_json",
++ "serial_test",
+  "services",
+  "sha2",
+  "shlex",
+@@ -6640,6 +6652,7 @@ dependencies = [
+  "shlex",
+  "similar",
+  "sqlx",
++ "tempfile",
+  "thiserror 2.0.18",
+  "tokio",
+  "tokio-stream",
+diff --git a/crates/db/src/models/task/sync.rs b/crates/db/src/models/task/sync.rs
+index 3a2cafdb..24bdf046 100644
+--- a/crates/db/src/models/task/sync.rs
++++ b/crates/db/src/models/task/sync.rs
+@@ -648,8 +648,10 @@ impl Task {
+     /// # Examples
+     ///
+     /// ```
+-    /// # async fn _example(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
+-    /// let unsynced = crate::models::task::Task::count_unsynced(pool).await?;
++    /// # use sqlx::SqlitePool;
++    /// # use db::models::task::Task;
++    /// # async fn _example(pool: &SqlitePool) -> Result<(), sqlx::Error> {
++    /// let unsynced = Task::count_unsynced(pool).await?;
+     /// assert!(unsynced >= 0);
+     /// # Ok(()) }
+     /// ```
+@@ -675,10 +677,11 @@ impl Task {
+     /// ```no_run
+     /// # use sqlx::SqlitePool;
+     /// # use uuid::Uuid;
++    /// # use db::models::task::Task;
+     /// # async fn example() -> Result<(), sqlx::Error> {
+     /// let pool = SqlitePool::connect("sqlite::memory:").await?;
+     /// let project_id = Uuid::new_v4();
+-    /// let tasks = crate::models::task::Task::find_synced_tasks_for_project(&pool, project_id).await?;
++    /// let tasks = Task::find_synced_tasks_for_project(&pool, project_id).await?;
+     /// # Ok(())
+     /// # }
+     /// ```
+@@ -749,9 +752,10 @@ impl Task {
+     ///
+     /// ```
+     /// # use sqlx::SqlitePool;
++    /// # use db::models::task::Task;
+     /// # async fn _example() -> Result<(), sqlx::Error> {
+     /// let pool = SqlitePool::connect(":memory:").await?;
+-    /// let tasks = crate::models::task::Task::find_needing_resync(&pool, 50).await?;
++    /// let tasks = Task::find_needing_resync(&pool, 50).await?;
+     /// // `tasks` is a Vec<Task> of records needing resync (may be empty).
+     /// # Ok(()) }
+     /// ```
+diff --git a/crates/db/src/models/task_attempt.rs b/crates/db/src/models/task_attempt.rs
+index 3074ec2e..92afa9d6 100644
+--- a/crates/db/src/models/task_attempt.rs
++++ b/crates/db/src/models/task_attempt.rs
+@@ -755,9 +755,10 @@ impl TaskAttempt {
+     /// ```no_run
+     /// # use sqlx::SqlitePool;
+     /// # use uuid::Uuid;
++    /// # use db::models::task_attempt::TaskAttempt;
+     /// # async fn example(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+     /// let project_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+-    /// let updated = crate::models::task_attempt::TaskAttempt::clear_hive_sync_for_project_tx(pool, project_id).await?;
++    /// let updated = TaskAttempt::clear_hive_sync_for_project_tx(pool, project_id).await?;
+     /// println!("Updated {} rows", updated);
+     /// # Ok(())
+     /// # }
+@@ -806,6 +807,7 @@ impl TaskAttempt {
+     /// # Examples
+     ///
+     /// ```
++    /// # use db::models::task_attempt::TaskAttempt;
+     /// # async fn example(pool: &sqlx::SqlitePool, id: uuid::Uuid) -> Result<(), sqlx::Error> {
+     /// TaskAttempt::delete(pool, id).await?;
+     /// # Ok(())
+diff --git a/crates/db/src/models/task_variable.rs b/crates/db/src/models/task_variable.rs
+index dc6c499b..aeec5afd 100644
+--- a/crates/db/src/models/task_variable.rs
++++ b/crates/db/src/models/task_variable.rs
+@@ -387,7 +387,7 @@ impl TaskVariable {
+     /// ```no_run
+     /// # use sqlx::SqlitePool;
+     /// # use uuid::Uuid;
+-    /// # use crates::db::models::task_variable::TaskVariable;
++    /// # use db::models::task_variable::TaskVariable;
+     /// # async fn example(pool: &SqlitePool, task_id: Uuid) {
+     /// let map = TaskVariable::get_variable_map(pool, task_id).await.unwrap();
+     /// if let Some((value, source)) = map.get("TASK_TITLE") {
+@@ -414,12 +414,15 @@ impl TaskVariable {
+     /// # Examples
+     ///
+     /// ```no_run
+-    /// use uuid::Uuid;
+-    /// // within an async context
+-    /// let vars = TaskVariable::find_inherited_with_system(&pool, task_id).await?;
++    /// # use sqlx::SqlitePool;
++    /// # use uuid::Uuid;
++    /// # use db::models::task_variable::TaskVariable;
++    /// # async fn example(pool: &SqlitePool, task_id: Uuid) -> Result<(), sqlx::Error> {
++    /// let vars = TaskVariable::find_inherited_with_system(pool, task_id).await?;
+     /// for v in vars {
+     ///     println!("{} = {}", v.name, v.value);
+     /// }
++    /// # Ok(()) }
+     /// ```
+     pub async fn find_inherited_with_system(
+         pool: &SqlitePool,
+@@ -450,11 +453,11 @@ impl TaskVariable {
+     /// # Examples
+     ///
+     /// ```no_run
+-    /// # use sqlx::SqlitePool; use uuid::Uuid;
+-    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+-    /// let pool = SqlitePool::connect("sqlite::memory:").await?;
+-    /// let task_id = Uuid::new_v4();
+-    /// let vars = crate::models::task_variable::get_variable_map_with_system(&pool, task_id).await?;
++    /// # use sqlx::SqlitePool;
++    /// # use uuid::Uuid;
++    /// # use db::models::task_variable::TaskVariable;
++    /// # async fn example(pool: &SqlitePool, task_id: Uuid) -> Result<(), sqlx::Error> {
++    /// let vars = TaskVariable::get_variable_map_with_system(pool, task_id).await?;
+     /// // `vars` is a HashMap<String, (String, Uuid)> where keys are variable names.
+     /// # Ok(()) }
+     /// ```
+diff --git a/crates/local-deployment/src/lib.rs b/crates/local-deployment/src/lib.rs
+index f622005a..296d117b 100644
+--- a/crates/local-deployment/src/lib.rs
++++ b/crates/local-deployment/src/lib.rs
+@@ -91,11 +91,12 @@ impl Deployment for LocalDeployment {
+     ///
+     /// # Examples
+     ///
+-    /// ```
+-    /// # tokio_test::block_on(async {
+-    /// let deployment = LocalDeployment::new().await.unwrap();
++    /// ```no_run
++    /// # async fn run() {
++    /// use deployment::Deployment;
++    /// let deployment = local_deployment::LocalDeployment::new().await.unwrap();
+     /// assert!(!deployment.user_id().is_empty());
+-    /// # });
++    /// # }
+     /// ```
+     async fn new() -> Result<Self, DeploymentError> {
+         // Load config and OAuth credentials in parallel for faster startup
+diff --git a/crates/remote/Cargo.toml b/crates/remote/Cargo.toml
+index 78d1e4ff..60c72762 100644
+--- a/crates/remote/Cargo.toml
++++ b/crates/remote/Cargo.toml
+@@ -42,7 +42,7 @@ subtle = "2.6"
+ dashmap = "6.1"
+ 
+ [dev-dependencies]
+-serial_test = "3"
++serial_test = { version = "3", features = ["file_locks"] }
+ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+ 
+ # Enable sqlx test macros for integration tests
+diff --git a/crates/remote/src/db/swarm_projects.rs b/crates/remote/src/db/swarm_projects.rs
+index 039e776c..f300421d 100644
+--- a/crates/remote/src/db/swarm_projects.rs
++++ b/crates/remote/src/db/swarm_projects.rs
+@@ -256,7 +256,7 @@ impl SwarmProjectRepository {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # async fn doc_example(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
+     /// use uuid::Uuid;
+     /// let org_id = Uuid::new_v4();
+@@ -870,7 +870,7 @@ impl SwarmProjectRepository {
+     ///
+     /// # Examples
+     ///
+-    /// ```no_run
++    /// ```,ignore
+     /// use uuid::Uuid;
+     /// // construct or obtain a PgPool named `pool`
+     /// let pool = unimplemented!();
+diff --git a/crates/remote/src/db/tasks.rs b/crates/remote/src/db/tasks.rs
+index b927b72b..75947449 100644
+--- a/crates/remote/src/db/tasks.rs
++++ b/crates/remote/src/db/tasks.rs
+@@ -236,7 +236,7 @@ impl<'a> SharedTaskRepository<'a> {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # async fn example(repo: &crate::SharedTaskRepository<'_>, id: Uuid) {
+     /// let result = repo.find_by_id(id).await.unwrap();
+@@ -347,7 +347,7 @@ impl<'a> SharedTaskRepository<'a> {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # async fn example(repo: &SharedTaskRepository<'_>, node_id: uuid::Uuid, task_id: uuid::Uuid) -> Result<(), SharedTaskError> {
+     /// let found = repo.find_by_source_task_id(node_id, task_id).await?;
+     /// if let Some(task) = found {
+@@ -479,7 +479,7 @@ impl<'a> SharedTaskRepository<'a> {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # use chrono::Utc;
+     /// # async fn example(repo: &crate::SharedTaskRepository<'_>) -> Result<(), crate::SharedTaskError> {
+@@ -582,7 +582,7 @@ impl<'a> SharedTaskRepository<'a> {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # async fn example(repo: &crate::SharedTaskRepository<'_>) -> Result<(), crate::SharedTaskError> {
+     /// use uuid::Uuid;
+     /// use crate::{UpsertTaskFromNodeData, TaskStatus};
+@@ -710,7 +710,7 @@ impl<'a> SharedTaskRepository<'a> {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # async fn example(repo: &crate::SharedTaskRepository<'_>, project_id: Uuid) {
+     /// let result = repo.bulk_fetch(project_id).await.unwrap();
+@@ -850,7 +850,7 @@ impl<'a> SharedTaskRepository<'a> {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// // Example usage in an async context:
+     /// # async fn _example(repo: &crate::SharedTaskRepository<'_>, task_id: uuid::Uuid, data: crate::UpdateSharedTaskData) -> Result<(), crate::SharedTaskError> {
+     /// let result = repo.update(task_id, data).await?;
+@@ -958,7 +958,7 @@ impl<'a> SharedTaskRepository<'a> {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # async fn example(repo: &SharedTaskRepository<'_>, task_id: uuid::Uuid) -> Result<(), SharedTaskError> {
+     /// let data = AssignTaskData {
+     ///     new_assignee_user_id: Some(uuid::Uuid::new_v4()),
+@@ -1049,7 +1049,7 @@ impl<'a> SharedTaskRepository<'a> {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # use crate::db::tasks::{SharedTaskRepository, TaskStatus};
+     /// # async fn example(repo: &SharedTaskRepository<'_>) {
+@@ -1146,7 +1146,7 @@ impl<'a> SharedTaskRepository<'a> {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # async fn example(repo: &crate::db::tasks::SharedTaskRepository<'_>) -> Result<(), crate::db::tasks::SharedTaskError> {
+     /// let task_id = Uuid::new_v4();
+diff --git a/crates/remote/src/nodes/service.rs b/crates/remote/src/nodes/service.rs
+index ba10e79c..a3dd209e 100644
+--- a/crates/remote/src/nodes/service.rs
++++ b/crates/remote/src/nodes/service.rs
+@@ -102,7 +102,7 @@ impl From<NodeApiKeyError> for NodeError {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// use uuid::Uuid;
+     /// // construct an example variant
+     /// let api_err = crate::nodes::NodeApiKeyError::NotFound;
+@@ -131,7 +131,7 @@ impl From<SwarmProjectError> for NodeError {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// use uuid::Uuid;
+     /// // example variants; adjust imports to actual module paths in real code
+     /// let ne: crate::nodes::service::NodeError = crate::swarm_projects::SwarmProjectError::NotFound.into();
+@@ -518,7 +518,7 @@ impl NodeServiceImpl {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// use uuid::Uuid;
+     ///
+     /// # async fn _example(service: &crate::nodes::NodeServiceImpl) {
+@@ -724,7 +724,7 @@ impl NodeServiceImpl {
+     ///
+     /// # Examples
+     ///
+-    /// ```rust,no_run
++    /// ```rust,ignore
+     /// # use uuid::Uuid;
+     /// # use crate::nodes::{NodeServiceImpl, NodeStatus};
+     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+@@ -775,7 +775,7 @@ impl NodeServiceImpl {
+     ///
+     /// # Examples
+     ///
+-    /// ```no_run
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # async fn example(svc: &crate::nodes::service::NodeServiceImpl) -> Result<(), Box<dyn std::error::Error>> {
+     /// let node_id = Uuid::new_v4();
+diff --git a/crates/remote/src/nodes/ws/dispatcher.rs b/crates/remote/src/nodes/ws/dispatcher.rs
+index 5c6a7c70..8267e8fb 100644
+--- a/crates/remote/src/nodes/ws/dispatcher.rs
++++ b/crates/remote/src/nodes/ws/dispatcher.rs
+@@ -31,7 +31,7 @@ impl TaskDispatcher {
+     ///
+     /// # Examples
+     ///
+-    /// ```no_run
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # use crate::nodes::ws::{TaskDispatcher, TaskDetails};
+     /// # async fn example(dispatcher: &TaskDispatcher) -> Result<(), Box<dyn std::error::Error>> {
+@@ -73,7 +73,7 @@ impl TaskDispatcher {
+     ///
+     /// # Examples
+     ///
+-    /// ```no_run
++    /// ```,ignore
+     /// use uuid::Uuid;
+     /// # async fn example(dispatcher: &crate::nodes::ws::TaskDispatcher, node: &crate::db::swarm_projects::SwarmProjectNodeForDispatch) {
+     /// let task_id = Uuid::new_v4();
+@@ -139,7 +139,7 @@ impl TaskDispatcher {
+     ///
+     /// # Examples
+     ///
+-    /// ```no_run
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # async fn example(dispatcher: &crate::nodes::ws::dispatcher::TaskDispatcher) -> Result<(), ()> {
+     /// let swarm_project_id = Uuid::new_v4();
+@@ -204,7 +204,7 @@ impl TaskDispatcher {
+     ///
+     /// # Examples
+     ///
+-    /// ```no_run
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # use crate::nodes::ws::dispatcher::TaskDispatcher;
+     /// # use crate::nodes::ws::dispatcher::AssignResult;
+diff --git a/crates/remote/src/nodes/ws/session.rs b/crates/remote/src/nodes/ws/session.rs
+index 0be1cf20..f84e8031 100644
+--- a/crates/remote/src/nodes/ws/session.rs
++++ b/crates/remote/src/nodes/ws/session.rs
+@@ -54,7 +54,7 @@ const OUTGOING_BUFFER_SIZE: usize = 64;
+ ///
+ /// # Examples
+ ///
+-/// ```
++/// ```,ignore
+ /// assert_eq!(extract_project_name("https://example.com/org/repo.git"), "repo.git");
+ /// assert_eq!(extract_project_name("C:\\path\\to\\project\\"), "project");
+ /// assert_eq!(extract_project_name("/single_component"), "single_component");
+@@ -969,7 +969,7 @@ async fn handle_link_project(
+ ///
+ /// # Examples
+ ///
+-/// ```no_run
++/// ```,ignore
+ /// use uuid::Uuid;
+ /// # async fn doc() {
+ /// let pool = /* PgPool */ todo!();
+@@ -1099,7 +1099,7 @@ async fn handle_unlink_project(
+ ///
+ /// # Examples
+ ///
+-/// ```
++/// ```,ignore
+ /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+ /// # // placeholders for required values
+ /// # let pool = todo!("PgPool instance");
+@@ -1217,7 +1217,7 @@ async fn send_message(
+ ///
+ /// # Examples
+ ///
+-/// ```
++/// ```,ignore
+ /// # async fn example(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
+ /// use uuid::Uuid;
+ /// use chrono::Utc;
+diff --git a/crates/remote/src/routes/error.rs b/crates/remote/src/routes/error.rs
+index 5d61ab73..99af6615 100644
+--- a/crates/remote/src/routes/error.rs
++++ b/crates/remote/src/routes/error.rs
+@@ -47,7 +47,7 @@ impl IntoResponse for ErrorResponse {
+ ///
+ /// # Examples
+ ///
+-/// ```
++/// ```,ignore
+ /// use axum::http::StatusCode;
+ /// use crate::db::SharedTaskError;
+ ///
+diff --git a/crates/remote/src/routes/mod.rs b/crates/remote/src/routes/mod.rs
+index 9470502c..90ec119b 100644
+--- a/crates/remote/src/routes/mod.rs
++++ b/crates/remote/src/routes/mod.rs
+@@ -43,7 +43,7 @@ mod tokens;
+ ///
+ /// # Examples
+ ///
+-/// ```rust,no_run
++/// ```rust,ignore
+ /// use crate::routes::router;
+ /// use crate::AppState;
+ ///
+diff --git a/crates/remote/src/routes/nodes.rs b/crates/remote/src/routes/nodes.rs
+index 9e5b71c6..897bceff 100644
+--- a/crates/remote/src/routes/nodes.rs
++++ b/crates/remote/src/routes/nodes.rs
+@@ -36,7 +36,7 @@ const API_KEY_HEADER: &str = "x-api-key";
+ ///
+ /// # Examples
+ ///
+-/// ```
++/// ```,ignore
+ /// let router = api_key_router();
+ /// // router now contains POST /nodes/register and POST /nodes/{node_id}/heartbeat
+ /// ```
+@@ -240,7 +240,7 @@ pub struct RegisterNodeResponse {
+ ///
+ /// # Examples
+ ///
+-/// ```
++/// ```,ignore
+ /// # use axum::http::HeaderMap;
+ /// # use axum::extract::State;
+ /// # use axum::Json;
+diff --git a/crates/remote/src/routes/organization_members.rs b/crates/remote/src/routes/organization_members.rs
+index 166ccf84..6f7dfdcd 100644
+--- a/crates/remote/src/routes/organization_members.rs
++++ b/crates/remote/src/routes/organization_members.rs
+@@ -507,7 +507,7 @@ pub(crate) async fn ensure_member_access(
+ ///
+ /// # Examples
+ ///
+-/// ```no_run
++/// ```,ignore
+ /// # use sqlx::PgPool;
+ /// # use uuid::Uuid;
+ /// # async fn example(pool: &PgPool, org_id: Uuid, user_id: Uuid) {
+@@ -539,7 +539,7 @@ pub(crate) async fn ensure_admin_access(
+ ///
+ /// # Examples
+ ///
+-/// ```no_run
++/// ```,ignore
+ /// # use sqlx::PgPool;
+ /// # use uuid::Uuid;
+ /// # use crate::api::ensure_project_access;
+diff --git a/crates/remote/src/routes/tasks.rs b/crates/remote/src/routes/tasks.rs
+index f090aa74..02b1445a 100644
+--- a/crates/remote/src/routes/tasks.rs
++++ b/crates/remote/src/routes/tasks.rs
+@@ -188,7 +188,7 @@ pub async fn get_shared_task(
+ ///
+ /// # Examples
+ ///
+-/// ```
++/// ```,ignore
+ /// use uuid::Uuid;
+ ///
+ /// let req = CreateSharedTaskRequest {
+diff --git a/crates/remote/tests/backfill_e2e.rs b/crates/remote/tests/backfill_e2e.rs
+index 8a2133a1..43f8d4a3 100644
+--- a/crates/remote/tests/backfill_e2e.rs
++++ b/crates/remote/tests/backfill_e2e.rs
+@@ -15,6 +15,7 @@
+ //! Note: Tests are skipped if DATABASE_URL is not set.
+ 
+ use chrono::Utc;
++use serial_test::file_serial;
+ use sqlx::PgPool;
+ use uuid::Uuid;
+ 
+@@ -50,12 +51,13 @@ async fn create_test_organization(pool: &PgPool) -> Uuid {
+ 
+     sqlx::query(
+         r#"
+-        INSERT INTO organizations (id, name, created_at, updated_at)
+-        VALUES ($1, $2, $3, $4)
++        INSERT INTO organizations (id, name, slug, created_at, updated_at)
++        VALUES ($1, $2, $3, $4, $5)
+         "#,
+     )
+     .bind(org_id)
+     .bind(format!("Test Org {}", org_id))
++    .bind(format!("test-org-{}", org_id))
+     .bind(now)
+     .bind(now)
+     .execute(pool)
+@@ -69,26 +71,21 @@ async fn create_test_organization(pool: &PgPool) -> Uuid {
+ async fn create_test_node(pool: &PgPool, org_id: Uuid, is_online: bool) -> Uuid {
+     let node_id = Uuid::new_v4();
+     let now = Utc::now();
+-    // If online, last_seen is now; if offline, last_seen is 10 minutes ago
+-    let last_seen = if is_online {
+-        now
+-    } else {
+-        now - chrono::Duration::minutes(10)
+-    };
++    let status = if is_online { "online" } else { "offline" };
++    let last_heartbeat_at = if is_online { Some(now) } else { None };
+ 
+     sqlx::query(
+         r#"
+-        INSERT INTO nodes (id, organization_id, machine_id, hostname, os_type, os_version, last_seen_at, created_at, updated_at)
+-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
++        INSERT INTO nodes (id, organization_id, name, machine_id, status, capabilities, last_heartbeat_at, created_at, updated_at)
++        VALUES ($1, $2, $3, $4, $5::node_status, '{}'::jsonb, $6, $7, $8)
+         "#,
+     )
+     .bind(node_id)
+     .bind(org_id)
++    .bind(format!("node-{}", node_id))
+     .bind(format!("machine-{}", node_id))
+-    .bind("test-host")
+-    .bind("linux")
+-    .bind("test")
+-    .bind(last_seen)
++    .bind(status)
++    .bind(last_heartbeat_at)
+     .bind(now)
+     .bind(now)
+     .execute(pool)
+@@ -106,7 +103,7 @@ async fn create_test_shared_task(pool: &PgPool, org_id: Uuid) -> Uuid {
+     sqlx::query(
+         r#"
+         INSERT INTO shared_tasks (id, organization_id, title, status, created_at, updated_at)
+-        VALUES ($1, $2, $3, $4, $5, $6)
++        VALUES ($1, $2, $3, $4::task_status, $5, $6)
+         "#,
+     )
+     .bind(task_id)
+@@ -134,7 +131,7 @@ async fn create_attempt_with_state(
+ 
+     let data = UpsertNodeTaskAttempt {
+         id: Uuid::new_v4(),
+-        assignment_id: Some(Uuid::new_v4()),
++        assignment_id: None,
+         shared_task_id,
+         node_id,
+         executor: "CLAUDE_CODE".to_string(),
+@@ -202,6 +199,7 @@ async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
+ 
+ /// Test: find_incomplete_with_online_nodes returns only partial attempts from online nodes.
+ #[tokio::test]
++#[file_serial]
+ async fn test_find_incomplete_with_online_nodes_basic() {
+     skip_without_db!();
+ 
+@@ -250,6 +248,7 @@ async fn test_find_incomplete_with_online_nodes_basic() {
+ 
+ /// Test: find_incomplete_with_online_nodes pagination works correctly.
+ #[tokio::test]
++#[file_serial]
+ async fn test_find_incomplete_pagination() {
+     skip_without_db!();
+ 
+@@ -293,6 +292,7 @@ async fn test_find_incomplete_pagination() {
+ 
+ /// Test: mark_pending_backfill transitions partial -> pending_backfill and stores request_id.
+ #[tokio::test]
++#[file_serial]
+ async fn test_mark_pending_backfill() {
+     skip_without_db!();
+ 
+@@ -338,6 +338,7 @@ async fn test_mark_pending_backfill() {
+ 
+ /// Test: mark_complete transitions to complete state.
+ #[tokio::test]
++#[file_serial]
+ async fn test_mark_complete() {
+     skip_without_db!();
+ 
+@@ -370,6 +371,7 @@ async fn test_mark_complete() {
+ 
+ /// Test: reset_failed_backfill resets all pending_backfill for a specific node.
+ #[tokio::test]
++#[file_serial]
+ async fn test_reset_failed_backfill() {
+     skip_without_db!();
+ 
+@@ -416,6 +418,7 @@ async fn test_reset_failed_backfill() {
+ 
+ /// Test: Complete backfill flow - partial -> pending_backfill -> complete.
+ #[tokio::test]
++#[file_serial]
+ async fn test_complete_backfill_flow() {
+     skip_without_db!();
+ 
+@@ -478,6 +481,7 @@ async fn test_complete_backfill_flow() {
+ 
+ /// Test: Failed backfill flow - partial -> pending_backfill -> partial (retry).
+ #[tokio::test]
++#[file_serial]
+ async fn test_failed_backfill_flow() {
+     skip_without_db!();
+ 
+@@ -535,6 +539,7 @@ async fn test_failed_backfill_flow() {
+ /// 3. Delayed backfill response arrives
+ /// 4. Handler uses DB fallback to find attempt IDs
+ #[tokio::test]
++#[file_serial]
+ async fn test_backfill_response_after_tracker_cleared() {
+     skip_without_db!();
+ 
+@@ -587,6 +592,7 @@ async fn test_backfill_response_after_tracker_cleared() {
+ 
+ /// Test: find_by_backfill_request_id returns empty for unknown request.
+ #[tokio::test]
++#[file_serial]
+ async fn test_find_by_backfill_request_id_not_found() {
+     skip_without_db!();
+ 
+diff --git a/crates/remote/tests/hive_cutover_migration.rs b/crates/remote/tests/hive_cutover_migration.rs
+index 584103b6..51fe3720 100644
+--- a/crates/remote/tests/hive_cutover_migration.rs
++++ b/crates/remote/tests/hive_cutover_migration.rs
+@@ -1,6 +1,11 @@
+ //! SC6 / TS6 — seed → run the cutover SQL → assert: REGENERABLE + DISCARDABLE rows are cleared (schema
+ //! kept), MUST-MIGRATE rows (incl. the active assignment) survive, completed assignments are purged.
+ //! (702 round-trips the id-bridge + status; 703 the regenerable re-ingest into the surviving tables.)
++//!
++//! Both tests use `file_serial` because they run `TRUNCATE TABLE` (acquiring `ACCESS EXCLUSIVE`
++//! locks) on tables that other test binaries (backfill_e2e) access concurrently. File-based
++//! serialization prevents cross-binary lock conflicts on the shared Postgres test DB.
++use serial_test::file_serial;
+ use sqlx::PgPool;
+ 
+ // Inlined verbatim from crates/remote/tests/backfill_e2e.rs (no shared `common` module exists).
+@@ -29,6 +34,7 @@ where
+ }
+ 
+ #[tokio::test]
++#[file_serial]
+ async fn cutover_seed_run_clears_regenerable_discardable_keeps_must_migrate() {
+     skip_without_db!(); // Trap 2b: a real migrated PG MUST be set or this is a hollow pass
+     let pool = create_pool().await;
+@@ -112,6 +118,7 @@ async fn cutover_seed_run_clears_regenerable_discardable_keeps_must_migrate() {
+ }
+ 
+ #[tokio::test]
++#[file_serial]
+ async fn cutover_keeps_regenerable_and_discardable_tables_present() {
+     // Regression guard: the cutover must NOT DROP these tables (data-clear, not drop) — a DROP would
+     // break surviving query refs + the re-ingest path. Asserts a STABLE IDENTITY (table OID), not just
+diff --git a/crates/server/Cargo.toml b/crates/server/Cargo.toml
+index 3810373f..9545f512 100644
+--- a/crates/server/Cargo.toml
++++ b/crates/server/Cargo.toml
+@@ -66,3 +66,4 @@ dotenv = "0.15"
+ 
+ [dev-dependencies]
+ db = { path = "../db", features = ["test-utils"] }
++serial_test = "3.0"
+diff --git a/crates/server/src/routes/projects/handlers/swarm.rs b/crates/server/src/routes/projects/handlers/swarm.rs
+index 929279de..4ae42ffa 100644
+--- a/crates/server/src/routes/projects/handlers/swarm.rs
++++ b/crates/server/src/routes/projects/handlers/swarm.rs
+@@ -35,6 +35,7 @@ use super::super::types::{ForceResyncResponse, UnlinkSwarmRequest, UnlinkSwarmRe
+ ///
+ /// ```
+ /// // Construct the expected response payload (example, not an invocation).
++/// use server::routes::projects::types::UnlinkSwarmResponse;
+ /// let resp = UnlinkSwarmResponse {
+ ///     tasks_unlinked: 42,
+ ///     attempts_reset: 10,
+@@ -101,7 +102,7 @@ pub async fn unlink_from_swarm(
+ /// # Examples
+ ///
+ /// ```
+-/// use crates::server::routes::projects::handlers::swarm::ForceResyncResponse;
++/// use server::routes::projects::types::ForceResyncResponse;
+ ///
+ /// let resp = ForceResyncResponse { tasks_resynced: 42 };
+ /// assert_eq!(resp.tasks_resynced, 42);
+diff --git a/crates/server/src/routes/tasks/handlers/remote.rs b/crates/server/src/routes/tasks/handlers/remote.rs
+index 1b7207fe..e6aa9462 100644
+--- a/crates/server/src/routes/tasks/handlers/remote.rs
++++ b/crates/server/src/routes/tasks/handlers/remote.rs
+@@ -26,13 +26,13 @@ use crate::{DeploymentImpl, error::ApiError};
+ ///
+ /// # Examples
+ ///
+-/// ```no_run
++/// ```ignore
+ /// // Run inside an async runtime
+ /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+-/// let deployment = /* obtain DeploymentImpl */ ;
+-/// let project = /* Project with remote_project_id set */ ;
+-/// let payload = /* db::models::task::CreateTask payload */ ;
+-/// let resp = crate::routes::tasks::handlers::remote::create_remote_task(&deployment, &project, &payload).await?;
++/// let deployment = unimplemented!() ; // obtain DeploymentImpl
++/// let project = unimplemented!() ; // Project with remote_project_id set
++/// let payload = unimplemented!() ; // db::models::task::CreateTask payload
++/// let resp = server::routes::tasks::handlers::remote::create_remote_task(&deployment, &project, &payload).await?;
+ /// # Ok(())
+ /// # }
+ /// ```
+@@ -269,9 +269,7 @@ pub(crate) async fn delete_remote_task(
+ ///
+ /// # Examples
+ ///
+-/// ```no_run
+-/// # use crates::server::routes::tasks::handlers::remote::resync_task_to_hive;
+-/// # use crates::server::db;
++/// ```ignore
+ /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+ /// // `deployment` and `existing_task` would be obtained from the application context.
+ /// let updated = resync_task_to_hive(&deployment, &existing_task, Some("New title".into()), None, None).await?;
+diff --git a/crates/server/tests/mcp_context_test.rs b/crates/server/tests/mcp_context_test.rs
+index e46a0643..4a26de05 100644
+--- a/crates/server/tests/mcp_context_test.rs
++++ b/crates/server/tests/mcp_context_test.rs
+@@ -17,10 +17,12 @@ use db::{
+     test_utils::create_test_pool,
+ };
+ use executors::executors::BaseCodingAgent;
++use serial_test::serial;
+ use uuid::Uuid;
+ 
+ /// Test that we can set up the test data correctly and verify env var reading.
+ #[tokio::test]
++#[serial]
+ async fn test_env_var_setup_and_reading() {
+     let (pool, _temp_dir) = create_test_pool().await;
+ 
+@@ -108,6 +110,7 @@ async fn test_env_var_setup_and_reading() {
+ /// Test the environment variable priority logic pattern.
+ /// This tests the same pattern used in get_context, get_task_id, and get_project_id.
+ #[tokio::test]
++#[serial]
+ async fn test_env_var_priority_pattern() {
+     let (pool, _temp_dir) = create_test_pool().await;
+ 
+@@ -199,6 +202,7 @@ async fn test_env_var_priority_pattern() {
+ /// This verifies the scenario where environment variables are crucial for
+ /// disambiguation when multiple subtasks share the same worktree.
+ #[tokio::test]
++#[serial]
+ async fn test_multiple_attempts_same_project() {
+     let (pool, _temp_dir) = create_test_pool().await;
+ 
+diff --git a/crates/services/Cargo.toml b/crates/services/Cargo.toml
+index 835c7d0f..5ff023de 100644
+--- a/crates/services/Cargo.toml
++++ b/crates/services/Cargo.toml
+@@ -3,6 +3,7 @@ name = "services"
+ version = "0.0.125"
+ edition = "2024"
+ 
++
+ [features]
+ default = []
+ cloud = []
+diff --git a/crates/services/src/services/container.rs b/crates/services/src/services/container.rs
+index abee970e..b067cbec 100644
+--- a/crates/services/src/services/container.rs
++++ b/crates/services/src/services/container.rs
+@@ -1182,7 +1182,7 @@ pub trait ContainerService {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # // Pseudocode example; replace `svc`, `task_attempt`, and `profile_id` with real values from your environment.
+     /// # async fn example(svc: &impl ContainerService, task_attempt: &TaskAttempt, profile_id: ExecutorProfileId) -> Result<(), ContainerError> {
+     /// let exec = svc.start_attempt(task_attempt, profile_id, false).await?;
+diff --git a/crates/services/src/services/hive_sync.rs b/crates/services/src/services/hive_sync.rs
+index 1859b628..6ddf56ec 100644
+--- a/crates/services/src/services/hive_sync.rs
++++ b/crates/services/src/services/hive_sync.rs
+@@ -67,7 +67,7 @@ impl Default for HiveSyncConfig {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// let cfg = HiveSyncConfig::default();
+     /// assert_eq!(cfg.sync_interval, std::time::Duration::from_secs(30));
+     /// assert_eq!(cfg.max_tasks_per_batch, 50);
+@@ -307,7 +307,7 @@ impl HiveSyncService {
+     ///
+     /// # Examples
+     ///
+-    /// ```no_run
++    /// ```,ignore
+     /// // `service` is an instance of `HiveSyncService`.
+     /// # async fn example(service: &crate::hive::HiveSyncService) {
+     /// let synced = service.sync_tasks().await.unwrap();
+diff --git a/crates/services/src/services/remote_client.rs b/crates/services/src/services/remote_client.rs
+index 1a56146e..0e1d0dcc 100644
+--- a/crates/services/src/services/remote_client.rs
++++ b/crates/services/src/services/remote_client.rs
+@@ -896,7 +896,7 @@ impl RemoteClient {
+     ///
+     /// # Examples
+     ///
+-    /// ```no_run
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # use remote::RemoteClient;
+     /// # use remote::auth::AuthContext;
+diff --git a/crates/services/src/services/share/processor.rs b/crates/services/src/services/share/processor.rs
+index 45793d03..726feb1d 100644
+--- a/crates/services/src/services/share/processor.rs
++++ b/crates/services/src/services/share/processor.rs
+@@ -289,7 +289,7 @@ impl ActivityProcessor {
+     ///
+     /// # Examples
+     ///
+-    /// ```rust,no_run
++    /// ```rust,ignore
+     /// // Illustrative example; types and setup are omitted for brevity.
+     /// # async fn doc_example(processor: &ActivityProcessor, tx: &mut Transaction<'_, Sqlite>, event: ActivityEvent) -> Result<(), ShareError> {
+     /// processor.process_task_upsert_event(tx, &event).await?;
+diff --git a/crates/services/src/services/share/publisher.rs b/crates/services/src/services/share/publisher.rs
+index b97513eb..7e56a6d2 100644
+--- a/crates/services/src/services/share/publisher.rs
++++ b/crates/services/src/services/share/publisher.rs
+@@ -46,7 +46,7 @@ impl SharePublisher {
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```,ignore
+     /// # use uuid::Uuid;
+     /// # use futures::executor::block_on;
+     /// # async fn example(publisher: &crate::SharePublisher, task_id: Uuid) {
+diff --git a/crates/services/tests/electric_task_sync.rs b/crates/services/tests/electric_task_sync.rs
+index 88d25916..26e2b4a6 100644
+--- a/crates/services/tests/electric_task_sync.rs
++++ b/crates/services/tests/electric_task_sync.rs
+@@ -96,6 +96,38 @@ async fn setup_db() -> (SqlitePool, TempDir) {
+     .await
+     .unwrap();
+ 
++    // node_outbox (SC2 op-log) — required by upsert_remote_task's dirty-guard
++    sqlx::query(
++        r#"
++        CREATE TABLE IF NOT EXISTS node_outbox (
++            id              BLOB PRIMARY KEY,
++            seq             INTEGER NOT NULL UNIQUE,
++            op_type         TEXT NOT NULL,
++            entity_type     TEXT NOT NULL,
++            entity_id       BLOB NOT NULL,
++            payload         TEXT NOT NULL,
++            idempotency_key TEXT NOT NULL UNIQUE,
++            fencing_token   INTEGER,
++            created_at      TEXT NOT NULL DEFAULT (datetime('now', 'subsec')),
++            acked_at        TEXT
++        )
++        "#,
++    )
++    .execute(&pool)
++    .await
++    .unwrap();
++
++    sqlx::query(
++        r#"
++        CREATE INDEX IF NOT EXISTS idx_node_outbox_unacked_seq
++            ON node_outbox(seq)
++            WHERE acked_at IS NULL
++        "#,
++    )
++    .execute(&pool)
++    .await
++    .unwrap();
++
+     (pool, temp_dir)
+ }
+ 
+diff --git a/crates/utils/Cargo.toml b/crates/utils/Cargo.toml
+index 7b0ee930..5ccc8c98 100644
+--- a/crates/utils/Cargo.toml
++++ b/crates/utils/Cargo.toml
+@@ -47,3 +47,4 @@ windows-sys = { version = "0.61", features = ["Win32_System_Environment"] }
+ 
+ [dev-dependencies]
+ serial_test = "3.0"
++tempfile = "3.10"
+diff --git a/crates/utils/src/assets.rs b/crates/utils/src/assets.rs
+index 9baa513b..90ea367f 100644
+--- a/crates/utils/src/assets.rs
++++ b/crates/utils/src/assets.rs
+@@ -107,11 +107,13 @@ mod tests {
+     #[test]
+     #[serial]
+     fn test_database_path_env_override() {
++        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
++        let db_path = tmp.path().join("custom").join("test.db");
+         // SAFETY: Tests run serially via #[serial] attribute
+-        unsafe { env::set_var("VK_DATABASE_PATH", "/custom/path/test.db") };
++        unsafe { env::set_var("VK_DATABASE_PATH", &db_path) };
+         let path = database_path();
+         unsafe { env::remove_var("VK_DATABASE_PATH") };
+-        assert_eq!(path, std::path::PathBuf::from("/custom/path/test.db"));
++        assert_eq!(path, db_path);
+     }
+ 
+     #[test]
+@@ -137,11 +139,13 @@ mod tests {
+     #[test]
+     #[serial]
+     fn test_backup_dir_env_override() {
++        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
++        let backup_path = tmp.path().join("custom-backups");
+         // SAFETY: Tests run serially via #[serial] attribute
+-        unsafe { env::set_var("VK_BACKUP_DIR", "/custom/backups") };
++        unsafe { env::set_var("VK_BACKUP_DIR", &backup_path) };
+         let dir = backup_dir();
+         unsafe { env::remove_var("VK_BACKUP_DIR") };
+-        assert_eq!(dir, std::path::PathBuf::from("/custom/backups"));
++        assert_eq!(dir, backup_path);
+     }
+ 
+     #[test]

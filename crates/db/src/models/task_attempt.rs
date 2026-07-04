@@ -755,9 +755,10 @@ impl TaskAttempt {
     /// ```no_run
     /// # use sqlx::SqlitePool;
     /// # use uuid::Uuid;
+    /// # use db::models::task_attempt::TaskAttempt;
     /// # async fn example(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     /// let project_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
-    /// let updated = crate::models::task_attempt::TaskAttempt::clear_hive_sync_for_project_tx(pool, project_id).await?;
+    /// let updated = TaskAttempt::clear_hive_sync_for_project_tx(pool, project_id).await?;
     /// println!("Updated {} rows", updated);
     /// # Ok(())
     /// # }
@@ -806,6 +807,7 @@ impl TaskAttempt {
     /// # Examples
     ///
     /// ```
+    /// # use db::models::task_attempt::TaskAttempt;
     /// # async fn example(pool: &sqlx::SqlitePool, id: uuid::Uuid) -> Result<(), sqlx::Error> {
     /// TaskAttempt::delete(pool, id).await?;
     /// # Ok(())

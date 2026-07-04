@@ -107,11 +107,13 @@ mod tests {
     #[test]
     #[serial]
     fn test_database_path_env_override() {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = tmp.path().join("custom").join("test.db");
         // SAFETY: Tests run serially via #[serial] attribute
-        unsafe { env::set_var("VK_DATABASE_PATH", "/custom/path/test.db") };
+        unsafe { env::set_var("VK_DATABASE_PATH", &db_path) };
         let path = database_path();
         unsafe { env::remove_var("VK_DATABASE_PATH") };
-        assert_eq!(path, std::path::PathBuf::from("/custom/path/test.db"));
+        assert_eq!(path, db_path);
     }
 
     #[test]
@@ -137,11 +139,13 @@ mod tests {
     #[test]
     #[serial]
     fn test_backup_dir_env_override() {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        let backup_path = tmp.path().join("custom-backups");
         // SAFETY: Tests run serially via #[serial] attribute
-        unsafe { env::set_var("VK_BACKUP_DIR", "/custom/backups") };
+        unsafe { env::set_var("VK_BACKUP_DIR", &backup_path) };
         let dir = backup_dir();
         unsafe { env::remove_var("VK_BACKUP_DIR") };
-        assert_eq!(dir, std::path::PathBuf::from("/custom/backups"));
+        assert_eq!(dir, backup_path);
     }
 
     #[test]

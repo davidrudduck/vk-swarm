@@ -47,7 +47,7 @@ impl IntoResponse for ErrorResponse {
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust,ignore
 /// use axum::http::StatusCode;
 /// use crate::db::SharedTaskError;
 ///

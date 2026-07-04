@@ -66,3 +66,4 @@ dotenv = "0.15"
 
 [dev-dependencies]
 db = { path = "../db", features = ["test-utils"] }
+serial_test = "3.0"

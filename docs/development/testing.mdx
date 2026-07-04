@@ -1,0 +1,180 @@
+---
+title: Testing & Quality Gate
+description: How to run the mandatory quality gate, write tests, and handle tests that cannot run in CI
+---
+
+# Testing & Quality Gate
+
+Every PR must pass a four-check mandatory gate before it can be merged. This page explains the gate, how to run it locally, the testing standards for the Rust workspace and frontend, and how to handle tests that cannot run in CI.
+
+## The Mandatory Gate
+
+A PR is not complete until all four checks are green on the final committed state:
+
+```bash
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo test --workspace
+cd frontend && npm run lint
+cd frontend && npx tsc --noEmit
+```
+
+<Warning>
+No CI-breaking or half-implemented code is deferred to the next session. If the gate is red on the baseline before your changes, fix it in the same session — do not carry it forward.
+</Warning>
+
+### Running the Gate
+
+Run all four commands from the repository root. The Rust commands use the workspace `Cargo.toml` and cover all crates (`crates/db`, `crates/remote`, `crates/server`, `crates/services`, `crates/utils`, `crates/executors`, `crates/deployment`, `crates/local-deployment`).
+
+The frontend commands run from the `frontend/` directory:
+
+```bash
+cd frontend && npm run lint        # eslint . --max-warnings 0
+cd frontend && npx tsc --noEmit     # TypeScript type check
+cd frontend && npm run test         # vitest (frontend unit tests)
+```
+
+### Postgres for Hive Tests
+
+Tests in `crates/remote/` that touch the hive (Postgres) layer require a live, migrated Postgres database. Set `DATABASE_URL` before running:
+
+```bash
+export DATABASE_URL=postgres://postgres@localhost:5432/vibe_remote_dev
+```
+
+Tests that need Postgres use `skip_without_db!` and will silently skip if `DATABASE_URL` is not set — a skipped test is a **hollow pass**, not a real green. Always stand up a Postgres and run migrations before relying on hive test results.
+
+## Testing Standards
+
+### SQLite Test Databases
+
+When a test requires a populated SQLite database, use one of the provided test utilities in `crates/db/src/test_utils.rs`:
+
+<Tabs>
+<Tab title="Fast (preferred)">
+```rust
+use db::test_utils::create_test_pool;
+
+let pool = create_test_pool().await;
+```
+<Note>
+Template-copy approach. Fast — prefer for the majority of tests.
+</Note>
+</Tab>
+<Tab title="Full migrations">
+```rust
+use db::test_utils::create_test_pool_with_migrations;
+
+let pool = create_test_pool_with_migrations().await;
+```
+<Note>
+Fresh migrations per test. Use when the test exercises migration behavior or needs the full production schema.
+</Note>
+</Tab>
+</Tabs>
+
+<Warning>
+Never manually duplicate `CREATE TABLE` SQL in test helpers. Schema defined outside `crates/db/migrations/` will drift from production and produce false-green tests that mask real regressions.
+</Warning>
+
+### Test Serialization
+
+Some tests share state (environment variables, database tables) and must be serialized to avoid race conditions:
+
+- **`#[serial]`** — serializes tests within a single binary (e.g., tests that manipulate environment variables like `VK_ATTEMPT_ID`).
+- **`#[file_serial]`** — serializes tests across binaries using a file-based lock (e.g., tests that `TRUNCATE` shared Postgres tables). Requires the `file_locks` feature on `serial_test`.
+
+```toml
+[dev-dependencies]
+serial_test = { version = "3.0", features = ["file_locks"] }
+```
+
+```rust
+use serial_test::{serial, file_serial};
+
+#[tokio::test]
+#[serial]
+async fn test_env_var_handling() { /* ... */ }
+
+#[tokio::test]
+#[file_serial]
+async fn test_truncates_shared_table() { /* ... */ }
+```
+
+### Doctests
+
+Rust doctests (`///` examples in `rust,` code blocks) are compiled and executed by `cargo test --doc`. They must either pass or be marked at the source level:
+
+```rust
+/// ```rust,ignore
+/// // Example that requires types not yet re-exported at the crate root.
+/// let _ = remote::SharedTaskRepository::new();
+/// ```
+```
+
+<Warning>
+Globally disabling doctests via `[lib] doctest = false` in `Cargo.toml` is prohibited — it is a silent deferral that hides broken examples. Mark each broken doctest individually with `rust,ignore` at the source level so the remaining doctests in the crate continue to run and catch regressions.
+</Warning>
+
+## Handling Tests That Cannot Run in CI
+
+Some tests require resources unavailable in CI (live PTY devices, network endpoints, interactive shells). The sanctioned approach is per-item source-level attributes:
+
+### Source-Level `#[ignore]` Markers
+
+```rust
+#[tokio::test]
+#[ignore = "requires live PTY device; run with --include-ignored in interactive shells"]
+async fn test_create_session_in_directory() { /* ... */ }
+```
+
+### Requirements for Using `#[ignore]`
+
+Using `#[ignore]` or `rust,ignore` is legitimate **only if both conditions are met**:
+
+1. **At least one test in the category remains live** — the test suite must not be entirely dead.
+2. **A tracked follow-up workstream exists** at `dev-docs/workstreams/<name>/README.md` documenting:
+   - Which tests remain ignored (with file paths and line numbers)
+   - Why they cannot be made live (the missing resource or architectural entanglement)
+   - What is required to bring them live (acceptance criteria)
+   - The approach being considered
+
+<Info>
+This rule is self-enforcing: if you mark a test `#[ignore]`, you must create the workstream in the same session. "I'll document it later" is not permitted.
+</Info>
+
+### Running Ignored Tests Locally
+
+```bash
+# Run all tests including ignored ones
+cargo test --workspace -- --include-ignored
+
+# Run a specific ignored test
+cargo test --workspace test_kill_session -- --include-ignored
+```
+
+## Process Rules
+
+### No Deferred Remediation
+
+Code review findings — from adversarial panels, Gemini review, `/dr:pr`, or any other review step — must be fixed **in the same session** before the PR is pushed or merged.
+
+- **False positive?** Document why in the decisions-ledger (`docs/plans/<topic>/decisions-ledger.md`) with specific evidence (grep output, file:line).
+- **Real finding?** Fix it now. "Fix in the next session" is not permitted.
+- **Pre-existing debt discovered?** Fix it now, split it as a legitimate scope split (with a tracked workstream), or escalate to the user.
+
+### Legitimate Scope Splits
+
+If a fix is architecturally entangled or requires a decision beyond the session's scope, it can be split as a legitimate scope split. It must:
+
+1. Be explicitly named (e.g., `remote-services-doctest-revival`)
+2. Have a tracked follow-up workstream (`dev-docs/workstreams/<name>/README.md`) created in the same session
+3. Be documented in the decisions-ledger (`docs/plans/<topic>/decisions-ledger.md`) before the PR is submitted
+
+See `docs/plans/preexisting-gate-failures/decisions-ledger.md` for a worked example.
+
+## Further Reading
+
+- [AGENTS.md](../../AGENTS.md) — full AI agent instructions and mandatory gate rules
+- [CLAUDE.md](../../CLAUDE.md) — condensed development guide
+- [Development Server Lifecycle](/development/dev-server-lifecycle) — starting, stopping, and managing dev servers
