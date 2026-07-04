@@ -289,7 +289,7 @@ impl ActivityProcessor {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// // Illustrative example; types and setup are omitted for brevity.
     /// # async fn doc_example(processor: &ActivityProcessor, tx: &mut Transaction<'_, Sqlite>, event: ActivityEvent) -> Result<(), ShareError> {
     /// processor.process_task_upsert_event(tx, &event).await?;

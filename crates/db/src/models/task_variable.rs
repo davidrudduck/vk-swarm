@@ -387,7 +387,7 @@ impl TaskVariable {
     /// ```no_run
     /// # use sqlx::SqlitePool;
     /// # use uuid::Uuid;
-    /// # use crates::db::models::task_variable::TaskVariable;
+    /// # use db::models::task_variable::TaskVariable;
     /// # async fn example(pool: &SqlitePool, task_id: Uuid) {
     /// let map = TaskVariable::get_variable_map(pool, task_id).await.unwrap();
     /// if let Some((value, source)) = map.get("TASK_TITLE") {
@@ -414,12 +414,15 @@ impl TaskVariable {
     /// # Examples
     ///
     /// ```no_run
-    /// use uuid::Uuid;
-    /// // within an async context
-    /// let vars = TaskVariable::find_inherited_with_system(&pool, task_id).await?;
+    /// # use sqlx::SqlitePool;
+    /// # use uuid::Uuid;
+    /// # use db::models::task_variable::TaskVariable;
+    /// # async fn example(pool: &SqlitePool, task_id: Uuid) -> Result<(), sqlx::Error> {
+    /// let vars = TaskVariable::find_inherited_with_system(pool, task_id).await?;
     /// for v in vars {
     ///     println!("{} = {}", v.name, v.value);
     /// }
+    /// # Ok(()) }
     /// ```
     pub async fn find_inherited_with_system(
         pool: &SqlitePool,
@@ -450,11 +453,11 @@ impl TaskVariable {
     /// # Examples
     ///
     /// ```no_run
-    /// # use sqlx::SqlitePool; use uuid::Uuid;
-    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let pool = SqlitePool::connect("sqlite::memory:").await?;
-    /// let task_id = Uuid::new_v4();
-    /// let vars = crate::models::task_variable::get_variable_map_with_system(&pool, task_id).await?;
+    /// # use sqlx::SqlitePool;
+    /// # use uuid::Uuid;
+    /// # use db::models::task_variable::TaskVariable;
+    /// # async fn example(pool: &SqlitePool, task_id: Uuid) -> Result<(), sqlx::Error> {
+    /// let vars = TaskVariable::get_variable_map_with_system(pool, task_id).await?;
     /// // `vars` is a HashMap<String, (String, Uuid)> where keys are variable names.
     /// # Ok(()) }
     /// ```

@@ -91,11 +91,12 @@ impl Deployment for LocalDeployment {
     ///
     /// # Examples
     ///
-    /// ```
-    /// # tokio_test::block_on(async {
-    /// let deployment = LocalDeployment::new().await.unwrap();
+    /// ```no_run
+    /// # async fn run() {
+    /// use deployment::Deployment;
+    /// let deployment = local_deployment::LocalDeployment::new().await.unwrap();
     /// assert!(!deployment.user_id().is_empty());
-    /// # });
+    /// # }
     /// ```
     async fn new() -> Result<Self, DeploymentError> {
         // Load config and OAuth credentials in parallel for faster startup

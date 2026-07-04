@@ -42,7 +42,7 @@ subtle = "2.6"
 dashmap = "6.1"
 
 [dev-dependencies]
-serial_test = "3"
+serial_test = { version = "3", features = ["file_locks"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 # Enable sqlx test macros for integration tests
