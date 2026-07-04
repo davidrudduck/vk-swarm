@@ -3,7 +3,8 @@ workstream: vk-swarm-hive-ui
 doc_type: readme
 status: draft
 title: "Hive central-management web UI — host the cross-node console (SC1 UI half)"
-staging_pointers: []
+staging_pointers:
+  - docs/superpowers/specs/2026-07-04-vk-swarm-hive-ui.md
 depends_on: [vk-swarm-hive-redesign]
 adrs: []
 ---
