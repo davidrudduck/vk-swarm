@@ -43,9 +43,22 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
     let cancelled = false;
 
     const fetchProfile = async () => {
+      const token = localStorage.getItem('access_token');
+
+      if (!token) {
+        if (!cancelled) {
+          setProfile(null);
+          setIsSignedIn(false);
+          setIsLoaded(true);
+        }
+        return;
+      }
+
       try {
         const response = await fetch('/v1/profile', {
-          credentials: 'include',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
         });
 
         if (cancelled) return;
@@ -54,16 +67,22 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
           const data: ProfileResponse = await response.json();
           setProfile(data);
           setIsSignedIn(true);
+          setIsLoaded(true);
+        } else if (response.status === 401) {
+          localStorage.removeItem('access_token');
+          setProfile(null);
+          setIsSignedIn(false);
+          setIsLoaded(true);
         } else {
           setProfile(null);
           setIsSignedIn(false);
+          setIsLoaded(true);
         }
       } catch (err) {
         console.error('Failed to fetch profile:', err);
-        setProfile(null);
-        setIsSignedIn(false);
-      } finally {
         if (!cancelled) {
+          setProfile(null);
+          setIsSignedIn(false);
           setIsLoaded(true);
         }
       }

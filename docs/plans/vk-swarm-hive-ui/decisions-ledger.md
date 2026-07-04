@@ -64,3 +64,13 @@
 - [Task 101] No children gating while loading (ConfigProvider gates with Loader). Task spec silent on UX loading state — app shell responsibility. Provider exposes isLoaded flag for consumers to gate as needed. — remote-frontend/src/components/ProfileProvider.tsx (entire component)
 - [Task 101] Fetch uses `credentials: 'include'` for hive session auth (vs node backend which uses bearer tokens). — remote-frontend/src/components/ProfileProvider.tsx:53-54
 - [Task 101] Tests: vi.stubGlobal('fetch', ...) + vi.mocked(globalThis.fetch) pattern to avoid TypeScript 'global' not found (jsdom environment). vi.unstubAllGlobals() in afterEach ensures isolation. — remote-frontend/src/components/ProfileProvider.test.tsx:6-11,60-61
+
+## Task 101 (round 2) — Bearer token auth amendment
+
+- **Rejection cause:** Round 1 implemented cookie-based auth (`credentials: 'include'`) when the hive uses Bearer token auth per the middleware contract.
+- **Evidence:** `crates/remote/src/auth/middleware.rs:46-53` — `require_session` reads only `Authorization<Bearer>` header; `grep -rn 'cookie|Cookie' crates/remote/src/` returns zero matches.
+- **Correction:** `ProfileProvider` now reads `localStorage.getItem('access_token')`. If absent → signed-out state, NO fetch. If present → `fetch('/v1/profile', { headers: { Authorization: 'Bearer ' + token } })`. On 401 → `localStorage.removeItem('access_token')` (token expired/invalid) + signed-out. On network error → signed-out but token NOT cleared (transient failure ≠ expiry).
+- **localStorage binding:** The `access_token` key is part of the orchestrator-level contract (task 101, 102, 105) matching the existing invitation flow (`remote-frontend/src/api.ts:85` already sends `Authorization: Bearer ${accessToken}`).
+- **ProfileContext default:** Intentionally `undefined` (matching `ConfigProvider` pattern) — using `useProfile()` outside `ProfileProvider` throws. NOT the literal `{ profile: null, isSignedIn: false, isLoaded: false }` — the latter would silently hide context misuse.
+- **Tests (5 scenarios):** Bearer header assertion, no-token no-fetch, 401 clears token, network error preserves token, loading state before fetch resolves. Mocks: `vitest`/`@testing-library/react` `renderHook` + consumer hook; mocked `fetch` + mocked `localStorage` (vi.stubGlobal + getter/removeItem spies).
+- **Files:** `remote-frontend/src/components/ProfileProvider.tsx` (rewritten 46-85), `remote-frontend/src/components/ProfileProvider.test.tsx` (rewritten 5 tests, mocks localStorage).
