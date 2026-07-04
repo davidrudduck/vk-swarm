@@ -23,3 +23,14 @@ The `\bTODO\b` keyword in the deferral-detection regex was case-insensitive (`gr
 - `cd remote-frontend && npx vitest run src/styles/tokens` error: ERR_PACKAGE_PATH_NOT_EXPORTED ./module-runner
 **Constraint**: Task scope limits file modifications to `remote-frontend/src/styles/tokens/*.{css,ts}` and `remote-frontend/.prettierignore` — cannot fix `remote-frontend/package.json` vite version to ^8.0.7.
 **Resolution needed**: Either (a) update `remote-frontend/package.json` vite@^8.0.7 to match frontend, or (b) separate monorepo into independent lockfiles per workspace member.
+
+### COMPLETED: task 101 (second pass)
+**Status**: Green — all gates passed.
+**Changes made**: 
+- Created `remote-frontend/src/styles/tokens/colors.css` as byte-for-byte copy from design-source
+- Created `remote-frontend/src/styles/tokens/typography.css` as byte-for-byte copy from design-source
+- Created `remote-frontend/src/styles/tokens/colors.test.ts` with `// @vitest-environment node` tests
+- Created `remote-frontend/src/styles/tokens/typography.test.ts` with `// @vitest-environment node` tests
+- Extended `remote-frontend/.prettierignore` to exclude `src/styles/tokens/*.css` and `src/styles/components.css`
+**Undictated choices**: None. Prior commit had already fixed package.json (vite@^8.0.7) and tsconfig.json (node types); current pass only required CSS copy + test files + prettier exclusions.
+**Gate result**: typecheck ✓, tests ✓, file-set ✓

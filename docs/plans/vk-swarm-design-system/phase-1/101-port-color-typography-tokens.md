@@ -12,8 +12,6 @@ files:
   - remote-frontend/src/styles/tokens/colors.test.ts
   - remote-frontend/src/styles/tokens/typography.test.ts
   - remote-frontend/.prettierignore
-  - remote-frontend/package.json
-  - remote-frontend/tsconfig.json
 irreversible: false
 scope_test: "remote-frontend/src/styles/tokens"
 allowed_change: mixed
@@ -125,18 +123,7 @@ Copy byte-for-byte from `dev-docs/designs/2026-07-04-vk-swarm-design-system/desi
   src/styles/components.css
   ```
 
-### File: `remote-frontend/package.json` (EDIT — fix vite version + add @types/node)
-- **Anchor:** `"vite": "^5.0.8"` in the `devDependencies` block
-- **Before:** `"vite": "^5.0.8"`
-- **After:** `"vite": "^8.0.7"`
-- Also add `"@types/node": "^22.0.0"` to `devDependencies` (needed for `node:fs`/`node:path`/`node:url` type declarations used by the `// @vitest-environment node` tests).
-- **Rationale:** pnpm hoists `vite@8.0.7` to satisfy `frontend/package.json`'s `vite@^8.0.7`; `remote-frontend`'s `vite@^5.0.8` is ignored. vitest@4.1.3 requires vite≥6; with the hoisted vite@8, vitest fails with `ERR_PACKAGE_PATH_NOT_EXPORTED: Package subpath './module-runner' not defined`. Bumping to `^8.0.7` aligns both frontends and resolves the incompatibility. `import.meta.glob` returns empty strings in vitest 4.1.3+vite 8 (broken); `// @vitest-environment node` + `readFileSync` is the working pattern.
-
-### File: `remote-frontend/tsconfig.json` (EDIT — add node types)
-- **Anchor:** the `"types"` array in `compilerOptions` (currently `["vitest/globals"]` or similar)
-- **Before:** `"types": ["vitest/globals"]`
-- **After:** `"types": ["vitest/globals", "node"]`
-- **Rationale:** the `// @vitest-environment node` tests import from `node:fs`/`node:path`/`node:url`, which require `@types/node` to be in the `types` array for `tsc --noEmit` to pass.
+**Note:** `remote-frontend/package.json` (vite `^8.0.7`, `@types/node`) and `remote-frontend/tsconfig.json` (`"node"` in types) were already updated in commit `4ca9ead9` to fix the vitest+vite incompatibility. Do NOT touch them — they are NOT in this task's `files:` list.
 
 ## Allowed moves
 
@@ -144,9 +131,7 @@ Copy byte-for-byte from `dev-docs/designs/2026-07-04-vk-swarm-design-system/desi
 - Create `remote-frontend/src/styles/tokens/typography.css` as a byte-for-byte copy.
 - Create the two `.test.ts` files exactly as written above (with `// @vitest-environment node` directive).
 - Append the three new lines to `remote-frontend/.prettierignore`.
-- Edit `remote-frontend/package.json`: bump `vite` to `^8.0.7`, add `@types/node: ^22.0.0` to devDependencies.
-- Edit `remote-frontend/tsconfig.json`: add `"node"` to the `types` array.
-- Run `pnpm install` from the worktree root after editing package.json (to update the lockfile + node_modules).
+- Do NOT edit `package.json` or `tsconfig.json` — they were already fixed in commit `4ca9ead9`.
 - Run `cp` from the worktree root: `cp dev-docs/designs/2026-07-04-vk-swarm-design-system/design-source/tokens/colors.css remote-frontend/src/styles/tokens/colors.css` (and the same for typography.css).
 - No other file may be touched. Do NOT edit `frontend/` (SC9).
 
@@ -158,4 +143,4 @@ Copy byte-for-byte from `dev-docs/designs/2026-07-04-vk-swarm-design-system/desi
 - A token the test asserts is absent from the source file (the source is authoritative; a missing token is a design-source defect → escalate, do not invent).
 
 ## Done when
-`WAI_TYPECHECK_CMD="cd remote-frontend && npx tsc --noEmit" WAI_TEST_CMD="cd remote-frontend && npx vitest run src/styles/tokens" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-design-system 101` exits 0. The test files use `// @vitest-environment node` + `readFileSync` (NOT `import.meta.glob` which is broken in vitest 4.1.3+vite 8). The worker MUST run `pnpm install` from the worktree root after editing `package.json` so the lockfile + node_modules are updated before running the gate.
+`WAI_TYPECHECK_CMD="cd remote-frontend && npx tsc --noEmit" WAI_TEST_CMD="cd remote-frontend && npx vitest run src/styles/tokens" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-design-system 101` exits 0. The test files use `// @vitest-environment node` + `readFileSync` (NOT `import.meta.glob` which is broken in vitest 4.1.3+vite 8). The `package.json` (vite `^8.0.7`, `@types/node`) and `tsconfig.json` (`"node"` in types) are already applied to the main tree (commit `4ca9ead9`) — do NOT touch them.

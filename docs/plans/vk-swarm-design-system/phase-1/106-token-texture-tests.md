@@ -8,11 +8,9 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/src/styles/tokens/smoke.test.ts
-  - remote-frontend/package.json
-  - remote-frontend/tsconfig.json
 irreversible: false
 scope_test: "remote-frontend/src/styles/tokens/smoke.test.ts"
-allowed_change: mixed
+allowed_change: create
 covers_criteria: [SC2, SC3]
 ---
 
@@ -47,11 +45,7 @@ Create exactly as written above. The test exercises the three supplemental gate 
 
 NOTE: no `cwd` is passed to `execSync` because vitest already runs from `remote-frontend/` (the `WAI_TEST_CMD` `cd`s there); the spawned `npm run build` / `npx tsc --noEmit` / `npx eslint` inherit vitest's cwd (`remote-frontend/`) where `package.json` / `tsconfig.json` live. Do NOT add `cwd: '..'` (would resolve to the worktree root which has no package.json build script).
 
-### File: `remote-frontend/package.json` (EDIT)
-Add `"@types/node": "^22.10.0"` to `devDependencies` (matching the node version used by vitest). Run `npm install --save-dev @types/node@^22.10.0` to install.
-
-### File: `remote-frontend/tsconfig.json` (EDIT)
-Add `"node"` to the `types` array: `"types": ["vitest/globals", "@testing-library/jest-dom", "node"]`. This lets the smoke test import `node:child_process` without TS2307 errors.
+**Note:** `remote-frontend/package.json` (`@types/node` already in devDeps) and `remote-frontend/tsconfig.json` (`"node"` already in types) were already updated in commit `4ca9ead9`. Do NOT touch them — they are NOT in this task's `files:` list.
 
 ## Allowed moves
 
