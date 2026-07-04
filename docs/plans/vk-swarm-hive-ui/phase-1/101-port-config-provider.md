@@ -2,7 +2,7 @@
 id: "101"
 phase: 1
 title: "Hive app shell: ProfileProvider context (auth state from /profile)"
-status: ready
+status: done
 depends_on: ["100"]
 parallel: false
 conflicts_with: []
