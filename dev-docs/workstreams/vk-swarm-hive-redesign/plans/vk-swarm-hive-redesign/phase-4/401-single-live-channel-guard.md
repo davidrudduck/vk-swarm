@@ -2,7 +2,7 @@
 id: "401"
 phase: 4
 title: TS5 acceptance — single inbound channel, one delete, one conflict (SC7)
-status: ready
+status: done
 depends_on: ["402", "403", "404"]
 parallel: false
 conflicts_with: ["402", "403"]

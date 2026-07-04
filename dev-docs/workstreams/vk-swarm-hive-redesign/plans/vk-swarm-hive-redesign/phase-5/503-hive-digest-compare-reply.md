@@ -2,7 +2,7 @@
 id: "503"
 phase: 5
 title: Hive handle_digest — compare against shared_tasks/node_op_log, reply DigestResult (TS4 self-heal)
-status: ready
+status: done
 depends_on: ["501"]
 parallel: false
 conflicts_with: ["501"]

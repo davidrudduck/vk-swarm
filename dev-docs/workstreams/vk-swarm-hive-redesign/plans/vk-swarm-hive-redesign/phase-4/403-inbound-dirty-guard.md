@@ -2,7 +2,7 @@
 id: "403"
 phase: 4
 title: Dirty-guard in upsert_remote_task — inbound never clobbers an unacked local edit
-status: ready
+status: done
 depends_on: ["104"]
 parallel: false
 conflicts_with: ["401", "402"]

@@ -2,7 +2,7 @@
 id: "601"
 phase: 6
 title: No-fanout invariant guard — exhaustive HiveMessage classification + topology assertion
-status: ready
+status: done
 depends_on: ["103", "202", "501"]
 parallel: false
 conflicts_with: []
