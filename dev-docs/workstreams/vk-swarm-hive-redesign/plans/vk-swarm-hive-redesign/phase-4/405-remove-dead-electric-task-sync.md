@@ -2,7 +2,7 @@
 id: "405"
 phase: 4
 title: Remove the dead ElectricTaskSyncService task-shape path
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: []

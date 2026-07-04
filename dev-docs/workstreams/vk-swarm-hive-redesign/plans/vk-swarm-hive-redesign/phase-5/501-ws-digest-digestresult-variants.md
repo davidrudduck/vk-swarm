@@ -2,7 +2,7 @@
 id: "501"
 phase: 5
 title: Add Digest/DigestEntry/DigestResult WS variants to both crates + exhaustive stub arms
-status: ready
+status: done
 depends_on: ["202"]
 parallel: false
 conflicts_with: ["202", "503", "504"]

@@ -2,7 +2,7 @@
 id: "602"
 phase: 6
 title: No-fanout send-site comment fence — document the SC1 invariant at connection.rs
-status: ready
+status: done
 depends_on: ["601"]
 parallel: false
 conflicts_with: []
