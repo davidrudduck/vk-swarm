@@ -11,6 +11,7 @@ files:
   - remote-frontend/vite.config.ts
   - remote-frontend/src/types/shared/types.ts
   - remote-frontend/src/types/shared.test.ts
+  - remote-frontend/.prettierignore
 irreversible: false
 scope_test: "remote-frontend/src/types/shared.test.ts"
 allowed_change: mixed

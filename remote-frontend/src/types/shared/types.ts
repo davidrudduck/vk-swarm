@@ -8,59 +8,59 @@ export type DirectoryEntry = { name: string, path: string, is_directory: boolean
 
 export type DirectoryListResponse = { entries: Array<DirectoryEntry>, current_path: string, };
 
-export type FileContentResponse = {
+export type FileContentResponse = { 
 /**
  * The file path (relative if within a base directory)
  */
-path: string,
+path: string, 
 /**
  * The file content as text
  */
-content: string,
+content: string, 
 /**
  * File size in bytes
  */
-size_bytes: bigint,
+size_bytes: bigint, 
 /**
  * Whether the content was truncated due to size limit
  */
-truncated: boolean,
+truncated: boolean, 
 /**
  * Detected language based on file extension
  */
 language: string | null, };
 
-export type Project = { id: string, name: string, git_repo_path: string, setup_script: string | null, dev_script: string | null, cleanup_script: string | null, copy_files: string | null,
+export type Project = { id: string, name: string, git_repo_path: string, setup_script: string | null, dev_script: string | null, cleanup_script: string | null, copy_files: string | null, 
 /**
  * When true, setup script runs concurrently with the coding agent
  */
-parallel_setup_script: boolean, remote_project_id: string | null, created_at: Date, updated_at: Date, is_remote: boolean, source_node_id: string | null, source_node_name: string | null, source_node_public_url: string | null, source_node_status: string | null, remote_last_synced_at: Date | null,
+parallel_setup_script: boolean, remote_project_id: string | null, created_at: Date, updated_at: Date, is_remote: boolean, source_node_id: string | null, source_node_name: string | null, source_node_public_url: string | null, source_node_status: string | null, remote_last_synced_at: Date | null, 
 /**
  * Whether GitHub integration is enabled for this project
  */
-github_enabled: boolean,
+github_enabled: boolean, 
 /**
  * GitHub repository owner (e.g., "anthropics" from "anthropics/claude-code")
  */
-github_owner: string | null,
+github_owner: string | null, 
 /**
  * GitHub repository name (e.g., "claude-code" from "anthropics/claude-code")
  */
-github_repo: string | null,
+github_repo: string | null, 
 /**
  * Count of open issues (cached from GitHub API)
  */
-github_open_issues: number,
+github_open_issues: number, 
 /**
  * Count of open pull requests (cached from GitHub API)
  */
-github_open_prs: number,
+github_open_prs: number, 
 /**
  * Timestamp of last successful sync with GitHub API
  */
 github_last_synced_at: Date | null, };
 
-export type CreateProject = { name: string, git_repo_path: string, use_existing_repo: boolean,
+export type CreateProject = { name: string, git_repo_path: string, use_existing_repo: boolean, 
 /**
  * URL to clone repository from (mutually exclusive with use_existing_repo=true)
  */
@@ -82,15 +82,15 @@ export type ScanConfigRequest = { repo_path: string, };
 
 export type ScanConfigResponse = { suggestions: Array<ProjectConfigSuggestion>, };
 
-export type LinkToLocalFolderRequest = {
+export type LinkToLocalFolderRequest = { 
 /**
  * The remote project ID to link to (from the Hive)
  */
-remote_project_id: string,
+remote_project_id: string, 
 /**
  * The local folder path where the project will be created
  */
-local_folder_path: string,
+local_folder_path: string, 
 /**
  * Optional project name (defaults to folder name if not provided)
  */
@@ -98,15 +98,15 @@ project_name: string | null, };
 
 export type UnifiedProject = { "type": "local" } & Project | { "type": "remote" } & RemoteNodeProject;
 
-export type RemoteNodeProject = {
+export type RemoteNodeProject = { 
 /**
  * Local ID in the unified projects table
  */
-id: string,
+id: string, 
 /**
  * ID of the node this project belongs to
  */
-node_id: string,
+node_id: string, 
 /**
  * Remote project ID from the Hive
  */
@@ -114,53 +114,53 @@ project_id: string, project_name: string, git_repo_path: string, last_synced_at:
 
 export type RemoteNodeGroup = { node_id: string, node_name: string, node_status: CachedNodeStatus, node_public_url: string | null, projects: Array<RemoteNodeProject>, };
 
-export type MergedProject = {
+export type MergedProject = { 
 /**
  * Use local project ID if exists, otherwise first remote's ID
  */
-id: string, name: string, git_repo_path: string, created_at: Date,
+id: string, name: string, git_repo_path: string, created_at: Date, 
 /**
  * Linking status - Hive project ID (if linked)
  */
-remote_project_id: string | null,
+remote_project_id: string | null, 
 /**
  * Location info - where the project runs
  */
-has_local: boolean,
+has_local: boolean, 
 /**
  * Local project ID if has_local is true
  */
-local_project_id: string | null,
+local_project_id: string | null, 
 /**
  * List of remote nodes that have this project
  */
-nodes: Array<NodeLocation>,
+nodes: Array<NodeLocation>, 
 /**
  * For sorting - timestamp of last task attempt
  */
-last_attempt_at: Date | null,
+last_attempt_at: Date | null, 
 /**
  * GitHub integration fields
  */
-github_enabled: boolean, github_owner: string | null, github_repo: string | null, github_open_issues: number, github_open_prs: number, github_last_synced_at: Date | null,
+github_enabled: boolean, github_owner: string | null, github_repo: string | null, github_open_issues: number, github_open_prs: number, github_last_synced_at: Date | null, 
 /**
  * Task status counts for quick display
  */
 task_counts: TaskCounts, };
 
-export type NodeLocation = { node_id: string,
+export type NodeLocation = { node_id: string, 
 /**
  * Full name like "tardis.raverx.net"
  */
-node_name: string,
+node_name: string, 
 /**
  * Truncated at first period: "tardis"
  */
-node_short_name: string, node_status: CachedNodeStatus, node_public_url: string | null,
+node_short_name: string, node_status: CachedNodeStatus, node_public_url: string | null, 
 /**
  * The project ID on that node
  */
-remote_project_id: string,
+remote_project_id: string, 
 /**
  * Operating system: "darwin", "linux", "windows"
  */
@@ -170,23 +170,23 @@ export type TaskCounts = { todo: number, in_progress: number, in_review: number,
 
 export type MergedProjectsResponse = { projects: Array<MergedProject>, };
 
-export type SyncHealthResponse = {
+export type SyncHealthResponse = { 
 /**
  * Whether the project is currently linked to a Hive project
  */
-is_linked: boolean,
+is_linked: boolean, 
 /**
  * The remote project ID if linked
  */
-remote_project_id: string | null,
+remote_project_id: string | null, 
 /**
  * Number of tasks with orphaned shared_task_id values
  */
-orphaned_task_count: bigint,
+orphaned_task_count: bigint, 
 /**
  * Whether the project has any sync issues
  */
-has_sync_issues: boolean,
+has_sync_issues: boolean, 
 /**
  * List of specific sync issues found
  */
@@ -194,21 +194,21 @@ issues: Array<SyncIssue>, };
 
 export type SyncIssue = { "type": "orphaned_tasks", count: bigint, } | { "type": "project_not_linked" };
 
-export type UnlinkSwarmRequest = {
+export type UnlinkSwarmRequest = { 
 /**
  * Whether to notify the Hive server about the unlink
  */
 notify_hive: boolean, };
 
-export type UnlinkSwarmResponse = {
+export type UnlinkSwarmResponse = { 
 /**
  * Number of tasks that had their shared_task_id cleared
  */
-tasks_unlinked: bigint,
+tasks_unlinked: bigint, 
 /**
  * Number of task attempts that had their hive sync reset
  */
-attempts_reset: bigint,
+attempts_reset: bigint, 
 /**
  * Whether the Hive was successfully notified
  */
@@ -216,23 +216,23 @@ hive_notified: boolean, };
 
 export type CachedNodeStatus = "pending" | "online" | "offline" | "busy" | "draining";
 
-export type CachedNodeCapabilities = {
+export type CachedNodeCapabilities = { 
 /**
  * List of executor types this node supports
  */
-executors: Array<string>,
+executors: Array<string>, 
 /**
  * Maximum number of concurrent tasks
  */
-max_concurrent_tasks: number,
+max_concurrent_tasks: number, 
 /**
  * Operating system (e.g., "darwin", "linux", "windows")
  */
-os: string,
+os: string, 
 /**
  * CPU architecture (e.g., "arm64", "x86_64")
  */
-arch: string,
+arch: string, 
 /**
  * Vibe Kanban version running on the node
  */
@@ -262,33 +262,33 @@ export type UpdateTemplate = { template_name: string | null, content: string | n
 
 export type TemplateSearchParams = { search: string | null, };
 
-export type Label = { id: string,
+export type Label = { id: string, 
 /**
  * Project ID if project-specific, NULL if global
  */
-project_id: string | null, name: string,
+project_id: string | null, name: string, 
 /**
  * Lucide icon name (e.g., "tag", "bug", "code")
  */
-icon: string,
+icon: string, 
 /**
  * Hex color code (e.g., "#3b82f6")
  */
-color: string,
+color: string, 
 /**
  * UUID of the label in the Hive (NULL if not yet synced)
  */
-shared_label_id?: string,
+shared_label_id?: string, 
 /**
  * Optimistic locking version for conflict resolution
  */
-version: bigint,
+version: bigint, 
 /**
  * Timestamp of last successful sync to Hive
  */
 synced_at?: string, created_at: string, updated_at: string, };
 
-export type CreateLabel = {
+export type CreateLabel = { 
 /**
  * Project ID if project-specific, None for global label
  */
@@ -300,18 +300,18 @@ export type TaskLabel = { id: string, task_id: string, label_id: string, created
 
 export type SetTaskLabels = { label_ids: Array<string>, };
 
-export type LabelQueryParams = {
+export type LabelQueryParams = { 
 /**
  * Filter by project ID. If provided, returns global + project-specific labels.
  * If not provided, returns only global labels.
  */
 project_id: string | null, };
 
-export type Webhook = { id: string, project_id: string | null, name: string, url: string,
+export type Webhook = { id: string, project_id: string | null, name: string, url: string, 
 /**
  * JSON-serialized Vec<WebhookEventType>
  */
-events: string,
+events: string, 
 /**
  * JSON-serialized HashMap<String, String>
  */
@@ -323,11 +323,11 @@ export type WebhookEventType = "approval_request" | "pending_question" | "execut
 
 export type CreateWebhook = { name: string, url: string, events: Array<WebhookEventType>, headers: { [key in string]?: string }, secret: string | null, payload_template: string | null, override_global: boolean, active: boolean, };
 
-export type UpdateWebhook = { name: string | null, url: string | null, events: Array<WebhookEventType> | null, headers: { [key in string]?: string } | null, secret: string | null,
+export type UpdateWebhook = { name: string | null, url: string | null, events: Array<WebhookEventType> | null, headers: { [key in string]?: string } | null, secret: string | null, 
 /**
  * If true, clears the signing secret (sets it to NULL).
  */
-clear_secret: boolean, payload_template: string | null,
+clear_secret: boolean, payload_template: string | null, 
 /**
  * If true, clears the payload template (reverts to default JSON payload).
  */
@@ -339,11 +339,11 @@ export type CreateTaskVariable = { name: string, value: string, };
 
 export type UpdateTaskVariable = { name: string | null, value: string | null, };
 
-export type ResolvedVariable = { name: string, value: string,
+export type ResolvedVariable = { name: string, value: string, 
 /**
  * The task ID this variable was defined on (may differ from requested task_id for inherited vars)
  */
-source_task_id: string,
+source_task_id: string, 
 /**
  * True if this variable was inherited from a parent task
  */
@@ -351,34 +351,34 @@ inherited: boolean, };
 
 export type TaskStatus = "todo" | "inprogress" | "inreview" | "done" | "cancelled";
 
-export type Task = { id: string, project_id: string, title: string, description: string | null, status: TaskStatus, parent_task_id: string | null, shared_task_id: string | null, created_at: string, updated_at: string, remote_assignee_user_id: string | null, remote_assignee_name: string | null, remote_assignee_username: string | null, remote_version: bigint, remote_last_synced_at: string | null, remote_stream_node_id: string | null, remote_stream_url: string | null,
+export type Task = { id: string, project_id: string, title: string, description: string | null, status: TaskStatus, parent_task_id: string | null, shared_task_id: string | null, created_at: string, updated_at: string, remote_assignee_user_id: string | null, remote_assignee_name: string | null, remote_assignee_username: string | null, remote_version: bigint, remote_last_synced_at: string | null, remote_stream_node_id: string | null, remote_stream_url: string | null, 
 /**
  * Timestamp when task was archived. NULL means not archived.
  */
-archived_at: Date | null,
+archived_at: Date | null, 
 /**
  * Timestamp of last significant activity (status change, execution start).
  * Unlike updated_at, this is NOT updated for metadata changes like title/description edits.
  */
 activity_at: Date | null, };
 
-export type TaskWithAttemptStatus = { has_in_progress_attempt: boolean, has_merged_attempt: boolean, last_attempt_failed: boolean, executor: string,
+export type TaskWithAttemptStatus = { has_in_progress_attempt: boolean, has_merged_attempt: boolean, last_attempt_failed: boolean, executor: string, 
 /**
  * Latest execution start timestamp for sorting (codingagent only, non-dropped)
  */
-latest_execution_started_at: Date | null,
+latest_execution_started_at: Date | null, 
 /**
  * Latest execution completion timestamp for sorting (codingagent only, non-dropped)
  */
-latest_execution_completed_at: Date | null,
+latest_execution_completed_at: Date | null, 
 /**
  * Node name where this task originated (for swarm display)
  */
-source_node_name: string | null, id: string, project_id: string, title: string, description: string | null, status: TaskStatus, parent_task_id: string | null, shared_task_id: string | null, created_at: string, updated_at: string, remote_assignee_user_id: string | null, remote_assignee_name: string | null, remote_assignee_username: string | null, remote_version: bigint, remote_last_synced_at: string | null, remote_stream_node_id: string | null, remote_stream_url: string | null,
+source_node_name: string | null, id: string, project_id: string, title: string, description: string | null, status: TaskStatus, parent_task_id: string | null, shared_task_id: string | null, created_at: string, updated_at: string, remote_assignee_user_id: string | null, remote_assignee_name: string | null, remote_assignee_username: string | null, remote_version: bigint, remote_last_synced_at: string | null, remote_stream_node_id: string | null, remote_stream_url: string | null, 
 /**
  * Timestamp when task was archived. NULL means not archived.
  */
-archived_at: Date | null,
+archived_at: Date | null, 
 /**
  * Timestamp of last significant activity (status change, execution start).
  * Unlike updated_at, this is NOT updated for metadata changes like title/description edits.
@@ -387,15 +387,15 @@ activity_at: Date | null, };
 
 export type TaskRelationships = { parent_task: Task | null, current_attempt: TaskAttempt, children: Array<Task>, };
 
-export type TaskWithProjectInfo = { id: string, project_id: string, title: string, description: string | null, status: TaskStatus, parent_task_id: string | null, shared_task_id: string | null, created_at: string, updated_at: string, remote_assignee_user_id: string | null, remote_assignee_name: string | null, remote_assignee_username: string | null, remote_version: bigint, remote_last_synced_at: string | null, remote_stream_node_id: string | null, remote_stream_url: string | null, archived_at: Date | null,
+export type TaskWithProjectInfo = { id: string, project_id: string, title: string, description: string | null, status: TaskStatus, parent_task_id: string | null, shared_task_id: string | null, created_at: string, updated_at: string, remote_assignee_user_id: string | null, remote_assignee_name: string | null, remote_assignee_username: string | null, remote_version: bigint, remote_last_synced_at: string | null, remote_stream_node_id: string | null, remote_stream_url: string | null, archived_at: Date | null, 
 /**
  * Timestamp of last significant activity (status change, execution start).
  */
-activity_at: Date | null, assignee_first_name: string | null, assignee_last_name: string | null, assignee_username: string | null, has_in_progress_attempt: boolean, has_merged_attempt: boolean, last_attempt_failed: boolean, executor: string,
+activity_at: Date | null, assignee_first_name: string | null, assignee_last_name: string | null, assignee_username: string | null, has_in_progress_attempt: boolean, has_merged_attempt: boolean, last_attempt_failed: boolean, executor: string, 
 /**
  * Latest execution start timestamp for sorting (codingagent only, non-dropped)
  */
-latest_execution_started_at: Date | null,
+latest_execution_started_at: Date | null, 
 /**
  * Latest execution completion timestamp for sorting (codingagent only, non-dropped)
  */
@@ -409,13 +409,13 @@ export type DashboardSummary = { running_tasks: Array<DashboardTask>, in_review_
 
 export type ActivityCategory = "needs_review" | "in_progress" | "completed";
 
-export type ActivityFeedItem = { task_id: string, task_title: string, project_id: string, project_name: string, status: TaskStatus, category: ActivityCategory, executor: string, activity_at: string,
+export type ActivityFeedItem = { task_id: string, task_title: string, project_id: string, project_name: string, status: TaskStatus, category: ActivityCategory, executor: string, activity_at: string, 
 /**
  * Whether this item has been dismissed by the user.
  */
 is_dismissed: boolean, };
 
-export type ActivityCounts = { needs_review: number, in_progress: number, completed: number,
+export type ActivityCounts = { needs_review: number, in_progress: number, completed: number, 
 /**
  * Number of dismissed items (across all categories).
  */
@@ -489,7 +489,7 @@ export type ListProjectsResponse = { projects: Array<RemoteProject>, };
 
 export type RemoteProjectMembersResponse = { organization_id: string, members: Array<OrganizationMemberWithProfile>, };
 
-export type UserSystemInfo = { config: Config, analytics_user_id: string, login_status: LoginStatus, environment: Environment,
+export type UserSystemInfo = { config: Config, analytics_user_id: string, login_status: LoginStatus, environment: Environment, 
 /**
  * Capabilities supported per executor (e.g., { "CLAUDE_CODE": ["SESSION_FORK"] })
  */
@@ -533,54 +533,54 @@ export type OpenEditorRequest = { editor_type: string | null, file_path: string 
 
 export type OpenEditorResponse = { url: string | null, };
 
-export type CreateAndStartTaskRequest = { task: CreateTask, executor_profile_id: ExecutorProfileId, base_branch: string,
+export type CreateAndStartTaskRequest = { task: CreateTask, executor_profile_id: ExecutorProfileId, base_branch: string, 
 /**
  * When true, reuse the parent task's latest attempt worktree.
  * Only valid when the task has a parent_task_id.
  */
 use_parent_worktree: boolean | null, };
 
-export type ArchiveTaskRequest = {
+export type ArchiveTaskRequest = { 
 /**
  * Whether to also archive subtasks (children). Defaults to true.
  */
 include_subtasks: boolean, };
 
-export type ArchiveTaskResponse = {
+export type ArchiveTaskResponse = { 
 /**
  * The archived/unarchived task
  */
-task: Task,
+task: Task, 
 /**
  * Number of subtasks also archived (only for archive operation)
  */
 subtasks_archived: bigint, };
 
-export type PreviewExpansionRequest = {
+export type PreviewExpansionRequest = { 
 /**
  * The text to expand variables in
  */
 text: string, };
 
-export type PreviewExpansionResponse = {
+export type PreviewExpansionResponse = { 
 /**
  * The text with variables expanded
  */
-expanded_text: string,
+expanded_text: string, 
 /**
  * Variables that were referenced but not defined
  */
-undefined_variables: Array<string>,
+undefined_variables: Array<string>, 
 /**
  * Variables that were successfully expanded
  */
 expanded_variables: Array<ExpandedVariableInfo>, };
 
-export type ExpandedVariableInfo = {
+export type ExpandedVariableInfo = { 
 /**
  * The variable name
  */
-name: string,
+name: string, 
 /**
  * The task ID where this variable was defined
  */
@@ -590,23 +590,23 @@ export type CreateGitHubPrRequest = { title: string, body: string | null, target
 
 export type ImageResponse = { id: string, file_path: string, original_name: string, mime_type: string | null, size_bytes: bigint, hash: string, created_at: string, updated_at: string, };
 
-export type Config = { config_version: string, theme: ThemeMode, executor_profile: ExecutorProfileId, disclaimer_acknowledged: boolean, onboarding_acknowledged: boolean, notifications: NotificationConfig, editor: EditorConfig, github: GitHubConfig,
+export type Config = { config_version: string, theme: ThemeMode, executor_profile: ExecutorProfileId, disclaimer_acknowledged: boolean, onboarding_acknowledged: boolean, notifications: NotificationConfig, editor: EditorConfig, github: GitHubConfig, 
 /**
  * Deprecated: analytics has been removed. Field kept for config compatibility.
  */
-analytics_enabled: boolean,
+analytics_enabled: boolean, 
 /**
  * Deprecated: Sentry error reporting has been removed. Field kept for config compatibility.
  */
-sentry_enabled: boolean, workspace_dir: string | null, last_app_version: string | null, show_release_notes: boolean, language: UiLanguage, git_branch_prefix: string, dev_banner: DevBannerConfig,
+sentry_enabled: boolean, workspace_dir: string | null, last_app_version: string | null, show_release_notes: boolean, language: UiLanguage, git_branch_prefix: string, dev_banner: DevBannerConfig, 
 /**
  * Pagination settings for log display
  */
-pagination: PaginationConfig,
+pagination: PaginationConfig, 
 /**
  * Font settings for UI, code, and prose contexts
  */
-fonts: FontConfig,
+fonts: FontConfig, 
 /**
  * Timestamp display settings
  */
@@ -628,47 +628,47 @@ export enum SoundFile { ABSTRACT_SOUND1 = "ABSTRACT_SOUND1", ABSTRACT_SOUND2 = "
 
 export type UiLanguage = "BROWSER" | "EN" | "JA" | "ES" | "KO";
 
-export type DevBannerConfig = {
+export type DevBannerConfig = { 
 /**
  * Custom background color (CSS color string), None = default orange
  */
-background_color: string | null,
+background_color: string | null, 
 /**
  * Custom foreground/text color (CSS color string), None = default white
  */
-foreground_color: string | null,
+foreground_color: string | null, 
 /**
  * Whether to display the system hostname in the banner
  */
-show_hostname: boolean,
+show_hostname: boolean, 
 /**
  * Whether to display the OS type and version in the banner
  */
 show_os_info: boolean, };
 
-export type PaginationConfig = {
+export type PaginationConfig = { 
 /**
  * Number of log entries to load initially (default: 100)
  */
-initial_load: bigint,
+initial_load: bigint, 
 /**
  * Maximum entries per page request (default: 500)
  */
 max_limit: bigint, };
 
-export type FontConfig = {
+export type FontConfig = { 
 /**
  * Font for UI elements (buttons, menus, navigation)
  */
-ui_font: UiFont,
+ui_font: UiFont, 
 /**
  * Font for code blocks and monospace text
  */
-code_font: CodeFont,
+code_font: CodeFont, 
 /**
  * Font for prose/reading content (task descriptions, markdown)
  */
-prose_font: ProseFont,
+prose_font: ProseFont, 
 /**
  * Disable font ligatures in code contexts
  */
@@ -680,16 +680,16 @@ export type CodeFont = "JET_BRAINS_MONO" | "CASCADIA_MONO" | "HACK" | "IBM_PLEX_
 
 export type ProseFont = "INTER" | "ROBOTO" | "GEORGIA" | "CHIVO_MONO" | "SYSTEM";
 
-export type TimestampConfig = {
+export type TimestampConfig = { 
 /**
  * IANA timezone name (e.g., "America/New_York", "Europe/London")
  * "LOCAL" means use browser's local timezone
  */
-timezone: string,
+timezone: string, 
 /**
  * Show timestamps on token usage lines
  */
-token_timestamp_enabled: boolean,
+token_timestamp_enabled: boolean, 
 /**
  * Format string for token usage timestamps (uses date-fns tokens:
  * HH=hour, mm=minute, ss=second, SSS=ms, dd=day, MM=month, yyyy=year)
@@ -698,11 +698,11 @@ token_timestamp_format: string, };
 
 export type GitBranch = { name: string, is_current: boolean, is_remote: boolean, last_commit_date: Date, };
 
-export type Diff = { change: DiffChangeKind, oldPath: string | null, newPath: string | null, oldContent: string | null, newContent: string | null,
+export type Diff = { change: DiffChangeKind, oldPath: string | null, newPath: string | null, oldContent: string | null, newContent: string | null, 
 /**
  * True when file contents are intentionally omitted (e.g., too large)
  */
-contentOmitted: boolean,
+contentOmitted: boolean, 
 /**
  * Optional precomputed stats for omitted content
  */
@@ -710,21 +710,21 @@ additions: number | null, deletions: number | null, };
 
 export type DiffChangeKind = "added" | "deleted" | "modified" | "renamed" | "copied" | "permissionChange";
 
-export type CommandBuilder = {
+export type CommandBuilder = { 
 /**
  * Base executable command (e.g., "npx -y @anthropic-ai/claude-code@latest")
  */
-base: string,
+base: string, 
 /**
  * Optional parameters to append to the base command
  */
 params: Array<string> | null, };
 
-export type ExecutorProfileId = {
+export type ExecutorProfileId = { 
 /**
  * The executor type (e.g., "CLAUDE_CODE", "AMP")
  */
-executor: BaseCodingAgent,
+executor: BaseCodingAgent, 
 /**
  * Optional variant name (e.g., "PLAN", "ROUTER")
  */
@@ -736,13 +736,13 @@ export type ExecutorConfigs = { executors: { [key in BaseCodingAgent]?: Executor
 
 export enum BaseAgentCapability { SESSION_FORK = "SESSION_FORK", SETUP_HELPER = "SETUP_HELPER" }
 
-export type ClaudeCode = { append_prompt: AppendPrompt, no_context?: boolean | null, claude_code_router?: boolean | null, plan?: boolean | null, approvals?: boolean | null, model?: string | null, dangerously_skip_permissions?: boolean | null, disable_api_key?: boolean | null,
+export type ClaudeCode = { append_prompt: AppendPrompt, no_context?: boolean | null, claude_code_router?: boolean | null, plan?: boolean | null, approvals?: boolean | null, model?: string | null, dangerously_skip_permissions?: boolean | null, disable_api_key?: boolean | null, 
 /**
  * Experimental: disable active process-group kill when a Result message is detected.
  * When true, behaves like the reference implementation — waits for natural process exit
  * instead of sending an exit signal on Result. Use this if executions terminate too early.
  */
-no_exit_on_result?: boolean | null,
+no_exit_on_result?: boolean | null, 
 /**
  * Enable interactive question UI for AskUserQuestion control requests.
  * When enabled, questions are displayed as clickable options in the UI.
@@ -785,19 +785,19 @@ export type DroidReasoningEffort = "none" | "dynamic" | "off" | "low" | "medium"
 
 export type AppendPrompt = string | null;
 
-export type CodingAgentInitialRequest = { prompt: string,
+export type CodingAgentInitialRequest = { prompt: string, 
 /**
  * Executor profile specification
  */
 executor_profile_id: ExecutorProfileId, };
 
-export type CodingAgentFollowUpRequest = { prompt: string, session_id: string,
+export type CodingAgentFollowUpRequest = { prompt: string, session_id: string, 
 /**
  * Executor profile specification
  */
 executor_profile_id: ExecutorProfileId, };
 
-export type CodingAgentReviewRequest = { target: CodingAgentReviewTarget, append_to_original_thread: boolean, session_id: string | null,
+export type CodingAgentReviewRequest = { target: CodingAgentReviewTarget, append_to_original_thread: boolean, session_id: string | null, 
 /**
  * Executor profile specification
  */
@@ -805,16 +805,16 @@ executor_profile_id: ExecutorProfileId, };
 
 export type CodingAgentReviewTarget = { "type": "uncommitted_changes" } | { "type": "base_branch", branch: string, } | { "type": "commit", sha: string, title: string | null, } | { "type": "custom", instructions: string, };
 
-export type CreateTaskAttemptBody = { task_id: string,
+export type CreateTaskAttemptBody = { task_id: string, 
 /**
  * Executor profile specification
  */
-executor_profile_id: ExecutorProfileId, base_branch: string,
+executor_profile_id: ExecutorProfileId, base_branch: string, 
 /**
  * Target node ID for remote execution (if project exists on multiple nodes).
  * When set, the request will be proxied to the specified node.
  */
-target_node_id: string | null,
+target_node_id: string | null, 
 /**
  * When true, reuse the parent task's latest attempt worktree.
  * Only valid when the task has a parent_task_id.
@@ -839,15 +839,15 @@ export type CreatePrError = { "type": "github_cli_not_installed" } | { "type": "
 
 export type CommitInfo = { sha: string, subject: string, };
 
-export type BranchStatus = { commits_behind: number | null, commits_ahead: number | null, has_uncommitted_changes: boolean | null, head_oid: string | null, uncommitted_count: number | null, untracked_count: number | null, target_branch_name: string, remote_commits_behind: number | null, remote_commits_ahead: number | null, merges: Array<Merge>,
+export type BranchStatus = { commits_behind: number | null, commits_ahead: number | null, has_uncommitted_changes: boolean | null, head_oid: string | null, uncommitted_count: number | null, untracked_count: number | null, target_branch_name: string, remote_commits_behind: number | null, remote_commits_ahead: number | null, merges: Array<Merge>, 
 /**
  * True if a `git rebase` is currently in progress in this worktree
  */
-is_rebase_in_progress: boolean,
+is_rebase_in_progress: boolean, 
 /**
  * Current conflict operation if any
  */
-conflict_op: ConflictOp | null,
+conflict_op: ConflictOp | null, 
 /**
  * List of files currently in conflicted (unmerged) state
  */
@@ -855,54 +855,54 @@ conflicted_files: Array<string>, };
 
 export type ConflictOp = "rebase" | "merge" | "cherry_pick" | "revert";
 
-export type TaskAttempt = { id: string, task_id: string, container_ref: string | null, branch: string, target_branch: string, executor: string, worktree_deleted: boolean, setup_completed_at: string | null, created_at: string, updated_at: string,
+export type TaskAttempt = { id: string, task_id: string, container_ref: string | null, branch: string, target_branch: string, executor: string, worktree_deleted: boolean, setup_completed_at: string | null, created_at: string, updated_at: string, 
 /**
  * When this attempt was last synced to the Hive. NULL means not yet synced.
  */
-hive_synced_at?: string,
+hive_synced_at?: string, 
 /**
  * The assignment ID from the Hive for tasks dispatched by the Hive.
  * NULL for locally-started tasks until a synthetic assignment is created.
  */
-hive_assignment_id?: string,
+hive_assignment_id?: string, 
 /**
  * The node ID that created this attempt. NULL for legacy data (treated as local).
  * Used for hybrid local+Hive queries: local attempts are always queried from local DB.
  */
 origin_node_id?: string, };
 
-export type ExecutionProcess = { id: string, task_attempt_id: string, run_reason: ExecutionProcessRunReason, executor_action: ExecutorAction,
+export type ExecutionProcess = { id: string, task_attempt_id: string, run_reason: ExecutionProcessRunReason, executor_action: ExecutorAction, 
 /**
  * Git HEAD commit OID captured before the process starts
  */
-before_head_commit: string | null,
+before_head_commit: string | null, 
 /**
  * Git HEAD commit OID captured after the process ends
  */
-after_head_commit: string | null, status: ExecutionProcessStatus, exit_code: bigint | null,
+after_head_commit: string | null, status: ExecutionProcessStatus, exit_code: bigint | null, 
 /**
  * dropped: true if this process is excluded from the current
  * history view (due to restore/trimming). Hidden from logs/timeline;
  * still listed in the Processes tab.
  */
-dropped: boolean,
+dropped: boolean, 
 /**
  * System process ID (PID) for process tree discovery
  */
-pid: bigint | null, started_at: string, completed_at: string | null, created_at: string, updated_at: string,
+pid: bigint | null, started_at: string, completed_at: string | null, created_at: string, updated_at: string, 
 /**
  * When this execution process was last synced to the Hive. NULL means not yet synced.
  */
-hive_synced_at?: string,
+hive_synced_at?: string, 
 /**
  * The server instance that spawned this process. Used for instance-scoped
  * process cleanup on shutdown (so cargo watch restarts don't kill other instances' processes).
  */
-server_instance_id?: string,
+server_instance_id?: string, 
 /**
  * Why the session completed: "result_success", "result_error", "eof", "killed", "error"
  */
-completion_reason?: string,
+completion_reason?: string, 
 /**
  * Additional details about completion (e.g., error message)
  */
@@ -926,15 +926,15 @@ export type Draft = { id: string, task_attempt_id: string, draft_type: DraftType
 
 export type DraftType = "follow_up" | "retry";
 
-export type BackupInfo = {
+export type BackupInfo = { 
 /**
  * Filename of the backup (e.g., "db_backup_20250101_100000.sqlite")
  */
-filename: string,
+filename: string, 
 /**
  * When the backup was created
  */
-created_at: Date,
+created_at: Date, 
 /**
  * Size of the backup file in bytes
  */
@@ -946,37 +946,37 @@ export type CommandRunResult = { exit_status: CommandExitStatus | null, output: 
 
 export type NormalizedEntry = { timestamp: string | null, entry_type: NormalizedEntryType, content: string, metadata: Record<string, unknown> | null, };
 
-export type NormalizedEntryType = { "type": "user_message" } | { "type": "user_feedback", denied_tool: string, } | { "type": "assistant_message" } | { "type": "tool_use", tool_name: string, action_type: ActionType, status: ToolStatus, } | { "type": "system_message" } | { "type": "error_message", error_type: NormalizedEntryError, } | { "type": "thinking" } | { "type": "loading" } | { "type": "next_action", failed: boolean, execution_processes: number, needs_setup: boolean, } | { "type": "execution_start", process_id: string, process_name: string, started_at: string, } | { "type": "execution_end", process_id: string, process_name: string, started_at: string, ended_at: string, duration_seconds: bigint, status: string, } | { "type": "result_message", subtype: string, duration_ms: bigint, num_turns: bigint, total_cost_usd: number | null, is_error: boolean, } | { "type": "token_usage",
+export type NormalizedEntryType = { "type": "user_message" } | { "type": "user_feedback", denied_tool: string, } | { "type": "assistant_message" } | { "type": "tool_use", tool_name: string, action_type: ActionType, status: ToolStatus, } | { "type": "system_message" } | { "type": "error_message", error_type: NormalizedEntryError, } | { "type": "thinking" } | { "type": "loading" } | { "type": "next_action", failed: boolean, execution_processes: number, needs_setup: boolean, } | { "type": "execution_start", process_id: string, process_name: string, started_at: string, } | { "type": "execution_end", process_id: string, process_name: string, started_at: string, ended_at: string, duration_seconds: bigint, status: string, } | { "type": "result_message", subtype: string, duration_ms: bigint, num_turns: bigint, total_cost_usd: number | null, is_error: boolean, } | { "type": "token_usage", 
 /**
  * Cumulative input tokens across all turns
  */
-input_tokens: bigint,
+input_tokens: bigint, 
 /**
  * Cumulative cached input tokens (counts toward context, not re-billed)
  */
-cached_input_tokens: bigint,
+cached_input_tokens: bigint, 
 /**
  * Cumulative output tokens across all turns
  */
-output_tokens: bigint,
+output_tokens: bigint, 
 /**
  * Cumulative reasoning tokens (subset of output)
  */
-reasoning_tokens: bigint,
+reasoning_tokens: bigint, 
 /**
  * Total tokens this turn (last turn only, for per-turn insight)
  */
-last_total_tokens: bigint,
+last_total_tokens: bigint, 
 /**
  * Model context window size (tokens), if reported
  */
 context_window: bigint | null, };
 
-export type FileChange = { "action": "write", content: string, } | { "action": "delete" } | { "action": "rename", new_path: string, } | { "action": "edit",
+export type FileChange = { "action": "write", content: string, } | { "action": "delete" } | { "action": "rename", new_path: string, } | { "action": "edit", 
 /**
  * Unified diff containing file header and hunks.
  */
-unified_diff: string,
+unified_diff: string, 
 /**
  * Whether line number in the hunks are reliable.
  */
@@ -988,7 +988,7 @@ export type TodoItem = { content: string, status: string, priority: string | nul
 
 export type NormalizedEntryError = { "type": "setup_required" } | { "type": "rate_limited" } | { "type": "network_error" } | { "type": "tool_execution_error" } | { "type": "permission_denied" } | { "type": "api_error" } | { "type": "other" };
 
-export type ToolResult = { type: ToolResultValueType,
+export type ToolResult = { type: ToolResultValueType, 
 /**
  * For Markdown, this will be a JSON string; for JSON, a structured value
  */
@@ -998,15 +998,15 @@ export type ToolResultValueType = { "type": "markdown" } | { "type": "json" };
 
 export type DenialSource = "user" | "hook" | "policy" | "system";
 
-export type ToolStatus = { "status": "created" } | { "status": "success" } | { "status": "failed" } | { "status": "denied", reason: string | null,
+export type ToolStatus = { "status": "created" } | { "status": "success" } | { "status": "failed" } | { "status": "denied", reason: string | null, 
 /**
  * Source of the denial
  */
-source: DenialSource, } | { "status": "pending_approval", approval_id: string, requested_at: string, timeout_at: string, } | { "status": "timed_out",
+source: DenialSource, } | { "status": "pending_approval", approval_id: string, requested_at: string, timeout_at: string, } | { "status": "timed_out", 
 /**
  * How long the approval was waited for before timing out, in seconds
  */
-waited_seconds: bigint | null, } | { "status": "pending_question", question_id: string, questions: Array<Question>, requested_at: string, timeout_at: string, } | { "status": "answered",
+waited_seconds: bigint | null, } | { "status": "pending_question", question_id: string, questions: Array<Question>, requested_at: string, timeout_at: string, } | { "status": "answered", 
 /**
  * Map of question text -> selected answer(s)
  */
@@ -1018,7 +1018,7 @@ export type ApprovalStatus = { "status": "pending" } | { "status": "approved" } 
 
 export type CreateApprovalRequest = { tool_name: string, tool_input: JsonValue, tool_call_id: string, };
 
-export type ApprovalResponse = { execution_process_id: string, status: ApprovalStatus,
+export type ApprovalResponse = { execution_process_id: string, status: ApprovalStatus, 
 /**
  * Optional answers for AskUserQuestion responses (header -> answer)
  */
@@ -1030,41 +1030,41 @@ export type QuestionOption = { label: string, description: string, };
 
 export type OutputType = "stdout" | "stderr" | "system" | "json_patch" | "session_id" | "finished" | "refresh_required";
 
-export type LogEntry = {
+export type LogEntry = { 
 /**
  * Sequential ID for cursor-based pagination.
  */
-id: bigint,
+id: bigint, 
 /**
  * The content of the log entry.
  */
-content: string,
+content: string, 
 /**
  * The type of output (stdout, stderr, system, json_patch, etc.).
  */
-output_type: OutputType,
+output_type: OutputType, 
 /**
  * When the log entry was created.
  */
-timestamp: string,
+timestamp: string, 
 /**
  * The execution ID this log belongs to.
  */
 execution_id: string, };
 
-export type PaginatedLogs = {
+export type PaginatedLogs = { 
 /**
  * The log entries for this page.
  */
-entries: Array<LogEntry>,
+entries: Array<LogEntry>, 
 /**
  * Cursor for the next page (if more entries exist).
  */
-next_cursor: bigint | null,
+next_cursor: bigint | null, 
 /**
  * Whether there are more entries after this page.
  */
-has_more: boolean,
+has_more: boolean, 
 /**
  * Total count of log entries (if available).
  */
@@ -1074,77 +1074,77 @@ export type Direction = "forward" | "backward";
 
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null;
 
-export type ProcessInfo = {
+export type ProcessInfo = { 
 /**
  * System process ID
  */
-pid: number,
+pid: number, 
 /**
  * Parent process ID (None for orphans/init)
  */
-parent_pid: number | null,
+parent_pid: number | null, 
 /**
  * Process name (executable name)
  */
-name: string,
+name: string, 
 /**
  * Full command line arguments
  */
-command: Array<string>,
+command: Array<string>, 
 /**
  * Working directory of the process
  */
-working_directory: string | null,
+working_directory: string | null, 
 /**
  * Memory usage in bytes
  */
-memory_bytes: bigint,
+memory_bytes: bigint, 
 /**
  * CPU usage percentage (0.0 - 100.0)
  */
-cpu_percent: number,
+cpu_percent: number, 
 /**
  * ID of the execution process record (if this is a tracked executor)
  */
-execution_process_id: string | null,
+execution_process_id: string | null, 
 /**
  * ID of the task attempt this process belongs to
  */
-task_attempt_id: string | null,
+task_attempt_id: string | null, 
 /**
  * ID of the task this process belongs to
  */
-task_id: string | null,
+task_id: string | null, 
 /**
  * ID of the project this process belongs to
  */
-project_id: string | null,
+project_id: string | null, 
 /**
  * Name of the project (for display)
  */
-project_name: string | null,
+project_name: string | null, 
 /**
  * Title of the task (for display)
  */
-task_title: string | null,
+task_title: string | null, 
 /**
  * Whether this is a direct executor process (vs a child spawned by an executor)
  */
 is_executor: boolean, };
 
-export type ProcessFilter = {
+export type ProcessFilter = { 
 /**
  * Filter by project ID
  */
-project_id: string | null,
+project_id: string | null, 
 /**
  * Filter by task ID
  */
-task_id: string | null,
+task_id: string | null, 
 /**
  * Filter by task attempt ID
  */
-task_attempt_id: string | null,
+task_attempt_id: string | null, 
 /**
  * Only include executor processes (exclude children)
  */
@@ -1152,61 +1152,61 @@ executors_only: boolean, };
 
 export type KillScope = { "type": "single", pid: number, } | { "type": "task", task_id: string, } | { "type": "project", project_id: string, } | { "type": "all_except_executors" } | { "type": "all" };
 
-export type KillResult = {
+export type KillResult = { 
 /**
  * Number of processes successfully killed
  */
-killed_count: number,
+killed_count: number, 
 /**
  * Number of processes that failed to kill
  */
-failed_count: number,
+failed_count: number, 
 /**
  * PIDs that failed to kill with error messages
  */
 failures: Array<KillFailure>, };
 
-export type KillFailure = {
+export type KillFailure = { 
 /**
  * PID that failed to kill
  */
-pid: number,
+pid: number, 
 /**
  * Error message
  */
 error: string, };
 
-export type SessionInfo = {
+export type SessionInfo = { 
 /**
  * Unique session identifier
  */
-id: string,
+id: string, 
 /**
  * Working directory of the session
  */
-working_dir: string,
+working_dir: string, 
 /**
  * Whether this session uses tmux
  */
-is_tmux: boolean,
+is_tmux: boolean, 
 /**
  * Current terminal dimensions
  */
-cols: number, rows: number,
+cols: number, rows: number, 
 /**
  * Whether the session is still active
  */
 active: boolean, };
 
-export type CreateSessionResponse = {
+export type CreateSessionResponse = { 
 /**
  * The session ID to use for WebSocket connection.
  */
-session_id: string,
+session_id: string, 
 /**
  * Information about the created session.
  */
-session: SessionInfo,
+session: SessionInfo, 
 /**
  * Whether this was a reconnection to an existing session.
  */
@@ -1214,7 +1214,7 @@ is_reconnect: boolean, };
 
 export type TerminalMessage = { "type": "input", data: string, } | { "type": "resize", cols: number, rows: number, } | { "type": "output", data: string, } | { "type": "exit", code: number | null, } | { "type": "error", message: string, };
 
-export type WorktreePathResponse = {
+export type WorktreePathResponse = { 
 /**
  * Absolute path to the worktree directory
  */
@@ -1228,43 +1228,43 @@ export type StashChangesResponse = { stash_ref: string, };
 
 export type FixSessionsResponse = { invalidated_count: number, invalidated_session_ids: Array<string>, };
 
-export type PurgeResult = {
+export type PurgeResult = { 
 /**
  * Number of bytes freed
  */
-freed_bytes: bigint,
+freed_bytes: bigint, 
 /**
  * Names of directories that were purged
  */
 purged_dirs: Array<string>, };
 
-export type DiskUsageStats = {
+export type DiskUsageStats = { 
 /**
  * Path to the worktree directory
  */
-worktree_dir: string,
+worktree_dir: string, 
 /**
  * Total bytes used by worktrees
  */
-used_bytes: bigint,
+used_bytes: bigint, 
 /**
  * Number of worktrees
  */
-worktree_count: number,
+worktree_count: number, 
 /**
  * Largest worktrees (top 10)
  */
 largest_worktrees: Array<WorktreeSize>, };
 
-export type WorktreeSize = {
+export type WorktreeSize = { 
 /**
  * Worktree directory name
  */
-name: string,
+name: string, 
 /**
  * Size in bytes
  */
-bytes: bigint,
+bytes: bigint, 
 /**
  * Associated task attempt ID (if found via container_ref matching)
  */
@@ -1278,193 +1278,193 @@ export type UpdateQueuedMessageRequest = { content: string | null, variant: stri
 
 export type ReorderQueuedMessagesRequest = { message_ids: Array<string>, };
 
-export type InstanceInfo = {
+export type InstanceInfo = { 
 /**
  * Canonical path to the project root directory
  */
-project_root: string,
+project_root: string, 
 /**
  * Process ID of the server
  */
-pid: number,
+pid: number, 
 /**
  * Dev root process ID (concurrently, only in dev mode)
  */
-dev_root_pid: number | null,
+dev_root_pid: number | null, 
 /**
  * Binary name (e.g., "vks-node-server")
  */
-binary: string,
+binary: string, 
 /**
  * When this instance started (RFC 3339)
  */
-started_at: string,
+started_at: string, 
 /**
  * All service ports for this instance
  */
-ports: InstancePorts,
+ports: InstancePorts, 
 /**
  * Optional human-readable instance name
  */
 name: string | null, };
 
-export type InstancePorts = {
+export type InstancePorts = { 
 /**
  * Backend API server port
  */
-backend: number | null,
+backend: number | null, 
 /**
  * Frontend dev server port (only in dev mode)
  */
-frontend: number | null,
+frontend: number | null, 
 /**
  * MCP HTTP server port (if enabled)
  */
-mcp: number | null,
+mcp: number | null, 
 /**
  * Remote/Hive WebSocket port (if enabled)
  */
 hive: number | null, };
 
-export type DatabaseStats = {
+export type DatabaseStats = { 
 /**
  * Size of the main database file in bytes
  */
-database_size_bytes: bigint,
+database_size_bytes: bigint, 
 /**
  * Size of the WAL (Write-Ahead Log) file in bytes
  */
-wal_size_bytes: bigint,
+wal_size_bytes: bigint, 
 /**
  * Number of free pages in the database (reclaimable with VACUUM)
  */
-free_pages: bigint,
+free_pages: bigint, 
 /**
  * Size of each database page in bytes
  */
-page_size: bigint,
+page_size: bigint, 
 /**
  * Total number of tasks in the database
  */
-task_count: bigint,
+task_count: bigint, 
 /**
  * Total number of task attempts in the database
  */
-task_attempt_count: bigint,
+task_attempt_count: bigint, 
 /**
  * Total number of execution processes in the database
  */
-execution_process_count: bigint,
+execution_process_count: bigint, 
 /**
  * Total number of log entries in the database
  */
 log_entry_count: bigint, };
 
-export type VacuumResult = {
+export type VacuumResult = { 
 /**
  * Database size before VACUUM in bytes
  */
-size_before_bytes: bigint,
+size_before_bytes: bigint, 
 /**
  * Database size after VACUUM in bytes
  */
-size_after_bytes: bigint,
+size_after_bytes: bigint, 
 /**
  * Bytes freed by the VACUUM operation
  */
 freed_bytes: bigint, };
 
-export type ArchivedStatsResponse = {
+export type ArchivedStatsResponse = { 
 /**
  * Number of archived terminal tasks older than the cutoff.
  */
-count: bigint,
+count: bigint, 
 /**
  * The cutoff in days used for the query.
  */
 older_than_days: bigint, };
 
-export type ArchivedPurgeResult = {
+export type ArchivedPurgeResult = { 
 /**
  * Number of tasks deleted.
  */
-deleted: bigint,
+deleted: bigint, 
 /**
  * The cutoff in days used for the purge.
  */
 older_than_days: bigint, };
 
-export type LogStatsResponse = {
+export type LogStatsResponse = { 
 /**
  * Number of log entries older than the cutoff.
  */
-count: bigint,
+count: bigint, 
 /**
  * The cutoff in days used for the query.
  */
 older_than_days: bigint, };
 
-export type LogPurgeResult = {
+export type LogPurgeResult = { 
 /**
  * Number of log entries deleted.
  */
-deleted: bigint,
+deleted: bigint, 
 /**
  * The cutoff in days used for the purge.
  */
 older_than_days: bigint, };
 
-export type SyncStatusResponse = {
+export type SyncStatusResponse = { 
 /**
  * Number of tasks not yet synced to Hive.
  */
-unsynced_tasks: bigint,
+unsynced_tasks: bigint, 
 /**
  * Number of task attempts not yet synced to Hive.
  */
-unsynced_attempts: bigint,
+unsynced_attempts: bigint, 
 /**
  * Number of execution processes not yet synced to Hive.
  */
-unsynced_executions: bigint,
+unsynced_executions: bigint, 
 /**
  * Number of log entries not yet synced to Hive.
  */
-unsynced_logs: bigint,
+unsynced_logs: bigint, 
 /**
  * Whether this node is connected to the Hive.
  */
-is_connected: boolean,
+is_connected: boolean, 
 /**
  * Current node ID (if connected to Hive).
  */
-node_id: string | null,
+node_id: string | null, 
 /**
  * Hive WebSocket URL this node is configured to sync with (from VK_HIVE_URL), if any.
  */
-hive_url: string | null,
+hive_url: string | null, 
 /**
  * Human-readable node name (from VK_NODE_NAME), if configured.
  */
-node_name: string | null,
+node_name: string | null, 
 /**
  * Most recent successful sync timestamp across synced entities (NULL = never synced).
  */
 last_synced_at: Date | null, };
 
-export type ForceResyncResult = {
+export type ForceResyncResult = { 
 /**
  * Number of tasks cleared for resync.
  */
-tasks_cleared: bigint,
+tasks_cleared: bigint, 
 /**
  * Number of attempts cleared for resync.
  */
-attempts_cleared: bigint,
+attempts_cleared: bigint, 
 /**
  * Number of executions cleared for resync.
  */
-executions_cleared: bigint,
+executions_cleared: bigint, 
 /**
  * Number of log entries cleared for resync.
  */
