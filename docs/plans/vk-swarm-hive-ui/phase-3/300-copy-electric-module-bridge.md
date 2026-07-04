@@ -2,7 +2,7 @@
 id: "300"
 phase: 3
 title: "Copy frontend/src/lib/electric/ into remote-frontend/src/lib/electric/ (alias bridge for @/lib/electric)"
-status: ready
+status: done
 depends_on: ["106"]
 parallel: false
 conflicts_with: []
