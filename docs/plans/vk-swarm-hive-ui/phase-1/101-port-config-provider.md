@@ -12,7 +12,7 @@ files:
   - remote-frontend/src/components/ProfileProvider.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/components/ProfileProvider.test.tsx"
-allowed_change: create
+allowed_change: edit
 covers_criteria: [SC3]
 ---
 ## Token storage contract (orchestrator-level, binds tasks 101, 102, 105)
