@@ -1,0 +1,40 @@
+{
+  "model": "claude",
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "high",
+      "issue": "34 occurrences of non-standard ```,ignore``` syntax (should be ```rust,ignore``` or ```ignore```) — renders as unformatted plain text on GitHub/crates.io/VS Code, breaking syntax highlighting for documentation examples. While rustdoc treats it as ignored, standard Markdown parsers do not recognize `,ignore` as a language tag.",
+      "citation": "crates/remote/src/nodes/service.rs:105",
+      "remediation": "Replace all ```,ignore``` fences with ```rust,ignore``` (or ```ignore``` where Rust highlighting is not desired) to preserve markdown syntax highlighting while still ignoring the tests in rustdoc."
+    },
+    {
+      "id": "F002",
+      "severity": "medium",
+      "issue": "The `NodeApiKeyError -> NodeError` From impl doctest at service.rs:105 was marked `ignore` even though it is a self-contained, zero-I/O assertion over public types. The only problem was the stale `crate::` path. Ignoring it carries forward avoidable documentation rot and drops a useful regression check for the error mapping.",
+      "citation": "crates/remote/src/nodes/service.rs:105",
+      "remediation": "Replace the ignored fence with a live Rust doctest: `/// ```rust` then `/// use remote::db::node_api_keys::NodeApiKeyError;` and `/// use remote::nodes::NodeError;` then assert the From conversion. This keeps the doctest compiling and running without any runtime setup."
+    },
+    {
+      "id": "F003",
+      "severity": "medium",
+      "issue": "The `SwarmProjectError -> NodeError` From impl doctest at service.rs:134 was marked `ignore` despite being a zero-I/O assertion that can compile and run with corrected public paths. This weakens doctest validation for a documented error-mapping contract.",
+      "citation": "crates/remote/src/nodes/service.rs:134",
+      "remediation": "Replace the ignored fence with a live Rust doctest using public paths: `/// use remote::db::swarm_projects::SwarmProjectError;` and `/// use remote::nodes::NodeError;` then assert the From conversion."
+    },
+    {
+      "id": "F004",
+      "severity": "low",
+      "issue": "The `HiveSyncConfig::default()` doctest at hive_sync.rs:70 was marked `ignore` even though it is a pure, zero-I/O invariant check over public API defaults. A future change to the defaults can now drift from the docs without `cargo test --doc -p services` catching it.",
+      "citation": "crates/services/src/services/hive_sync.rs:70",
+      "remediation": "Change the fence back to a live Rust doctest and add the missing public import: `/// ```rust` then `/// use services::services::hive_sync::HiveSyncConfig;` followed by the existing assertions."
+    },
+    {
+      "id": "F005",
+      "severity": "low",
+      "issue": "`extract_project_name` in session.rs:57 has zero test coverage. The doctest was correctly `ignore`d (private fn), but no `#[test]` equivalent exists, leaving this function untested.",
+      "citation": "crates/remote/src/nodes/ws/session.rs:57",
+      "remediation": "Add a `#[test]` unit test for `extract_project_name` covering valid input, empty input, and edge cases (e.g. trailing slashes, no project name segment)."
+    }
+  ]
+}

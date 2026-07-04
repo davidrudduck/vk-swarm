@@ -1,0 +1,9 @@
+{
+  "verdicts": {
+    "claude:F003": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "gemini"
+    }
+  }
+}

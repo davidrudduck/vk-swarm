@@ -8,7 +8,11 @@
 //! These tests require a PostgreSQL database available at DATABASE_URL with the migrations applied.
 //! Tests are skipped if DATABASE_URL is not set (the gate's `test -n "$DATABASE_URL" &&` prefix
 //! fails-closed so a hollow skip never becomes a green).
-
+//!
+//! Uses `file_serial` because it INSERTs into `node_task_attempts` (a TRUNCATE target in
+//! hive_cutover_migration's CUTOVER_SQL). File-based serialization prevents cross-binary lock
+//! conflicts on the shared Postgres test DB.
+use serial_test::file_serial;
 use sqlx::PgPool;
 
 /// Helper to check if database is available.
@@ -34,6 +38,7 @@ async fn create_pool() -> PgPool {
         .expect("Failed to connect to database")
 }
 
+#[file_serial]
 #[tokio::test]
 async fn regenerable_node_attempt_repopulates_from_reingest() {
     skip_without_db!(); // Trap 2b: a real migrated PG MUST be set or this is a hollow pass

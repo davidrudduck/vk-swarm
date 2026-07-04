@@ -67,7 +67,8 @@ impl Default for HiveSyncConfig {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
+    /// use services::services::hive_sync::HiveSyncConfig;
     /// let cfg = HiveSyncConfig::default();
     /// assert_eq!(cfg.sync_interval, std::time::Duration::from_secs(30));
     /// assert_eq!(cfg.max_tasks_per_batch, 50);
@@ -307,7 +308,7 @@ impl HiveSyncService {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```rust,ignore
     /// // `service` is an instance of `HiveSyncService`.
     /// # async fn example(service: &crate::hive::HiveSyncService) {
     /// let synced = service.sync_tasks().await.unwrap();

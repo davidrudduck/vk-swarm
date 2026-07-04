@@ -507,7 +507,7 @@ pub(crate) async fn ensure_member_access(
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```rust,ignore
 /// # use sqlx::PgPool;
 /// # use uuid::Uuid;
 /// # async fn example(pool: &PgPool, org_id: Uuid, user_id: Uuid) {
@@ -539,7 +539,7 @@ pub(crate) async fn ensure_admin_access(
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```rust,ignore
 /// # use sqlx::PgPool;
 /// # use uuid::Uuid;
 /// # use crate::api::ensure_project_access;

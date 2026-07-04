@@ -1,0 +1,19 @@
+{
+  "model": "gemini",
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "high",
+      "issue": "The PR uses a non-standard syntax hack `` ```,ignore `` across 37 documentation code blocks (31 in `crates/remote` and 6 in `crates/services`) to disable doctest execution. Although `rustdoc`'s custom parser splits on comma and ignores the test, standard Markdown parsers (like GitHub, crates.io, and VS Code) treat `,ignore` as the language name. This breaks syntax highlighting, rendering all affected documentation examples as unformatted plain text. It bypasses quality gates without selectively fixing code examples or using standard ignore attributes (`` ```rust,ignore `` or `` ```ignore ``), leading to documentation rot and violating the newly introduced rules in `AGENTS.md`.",
+      "citation": "crates/remote/src/db/swarm_projects.rs:259",
+      "remediation": "Replace all occurrences of `` ```,ignore `` with `` ```rust,ignore `` or `` ```ignore `` to preserve markdown syntax highlighting while still ignoring the tests in rustdoc. Alternatively, resolve the compilation or runtime errors of each doctest individually to eliminate the ignored state."
+    },
+    {
+      "id": "F002",
+      "severity": "low",
+      "issue": "The schema setup in `crates/services/tests/electric_task_sync.rs` duplicates the production `node_outbox` table schema. This can lead to schema drift between testing and production structures when columns are added or modified in migrations.",
+      "citation": "crates/services/tests/electric_task_sync.rs:102",
+      "remediation": "Import the database migrations or shared schema setup helper to create tables programmatically instead of duplicating table definitions as raw SQL strings."
+    }
+  ]
+}

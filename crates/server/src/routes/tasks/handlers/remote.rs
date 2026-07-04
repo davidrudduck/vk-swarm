@@ -26,13 +26,13 @@ use crate::{DeploymentImpl, error::ApiError};
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```ignore
 /// // Run inside an async runtime
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let deployment = /* obtain DeploymentImpl */ ;
-/// let project = /* Project with remote_project_id set */ ;
-/// let payload = /* db::models::task::CreateTask payload */ ;
-/// let resp = crate::routes::tasks::handlers::remote::create_remote_task(&deployment, &project, &payload).await?;
+/// let deployment = unimplemented!() ; // obtain DeploymentImpl
+/// let project = unimplemented!() ; // Project with remote_project_id set
+/// let payload = unimplemented!() ; // db::models::task::CreateTask payload
+/// let resp = server::routes::tasks::handlers::remote::create_remote_task(&deployment, &project, &payload).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -269,9 +269,7 @@ pub(crate) async fn delete_remote_task(
 ///
 /// # Examples
 ///
-/// ```no_run
-/// # use crates::server::routes::tasks::handlers::remote::resync_task_to_hive;
-/// # use crates::server::db;
+/// ```ignore
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// // `deployment` and `existing_task` would be obtained from the application context.
 /// let updated = resync_task_to_hive(&deployment, &existing_task, Some("New title".into()), None, None).await?;

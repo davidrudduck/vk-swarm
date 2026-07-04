@@ -1,4 +1,9 @@
 //! SC6 / TS6 — MUST-MIGRATE round-trip after cutover: id bridge intact, status canonical.
+//!
+//! Uses `file_serial` because it touches `activity` (a TRUNCATE target in hive_cutover_migration's
+//! CUTOVER_SQL). File-based serialization prevents cross-binary lock conflicts on the shared
+//! Postgres test DB.
+use serial_test::file_serial;
 use sqlx::PgPool;
 
 fn database_url() -> Option<String> {
@@ -16,6 +21,7 @@ async fn create_pool() -> PgPool {
     PgPool::connect(&database_url().unwrap()).await.expect("connect")
 }
 
+#[file_serial]
 #[tokio::test]
 async fn must_migrate_id_bridge_and_status_round_trip() {
     skip_without_db!(); // Trap 2b: a real migrated PG MUST be set or this is a hollow pass

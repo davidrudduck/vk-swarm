@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "claude",
+    "-p",
+    "--permission-mode",
+    "plan",
+    "--output-format",
+    "json",
+    "--effort",
+    "high"
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river",
+  "exit_code": 0,
+  "finished_at": "2026-07-04T01:49:47.465400+00:00",
+  "notes": [],
+  "prompt_file": "/tmp/opencode/tournament-prompt-claude.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river/docs/plans/preexisting-gate-failures/tournament/round-1/claude.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/crisp-river/.agents/reports/2026-07-04-adversarial-round-1-claude-tournament.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-04T01:34:33.280593+00:00",
+  "status": "ok",
+  "task": "codebase-review",
+  "tool": "claude",
+  "tool_version": "2.1.200 (Claude Code)"
+}

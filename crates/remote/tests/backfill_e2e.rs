@@ -15,6 +15,7 @@
 //! Note: Tests are skipped if DATABASE_URL is not set.
 
 use chrono::Utc;
+use serial_test::file_serial;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -50,12 +51,13 @@ async fn create_test_organization(pool: &PgPool) -> Uuid {
 
     sqlx::query(
         r#"
-        INSERT INTO organizations (id, name, created_at, updated_at)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO organizations (id, name, slug, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5)
         "#,
     )
     .bind(org_id)
     .bind(format!("Test Org {}", org_id))
+    .bind(format!("test-org-{}", org_id))
     .bind(now)
     .bind(now)
     .execute(pool)
@@ -69,26 +71,21 @@ async fn create_test_organization(pool: &PgPool) -> Uuid {
 async fn create_test_node(pool: &PgPool, org_id: Uuid, is_online: bool) -> Uuid {
     let node_id = Uuid::new_v4();
     let now = Utc::now();
-    // If online, last_seen is now; if offline, last_seen is 10 minutes ago
-    let last_seen = if is_online {
-        now
-    } else {
-        now - chrono::Duration::minutes(10)
-    };
+    let status = if is_online { "online" } else { "offline" };
+    let last_heartbeat_at = if is_online { Some(now) } else { None };
 
     sqlx::query(
         r#"
-        INSERT INTO nodes (id, organization_id, machine_id, hostname, os_type, os_version, last_seen_at, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO nodes (id, organization_id, name, machine_id, status, capabilities, last_heartbeat_at, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::node_status, '{}'::jsonb, $6, $7, $8)
         "#,
     )
     .bind(node_id)
     .bind(org_id)
+    .bind(format!("node-{}", node_id))
     .bind(format!("machine-{}", node_id))
-    .bind("test-host")
-    .bind("linux")
-    .bind("test")
-    .bind(last_seen)
+    .bind(status)
+    .bind(last_heartbeat_at)
     .bind(now)
     .bind(now)
     .execute(pool)
@@ -106,7 +103,7 @@ async fn create_test_shared_task(pool: &PgPool, org_id: Uuid) -> Uuid {
     sqlx::query(
         r#"
         INSERT INTO shared_tasks (id, organization_id, title, status, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4::task_status, $5, $6)
         "#,
     )
     .bind(task_id)
@@ -134,7 +131,7 @@ async fn create_attempt_with_state(
 
     let data = UpsertNodeTaskAttempt {
         id: Uuid::new_v4(),
-        assignment_id: Some(Uuid::new_v4()),
+        assignment_id: None,
         shared_task_id,
         node_id,
         executor: "CLAUDE_CODE".to_string(),
@@ -202,6 +199,7 @@ async fn cleanup_org(pool: &PgPool, org_id: Uuid) {
 
 /// Test: find_incomplete_with_online_nodes returns only partial attempts from online nodes.
 #[tokio::test]
+#[file_serial]
 async fn test_find_incomplete_with_online_nodes_basic() {
     skip_without_db!();
 
@@ -250,6 +248,7 @@ async fn test_find_incomplete_with_online_nodes_basic() {
 
 /// Test: find_incomplete_with_online_nodes pagination works correctly.
 #[tokio::test]
+#[file_serial]
 async fn test_find_incomplete_pagination() {
     skip_without_db!();
 
@@ -293,6 +292,7 @@ async fn test_find_incomplete_pagination() {
 
 /// Test: mark_pending_backfill transitions partial -> pending_backfill and stores request_id.
 #[tokio::test]
+#[file_serial]
 async fn test_mark_pending_backfill() {
     skip_without_db!();
 
@@ -338,6 +338,7 @@ async fn test_mark_pending_backfill() {
 
 /// Test: mark_complete transitions to complete state.
 #[tokio::test]
+#[file_serial]
 async fn test_mark_complete() {
     skip_without_db!();
 
@@ -370,6 +371,7 @@ async fn test_mark_complete() {
 
 /// Test: reset_failed_backfill resets all pending_backfill for a specific node.
 #[tokio::test]
+#[file_serial]
 async fn test_reset_failed_backfill() {
     skip_without_db!();
 
@@ -416,6 +418,7 @@ async fn test_reset_failed_backfill() {
 
 /// Test: Complete backfill flow - partial -> pending_backfill -> complete.
 #[tokio::test]
+#[file_serial]
 async fn test_complete_backfill_flow() {
     skip_without_db!();
 
@@ -478,6 +481,7 @@ async fn test_complete_backfill_flow() {
 
 /// Test: Failed backfill flow - partial -> pending_backfill -> partial (retry).
 #[tokio::test]
+#[file_serial]
 async fn test_failed_backfill_flow() {
     skip_without_db!();
 
@@ -535,6 +539,7 @@ async fn test_failed_backfill_flow() {
 /// 3. Delayed backfill response arrives
 /// 4. Handler uses DB fallback to find attempt IDs
 #[tokio::test]
+#[file_serial]
 async fn test_backfill_response_after_tracker_cleared() {
     skip_without_db!();
 
@@ -587,6 +592,7 @@ async fn test_backfill_response_after_tracker_cleared() {
 
 /// Test: find_by_backfill_request_id returns empty for unknown request.
 #[tokio::test]
+#[file_serial]
 async fn test_find_by_backfill_request_id_not_found() {
     skip_without_db!();
 

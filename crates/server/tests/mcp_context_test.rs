@@ -17,10 +17,12 @@ use db::{
     test_utils::create_test_pool,
 };
 use executors::executors::BaseCodingAgent;
+use serial_test::serial;
 use uuid::Uuid;
 
 /// Test that we can set up the test data correctly and verify env var reading.
 #[tokio::test]
+#[serial]
 async fn test_env_var_setup_and_reading() {
     let (pool, _temp_dir) = create_test_pool().await;
 
@@ -108,6 +110,7 @@ async fn test_env_var_setup_and_reading() {
 /// Test the environment variable priority logic pattern.
 /// This tests the same pattern used in get_context, get_task_id, and get_project_id.
 #[tokio::test]
+#[serial]
 async fn test_env_var_priority_pattern() {
     let (pool, _temp_dir) = create_test_pool().await;
 
@@ -199,6 +202,7 @@ async fn test_env_var_priority_pattern() {
 /// This verifies the scenario where environment variables are crucial for
 /// disambiguation when multiple subtasks share the same worktree.
 #[tokio::test]
+#[serial]
 async fn test_multiple_attempts_same_project() {
     let (pool, _temp_dir) = create_test_pool().await;
 

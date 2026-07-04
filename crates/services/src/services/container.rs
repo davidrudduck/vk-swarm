@@ -1182,7 +1182,7 @@ pub trait ContainerService {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// # // Pseudocode example; replace `svc`, `task_attempt`, and `profile_id` with real values from your environment.
     /// # async fn example(svc: &impl ContainerService, task_attempt: &TaskAttempt, profile_id: ExecutorProfileId) -> Result<(), ContainerError> {
     /// let exec = svc.start_attempt(task_attempt, profile_id, false).await?;

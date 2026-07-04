@@ -892,6 +892,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live PTY device; run with --include-ignored in interactive shells"]
     async fn test_create_session_in_directory() {
         let temp_dir = TempDir::new().unwrap();
         let mut manager = TerminalSessionManager::new();
@@ -922,6 +923,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live PTY device; run with --include-ignored in interactive shells"]
     async fn test_create_duplicate_session() {
         let temp_dir = TempDir::new().unwrap();
         let mut manager = TerminalSessionManager::new();
@@ -944,6 +946,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live PTY device; run with --include-ignored in interactive shells"]
     async fn test_kill_session() {
         let temp_dir = TempDir::new().unwrap();
         let mut manager = TerminalSessionManager::new();
@@ -963,6 +966,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live PTY device; run with --include-ignored in interactive shells"]
     async fn test_write_to_session() {
         let temp_dir = TempDir::new().unwrap();
         let mut manager = TerminalSessionManager::new();
@@ -980,6 +984,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live PTY device; run with --include-ignored in interactive shells"]
     async fn test_resize_session() {
         let temp_dir = TempDir::new().unwrap();
         let mut manager = TerminalSessionManager::new();

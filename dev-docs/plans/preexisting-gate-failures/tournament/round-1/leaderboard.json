@@ -1,0 +1,20 @@
+{
+  "leaderboard": [
+    {
+      "model": "claude",
+      "points": 15.0,
+      "rank": 1
+    },
+    {
+      "model": "codex",
+      "points": 9.0,
+      "rank": 2
+    },
+    {
+      "model": "gemini",
+      "points": 4.0,
+      "rank": 3
+    }
+  ],
+  "seed": 42
+}

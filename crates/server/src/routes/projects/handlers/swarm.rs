@@ -35,6 +35,7 @@ use super::super::types::{ForceResyncResponse, UnlinkSwarmRequest, UnlinkSwarmRe
 ///
 /// ```
 /// // Construct the expected response payload (example, not an invocation).
+/// use server::routes::projects::types::UnlinkSwarmResponse;
 /// let resp = UnlinkSwarmResponse {
 ///     tasks_unlinked: 42,
 ///     attempts_reset: 10,
@@ -101,7 +102,7 @@ pub async fn unlink_from_swarm(
 /// # Examples
 ///
 /// ```
-/// use crates::server::routes::projects::handlers::swarm::ForceResyncResponse;
+/// use server::routes::projects::types::ForceResyncResponse;
 ///
 /// let resp = ForceResyncResponse { tasks_resynced: 42 };
 /// assert_eq!(resp.tasks_resynced, 42);
