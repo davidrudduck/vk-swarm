@@ -20,10 +20,15 @@ covers_criteria: [SC1]
 Create `remote-frontend/src/styles/components.test.ts`:
 
 ```ts
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const modules = import.meta.glob('./components.css', { as: 'raw', eager: true });
-const css = modules['./components.css'] as string;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const css = readFileSync(join(__dirname, 'components.css'), 'utf-8');
 
 describe('component CSS classes (SC1)', () => {
   it('defines the primary component classes', () => {

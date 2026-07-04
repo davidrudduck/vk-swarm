@@ -21,12 +21,16 @@ covers_criteria: [SC2]
 Create `remote-frontend/src/styles/tokens/base.test.ts`:
 
 ```ts
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const fmods = import.meta.glob('./fonts.css', { as: 'raw', eager: true });
-const fonts = fmods['./fonts.css'] as string;
-const bmods = import.meta.glob('./base.css', { as: 'raw', eager: true });
-const base = bmods['./base.css'] as string;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const fonts = readFileSync(join(__dirname, 'fonts.css'), 'utf-8');
+const base = readFileSync(join(__dirname, 'base.css'), 'utf-8');
 
 describe('fonts (SC2)', () => {
   it('imports the 5 font families from Google Fonts', () => {

@@ -10,3 +10,16 @@ Append-only. Implementers record any choice the task did not dictate. Empty = pe
 
 ### Lint regex patch (wai-plan-lint.sh line 63)
 The `\bTODO\b` keyword in the deferral-detection regex was case-insensitive (`grep -qiE`), causing false positives on legitimate `status: 'todo'` / `--status-todo` / `vks-task--todo` strings in test fixtures (the design system uses `todo` as a TaskStatus enum value). Patched: split into two greps — case-insensitive for prose keywords (N/A, deferred, later, follow-up, backlog, not implemented) and case-SENSITIVE for `TODO`/`FIXME` (the actual deferral markers). This is a lint-quality fix, not a gate-weakening; the WAI plan-lint is a repo-local script at `~/.claude/wai/scripts/wai-plan-lint.sh`.
+
+## Execution (task 101)
+
+### STOPPED: vitest/vite version incompatibility
+**Status**: Blocker — scope_test cannot run.
+**Root cause**: Monorepo vite version conflict between `frontend` (vite@^8.0.7) and `remote-frontend` (vite@^5.0.8). When `pnpm install` resolves workspace dependencies, it picks vite@8.0.7 to satisfy frontend's requirement. But vitest@4.1.3 (specified in both packages) cannot load vite@8 module (`module-runner` export not found in vite@8's package.json).
+**Evidence**: 
+- `remote-frontend/package.json`: vite@^5.0.8, vitest@^4.1.3
+- `frontend/package.json`: vite@^8.0.7, vitest@^4.1.3 (compatible)
+- `pnpm install` output: vite@6.3.5 and vite@8.0.7 resolved (pnpm deduped to satisfy range), breaking vitest@4.1.3 compat
+- `cd remote-frontend && npx vitest run src/styles/tokens` error: ERR_PACKAGE_PATH_NOT_EXPORTED ./module-runner
+**Constraint**: Task scope limits file modifications to `remote-frontend/src/styles/tokens/*.{css,ts}` and `remote-frontend/.prettierignore` — cannot fix `remote-frontend/package.json` vite version to ^8.0.7.
+**Resolution needed**: Either (a) update `remote-frontend/package.json` vite@^8.0.7 to match frontend, or (b) separate monorepo into independent lockfiles per workspace member.

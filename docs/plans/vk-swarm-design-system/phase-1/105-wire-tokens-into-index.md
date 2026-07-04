@@ -20,10 +20,15 @@ covers_criteria: [SC2, SC3]
 Create `remote-frontend/src/styles/tokens/index.test.ts`:
 
 ```ts
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const mods = import.meta.glob('../../index.css', { as: 'raw', eager: true });
-const indexCss = mods['../../index.css'] as string;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const indexCss = readFileSync(join(__dirname, '..', '..', 'index.css'), 'utf-8');
 
 describe('index.css wires the token files (SC2/SC3)', () => {
   it('@imports fonts.css before colors/typography/spacing/base', () => {

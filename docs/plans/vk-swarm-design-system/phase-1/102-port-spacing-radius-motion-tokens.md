@@ -20,10 +20,15 @@ covers_criteria: [SC2]
 Create `remote-frontend/src/styles/tokens/spacing.test.ts`:
 
 ```ts
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const modules = import.meta.glob('./spacing.css', { as: 'raw', eager: true });
-const spacing = modules['./spacing.css'] as string;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const spacing = readFileSync(join(__dirname, 'spacing.css'), 'utf-8');
 
 describe('spacing tokens (SC2)', () => {
   it('defines the 4px-grid scale (--space-0..--space-16)', () => {

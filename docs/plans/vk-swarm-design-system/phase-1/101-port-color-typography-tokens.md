@@ -12,6 +12,8 @@ files:
   - remote-frontend/src/styles/tokens/colors.test.ts
   - remote-frontend/src/styles/tokens/typography.test.ts
   - remote-frontend/.prettierignore
+  - remote-frontend/package.json
+  - remote-frontend/tsconfig.json
 irreversible: false
 scope_test: "remote-frontend/src/styles/tokens"
 allowed_change: mixed
@@ -23,12 +25,15 @@ covers_criteria: [SC2]
 Create `remote-frontend/src/styles/tokens/colors.test.ts`:
 
 ```ts
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-// Vite's import.meta.glob with { as: 'raw' } loads CSS as a string at build time —
-// works in jsdom/browser env without Node.js types. Avoids fs.readFileSync/__dirname.
-const modules = import.meta.glob('./colors.css', { as: 'raw', eager: true });
-const colors = modules['./colors.css'] as string;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const colors = readFileSync(join(__dirname, 'colors.css'), 'utf-8');
 
 describe('color tokens (SC2)', () => {
   it('defines dark-first HSL triplets + hex aliases for the 11 vks primitives', () => {
@@ -68,10 +73,15 @@ describe('color tokens (SC2)', () => {
 Create `remote-frontend/src/styles/tokens/typography.test.ts`:
 
 ```ts
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const modules = import.meta.glob('./typography.css', { as: 'raw', eager: true });
-const typography = modules['./typography.css'] as string;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const typography = readFileSync(join(__dirname, 'typography.css'), 'utf-8');
 
 describe('typography tokens (SC2)', () => {
   it('defines the 5 font families', () => {
@@ -115,12 +125,28 @@ Copy byte-for-byte from `dev-docs/designs/2026-07-04-vk-swarm-design-system/desi
   src/styles/components.css
   ```
 
+### File: `remote-frontend/package.json` (EDIT — fix vite version + add @types/node)
+- **Anchor:** `"vite": "^5.0.8"` in the `devDependencies` block
+- **Before:** `"vite": "^5.0.8"`
+- **After:** `"vite": "^8.0.7"`
+- Also add `"@types/node": "^22.0.0"` to `devDependencies` (needed for `node:fs`/`node:path`/`node:url` type declarations used by the `// @vitest-environment node` tests).
+- **Rationale:** pnpm hoists `vite@8.0.7` to satisfy `frontend/package.json`'s `vite@^8.0.7`; `remote-frontend`'s `vite@^5.0.8` is ignored. vitest@4.1.3 requires vite≥6; with the hoisted vite@8, vitest fails with `ERR_PACKAGE_PATH_NOT_EXPORTED: Package subpath './module-runner' not defined`. Bumping to `^8.0.7` aligns both frontends and resolves the incompatibility. `import.meta.glob` returns empty strings in vitest 4.1.3+vite 8 (broken); `// @vitest-environment node` + `readFileSync` is the working pattern.
+
+### File: `remote-frontend/tsconfig.json` (EDIT — add node types)
+- **Anchor:** the `"types"` array in `compilerOptions` (currently `["vitest/globals"]` or similar)
+- **Before:** `"types": ["vitest/globals"]`
+- **After:** `"types": ["vitest/globals", "node"]`
+- **Rationale:** the `// @vitest-environment node` tests import from `node:fs`/`node:path`/`node:url`, which require `@types/node` to be in the `types` array for `tsc --noEmit` to pass.
+
 ## Allowed moves
 
 - Create `remote-frontend/src/styles/tokens/colors.css` as a byte-for-byte copy of the design-source file (use `cp`, not paste-into-editor).
 - Create `remote-frontend/src/styles/tokens/typography.css` as a byte-for-byte copy.
-- Create the two `.test.ts` files exactly as written above.
+- Create the two `.test.ts` files exactly as written above (with `// @vitest-environment node` directive).
 - Append the three new lines to `remote-frontend/.prettierignore`.
+- Edit `remote-frontend/package.json`: bump `vite` to `^8.0.7`, add `@types/node: ^22.0.0` to devDependencies.
+- Edit `remote-frontend/tsconfig.json`: add `"node"` to the `types` array.
+- Run `pnpm install` from the worktree root after editing package.json (to update the lockfile + node_modules).
 - Run `cp` from the worktree root: `cp dev-docs/designs/2026-07-04-vk-swarm-design-system/design-source/tokens/colors.css remote-frontend/src/styles/tokens/colors.css` (and the same for typography.css).
 - No other file may be touched. Do NOT edit `frontend/` (SC9).
 
@@ -132,4 +158,4 @@ Copy byte-for-byte from `dev-docs/designs/2026-07-04-vk-swarm-design-system/desi
 - A token the test asserts is absent from the source file (the source is authoritative; a missing token is a design-source defect → escalate, do not invent).
 
 ## Done when
-`WAI_TYPECHECK_CMD="cd remote-frontend && npx tsc --noEmit" WAI_TEST_CMD="cd remote-frontend && npx vitest run src/styles/tokens" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-design-system 101` exits 0.
+`WAI_TYPECHECK_CMD="cd remote-frontend && npx tsc --noEmit" WAI_TEST_CMD="cd remote-frontend && npx vitest run src/styles/tokens" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-design-system 101` exits 0. The test files use `// @vitest-environment node` + `readFileSync` (NOT `import.meta.glob` which is broken in vitest 4.1.3+vite 8). The worker MUST run `pnpm install` from the worktree root after editing `package.json` so the lockfile + node_modules are updated before running the gate.

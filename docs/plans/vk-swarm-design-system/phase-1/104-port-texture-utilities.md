@@ -19,11 +19,16 @@ covers_criteria: [SC3]
 Create `remote-frontend/src/styles/tokens/textures.test.tsx`:
 
 ```tsx
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const modules = import.meta.glob('./base.css', { as: 'raw', eager: true });
-const base = modules['./base.css'] as string;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const base = readFileSync(join(__dirname, 'base.css'), 'utf-8');
 
 describe('texture utilities (SC3)', () => {
   it('defines all 8 texture utility classes in base.css', () => {
