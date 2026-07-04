@@ -2,7 +2,7 @@
 id: "204"
 phase: 2
 title: "Rehost: parity smoke — hive swarm UI matches node swarm UI"
-status: ready
+status: done
 depends_on: ["203"]
 parallel: false
 conflicts_with: []
