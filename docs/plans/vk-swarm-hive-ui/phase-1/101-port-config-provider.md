@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - frontend/src/components/ConfigProvider.tsx
   - remote-frontend/src/components/ProfileProvider.tsx
+  - remote-frontend/src/components/ProfileProvider.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/components/ProfileProvider.test.tsx"
 allowed_change: create

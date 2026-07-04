@@ -56,3 +56,11 @@
 - **Decision:** Skip Stage-2 adversarial panel for task 100.
 - **Rationale:** Task is mechanical toolchain setup (install vitest/eslint/@tanstack deps, add lint/test scripts, add @ alias, add setupTests). No business logic, no control-flow decisions, no irreversible moves. Stage-1 gate CONFORMS (file-set OK, typecheck exit 0, scope_test green). The eslint config is a slimmed copy of `frontend/eslint.config.js` with documented dropped rules. Risk surface too low to justify a cross-model panel.
 - **Per execute skill:** circuit breaker widens panel on RETRY; first attempt on a trivial task with a clean gate does not require adversarial review.
+
+## Task 101: ProfileProvider context (auth state from /profile)
+
+- [Task 101] No retry loop in ProfileProvider.fetchProfile() — unlike ConfigProvider which retries on backend startup (node server may still boot), hive app shell assumes hive is always up (single-hive deployment, no startup-race condition). — remote-frontend/src/components/ProfileProvider.tsx:42-67
+- [Task 101] ProfileState simplified: 3 fields `{ profile, isSignedIn, isLoaded }` vs ConfigProvider's 6-field UserSystemState. Hive does not serve config/environment/profiles/capabilities surfaces — only `/v1/profile` identity endpoint. — remote-frontend/src/components/ProfileProvider.tsx:22-26
+- [Task 101] No children gating while loading (ConfigProvider gates with Loader). Task spec silent on UX loading state — app shell responsibility. Provider exposes isLoaded flag for consumers to gate as needed. — remote-frontend/src/components/ProfileProvider.tsx (entire component)
+- [Task 101] Fetch uses `credentials: 'include'` for hive session auth (vs node backend which uses bearer tokens). — remote-frontend/src/components/ProfileProvider.tsx:53-54
+- [Task 101] Tests: vi.stubGlobal('fetch', ...) + vi.mocked(globalThis.fetch) pattern to avoid TypeScript 'global' not found (jsdom environment). vi.unstubAllGlobals() in afterEach ensures isolation. — remote-frontend/src/components/ProfileProvider.test.tsx:6-11,60-61
