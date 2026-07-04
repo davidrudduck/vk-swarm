@@ -42,3 +42,12 @@
 
 - (tasks 100, 300 created as remediation for toolchain gap + Electric alias bridge)
 - (task 307 retitled "set executing node / delete" from "assign/reassign/delete" to match the actual route contract)
+
+## Task 100: remote-frontend toolchain setup
+
+- [Task 100] eslint.config.js: dropped i18next plugin + rules — hive has no i18n yet (unlike node frontend). — remote-frontend/eslint.config.js
+- [Task 100] eslint.config.js: dropped check-file naming rules (PascalCase .tsx, camelCase hooks/utils) — hive has no naming convention enforced yet. — remote-frontend/eslint.config.js
+- [Task 100] eslint.config.js: dropped NiceModal restrictions + @ebay/nice-modal-react detection — hive has no modals. — remote-frontend/eslint.config.js
+- [Task 100] eslint.config.js: dropped @eslint-community/eslint-comments rules — not required for hive. — remote-frontend/eslint.config.js
+- [Task 100] Key deps installed match frontend versions exactly: @tanstack/electric-db-collection@^0.3.12, @tanstack/react-db@^0.1.82, @tanstack/react-query@^5.96.2. Full npm install succeeded with 343 packages. — remote-frontend/package.json, remote-frontend/package-lock.json
+- [Task 100] react-router-dom version conflict avoided: hive declared ^7.9.5 (vs node frontend ^6.8.1), but npm resolved compatibly — no pin needed. — remote-frontend/package.json
