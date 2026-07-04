@@ -2,7 +2,7 @@
 id: "106"
 phase: 1
 title: "Hive app shell: wire root providers (ProfileProvider + QueryClientProvider + i18n if present)"
-status: ready
+status: done
 depends_on: ["101", "102", "105"]
 parallel: false
 conflicts_with: []
