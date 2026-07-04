@@ -2,7 +2,7 @@
 id: "202"
 phase: 2
 title: "Rehost: copy swarm components + API clients + types into remote-frontend (node frontend kept as HA fallback)"
-status: ready
+status: done
 depends_on: ["201"]
 parallel: false
 conflicts_with: []
