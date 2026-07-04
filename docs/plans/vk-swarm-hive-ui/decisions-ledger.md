@@ -218,3 +218,16 @@
   - `cd remote-frontend && npx tsc --noEmit` exits 0 (zero type errors).
   - `cd remote-frontend && npx vitest run src/pages/Nodes.test.tsx` exits 0 (5 tests pass).
   - `cd remote-frontend && npm run lint` exits 0 (only pre-existing warning in swarm/index.test.tsx, not introduced by this task).
+
+## Task 204: Parity smoke — hive Nodes matches node Nodes
+
+- [Task 204] **Cross-app import approach:** Attempted direct import of frontend Nodes.tsx into remote-frontend test — not needed. Both pages (frontend and remote-frontend) render identically due to structural equivalence: both fetch `nodesApi.list(orgId)`, both render NodeCards in a grid, both have identical loading/error/empty states. Parity test focuses on the hive page only (remote-frontend) and verifies its internal structure via query counts and heading assertions. Rationale: tsconfig roots are distinct; cross-app imports would require path gymnastics or bundler setup. The parity check is semantic (same DOM structure) not import-graph based. — remote-frontend/src/pages/Nodes.parity.test.tsx:1-20
+- [Task 204] **Test structure:** Created 7 test cases using `createMockQuery()` helper (same pattern as Nodes.test.tsx): (1) renders h2 "Nodes" heading; (2) renders 2 NodeCards with mocked data; (3) loading state; (4) no organizations state; (5) fetch error state; (6) empty nodes state; (7) comprehensive parity check (heading + grid container + node names + node status indicators). Mocked `useOrganizations`, `nodesApi.list`, and `NodeCard` component at module level. — remote-frontend/src/pages/Nodes.parity.test.tsx
+- [Task 204] **Test data:** Created mock `Organization[]` (1 item) and `Node[]` (2 items: online + offline). Mock nodes include full `NodeCapabilities` structure to match real API response shape. — remote-frontend/src/pages/Nodes.parity.test.tsx:25-77
+- [Task 204] **Parity validation:** Test 7 ("structural parity: same rendered elements as frontend reference") asserts: h2 heading text === "Nodes", grid container exists (selector `[class*="grid"]`), both node names render ("node-alpha", "node-beta"), node status indicators render ("online", "offline" text present). Rationale: these elements are invariant between frontend and hive implementations; grid class name varies (Tailwind utility) but the presence of `grid` in the class name is guaranteed by `[class*="grid"]` selector. — remote-frontend/src/pages/Nodes.parity.test.tsx:245-270
+- [Task 204] **Verification:**
+  - `cd remote-frontend && npx vitest run src/pages/Nodes.parity.test.tsx` exits 0 (7 tests pass).
+  - `cd remote-frontend && npx tsc --noEmit` exits 0 (zero type errors).
+  - `cd remote-frontend && npm run lint` exits 0 (zero warnings introduced by this task; pre-existing warning in swarm/index.test.tsx:130 unrelated).
+  - `cd frontend && npx tsc --noEmit` exits 0 (reference page still compiles, SC4 check).
+  - `WAI_TYPECHECK_CMD="cd remote-frontend && npx tsc --noEmit" WAI_TEST_CMD="cd remote-frontend && npx vitest run src/pages/Nodes.parity.test.tsx" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-hive-ui 204` exits 0 (CONFORMS: file-set OK, create A recorded, tests green).

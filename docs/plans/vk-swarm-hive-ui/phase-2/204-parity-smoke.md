@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - frontend/src/pages/Nodes.tsx
   - remote-frontend/src/pages/Nodes.tsx
+  - remote-frontend/src/pages/Nodes.parity.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/pages/Nodes.parity.test.tsx"
 allowed_change: create
