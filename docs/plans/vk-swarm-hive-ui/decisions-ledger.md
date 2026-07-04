@@ -92,3 +92,11 @@
 - **Test fix:** All 5 vitest mocks now return bare JSON: `json: async () => ({ handoff_id, authorize_url })` instead of `json: async () => ({ success: true, data: {...} })`. Added Test 5 (error path): `oauthApi.init()` with `response.ok = false` throws `ApiError`.
 - **Files touched:** `remote-frontend/src/lib/api/utils.ts` (deleted `handleApiResponse`), `remote-frontend/src/lib/api/profile.ts` (bare JSON), `remote-frontend/src/lib/api/oauth.ts` (bare JSON for init/redeem), `remote-frontend/src/lib/api/oauth.test.ts` (5 tests all pass, 4 mocks + error test).
 - **Verification:** `cd remote-frontend && npx vitest run src/lib/api/oauth.test.ts` exits 0 (5 tests pass), `cd remote-frontend && npx tsc --noEmit` exits 0 (zero errors).
+
+## Task 103: useAuth hook over ProfileProvider
+
+- [Task 103] Context source divergence: node frontend `useAuth()` wraps `useUserSystem()` (from `ConfigProvider`); hive `useAuth()` wraps `useProfile()` (from `ProfileProvider`). Both return `{ isSignedIn, isLoaded, userId }` — identical surface, different context source. Consumers do not change between environments.
+- [Task 103] `userId` field derivation: `profileState.profile?.user_id ?? null` — defaults to null when profile is null or user_id is undefined.
+- [Task 103] Test mocking: follows ProfileProvider.test.tsx pattern (vi.stubGlobal fetch + localStorage, renderHook with wrapper, waitFor loading state). Three test cases: (1) fetch 200 → signed-in + userId; (2) fetch 401 → signed-out + null userId; (3) no wrapper → throws.
+- [Task 103] Files: created `remote-frontend/src/hooks/auth/useAuth.ts` (wraps useProfile, 8 lines), created `remote-frontend/src/hooks/auth/useAuth.test.tsx` (3 tests, mocks fetch+localStorage).
+- [Task 103] Verification: `cd remote-frontend && npx vitest run src/hooks/auth/useAuth.test.tsx` exits 0 (3 tests pass), `cd remote-frontend && npx tsc --noEmit` exits 0 (zero errors), `cd remote-frontend && npm run lint` exits 0 (zero warnings).
