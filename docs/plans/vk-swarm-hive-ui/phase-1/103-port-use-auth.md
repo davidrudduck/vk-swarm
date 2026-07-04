@@ -2,7 +2,7 @@
 id: "103"
 phase: 1
 title: "Hive app shell: useAuth hook over ProfileProvider"
-status: ready
+status: done
 depends_on: ["101"]
 parallel: false
 conflicts_with: []
