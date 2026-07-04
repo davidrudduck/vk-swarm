@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - frontend/src/hooks/auth/useAuth.ts
   - remote-frontend/src/hooks/auth/useAuth.ts
+  - remote-frontend/src/hooks/auth/useAuth.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/hooks/auth/useAuth.test.tsx"
 allowed_change: create
