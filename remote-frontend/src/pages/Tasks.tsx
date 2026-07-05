@@ -9,6 +9,15 @@ import {
   type ElectricTaskAssignment,
 } from '@/lib/electric';
 import { tasksApi } from '@/lib/api/tasks';
+import { toastError, toastSuccess } from '@/lib/toast';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 const assignmentsCollection = createTaskAssignmentsCollection();
 const outputLogsCollection = createTaskOutputLogsCollection();
@@ -25,18 +34,47 @@ export function TasksBoard() {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string>('');
+  const [isAssigning, setIsAssigning] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const nodeNames = new Map(nodes.map((n: { id: string; name: string }) => [n.id, n.name]));
   const projectNames = new Map(projects.map((p: { id: string; name: string }) => [p.id, p.name]));
 
   const handleAssign = async (taskId: string) => {
     if (!selectedNodeId) return;
-    try { await tasksApi.setExecutingNode(taskId, selectedNodeId); } catch (err) { console.error('setExecutingNode failed:', err); }
+    setIsAssigning(taskId);
+    try {
+      await tasksApi.setExecutingNode(taskId, selectedNodeId);
+      toastSuccess('Task assigned');
+    } catch (err) {
+      toastError(
+        err instanceof Error ? err.message : 'Assignment failed',
+        { onClick: () => handleAssign(taskId) },
+      );
+    } finally {
+      setIsAssigning(null);
+    }
   };
 
   const handleDelete = async (taskId: string) => {
-    if (!confirm('Delete this task?')) return;
-    try { await tasksApi.delete(taskId); } catch (err) { console.error('delete task failed:', err); }
+    setDeleteTarget(taskId);
+  };
+
+  const confirmDelete = async (taskId: string) => {
+    setIsDeleting(taskId);
+    setDeleteTarget(null);
+    try {
+      await tasksApi.delete(taskId);
+      toastSuccess('Task deleted');
+    } catch (err) {
+      toastError(
+        err instanceof Error ? err.message : 'Delete failed',
+        { onClick: () => confirmDelete(taskId) },
+      );
+    } finally {
+      setIsDeleting(null);
+    }
   };
 
   const byStatus = new Map<string, ElectricTaskAssignment[]>();
@@ -65,8 +103,8 @@ export function TasksBoard() {
                   <div>{nodeNames.get(a.node_id) ?? a.node_id}</div>
 <div>{projectNames.get(a.node_project_id) ?? a.node_project_id}</div>
                 <div className="flex gap-2 mt-1">
-                  <button className="text-xs px-2 py-1 border" onClick={(e) => { e.stopPropagation(); handleAssign(a.task_id); }} aria-label="Assign">Assign</button>
-                  <button className="text-xs px-2 py-1 border text-red-500" onClick={(e) => { e.stopPropagation(); handleDelete(a.task_id); }} aria-label="Delete">Delete</button>
+                  <button className="text-xs px-2 py-1 border" onClick={(e) => { e.stopPropagation(); handleAssign(a.task_id); }} aria-label="Assign" disabled={isAssigning === a.task_id}>{isAssigning === a.task_id ? 'Assigning...' : 'Assign'}</button>
+                  <button className="text-xs px-2 py-1 border text-red-500" onClick={(e) => { e.stopPropagation(); handleDelete(a.task_id); }} aria-label="Delete" disabled={isDeleting === a.task_id}>{isDeleting === a.task_id ? 'Deleting...' : 'Delete'}</button>
                 </div>
               </li>
               ))}
@@ -74,6 +112,20 @@ export function TasksBoard() {
           </div>
         ))}
       </div>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this task and all its assignments.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 border rounded-md hover:bg-muted">Cancel</button>
+            <button onClick={() => { if (deleteTarget) confirmDelete(deleteTarget); }} className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600">Delete</button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {selectedAssignmentId && (
         <div className="w-80 border-l p-4">
           <TaskDetail assignmentId={selectedAssignmentId} />
