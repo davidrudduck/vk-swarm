@@ -1,8 +1,10 @@
 import { Link, useLocation } from 'react-router-dom';
 import { FolderOpen, ListTodo, LogOut } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { oauthApi } from '@/lib/api/oauth';
 import { useSyncStatus } from '@/lib/electric/sync-status';
+import { getQueueLength } from '@/lib/mutation-queue';
 
 const NAV_ITEMS = [
   { label: 'Nodes', icon: FolderOpen, to: '/nodes' },
@@ -18,6 +20,17 @@ export function Navbar() {
     reconnecting: 'bg-yellow-500',
     disconnected: 'bg-red-500',
   };
+
+  const [queueLength, setQueueLength] = useState(0);
+
+  useEffect(() => {
+    const update = () => {
+      getQueueLength().then(setQueueLength).catch(() => {});
+    };
+    update();
+    const interval = setInterval(update, 5_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleLogout = async () => {
     try {
@@ -40,6 +53,11 @@ export function Navbar() {
                 title={`Sync: ${syncStatus}`}
                 aria-label={`Sync status: ${syncStatus}`}
               />
+              {queueLength > 0 && (
+                <span className="inline-flex items-center justify-center w-5 h-5 text-xs bg-amber-500 text-black rounded-full font-bold">
+                  {queueLength}
+                </span>
+              )}
             </Link>
           </div>
           <button
