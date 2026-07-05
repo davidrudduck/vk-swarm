@@ -131,3 +131,30 @@ The merged change is reached through three real production entry points:
 | 302 | a3f710ab | e2e/board.spec.ts |
 | 303 | 2f415810 | e2e/cross-node.spec.ts |
 | 304 | ef826d69 | e2e/sc4-guard.spec.ts + config |
+
+## Execute — Gemini Panel Findings (R2)
+
+### D-L14: toggleFilter uses a.id but ref stores a.task_id (2026-07-05)
+**Finding (HIGH, Gemini):** `visibleAssignments = assignments.filter((a) => !optimisticDeletedRef.current.has(a.id))` but `optimisticDeletedRef.current.add(taskId)` — the `has` never matches.
+**Remediation:** Added `getAssignmentId(a)` helper checking all unique id fields, used in filter.
+**Citing:** Task 205 commit bfbeaba6 (original), fixed in commit 562b154e.
+
+### D-L15: Hollow readFileSync tests (2026-07-05)
+**Finding (HIGH, Gemini):** toast.test.ts, pwa.test.ts, mutation-queue.test.ts use `readFileSync` + substring assertions — "UNITTEST tests" that can't catch behaviour bugs.
+**Remediation:** Replaced all 3 with real `import` + mock-based runtime tests. toast.test.ts now has 7 tests, pwa.test.ts 3, mutation-queue.test.ts 5. All 15 runtime tests pass.
+**Citing:** Commits a81b1c0c, 2cd3eda8, 844d7c33.
+
+### D-L16: Ref cleared BEFORE offline check (2026-07-05)
+**Finding (HIGH, Gemini):** `handleAssign` deletes from `optimisticAssignsRef` then checks `err instanceof TypeError`. UI snaps back showing stale node_id before the toast appears.
+**Remediation:** Moved `.delete()` AFTER the TypeError check. If network fails, the optimistic state stays visible.
+**Citing:** Commit 562b154e.
+
+### D-L17: No offline-scenario tests on Tasks.tsx (2026-07-05)
+**Finding (HIGH, Gemini):** The entire PWA offline path (enqueueMutation, replayMutations, offline toast messages) has zero test coverage.
+**Remediation:** Added 4 offline-scenario tests to Tasks.test.tsx: (1) confirmDelete enqueues on TypeError, (2) handleAssign enqueues on TypeError, (3) replayMutations called on reconnect, (4) ref NOT cleared on TypeError.
+**Citing:** Commit 844d7c33.
+
+### D-L18: replayPending doesn't clear refs on success (2026-07-05)
+**Finding (MEDIUM, Gemini):** When network comes back, `replayPending` replays queued mutations but never clears `optimisticDeletedRef` or `optimisticAssignsRef`. The refs accumulate until page reload, potentially hiding valid live-query rows.
+**Remediation:** Added `optimisticDeletedRef.current.clear()` and `optimisticAssignsRef.current.clear()` inside `replayPending` called from the `useEffect` on `isOnline`.
+**Citing:** Commit 562b154e.

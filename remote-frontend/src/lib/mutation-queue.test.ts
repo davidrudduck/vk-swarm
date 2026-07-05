@@ -1,37 +1,64 @@
-// @vitest-environment node
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { enqueueMutation, getQueueLength, replayMutations } from './mutation-queue';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+vi.mock('idb-keyval', () => {
+  let store: Record<string, unknown> = {};
+  return {
+    get: vi.fn(async (key: string) => store[key] ?? null),
+    set: vi.fn(async (key: string, value: unknown) => { store[key] = value; }),
+    del: vi.fn(async (key: string) => { delete store[key]; }),
+  };
+});
+import { get, set } from 'idb-keyval';
 
 describe('mutation queue module (SC10)', () => {
-  it('exports enqueueMutation function', () => {
-    const source = readFileSync(join(__dirname, 'mutation-queue.ts'), 'utf-8');
-    expect(source).toContain('export async function enqueueMutation');
-    expect(source).toContain('idb-keyval');
-    expect(source).toContain("import { get, set } from 'idb-keyval'");
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it('exports replayMutations function', () => {
-    const source = readFileSync(join(__dirname, 'mutation-queue.ts'), 'utf-8');
-    expect(source).toContain('export async function replayMutations');
-    expect(source).toContain('get<MutationEntry[]>');
+  it('enqueueMutation stores entry in idb-keyval', async () => {
+    await enqueueMutation('DELETE', '/v1/tasks/t1', 't1');
+    expect(set).toHaveBeenCalledWith('offline-mutation-queue', expect.arrayContaining([
+      expect.objectContaining({ operation: 'DELETE', endpoint: '/v1/tasks/t1', payload: 't1' }),
+    ]));
   });
 
-  it('exports MutationEntry interface', () => {
-    const source = readFileSync(join(__dirname, 'mutation-queue.ts'), 'utf-8');
-    expect(source).toContain('export interface MutationEntry');
-    expect(source).toContain('operation: string');
-    expect(source).toContain('endpoint: string');
-    expect(source).toContain('payload');
-    expect(source).toContain('timestamp: number');
+  it('getQueueLength returns 0 for empty queue', async () => {
+    vi.mocked(get).mockResolvedValue(null);
+    const length = await getQueueLength();
+    expect(length).toBe(0);
   });
 
-  it('exports getQueueLength function', () => {
-    const source = readFileSync(join(__dirname, 'mutation-queue.ts'), 'utf-8');
-    expect(source).toContain('export async function getQueueLength');
+  it('getQueueLength returns count of queued entries', async () => {
+    vi.mocked(get).mockResolvedValue([{ id: '1' }, { id: '2' }]);
+    const length = await getQueueLength();
+    expect(length).toBe(2);
+  });
+
+  it('replayMutations replays entries and removes successful ones', async () => {
+    const entries = [
+      { id: 'm1', operation: 'DELETE', endpoint: '/v1/tasks/t1', payload: 't1', timestamp: 1 },
+      { id: 'm2', operation: 'PATCH', endpoint: '/v1/tasks/t2', payload: { taskId: 't2', nodeId: 'n1' }, timestamp: 2 },
+    ];
+    vi.mocked(get).mockResolvedValue(entries);
+    const execute = vi.fn().mockResolvedValue(undefined);
+    const onError = vi.fn();
+    await replayMutations(execute, onError);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledWith(entries[0]);
+    expect(execute).toHaveBeenCalledWith(entries[1]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('replayMutations keeps failing entries and calls onError', async () => {
+    const entries = [
+      { id: 'm1', operation: 'DELETE', endpoint: '/v1/tasks/t1', payload: 't1', timestamp: 1 },
+    ];
+    vi.mocked(get).mockResolvedValue(entries);
+    const execute = vi.fn().mockRejectedValue(new Error('network error'));
+    const onError = vi.fn();
+    await replayMutations(execute, onError);
+    expect(onError).toHaveBeenCalledWith(entries[0], expect.any(Error));
+    expect(set).toHaveBeenCalledWith('offline-mutation-queue', entries);
   });
 });

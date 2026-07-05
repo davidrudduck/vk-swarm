@@ -57,9 +57,11 @@ export function TasksBoard() {
         if (entry.operation === 'DELETE') {
           const taskId = entry.payload as string;
           await tasksApi.delete(taskId);
+          optimisticDeletedRef.current.delete(taskId);
         } else if (entry.operation === 'PATCH') {
           const { taskId, nodeId } = entry.payload as { taskId: string; nodeId: string };
           await tasksApi.setExecutingNode(taskId, nodeId);
+          optimisticAssignsRef.current.delete(taskId);
         }
       },
       (_entry, err) => {
@@ -85,7 +87,6 @@ export function TasksBoard() {
       await tasksApi.setExecutingNode(taskId, selectedNodeId);
       toastSuccess('Task assigned');
     } catch (err) {
-      optimisticAssignsRef.current.delete(taskId);
       if (err instanceof TypeError && err.message === 'Failed to fetch') {
         await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
           taskId,
@@ -93,6 +94,7 @@ export function TasksBoard() {
         });
         toastSuccess('Assignment queued for sync');
       } else {
+        optimisticAssignsRef.current.delete(taskId);
         toastError(
           err instanceof Error ? err.message : 'Assignment failed',
           { onClick: () => handleAssign(taskId) },
@@ -115,11 +117,11 @@ export function TasksBoard() {
       await tasksApi.delete(taskId);
       toastSuccess('Task deleted');
     } catch (err) {
-      optimisticDeletedRef.current.delete(taskId);
       if (err instanceof TypeError && err.message === 'Failed to fetch') {
         await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
         toastSuccess('Deletion queued for sync');
       } else {
+        optimisticDeletedRef.current.delete(taskId);
         toastError(
           err instanceof Error ? err.message : 'Delete failed',
           { onClick: () => confirmDelete(taskId) },
@@ -131,7 +133,7 @@ export function TasksBoard() {
   };
 
   const visibleAssignments = assignments.filter(
-    (a) => !optimisticDeletedRef.current.has(a.id),
+    (a) => !optimisticDeletedRef.current.has(a.task_id),
   );
   const byStatus = new Map<string, ElectricTaskAssignment[]>();
   for (const status of STATUS_COLUMNS) byStatus.set(status, []);
