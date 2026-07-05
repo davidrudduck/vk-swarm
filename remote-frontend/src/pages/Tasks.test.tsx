@@ -32,6 +32,16 @@ vi.mock('sonner', () => ({
   Toaster: () => null,
 }));
 
+vi.mock('idb-keyval', () => ({
+  get: vi.fn(async () => 0),
+  set: vi.fn(async () => undefined),
+  del: vi.fn(async () => undefined),
+}));
+
+vi.mock('@/lib/offline', () => ({
+  useOnlineStatus: () => ({ isOnline: true, wasOffline: false, lastOnlineAt: null }),
+}));
+
 import { TasksBoard, TaskDetail } from './Tasks';
 import { tasksApi } from '@/lib/api/tasks';
 

@@ -1,5 +1,5 @@
 import { useLiveQuery } from '@tanstack/react-db';
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   createTaskAssignmentsCollection,
   createTaskOutputLogsCollection,
@@ -18,6 +18,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { useSyncStatus } from '@/lib/electric/sync-status';
+import { useOnlineStatus } from '@/lib/offline';
+import { enqueueMutation, replayMutations } from '@/lib/mutation-queue';
 
 const assignmentsCollection = createTaskAssignmentsCollection();
 const outputLogsCollection = createTaskOutputLogsCollection();
@@ -38,20 +41,63 @@ export function TasksBoard() {
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
+  const optimisticDeletedRef = useRef<Set<string>>(new Set());
+  const optimisticAssignsRef = useRef<Map<string, string>>(new Map());
+
+  const { markSynced } = useSyncStatus();
+  const { isOnline } = useOnlineStatus();
+
+  useEffect(() => {
+    if (assignments.length > 0) markSynced();
+  }, [assignments, markSynced]);
+
+  const replayPending = useCallback(async () => {
+    await replayMutations(
+      async (entry) => {
+        if (entry.operation === 'DELETE') {
+          const taskId = entry.payload as string;
+          await tasksApi.delete(taskId);
+        } else if (entry.operation === 'PATCH') {
+          const { taskId, nodeId } = entry.payload as { taskId: string; nodeId: string };
+          await tasksApi.setExecutingNode(taskId, nodeId);
+        }
+      },
+      (_entry, err) => {
+        toastError(`Queued mutation failed: ${err.message}`);
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    if (isOnline) {
+      replayPending();
+    }
+  }, [isOnline, replayPending]);
+
   const nodeNames = new Map(nodes.map((n: { id: string; name: string }) => [n.id, n.name]));
   const projectNames = new Map(projects.map((p: { id: string; name: string }) => [p.id, p.name]));
 
   const handleAssign = async (taskId: string) => {
     if (!selectedNodeId) return;
     setIsAssigning(taskId);
+    optimisticAssignsRef.current.set(taskId, selectedNodeId);
     try {
       await tasksApi.setExecutingNode(taskId, selectedNodeId);
       toastSuccess('Task assigned');
     } catch (err) {
-      toastError(
-        err instanceof Error ? err.message : 'Assignment failed',
-        { onClick: () => handleAssign(taskId) },
-      );
+      optimisticAssignsRef.current.delete(taskId);
+      if (err instanceof TypeError && err.message === 'Failed to fetch') {
+        await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
+          taskId,
+          nodeId: selectedNodeId,
+        });
+        toastSuccess('Assignment queued for sync');
+      } else {
+        toastError(
+          err instanceof Error ? err.message : 'Assignment failed',
+          { onClick: () => handleAssign(taskId) },
+        );
+      }
     } finally {
       setIsAssigning(null);
     }
@@ -64,22 +110,32 @@ export function TasksBoard() {
   const confirmDelete = async (taskId: string) => {
     setIsDeleting(taskId);
     setDeleteTarget(null);
+    optimisticDeletedRef.current.add(taskId);
     try {
       await tasksApi.delete(taskId);
       toastSuccess('Task deleted');
     } catch (err) {
-      toastError(
-        err instanceof Error ? err.message : 'Delete failed',
-        { onClick: () => confirmDelete(taskId) },
-      );
+      optimisticDeletedRef.current.delete(taskId);
+      if (err instanceof TypeError && err.message === 'Failed to fetch') {
+        await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
+        toastSuccess('Deletion queued for sync');
+      } else {
+        toastError(
+          err instanceof Error ? err.message : 'Delete failed',
+          { onClick: () => confirmDelete(taskId) },
+        );
+      }
     } finally {
       setIsDeleting(null);
     }
   };
 
+  const visibleAssignments = assignments.filter(
+    (a) => !optimisticDeletedRef.current.has(a.id),
+  );
   const byStatus = new Map<string, ElectricTaskAssignment[]>();
   for (const status of STATUS_COLUMNS) byStatus.set(status, []);
-  for (const a of assignments) {
+  for (const a of visibleAssignments) {
     const bucket = byStatus.get(a.execution_status) ?? byStatus.get('pending');
     bucket?.push(a);
   }
@@ -97,17 +153,21 @@ export function TasksBoard() {
               ))}
             </select>
             <ul>
-              {(byStatus.get(status) ?? []).map((a) => (
-                <li key={a.id} className="border p-2 my-2" onClick={() => setSelectedAssignmentId(a.id)}>
-                  <div>task {a.task_id}</div>
-                  <div>{nodeNames.get(a.node_id) ?? a.node_id}</div>
-<div>{projectNames.get(a.node_project_id) ?? a.node_project_id}</div>
-                <div className="flex gap-2 mt-1">
-                  <button className="text-xs px-2 py-1 border" onClick={(e) => { e.stopPropagation(); handleAssign(a.task_id); }} aria-label="Assign" disabled={isAssigning === a.task_id}>{isAssigning === a.task_id ? 'Assigning...' : 'Assign'}</button>
-                  <button className="text-xs px-2 py-1 border text-red-500" onClick={(e) => { e.stopPropagation(); handleDelete(a.task_id); }} aria-label="Delete" disabled={isDeleting === a.task_id}>{isDeleting === a.task_id ? 'Deleting...' : 'Delete'}</button>
-                </div>
-              </li>
-              ))}
+              {(byStatus.get(status) ?? []).map((a) => {
+                const optimisticNodeId = optimisticAssignsRef.current.get(a.task_id);
+                const displayNodeId = optimisticNodeId ?? a.node_id;
+                return (
+                  <li key={a.id} className="border p-2 my-2" onClick={() => setSelectedAssignmentId(a.id)}>
+                    <div>task {a.task_id}</div>
+                    <div>{nodeNames.get(displayNodeId) ?? displayNodeId}</div>
+                    <div>{projectNames.get(a.node_project_id) ?? a.node_project_id}</div>
+                    <div className="flex gap-2 mt-1">
+                      <button className="text-xs px-2 py-1 border" onClick={(e) => { e.stopPropagation(); handleAssign(a.task_id); }} aria-label="Assign" disabled={isAssigning === a.task_id}>{isAssigning === a.task_id ? 'Assigning...' : 'Assign'}</button>
+                      <button className="text-xs px-2 py-1 border text-red-500" onClick={(e) => { e.stopPropagation(); handleDelete(a.task_id); }} aria-label="Delete" disabled={isDeleting === a.task_id}>{isDeleting === a.task_id ? 'Deleting...' : 'Delete'}</button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ))}
