@@ -118,8 +118,8 @@ importers:
         specifier: 6.1.1
         version: 6.1.1(@rjsf/core@6.1.1(@rjsf/utils@6.1.1(react@18.3.1))(react@18.3.1))(@rjsf/utils@6.1.1(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.23))(@types/react@18.3.23)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(tailwindcss@3.4.17)
       '@tanstack/electric-db-collection':
-        specifier: ^0.2.43
-        version: 0.2.43(typescript@6.0.2)
+        specifier: ^0.3.12
+        version: 0.3.12(typescript@6.0.2)
       '@tanstack/react-db':
         specifier: ^0.1.82
         version: 0.1.82(react@18.3.1)(typescript@6.0.2)
@@ -570,6 +570,10 @@ packages:
 
   '@electric-sql/client@1.5.14':
     resolution: {integrity: sha512-/bT33y++WsX1McYZ0oa6NtnTfxTB8JgFdrGkSWtQnBNusDRNBEpF+Wn4Meg0Hjxj99gfAbQprqBz4U0KGG/EBA==}
+    hasBin: true
+
+  '@electric-sql/client@1.5.23':
+    resolution: {integrity: sha512-3b0ddP8/J7dIHNFwoXzuFcow40aXvKtGss1rpiF5H4AGvuYWHR7A/hCe7xE86wbvdJP3PNcpDAmtUNF1cc+vlQ==}
     hasBin: true
 
   '@electric-sql/react@1.0.43':
@@ -1966,8 +1970,8 @@ packages:
     peerDependencies:
       solid-js: '>=1.9.7'
 
-  '@tanstack/electric-db-collection@0.2.43':
-    resolution: {integrity: sha512-OCZun7+2EcVLpYH93bTxJOhFSKSRCNs1Ya/QfNUeWQ88weQX2y2xvu5koEz0q5z3ivpad13BV9QMlO2vhP4LIA==}
+  '@tanstack/electric-db-collection@0.3.12':
+    resolution: {integrity: sha512-jxVcWdNfdBS1W9CLhP98tNIo/pZd5l5JT/dN2YXYBsnvIDyQ4mV1EEzH/VGVfhZSLnL4fkWDBpoT79omW5Funw==}
 
   '@tanstack/form-core@1.24.4':
     resolution: {integrity: sha512-+eIR7DiDamit1zvTVgaHxuIRA02YFgJaXMUGxsLRJoBpUjGl/g/nhUocQoNkRyfXqOlh8OCMTanjwDprWSRq6w==}
@@ -4419,6 +4423,12 @@ snapshots:
     optionalDependencies:
       '@rollup/rollup-darwin-arm64': 4.44.0
 
+  '@electric-sql/client@1.5.23':
+    dependencies:
+      '@microsoft/fetch-event-source': 2.0.1
+    optionalDependencies:
+      '@rollup/rollup-darwin-arm64': 4.44.0
+
   '@electric-sql/react@1.0.43(react@18.3.1)':
     dependencies:
       '@electric-sql/client': 1.5.14
@@ -5747,9 +5757,9 @@ snapshots:
       - csstype
       - utf-8-validate
 
-  '@tanstack/electric-db-collection@0.2.43(typescript@6.0.2)':
+  '@tanstack/electric-db-collection@0.3.12(typescript@6.0.2)':
     dependencies:
-      '@electric-sql/client': 1.5.14
+      '@electric-sql/client': 1.5.23
       '@standard-schema/spec': 1.1.0
       '@tanstack/db': 0.6.4(typescript@6.0.2)
       '@tanstack/store': 0.9.3
