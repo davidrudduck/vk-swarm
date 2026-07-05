@@ -54,8 +54,8 @@ export function Navbar() {
                 aria-label={`Sync status: ${syncStatus}`}
               />
               {queueLength > 0 && (
-                <span className="inline-flex items-center justify-center w-5 h-5 text-xs bg-amber-500 text-black rounded-full font-bold">
-                  {queueLength}
+                <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-xs bg-amber-500 text-black rounded-full font-bold">
+                  {queueLength} pending
                 </span>
               )}
             </Link>

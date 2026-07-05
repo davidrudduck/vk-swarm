@@ -223,3 +223,38 @@ The merged change is reached through three real production entry points:
 **Finding (LOW, Codex PD-022):** Plan specified `setupTaskApiMocks(page, tasks)` but implementation has `setupTaskApiMocks(page)`. No test passes task data — all intercept DELETE→204 and PATCH→200.
 **Resolution:** The `tasks` param would allow per-test task data. Currently no test needs it — all E2E board tests use the same mock responses. Documented here; add the param when a test actually needs custom task data.
 **Citing:** Recorded, no code change needed.
+
+## Execute — Round 5 Adversarial Review (Codex + Gemini, 2026-07-05)
+
+### D-L30: return_to login flow fixed (2026-07-05)
+**Finding (HIGH, Gemini F-002):** `LoginPage` hardcoded `returnTo = ${appBase}/oauth/callback`, ignoring the `return_to` query param from AuthGuard. Users always landed at /nodes after login.
+**Remediation:** `LoginPage` now reads `return_to` from `useSearchParams()` and appends it to the OAuth callback URL: `${appBase}/oauth/callback?return_to=${encodeURIComponent(returnTo)}`. The OAuth callback's existing `safeReturnTo` logic then redirects correctly after token redemption.
+**Citing:** Fixed in this session (AppRouter.tsx).
+
+### D-L31: Enqueue serialization replaced with atomic IndexedDB update (2026-07-05)
+**Finding (HIGH, Codex F-501, Gemini F-001):** The manual `enqueueLock` promise-chain was not atomic — concurrent `enqueueMutation` calls could all pass the same resolved lock, then each read-write clobbered the previous. Silent mutation loss.
+**Remediation:** Replaced `get`/`set` + manual lock with `update()` from idb-keyval, which performs an atomic read-modify-write inside an IndexedDB transaction. Removed `enqueueLock` entirely.
+**Citing:** Fixed in this session (mutation-queue.ts).
+
+### D-L32: Network error detection broadened beyond 'Failed to fetch' (2026-07-05)
+**Finding (HIGH, Codex F-503):** Offline queuing only matched `err instanceof TypeError && err.message === 'Failed to fetch'`. Timeouts (AbortError), DNS failures, and other network errors treated as permanent failures, rolling back optimistic state and never enqueuing.
+**Remediation:** Added `else if (err instanceof DOMException && err.name === 'AbortError')` branch to both `handleAssign` and `confirmDelete`. AbortError from the 30s timeout in `makeRequest` is now correctly queued for replay.
+**Citing:** Fixed in this session (Tasks.tsx assign + delete paths).
+
+### D-L33: Hollow cross-node E2E test fixed (2026-07-05)
+**Finding (HIGH, Gemini F-003):** `cross-node.spec.ts` asserted `text=node-alpha` visible, which passed because the board's list item contains the node name text. The mock didn't supply `task_output_logs`, so TaskDetail actually rendered "No activity yet". Test gave false confidence.
+**Remediation:** (a) Added `CROSS_NODE_LOGS` with 2 entries (stdout + stderr) mapped to `assignment_id: 'a1'`. (b) Added `node_task_output_logs: CROSS_NODE_LOGS` to the `mockElectricShape` call. (c) Changed assertions from `text=node-alpha` (hollow) to `text=build starting...` and `text=deprecated warning` (real TaskDetail content). Second task click now asserts `text=No activity yet` (correctly empty TaskDetail).
+**Citing:** Fixed in this session (cross-node.spec.ts).
+
+### D-L34: SPA shell stale-while-revalidate caching added (2026-07-05)
+**Finding (MEDIUM, Gemini F-006):** SC6 mandated `stale-while-revalidate` caching for SPA shell routes (/, /login, /oauth/callback). The PWA config only had `/v1/` NetworkFirst and `/assets/` CacheFirst.
+**Remediation:** Added a third `runtimeCaching` rule matching `/`, `/login`, `/oauth/callback` with `handler: 'StaleWhileRevalidate'` and `cacheName: 'shell-cache'` (max 10 entries, 24h expiry).
+**Citing:** Fixed in this session (vite.config.ts).
+
+### D-L35: Intentional or documented round 5 findings (2026-07-05)
+**Context:** Remaining Gemini F-004/F-005/F-007, Codex F-502/F-504:
+- **F-004 (MEDIUM, shared selectedNodeId):** Pre-existing behavior — all 4 status columns share one node dropdown. Fixing this requires per-column state refactoring beyond this phase's scope. Documented, future workstream candidate.
+- **F-005 (MEDIUM, isAssigning overwrite):** Changing `isAssigning` from `string|null` to `Set<string>` would require wider test changes. Current behavior is correct for sequential mutations; concurrent double-assign from same column is an edge case.
+- **F-007 (LOW, fake Undo):** Spec says "if undoable" — no restore API exists. Undo shows explanatory toast. Intentional per D-L24.
+- **F-502 (MEDIUM, Electric NDJSON format):** The `mockElectricShape` emits bare row JSON; the TanStack adapter may expect structured change messages. This affects E2E fidelity but is a mock implementation concern. To be verified during first real Playwright run.
+- **F-504 (MEDIUM, empty sync):** markSynced now called unconditionally on data arrival (including empty arrays). Empty collections correctly show synced status. Fixed in this session.

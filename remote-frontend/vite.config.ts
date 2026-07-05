@@ -30,6 +30,14 @@ export default defineConfig({
               expiration: { maxEntries: 200, maxAgeSeconds: 604800 },
             },
           },
+          {
+            urlPattern: ({ url }) => ['/', '/login', '/oauth/callback'].includes(url.pathname),
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'shell-cache',
+              expiration: { maxEntries: 10, maxAgeSeconds: 86400 },
+            },
+          },
         ],
       },
       manifest: {

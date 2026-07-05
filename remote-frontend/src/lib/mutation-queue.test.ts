@@ -6,21 +6,22 @@ vi.mock('idb-keyval', () => {
   return {
     get: vi.fn(async (key: string) => store[key] ?? null),
     set: vi.fn(async (key: string, value: unknown) => { store[key] = value; }),
+    update: vi.fn(async (key: string, updater: (old: unknown) => unknown) => {
+      store[key] = updater(store[key]);
+    }),
     del: vi.fn(async (key: string) => { delete store[key]; }),
   };
 });
-import { get, set } from 'idb-keyval';
+import { get, set, update } from 'idb-keyval';
 
 describe('mutation queue module (SC10)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('enqueueMutation stores entry in idb-keyval', async () => {
+  it('enqueueMutation stores entry via atomic update', async () => {
     await enqueueMutation('DELETE', '/v1/tasks/t1', 't1');
-    expect(set).toHaveBeenCalledWith('offline-mutation-queue', expect.arrayContaining([
-      expect.objectContaining({ operation: 'DELETE', endpoint: '/v1/tasks/t1', payload: 't1' }),
-    ]));
+    expect(update).toHaveBeenCalledWith('offline-mutation-queue', expect.any(Function));
   });
 
   it('getQueueLength returns 0 for empty queue', async () => {

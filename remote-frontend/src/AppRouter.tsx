@@ -27,6 +27,7 @@ function RootRedirect() {
 }
 
 function LoginPage() {
+  const [searchParams] = useSearchParams()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -40,9 +41,10 @@ function LoginPage() {
       storeVerifier(verifier)
 
       const appBase = import.meta.env.VITE_APP_BASE_URL || window.location.origin
-      const returnTo = `${appBase}/oauth/callback`
+      const returnTo = searchParams.get('return_to') || '/nodes'
+      const callbackUrl = `${appBase}/oauth/callback?return_to=${encodeURIComponent(returnTo)}`
 
-      const result = await initOAuth(provider, returnTo, challenge)
+      const result = await initOAuth(provider, callbackUrl, challenge)
       window.location.assign(result.authorize_url)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'OAuth init failed')

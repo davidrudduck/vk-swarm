@@ -49,7 +49,7 @@ export function TasksBoard() {
   const { isOnline } = useOnlineStatus();
 
   useEffect(() => {
-    if (assignments.length > 0 || nodes.length > 0 || projects.length > 0) markSynced();
+    markSynced();
   }, [assignments, nodes, projects, markSynced]);
 
   const replayPending = useCallback(async () => {
@@ -94,6 +94,12 @@ export function TasksBoard() {
           nodeId: selectedNodeId,
         });
         toastSuccess('Assignment queued for sync');
+      } else if (err instanceof DOMException && err.name === 'AbortError') {
+        await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
+          taskId,
+          nodeId: selectedNodeId,
+        });
+        toastSuccess('Assignment queued for sync');
       } else {
         optimisticAssignsRef.current.delete(taskId);
         toastError(
@@ -125,6 +131,9 @@ export function TasksBoard() {
       });
     } catch (err) {
       if (err instanceof TypeError && err.message === 'Failed to fetch') {
+        await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
+        toastSuccess('Deletion queued for sync');
+      } else if (err instanceof DOMException && err.name === 'AbortError') {
         await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
         toastSuccess('Deletion queued for sync');
       } else {

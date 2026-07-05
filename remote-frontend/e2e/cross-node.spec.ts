@@ -9,6 +9,11 @@ const CROSS_NODE_ASSIGNMENTS = [
   { id: 'a4', task_id: 't-n2-2', node_id: 'n2', node_project_id: 'p2', execution_status: 'completed' },
 ];
 
+const CROSS_NODE_LOGS = [
+  { id: 'log1', assignment_id: 'a1', output_type: 'stdout', content: 'build starting...' },
+  { id: 'log2', assignment_id: 'a1', output_type: 'stderr', content: 'deprecated warning' },
+];
+
 test.describe('cross-node correctness (SC14)', () => {
   test.beforeEach(async ({ page }) => {
     await setupApiMocks(page);
@@ -18,6 +23,7 @@ test.describe('cross-node correctness (SC14)', () => {
         { id: 'n1', name: 'node-alpha' },
         { id: 'n2', name: 'node-beta' },
       ],
+      node_task_output_logs: CROSS_NODE_LOGS,
     });
     await page.addInitScript(() => {
       sessionStorage.setItem('oauth_verifier', 'test-verifier');
@@ -34,10 +40,11 @@ test.describe('cross-node correctness (SC14)', () => {
 
   test('TaskDetail shows correct node_id label per task', async ({ page }) => {
     await page.locator('li').first().click();
-    await expect(page.locator('text=node-alpha')).toBeVisible();
+    await expect(page.locator('text=build starting...')).toBeVisible();
+    await expect(page.locator('text=deprecated warning')).toBeVisible();
 
     await page.locator('li').nth(1).click();
-    await expect(page.locator('text=node-beta')).toBeVisible();
+    await expect(page.locator('text=No activity yet')).toBeVisible();
   });
 
   test('tasks from both nodes span all status columns', async ({ page }) => {
