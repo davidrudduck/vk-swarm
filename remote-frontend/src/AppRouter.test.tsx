@@ -72,9 +72,9 @@ describe('AppRouter', () => {
 
     renderWithRouter('/')
 
-    // The root redirect should navigate to /nodes, which renders the NodesPage
+    // The root redirect should navigate to /nodes, which renders the Nodes page (h2 "Nodes")
     await waitFor(() => {
-      expect(screen.getByText('Nodes (coming in phase 2)')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 2, name: 'Nodes' })).toBeInTheDocument()
     })
   })
 
@@ -92,9 +92,9 @@ describe('AppRouter', () => {
 
     renderWithRouter('/nodes')
 
-    // Should render the Nodes placeholder
+    // Should render the Nodes page heading
     await waitFor(() => {
-      expect(screen.getByText('Nodes (coming in phase 2)')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 2, name: 'Nodes' })).toBeInTheDocument()
     })
   })
 
@@ -121,9 +121,14 @@ describe('AppRouter', () => {
 
   it('unknown path renders NotFoundPage', async () => {
     vi.mocked(useProfile).mockReturnValue({
-      isSignedIn: false,
+      isSignedIn: true,
       isLoaded: true,
-      profile: null,
+      profile: {
+        user_id: 'test-id',
+        username: 'testuser',
+        email: 'test@example.com',
+        providers: [],
+      },
     })
 
     renderWithRouter('/nonexistent')
