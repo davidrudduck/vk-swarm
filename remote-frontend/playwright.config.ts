@@ -2,6 +2,8 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: ['**/sc4-guard.spec.ts'],
+  globalSetup: './e2e/sc4-guard.spec.ts',
   timeout: 30_000,
   expect: { timeout: 10_000 },
   use: {
