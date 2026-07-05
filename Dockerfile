@@ -28,7 +28,8 @@ COPY npx-cli/package*.json ./npx-cli/
 
 # Install pnpm and dependencies
 # keep in sync with crates/remote/Dockerfile's fe-builder pnpm version
-RUN npm install -g pnpm@10.25.0 && pnpm install
+ARG PNPM_VERSION=10.25.0
+RUN npm install -g pnpm@${PNPM_VERSION} && pnpm install
 
 # Copy source code
 COPY . .

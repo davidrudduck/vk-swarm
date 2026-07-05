@@ -6,7 +6,7 @@ ARG APP_NAME=vks-hive-server
 FROM node:24-alpine AS fe-builder
 WORKDIR /repo
 
-ARG PNPM_VERSION
+ARG PNPM_VERSION=10.25.0
 RUN corepack enable \
  && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
