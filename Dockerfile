@@ -25,7 +25,8 @@ COPY frontend/package*.json ./frontend/
 COPY npx-cli/package*.json ./npx-cli/
 
 # Install pnpm and dependencies
-RUN npm install -g pnpm && pnpm install
+# keep in sync with crates/remote/Dockerfile's fe-builder pnpm version
+RUN npm install -g pnpm@10.25.0 && pnpm install
 
 # Copy source code
 COPY . .
