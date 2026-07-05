@@ -119,6 +119,8 @@ services:
       context: ../..
       dockerfile: crates/remote/Dockerfile
       args:
+        # pnpm version — sourced from package.json packageManager field by rebuild.sh
+        PNPM_VERSION: ${PNPM_VERSION:-10.25.0}
         # SQLx needs DATABASE_URL at compile time for query validation
         # Use offline mode with sqlx-data.json, or provide a dummy URL
         SQLX_OFFLINE: "true"
