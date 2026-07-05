@@ -119,14 +119,26 @@ export function NodeProjectsSection({
   // Mutations for linking and creating
   const mutations = useSwarmProjectMutations({
     organizationId,
-    onLinkNodeSuccess: () => {
+    onLinkNodeSuccess: (link) => {
       setLinkingProject(null);
       setSelectedSwarmProjectId(null);
       setNewProjectName('');
       setNewProjectDescription('');
       setDialogTab('existing');
-      // Refetch to update linked status
       refetchNodes();
+      setNodeProjects((prev) => {
+        const next = { ...prev };
+        delete next[link.node_id];
+        return next;
+      });
+    },
+    onUnlinkNodeSuccess: (nodeId) => {
+      refetchNodes();
+      setNodeProjects((prev) => {
+        const next = { ...prev };
+        delete next[nodeId];
+        return next;
+      });
     },
   });
 

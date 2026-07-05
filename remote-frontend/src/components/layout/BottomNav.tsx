@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { FolderOpen, ListTodo, Settings } from 'lucide-react';
+import { FolderOpen, ListTodo } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface NavItemProps {
@@ -35,7 +35,6 @@ export function BottomNav() {
 
   const isNodesActive = location.pathname === '/nodes';
   const isTasksActive = location.pathname === '/tasks';
-  const isSettingsActive = location.pathname === '/settings';
 
   return (
     <nav
@@ -55,12 +54,6 @@ export function BottomNav() {
           label="Tasks"
           isActive={isTasksActive}
           onClick={() => navigate('/tasks')}
-        />
-        <NavItem
-          icon={Settings}
-          label="Settings"
-          isActive={isSettingsActive}
-          onClick={() => navigate('/settings')}
         />
       </div>
     </nav>

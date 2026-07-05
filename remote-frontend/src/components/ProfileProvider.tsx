@@ -7,20 +7,7 @@ import {
   useState,
 } from 'react';
 
-export interface ProviderProfile {
-  provider: string;
-  username: string | null;
-  display_name: string | null;
-  email: string | null;
-  avatar_url: string | null;
-}
-
-export interface ProfileResponse {
-  user_id: string;
-  username: string | null;
-  email: string;
-  providers: ProviderProfile[];
-}
+import type { ProfileResponse } from '@/types/shared/types';
 
 interface ProfileState {
   profile: ProfileResponse | null;

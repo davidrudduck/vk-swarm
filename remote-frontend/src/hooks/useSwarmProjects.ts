@@ -86,7 +86,7 @@ interface UseSwarmProjectMutationsOptions {
   onMergeError?: (err: unknown) => void;
   onLinkNodeSuccess?: (link: SwarmProjectNode) => void;
   onLinkNodeError?: (err: unknown) => void;
-  onUnlinkNodeSuccess?: () => void;
+  onUnlinkNodeSuccess?: (nodeId: string) => void;
   onUnlinkNodeError?: (err: unknown) => void;
 }
 
@@ -228,12 +228,12 @@ export function useSwarmProjectMutations(
       projectId: string;
       nodeId: string;
     }) => swarmProjectsApi.unlinkNode(projectId, nodeId),
-    onSuccess: (_, { projectId }) => {
+    onSuccess: (_, { projectId, nodeId }) => {
       queryClient.invalidateQueries({
         queryKey: swarmProjectsKeys.nodes(projectId),
       });
       invalidateProjects();
-      options.onUnlinkNodeSuccess?.();
+      options.onUnlinkNodeSuccess?.(nodeId);
     },
     onError: (err) => {
       console.error('Failed to unlink node from swarm project:', err);

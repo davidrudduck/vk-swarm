@@ -47,6 +47,7 @@ vi.mock('@/hooks/useSwarmProjects', () => ({
     deleteProject: { mutate: vi.fn(), isPending: false },
     mergeProjects: { mutate: vi.fn(), isPending: false },
     linkNode: { mutate: vi.fn(), isPending: false },
+    unlinkNode: { mutate: vi.fn(), isPending: false },
   }),
 }));
 
@@ -127,7 +128,7 @@ describe('Swarm Components', () => {
       clear: vi.fn(),
       key: vi.fn(),
       length: 0,
-    } as any;
+    } as Storage;
   });
 
   const renderWithProviders = (component: React.ReactElement) => {

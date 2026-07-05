@@ -1,21 +1,7 @@
 import { makeRequest, ApiError } from './utils';
+import type { ProfileResponse } from '@/types/shared/types';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
-
-export interface ProviderProfile {
-  provider: string;
-  username: string | null;
-  display_name: string | null;
-  email: string | null;
-  avatar_url: string | null;
-}
-
-export interface ProfileResponse {
-  user_id: string;
-  username: string | null;
-  email: string;
-  providers: ProviderProfile[];
-}
 
 export const profileApi = {
   async get(): Promise<ProfileResponse> {

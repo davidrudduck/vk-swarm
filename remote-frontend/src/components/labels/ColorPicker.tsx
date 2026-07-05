@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -40,6 +40,10 @@ interface ColorPickerProps {
 export function ColorPicker({ value, onChange, disabled }: ColorPickerProps) {
   const [open, setOpen] = useState(false);
   const [customColor, setCustomColor] = useState(value);
+
+  useEffect(() => {
+    setCustomColor(value);
+  }, [value]);
 
   const handleCustomColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newColor = e.target.value;

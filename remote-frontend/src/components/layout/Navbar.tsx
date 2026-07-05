@@ -1,12 +1,11 @@
 import { Link, useLocation } from 'react-router-dom';
-import { FolderOpen, ListTodo, Settings, LogOut } from 'lucide-react';
+import { FolderOpen, ListTodo, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { oauthApi } from '@/lib/api/oauth';
 
 const NAV_ITEMS = [
   { label: 'Nodes', icon: FolderOpen, to: '/nodes' },
   { label: 'Tasks', icon: ListTodo, to: '/tasks' },
-  { label: 'Settings', icon: Settings, to: '/settings' },
 ];
 
 export function Navbar() {

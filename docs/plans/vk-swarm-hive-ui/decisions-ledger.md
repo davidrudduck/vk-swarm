@@ -275,3 +275,80 @@
 **N/A — new feature.** No documented incident exists for vk-swarm-hive-ui. The workstream is a new hive-hosted console (rehosting swarm components + adding cross-node views). The real-seam tests in (b) exercise the actual production route tree and provider chain, confirming the new console shell is reachable end-to-end.
 
 VERDICT: PASS
+
+## CodeRabbit PR#456 Review Remediation (2026-07-05)
+
+CodeRabbit auto-review found 30 major findings across the 234-file diff. Cross-model verification (Opus + Gemini panels) confirmed 7 real bugs in code files; 1 false positive; the remaining 22 were categorized as false positives on frozen spec docs (6), out-of-diff files (3), known-deferred stubs (3), source-matching bugs from copy source (4), or UX patterns already counted (1). All 7 confirmed bugs fixed in-session per No Deferred Remediation rule. Pre-existing test failures (2 in AppRouter.test.tsx + 1 in no-push-invariant.test.mjs) documented — not introduced by remediation.
+
+### (T1) CONFIRMED_REAL — Auth: makeRequest centralized Bearer token (F14-16)
+
+- **Finding:** `makeRequest()` in `utils.ts` had no auto-attached Bearer token. 5 API clients (nodes.ts, swarmLabels.ts, swarmTemplates.ts, swarmProjects.ts, tasks.ts) sent no `Authorization` header, while organizations.ts and profile.ts each manually read `localStorage.getItem('access_token')` and set `Authorization: Bearer ${token}` — inconsistent, error-prone.
+- **Fix:** Added automatic Bearer token injection to `makeRequest()`. Before setting headers, checks `if (!headers.has('Authorization'))` and reads `localStorage.getItem('access_token')` — if present, sets `Authorization: Bearer ${token}`. Existing callers that manually set `Authorization` (organizations.ts, profile.ts) still pass the header explicitly, so `makeRequest`'s `!headers.has('Authorization')` guard skips them. All other callers now transparently get auth.
+- **Files:** `remote-frontend/src/lib/api/utils.ts:56-70` (added auth injection block).
+
+### (T2) CONFIRMED_REAL — Security: return_to open redirect (F28)
+
+- **Finding:** `OAuthCallbackPage` in `AppRouter.tsx` reads `return_to` from URL params with zero validation. `window.location.assign(returnTo)` could redirect to any origin (e.g., `https://evil.com`).
+- **Fix:** Added `isSafeReturnTo()` validation function. Uses `new URL(url, window.location.origin)` — only allows same-origin URLs or paths starting with `/`. Failed validation falls back to `/nodes`. The function handles both absolute URLs (checks `parsed.origin === window.location.origin`) and relative paths (`url.startsWith('/')`).
+- **Files:** `remote-frontend/src/AppRouter.tsx:87-96` (added `isSafeReturnTo()` + updated `OAuthCallbackPage` to use `safeReturnTo`).
+
+### (T3) CONFIRMED_REAL — Nav: dead /settings route (F3, F4)
+
+- **Finding:** `Navbar.tsx` NAV_ITEMS and `BottomNav.tsx` both link to `/settings`, but no `/settings` route exists in AppRouter.tsx (falls through to NotFoundPage catch-all).
+- **Fix:** Removed Settings item from both navigation components. Navbar: removed `{ label: 'Settings', icon: Settings, to: '/settings' }` from NAV_ITEMS, removed unused `Settings` from lucide-react import. BottomNav: removed Settings `NavItem`, removed `isSettingsActive` state var and unused `Settings` import.
+- **Files:** `remote-frontend/src/components/layout/Navbar.tsx:2,6-10`, `remote-frontend/src/components/layout/BottomNav.tsx:2,38,59-64`.
+
+### (T4) CONFIRMED_REAL — Tasks.tsx empty catch blocks (F19)
+
+- **Finding:** Tasks.tsx lines 34,39 use bare `catch {}` — assign and delete failures silently swallowed with zero user feedback.
+- **Fix:** Both catch blocks now log via `console.error(...)`: `catch (err) { console.error('setExecutingNode failed:', err); }` and `catch (err) { console.error('delete task failed:', err); }`. Full inline error handling (toasts, error state) is deferred — the current component has no toast/notification system; this fix makes failures debuggable (visible in console) rather than silent.
+- **Files:** `remote-frontend/src/pages/Tasks.tsx:34,39`.
+
+### (T5) CONFIRMED_REAL — ColorPicker customColor sync (F21)
+
+- **Finding:** `ColorPicker.tsx` initializes `customColor` from `value` via `useState(value)` once, but never re-syncs when the `value` prop changes externally (e.g., parent resets the color to a different value). Custom hex input field shows stale value.
+- **Fix:** Added `useEffect(() => { setCustomColor(value); }, [value])` after the `useState` call. When the `value` prop changes (parent re-render with new color), `customColor` syncs automatically.
+- **Files:** `remote-frontend/src/components/labels/ColorPicker.tsx:40-43` (added useEffect, updated import).
+
+### (T6) CONFIRMED_REAL — NodeProjectsSection per-node cache stale (F25)
+
+- **Finding:** `NodeProjectsSection.tsx` maintains a per-node project cache (`nodeProjects[nodeId]` Record<string, NodeProject[]>). Cache is populated on first node expand, but link/unlink success handlers only called `refetchNodes()` — they never invalidated the per-node project cache. Expanding a node a second time shows stale data (pre-link/unlink state).
+- **Fix:** (a) Updated `useSwarmProjectMutations` hook: `onUnlinkNodeSuccess` callback now receives `nodeId: string` parameter instead of `() => void`. The hook's `unlinkNode` mutation receives `{projectId, nodeId}` in its `mutationFn`, so `onSuccess` passes `nodeId` to the callback. Updated the `UseSwarmProjectMutationsOptions` interface accordingly. (b) `NodeProjectsSection`: `onLinkNodeSuccess` now receives the `link` object (contains `node_id`) and clears that node from cache `delete next[link.node_id]`. `onUnlinkNodeSuccess` clears the unlinked node from cache: `delete next[nodeId]`. Both callbacks also call `refetchNodes()` as before.
+- **Files:** `remote-frontend/src/hooks/useSwarmProjects.ts:88,236`, `remote-frontend/src/components/swarm/NodeProjectsSection.tsx:122-143`.
+
+### (T7) CONFIRMED_REAL — ProfileProvider type duplication (F30)
+
+- **Finding:** `ProfileProvider.tsx` declares `ProviderProfile` and `ProfileResponse` interfaces locally (lines 10-23) instead of importing from `shared/types` (which defines identical types at lines 438-440). Duplication was also present in `profile.ts`. If canonical types change, these local copies diverge silently.
+- **Fix:** Both files now import from `@/types/shared/types`. `ProfileProvider.tsx` imports `ProfileResponse` type. `profile.ts` imports `ProfileResponse` type and removes the local `ProviderProfile` + `ProfileResponse` declarations. The `ProfileState` interface's `profile` field type (`ProfileResponse | null`) resolves to the canonical type.
+- **Files:** `remote-frontend/src/components/ProfileProvider.tsx:10`, `remote-frontend/src/lib/api/profile.ts:2,5-23`.
+
+### (FPs) False Positives on frozen spec/plan docs (F5-F10)
+
+- **F5:** Spec says `/tasks/{id}/assign` — code uses `PATCH /v1/tasks/{id}/executing-node` (correct). Spec frozen at `spec_sha=380f469b` — the actual contract was corrected pre-tournament (ledger line 16).
+- **F6:** Spec says `/profile` not `/v1/profile` — code uses `/v1/profile` (correct). Same frozen-spec issue (ledger line 12).
+- **F7:** SC2/SC5 mention attempts/executions — dismissed in tournament (ledger line 18). Tables exist but not synced to Electric; adding collections requires server-side work (out of scope).
+- **F8-F10:** Plan docs (task 306 keyboard a11y, task 105 invitation route naming, task 307 handleApiResponse) — these are historical plan documents frozen at decompose time. Code has been verified to match actual contracts.
+
+### (NOOTS) Not in our diff (F11, F17, F18)
+
+- **F11:** preexisting-gate-failures tournament target.diff — from a different workstream entirely.
+- **F17-F18:** vk-swarm-design-system plan documents — different project, not in this PR.
+
+### (DEFERRED) Known-deferred stubs (F12, F13, F26, F27)
+
+- **F12-F13:** useSwarmHealth/useSwarmHealthActions stubs — created as inert stubs during task 202 (no hive health endpoint exists). Documented in ledger line 205.
+- **F26-F27:** templatesApi.list()/fixAllIssues no-ops — same stub pattern, same rationale.
+
+### (SOURCE-MATCH) Source-matching bugs from copy source (F1, F2, F20, F22, F23, F24)
+
+- **F1:** dialog.tsx lacks aria-modal/focus-trap — exists in node frontend dialog copy. Fixing here would diverge from source.
+- **F2:** alert-dialog.tsx lacks dialog semantics — same copy issue.
+- **F20:** SwarmLabelsSection merge defaults to `labels[0]` — exists in node frontend.
+- **F22:** SwarmProjectsSection merge defaults to unsorted `projects[0]` — exists in node frontend.
+- **F23-F24:** No error handling in promote/link flows — exists in node frontend.
+- **Decision:** NOT fixing. These are legitimate bugs but exist in the COPY SOURCE (frontend/src/components/swarm/...). Fixing them here would create divergence from the HA fallback. Will be tracked as a follow-up workstream to fix both source and copy simultaneously.
+
+### (TEST-FAILURES) Pre-existing test failures
+- 2 failures in `AppRouter.test.tsx` (authenticated redirect + nodes render) — tests look for "Nodes (coming in phase 2)" placeholder text removed when real Nodes page was mounted. Present on baseline before remediation.
+- 1 suite failure in `scripts/no-push-invariant.test.mjs` — "No test suite found in file". Present on baseline before remediation.
+- **Decision:** NOT fixed. These are pre-existing failures unrelated to this PR.

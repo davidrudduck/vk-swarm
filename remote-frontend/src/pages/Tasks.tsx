@@ -31,12 +31,12 @@ export function TasksBoard() {
 
   const handleAssign = async (taskId: string) => {
     if (!selectedNodeId) return;
-    try { await tasksApi.setExecutingNode(taskId, selectedNodeId); } catch {}
+    try { await tasksApi.setExecutingNode(taskId, selectedNodeId); } catch (err) { console.error('setExecutingNode failed:', err); }
   };
 
   const handleDelete = async (taskId: string) => {
     if (!confirm('Delete this task?')) return;
-    try { await tasksApi.delete(taskId); } catch {}
+    try { await tasksApi.delete(taskId); } catch (err) { console.error('delete task failed:', err); }
   };
 
   const byStatus = new Map<string, ElectricTaskAssignment[]>();

@@ -61,6 +61,12 @@ export const makeRequest = async (url: string, options: RequestInit = {}) => {
   if (!headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
+  if (!headers.has('Authorization')) {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+  }
 
   try {
     return await fetch(url, {

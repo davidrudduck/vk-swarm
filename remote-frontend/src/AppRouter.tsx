@@ -84,6 +84,15 @@ function LoginPage() {
   )
 }
 
+function isSafeReturnTo(url: string): boolean {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.origin === window.location.origin;
+  } catch {
+    return url.startsWith('/');
+  }
+}
+
 function OAuthCallbackPage() {
   const [searchParams] = useSearchParams()
   const [isRedirecting, setIsRedirecting] = useState(false)
@@ -94,6 +103,7 @@ function OAuthCallbackPage() {
       const appCode = searchParams.get('app_code')
       const oauthError = searchParams.get('error')
       const returnTo = searchParams.get('return_to') || '/nodes'
+      const safeReturnTo = isSafeReturnTo(returnTo) ? returnTo : '/nodes'
 
       if (oauthError) {
         window.location.assign(`/login?error=${encodeURIComponent(`OAuth error: ${oauthError}`)}`)
@@ -118,7 +128,7 @@ function OAuthCallbackPage() {
         clearVerifier()
 
         setIsRedirecting(true)
-        window.location.assign(returnTo)
+        window.location.assign(safeReturnTo)
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Failed to complete OAuth'
         window.location.assign(`/login?error=${encodeURIComponent(errorMsg)}`)

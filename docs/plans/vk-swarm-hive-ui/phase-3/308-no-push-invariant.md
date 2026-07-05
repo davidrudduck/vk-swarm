@@ -2,7 +2,7 @@
 id: "308"
 phase: 3
 title: No-push invariant — grep asserts zero WebSocket/SSE in the new board code
-status: ready
+status: done
 depends_on: ["305", "306", "307"]
 parallel: false
 conflicts_with: []
