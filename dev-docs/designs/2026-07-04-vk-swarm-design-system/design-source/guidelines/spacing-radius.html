@@ -1,0 +1,27 @@
+<!-- @dsCard group="Spacing" viewport="700x170" name="Radius & borders" subtitle="0.5rem base, hairline + dashed dividers" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 22px; display: flex; gap: 18px; align-items: center; }
+  .box { width: 84px; height: 64px; background: var(--surface-raised); border: 1px solid var(--border-strong); display: flex; align-items: flex-end; justify-content: center; padding-bottom: 6px; }
+  .lbl { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-muted); }
+  .div { flex: 1; }
+  .div .d { height: 1px; margin: 14px 0; }
+</style>
+</head>
+<body>
+  <div class="box" style="border-radius:var(--radius-sm)"><span class="lbl">sm·4</span></div>
+  <div class="box" style="border-radius:var(--radius-md)"><span class="lbl">md·6</span></div>
+  <div class="box" style="border-radius:var(--radius-lg)"><span class="lbl">lg·8</span></div>
+  <div class="box" style="border-radius:var(--radius-full)"><span class="lbl">full</span></div>
+  <div class="div">
+    <div class="d" style="background:var(--border)"></div>
+    <div class="lbl">solid hairline · --border</div>
+    <div class="d" style="border-top:1px dashed var(--border)"></div>
+    <div class="lbl">dashed divider · columns</div>
+  </div>
+</body>
+</html>

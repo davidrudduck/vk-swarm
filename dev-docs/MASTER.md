@@ -14,8 +14,9 @@
 | remote-services-doctest-revival | active | Bring 32 rust,ignore'd doctests in remote + services crates back to live | - | - | 0 |
 | terminal-session-pty-tests | active | Bring 5 #[ignore]'d PTY-spawning tests in terminal_session back to live | - | - | 0 |
 | ui-overhaul | shipped | ui-overhaul | - | - | 2 |
+| vk-swarm-design-system | draft | VK-Swarm design system — Midnight Terminal component vocabulary + hive app UI kit | - | - | 1 |
 | vk-swarm-hive-redesign | shipped | Phase 2b — rebuild hive as hub-and-spoke central management (after node) | - | - | 2 |
-| vk-swarm-hive-ui | draft | Hive central-management web UI — host the cross-node console (SC1 UI half) | - | - | 0 |
+| vk-swarm-hive-ui | shipped | Hive central-management web UI — host the cross-node console (SC1 UI half) | - | - | 2 |
 | vk-swarm-node-foundations | shipped | Phase 2a — node correct, durable, crash-resumable (ships first) | - | - | 2 |
 | vk-swarm-node-ui-localize | draft | Localize the node frontend — repoint dual-purpose remote-display hooks to local-only | - | - | 0 |
 | vk-swarm-refactor | draft | vk-swarm orchestration platform — 8-phase program umbrella | - | - | 1 |

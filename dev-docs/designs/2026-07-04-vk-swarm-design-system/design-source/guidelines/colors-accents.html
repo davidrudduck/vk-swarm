@@ -1,0 +1,25 @@
+<!-- @dsCard group="Colors" viewport="700x180" name="Accent ramp" subtitle="Cyan primary, violet, and the signal hues" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 20px; }
+  .row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .sw { text-align: center; }
+  .chip { height: 64px; border-radius: var(--radius-md); border: 1px solid hsl(0 0% 100% / 0.08); }
+  .name { font-size: var(--text-sm); font-weight: 600; margin-top: 8px; color: var(--text-body); }
+  .hex { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="sw"><div class="chip" style="background:var(--vks-cyan); box-shadow:var(--glow-cyan)"></div><div class="name">Cyan</div><div class="hex">#00d4ff</div></div>
+    <div class="sw"><div class="chip" style="background:var(--vks-violet)"></div><div class="name">Violet</div><div class="hex">#a855f7</div></div>
+    <div class="sw"><div class="chip" style="background:var(--vks-emerald)"></div><div class="name">Emerald</div><div class="hex">#00ff88</div></div>
+    <div class="sw"><div class="chip" style="background:var(--vks-amber)"></div><div class="name">Amber</div><div class="hex">#ffb800</div></div>
+    <div class="sw"><div class="chip" style="background:var(--vks-coral)"></div><div class="name">Coral</div><div class="hex">#ff6b6b</div></div>
+  </div>
+</body>
+</html>
