@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: [203]
 files:
   - remote-frontend/package.json
+  - remote-frontend/src/lib/mutation-queue.test.ts
   - remote-frontend/src/lib/mutation-queue.ts
   - remote-frontend/src/components/layout/Navbar.tsx
 irreversible: false

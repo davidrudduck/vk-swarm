@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/package.json
+  - remote-frontend/e2e/.gitkeep
   - remote-frontend/playwright.config.ts
   - remote-frontend/e2e/fixtures/mock-api.ts
   - remote-frontend/e2e/fixtures/mock-electric.ts

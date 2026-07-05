@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/package.json
+  - remote-frontend/src/lib/toast.test.ts
   - remote-frontend/src/lib/toast.ts
   - remote-frontend/src/lib/toast.test.ts
 irreversible: false

@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - remote-frontend/src/components/ErrorBoundary.tsx
   - remote-frontend/src/components/ErrorBoundary.test.tsx
+  - remote-frontend/src/components/ErrorBoundary.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/components"
 allowed_change: create

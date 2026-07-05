@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/src/components/AuthGuard.tsx
+  - remote-frontend/src/components/AuthGuard.test.tsx
   - remote-frontend/src/AppRouter.tsx
 irreversible: false
 scope_test: "remote-frontend/src/components"

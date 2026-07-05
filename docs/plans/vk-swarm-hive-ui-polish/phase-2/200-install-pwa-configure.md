@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/package.json
+  - remote-frontend/src/lib/pwa.test.ts
   - remote-frontend/vite.config.ts
   - remote-frontend/src/lib/pwa.ts
 irreversible: false

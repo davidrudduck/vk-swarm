@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/e2e/auth.spec.ts
+  - remote-frontend/e2e/fixtures/mock-api.ts
 irreversible: false
 scope_test: "remote-frontend/e2e"
 allowed_change: create

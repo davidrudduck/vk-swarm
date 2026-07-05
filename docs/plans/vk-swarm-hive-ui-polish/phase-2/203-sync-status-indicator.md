@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: [204]
 files:
   - remote-frontend/src/lib/electric/sync-status.ts
+  - remote-frontend/src/lib/electric/sync-status.test.ts
   - remote-frontend/src/components/layout/Navbar.tsx
 irreversible: false
 scope_test: "remote-frontend/src/lib/electric"

@@ -10,6 +10,7 @@ files:
   - remote-frontend/src/main.tsx
   - remote-frontend/src/App.tsx
   - remote-frontend/src/AppRouter.tsx
+  - remote-frontend/src/App.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src"
 allowed_change: edit

@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/src/lib/electric/optimistic.ts
+  - remote-frontend/src/lib/electric/optimistic.test.ts
 irreversible: false
 scope_test: "remote-frontend/src/lib/electric"
 allowed_change: create

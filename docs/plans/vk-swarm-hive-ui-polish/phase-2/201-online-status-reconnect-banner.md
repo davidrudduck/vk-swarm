@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - remote-frontend/src/lib/offline.ts
+  - remote-frontend/src/lib/offline.test.ts
   - remote-frontend/src/components/layout/NormalLayout.tsx
 irreversible: false
 scope_test: "remote-frontend/src/lib/offline"

@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: [103]
 files:
   - remote-frontend/src/pages/Tasks.tsx
+  - remote-frontend/src/pages/Tasks.test.tsx
 irreversible: false
 scope_test: "remote-frontend/src/pages/Tasks"
 allowed_change: edit

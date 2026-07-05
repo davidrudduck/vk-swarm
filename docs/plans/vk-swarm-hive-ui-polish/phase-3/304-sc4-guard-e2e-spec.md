@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - remote-frontend/e2e/sc4-guard.spec.ts
   - remote-frontend/playwright.config.ts
+  - remote-frontend/playwright.config.ts
 irreversible: false
 scope_test: "remote-frontend/e2e"
 allowed_change: mixed
