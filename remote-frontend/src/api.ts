@@ -1,3 +1,10 @@
+import {
+  oauthApi,
+  type OAuthProvider,
+  type HandoffInitResponse,
+  type HandoffRedeemResponse,
+} from './lib/api/oauth';
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
 export type Invitation = {
@@ -8,68 +15,23 @@ export type Invitation = {
   expires_at: string;
 };
 
-export type OAuthProvider = "github" | "google";
-
-export type HandoffInitResponse = {
-  handoff_id: string;
-  authorize_url: string;
-};
-
-export type HandoffRedeemResponse = {
-  access_token: string;
-  refresh_token: string;
-};
-
 export type AcceptInvitationResponse = {
   organization_id: string;
   organization_slug: string;
   role: string;
 };
 
+// Re-export OAuth types for backwards compatibility
+export type { OAuthProvider, HandoffInitResponse, HandoffRedeemResponse };
+
+// Re-export OAuth functions for backwards compatibility
+export const initOAuth = oauthApi.init.bind(oauthApi);
+export const redeemOAuth = oauthApi.redeem.bind(oauthApi);
+
 export async function getInvitation(token: string): Promise<Invitation> {
   const res = await fetch(`${API_BASE}/v1/invitations/${token}`);
   if (!res.ok) {
     throw new Error(`Invitation not found (${res.status})`);
-  }
-  return res.json();
-}
-
-export async function initOAuth(
-  provider: OAuthProvider,
-  returnTo: string,
-  appChallenge: string,
-): Promise<HandoffInitResponse> {
-  const res = await fetch(`${API_BASE}/v1/oauth/web/init`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      provider,
-      return_to: returnTo,
-      app_challenge: appChallenge,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`OAuth init failed (${res.status})`);
-  }
-  return res.json();
-}
-
-export async function redeemOAuth(
-  handoffId: string,
-  appCode: string,
-  appVerifier: string,
-): Promise<HandoffRedeemResponse> {
-  const res = await fetch(`${API_BASE}/v1/oauth/web/redeem`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      handoff_id: handoffId,
-      app_code: appCode,
-      app_verifier: appVerifier,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`OAuth redeem failed (${res.status})`);
   }
   return res.json();
 }

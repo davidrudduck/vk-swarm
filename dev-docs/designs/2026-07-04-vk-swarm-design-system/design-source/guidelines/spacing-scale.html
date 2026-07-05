@@ -1,0 +1,27 @@
+<!-- @dsCard group="Spacing" viewport="700x160" name="Spacing scale" subtitle="4px base grid — 1 → 16" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 22px; }
+  .row { display: flex; align-items: flex-end; gap: 16px; }
+  .item { text-align: center; }
+  .bar { background: var(--vks-cyan); border-radius: 2px; width: 100%; }
+  .lbl { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="item"><div class="bar" style="height:var(--space-1)"></div><div class="lbl">1·4</div></div>
+    <div class="item"><div class="bar" style="height:var(--space-2)"></div><div class="lbl">2·8</div></div>
+    <div class="item"><div class="bar" style="height:var(--space-3)"></div><div class="lbl">3·12</div></div>
+    <div class="item"><div class="bar" style="height:var(--space-4)"></div><div class="lbl">4·16</div></div>
+    <div class="item"><div class="bar" style="height:var(--space-6)"></div><div class="lbl">6·24</div></div>
+    <div class="item"><div class="bar" style="height:var(--space-8)"></div><div class="lbl">8·32</div></div>
+    <div class="item"><div class="bar" style="height:var(--space-12)"></div><div class="lbl">12·48</div></div>
+    <div class="item"><div class="bar" style="height:var(--space-16)"></div><div class="lbl">16·64</div></div>
+  </div>
+</body>
+</html>

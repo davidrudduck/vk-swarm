@@ -1,0 +1,54 @@
+<!-- @dsCard group="Components" viewport="700x320" name="Board — tasks & nodes" subtitle="Status badges, task cards, swarm nodes" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body { margin: 0; padding: 22px; }
+  .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 10px; }
+  .lbl { font-family: var(--font-code); font-size: var(--text-xs); letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); }
+  .statuses { display: flex; flex-wrap: wrap; gap: 14px; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+  <script src="../../_ds_bundle.js"></script>
+  <script type="text/babel">
+    const { StatusBadge, TaskCard, NodeCard, Badge } = window.VKSwarmDesignSystem_067861;
+    function Demo() {
+      return (
+        <div>
+          <div className="lbl" style={{marginBottom:12}}>Statuses</div>
+          <div className="statuses" style={{marginBottom:20}}>
+            <StatusBadge status="todo" />
+            <StatusBadge status="inprogress" />
+            <StatusBadge status="inreview" />
+            <StatusBadge status="done" />
+            <StatusBadge status="cancelled" />
+          </div>
+          <div className="wrap">
+            <div className="col">
+              <div className="lbl">Task cards</div>
+              <TaskCard title="Wire up OAuth callback" description="Handle redirect and persist the session token" status="inprogress" node="justX" labels={["auth","backend"]} attempt="running" days={2} />
+              <TaskCard title="Add diff view switch" status="done" node="linux-01" labels={["ui"]} attempt="merged" days={5} />
+              <TaskCard title="Migrate hive schema" description="pgvector backend changes" status="inreview" node="winbox" attempt="failed" days={1} />
+            </div>
+            <div className="col">
+              <div className="lbl">Swarm nodes</div>
+              <NodeCard name="justX.raverx.net" os="mac" online meta="3 agents · wss connected" right={<Badge variant="secondary" dot>3</Badge>} />
+              <NodeCard name="linux-01" os="linux" online meta="1 agent · streaming logs" right={<Badge variant="secondary" dot>1</Badge>} />
+              <NodeCard name="winbox" os="windows" online={false} meta="last seen 4m ago" right={<Badge variant="outline">offline</Badge>} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+  </script>
+</body>
+</html>

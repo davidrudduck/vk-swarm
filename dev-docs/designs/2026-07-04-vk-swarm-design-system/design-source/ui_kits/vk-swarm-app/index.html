@@ -1,0 +1,76 @@
+<!-- @dsCard group="VK-Swarm App" viewport="1280x720" name="Kanban board" subtitle="The core orchestration surface" -->
+<!-- @startingPoint section="VK-Swarm App" subtitle="Full kanban board with task drawer, nodes & processes" viewport="1280x800" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VK-Swarm — Board</title>
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  html, body, #root { height: 100%; margin: 0; }
+  #root { display: flex; flex-direction: column; }
+  .vks-app-main { flex: 1; position: relative; min-height: 0; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+  <script src="../../_ds_bundle.js"></script>
+  <script type="text/babel" src="chrome.jsx"></script>
+  <script type="text/babel" src="board.jsx"></script>
+  <script type="text/babel" src="panels.jsx"></script>
+  <script type="text/babel" src="settings-panels.jsx"></script>
+  <script type="text/babel" src="settings.jsx"></script>
+  <script type="text/babel">
+    const { useState } = React;
+
+    function App() {
+      const [view, setView] = useState('board');
+      const [columns, setColumns] = useState(window.SEED);
+      const [selected, setSelected] = useState(null); // { task, status }
+      const [settingsOpen, setSettingsOpen] = useState(false);
+      const [theme, setTheme] = useState(() => localStorage.getItem('vks-theme') || 'dark');
+
+      React.useEffect(() => {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('vks-theme', theme);
+      }, [theme]);
+      const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+
+      const addTask = (status) => {
+        const id = 'n' + Math.random().toString(36).slice(2, 7);
+        const task = { id, title: 'New task', description: 'Describe what the agent should do…', node: 'justX', labels: [], days: 0 };
+        setColumns((c) => ({ ...c, [status]: [task, ...c[status]] }));
+        setSelected({ task, status });
+      };
+
+      return (
+        <>
+          <window.Navbar project="vk-swarm" view={view} onView={setView} onNewTask={() => addTask('todo')} theme={theme} onToggleTheme={toggleTheme} onOpenSettings={() => setSettingsOpen(true)} />
+          <div className="vks-app-main">
+            {view === 'board' && (
+              <window.BoardView columns={columns} onAdd={addTask} onOpen={(task, status) => setSelected({ task, status })} selectedId={selected && selected.task.id} />
+            )}
+            {view === 'nodes' && <window.NodesView />}
+            {view === 'processes' && <window.ProcessesView />}
+            {selected && <window.TaskDrawer task={selected.task} status={selected.status} onClose={() => setSelected(null)} />}
+            {settingsOpen && <window.SettingsView onClose={() => setSettingsOpen(false)} onApplyTheme={(m) => setTheme(m === 'LIGHT' ? 'light' : m === 'SYSTEM' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : 'dark')} />}
+          </div>
+        </>
+      );
+    }
+
+    function mountWhenReady() {
+      if (window.Navbar && window.BoardView && window.NodesView && window.SettingsView && window.VKS_PANELS && window.VKSwarmDesignSystem_067861) {
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+      } else {
+        setTimeout(mountWhenReady, 30);
+      }
+    }
+    mountWhenReady();
+  </script>
+</body>
+</html>

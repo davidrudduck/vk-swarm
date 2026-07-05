@@ -1,0 +1,25 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Semantic feedback" subtitle="Success, warning, danger, info on void" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 20px; }
+  .row { display: flex; gap: 12px; }
+  .pill { flex: 1; display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--surface-card); border: 1px solid var(--border); }
+  .dot { width: 12px; height: 12px; border-radius: var(--radius-full); flex-shrink: 0; }
+  .lbl { font-size: var(--text-sm); }
+  .lbl b { display: block; color: var(--text-body); font-weight: 600; }
+  .lbl span { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="pill"><div class="dot" style="background:var(--success)"></div><div class="lbl"><b>Success</b><span>--success</span></div></div>
+    <div class="pill"><div class="dot" style="background:var(--warning)"></div><div class="lbl"><b>Warning</b><span>--warning</span></div></div>
+    <div class="pill"><div class="dot" style="background:var(--danger)"></div><div class="lbl"><b>Danger</b><span>--danger</span></div></div>
+    <div class="pill"><div class="dot" style="background:var(--info)"></div><div class="lbl"><b>Info</b><span>--info</span></div></div>
+  </div>
+</body>
+</html>

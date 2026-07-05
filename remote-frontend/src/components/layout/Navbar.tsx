@@ -1,0 +1,66 @@
+import { Link, useLocation } from 'react-router-dom';
+import { FolderOpen, ListTodo, LogOut } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { oauthApi } from '@/lib/api/oauth';
+
+const NAV_ITEMS = [
+  { label: 'Nodes', icon: FolderOpen, to: '/nodes' },
+  { label: 'Tasks', icon: ListTodo, to: '/tasks' },
+];
+
+export function Navbar() {
+  const location = useLocation();
+
+  const handleLogout = async () => {
+    try {
+      await oauthApi.logout();
+      window.location.reload();
+    } catch (err) {
+      console.error('Error logging out:', err);
+    }
+  };
+
+  return (
+    <div className="border-b bg-background" data-testid="navbar">
+      <div className="w-full px-3">
+        <div className="flex items-center h-12 py-2">
+          <div className="flex-1">
+            <Link to="/nodes" className="text-foreground font-semibold">
+              VK Swarm
+            </Link>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:text-muted-foreground transition-colors"
+            aria-label="Logout"
+          >
+            <LogOut className="h-4 w-4" />
+            Logout
+          </button>
+        </div>
+
+        <nav className="flex items-center gap-4 h-9 border-t text-sm">
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isActive = location.pathname === item.to;
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                className={cn(
+                  'mb-[-1px] py-2 flex items-center gap-2',
+                  isActive
+                    ? 'border-b-2 border-primary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </div>
+    </div>
+  );
+}

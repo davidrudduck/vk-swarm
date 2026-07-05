@@ -1,0 +1,61 @@
+<!-- @dsCard group="Components" viewport="700x340" name="Core — controls" subtitle="Buttons, inputs, toggles, tabs, badges" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body { margin: 0; padding: 22px; }
+  .grid { display: flex; flex-direction: column; gap: 18px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .lbl { font-family: var(--font-code); font-size: var(--text-xs); letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); width: 72px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+  <script src="../../_ds_bundle.js"></script>
+  <script type="text/babel">
+    const { Button, Badge, Input, Switch, Checkbox, Tabs, Select } = window.VKSwarmDesignSystem_067861;
+    function Demo() {
+      return (
+        <div className="grid">
+          <div className="row"><span className="lbl">Buttons</span>
+            <Button variant="primary">Create task</Button>
+            <Button variant="secondary">Rebase</Button>
+            <Button variant="outline">Open in IDE</Button>
+            <Button variant="ghost">Cancel</Button>
+            <Button variant="destructive">Delete</Button>
+            <Button variant="primary" disabled>Disabled</Button>
+          </div>
+          <div className="row"><span className="lbl">Sizes</span>
+            <Button size="xs">xs</Button>
+            <Button size="sm">sm</Button>
+            <Button size="md">md</Button>
+            <Button size="lg">lg</Button>
+          </div>
+          <div className="row"><span className="lbl">Badges</span>
+            <Badge>agent</Badge>
+            <Badge variant="secondary" dot>3 running</Badge>
+            <Badge variant="outline">main</Badge>
+            <Badge variant="destructive">conflict</Badge>
+          </div>
+          <div className="row"><span className="lbl">Inputs</span>
+            <div style={{width:200}}><Input placeholder="Search tasks…" /></div>
+            <div style={{width:180}}><Input mono placeholder="feat/auth-flow" /></div>
+            <div style={{width:160}}><Select defaultValue="claude" options={[{value:'claude',label:'Claude Code'},{value:'codex',label:'Codex'},{value:'opencode',label:'OpenCode'}]} /></div>
+          </div>
+          <div className="row"><span className="lbl">Toggles</span>
+            <Switch defaultChecked /> <Switch />
+            <Checkbox defaultChecked /> <Checkbox />
+            <Tabs defaultValue="diff" tabs={[{value:'diff',label:'Diff'},{value:'logs',label:'Logs'},{value:'procs',label:'Processes'}]} />
+          </div>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+  </script>
+</body>
+</html>

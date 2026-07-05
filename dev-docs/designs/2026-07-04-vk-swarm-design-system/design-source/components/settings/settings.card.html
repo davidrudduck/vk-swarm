@@ -1,0 +1,53 @@
+<!-- @dsCard group="Components" viewport="720x460" name="Settings — section & rows" subtitle="SettingsSection + SettingsRow (stacked & inline)" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body { margin: 0; padding: 22px; }
+  #root { max-width: 560px; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+  <script src="../../_ds_bundle.js"></script>
+  <script type="text/babel">
+    const { SettingsSection, SettingsRow, Select, Input, Switch, Checkbox } = window.VKSwarmDesignSystem_067861;
+    const Gear = () => (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 14H4.5a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 6 8.6a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 10 4.6h.09A1.65 1.65 0 0 0 11.4 3h.09a2 2 0 0 1 4 0v.09A1.65 1.65 0 0 0 16 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 8z"/></svg>
+    );
+    function Demo() {
+      const [theme, setTheme] = React.useState('DARK');
+      const [prefix, setPrefix] = React.useState('vk');
+      const [sound, setSound] = React.useState(true);
+      const [push, setPush] = React.useState(false);
+      return (
+        <SettingsSection icon={<Gear />} title="Appearance & Git"
+          description="Real controls wired through SettingsRow.">
+          <SettingsRow label="Theme" htmlFor="d-theme" helper="Midnight Terminal is the default.">
+            <Select id="d-theme" value={theme} onValueChange={setTheme}
+              options={[{value:'DARK',label:'Dark'},{value:'LIGHT',label:'Light'},{value:'SYSTEM',label:'System'}]} />
+          </SettingsRow>
+          <SettingsRow label="Git branch prefix" htmlFor="d-prefix"
+            helper={<>Preview: <span className="vks-field__preview">{(prefix||'')+'/'}feat-auth</span></>}>
+            <Input id="d-prefix" mono value={prefix} onChange={(e)=>setPrefix(e.target.value.trim())} placeholder="e.g. vk" />
+          </SettingsRow>
+          <SettingsRow inline label="Enable sound" htmlFor="d-sound"
+            helper="Play a sound when an attempt finishes.">
+            <Checkbox id="d-sound" checked={sound} onCheckedChange={setSound} />
+          </SettingsRow>
+          <SettingsRow inline label="Push notifications" htmlFor="d-push"
+            helper="Notify even when the tab is in the background.">
+            <Switch id="d-push" checked={push} onCheckedChange={setPush} />
+          </SettingsRow>
+        </SettingsSection>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+  </script>
+</body>
+</html>
