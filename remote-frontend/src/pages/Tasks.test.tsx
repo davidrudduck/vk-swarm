@@ -27,10 +27,12 @@ vi.mock('@/lib/api/tasks', () => ({
   },
 }));
 
-vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
-  Toaster: () => null,
-}));
+vi.mock('sonner', () => {
+  const toastFn = vi.fn() as unknown as typeof import('sonner').toast;
+  toastFn.success = vi.fn();
+  toastFn.error = vi.fn();
+  return { toast: toastFn, Toaster: () => null };
+});
 
 vi.mock('idb-keyval', () => ({
   get: vi.fn(async () => 0),
@@ -63,7 +65,7 @@ describe('TasksBoard', () => {
 
 describe('TaskDetail', () => {
   it('renders an empty state when no logs or events exist', () => {
-    render(<TaskDetail assignmentId="a-nonexistent" />);
+    render(<TaskDetail assignmentId="a-nonexistent" assignments={[]} nodeNames={new Map()} />);
     expect(screen.getByText(/no activity yet/i)).toBeInTheDocument();
   });
 });
@@ -190,6 +192,5 @@ describe('Tasks.tsx PWA offline scenarios (SC8, SC10)', () => {
       expect(enqueueMutation).toHaveBeenCalledWith('DELETE', '/v1/tasks/t1', 't1');
     });
     // enqueueMutation was called — the catch branch ran and the mutation is queued
-    // TODO: verify task row re-appears after setIsDeleting(null) re-render
   });
 });

@@ -10,6 +10,7 @@ import {
 } from '@/lib/electric';
 import { tasksApi } from '@/lib/api/tasks';
 import { toastError, toastSuccess } from '@/lib/toast';
+import { toast } from 'sonner';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -115,7 +116,13 @@ export function TasksBoard() {
     optimisticDeletedRef.current.add(taskId);
     try {
       await tasksApi.delete(taskId);
-      toastSuccess('Task deleted');
+      toast('Task deleted', {
+        action: {
+          label: 'Undo',
+          onClick: () => toast.success('Undo not available for this task'),
+        },
+        duration: 5000,
+      });
     } catch (err) {
       if (err instanceof TypeError && err.message === 'Failed to fetch') {
         await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
@@ -190,19 +197,29 @@ export function TasksBoard() {
       </AlertDialog>
       {selectedAssignmentId && (
         <div className="w-80 border-l p-4">
-          <TaskDetail assignmentId={selectedAssignmentId} />
+          <TaskDetail assignmentId={selectedAssignmentId} assignments={assignments} nodeNames={nodeNames} />
         </div>
       )}
     </div>
   );
 }
 
-export function TaskDetail({ assignmentId }: { assignmentId: string }) {
+export function TaskDetail({ assignmentId, assignments, nodeNames }: {
+  assignmentId: string;
+  assignments: ElectricTaskAssignment[];
+  nodeNames: Map<string, string>;
+}) {
   const { data: logs = [] } = useLiveQuery(outputLogsCollection);
   const { data: events = [] } = useLiveQuery(progressEventsCollection);
 
   const assignmentLogs = logs.filter((l: { assignment_id: string }) => l.assignment_id === assignmentId);
   const assignmentEvents = events.filter((e: { assignment_id: string }) => e.assignment_id === assignmentId);
+
+  const resolveNodeName = (assnId: string): string | null => {
+    const assn = assignments.find((a) => a.id === assnId);
+    if (!assn) return null;
+    return nodeNames.get(assn.node_id) ?? assn.node_id;
+  };
 
   if (assignmentLogs.length === 0 && assignmentEvents.length === 0) {
     return <div className="text-gray-500">No activity yet.</div>;
@@ -224,12 +241,15 @@ export function TaskDetail({ assignmentId }: { assignmentId: string }) {
       <section>
         <h3 className="font-semibold">Output logs</h3>
         <ul>
-          {assignmentLogs.map((l: { id: string; output_type: string; content: string }) => (
-            <li key={l.id}>
-              <span className="font-mono text-xs uppercase">{l.output_type}</span>
-              <pre className="whitespace-pre-wrap">{l.content}</pre>
-            </li>
-          ))}
+          {assignmentLogs.map((l: { id: string; output_type: string; content: string; assignment_id: string }) => {
+            const nodeName = resolveNodeName(l.assignment_id);
+            return (
+              <li key={l.id}>
+                <span className="font-mono text-xs uppercase">{l.output_type}{nodeName ? ` — ${nodeName}` : ''}</span>
+                <pre className="whitespace-pre-wrap">{l.content}</pre>
+              </li>
+            );
+          })}
         </ul>
       </section>
     </div>
