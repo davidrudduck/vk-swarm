@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { enqueueMutation, getQueueLength, replayMutations } from './mutation-queue';
 
 vi.mock('idb-keyval', () => {
-  let store: Record<string, unknown> = {};
+  const store: Record<string, unknown> = {};
   return {
     get: vi.fn(async (key: string) => store[key] ?? null),
     set: vi.fn(async (key: string, value: unknown) => { store[key] = value; }),

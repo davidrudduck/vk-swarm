@@ -1,9 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { setupApiMocks, setupNodesApiMocks } from './fixtures/mock-api';
+import { setupApiMocks } from './fixtures/mock-api';
 import { mockElectricShape } from './fixtures/mock-electric';
-import type { MockTaskAssignment } from './fixtures/mock-electric';
 
-const CROSS_NODE_ASSIGNMENTS: MockTaskAssignment[] = [
+const CROSS_NODE_ASSIGNMENTS = [
   { id: 'a1', task_id: 't-n1-1', node_id: 'n1', node_project_id: 'p1', execution_status: 'pending' },
   { id: 'a2', task_id: 't-n2-1', node_id: 'n2', node_project_id: 'p2', execution_status: 'pending' },
   { id: 'a3', task_id: 't-n1-2', node_id: 'n1', node_project_id: 'p1', execution_status: 'in_progress' },
@@ -13,11 +12,13 @@ const CROSS_NODE_ASSIGNMENTS: MockTaskAssignment[] = [
 test.describe('cross-node correctness (SC14)', () => {
   test.beforeEach(async ({ page }) => {
     await setupApiMocks(page);
-    mockElectricShape(page, CROSS_NODE_ASSIGNMENTS);
-    await setupNodesApiMocks(page, [
-      { id: 'n1', name: 'node-alpha' },
-      { id: 'n2', name: 'node-beta' },
-    ]);
+    mockElectricShape(page, {
+      node_task_assignments: CROSS_NODE_ASSIGNMENTS,
+      nodes: [
+        { id: 'n1', name: 'node-alpha' },
+        { id: 'n2', name: 'node-beta' },
+      ],
+    });
     await page.addInitScript(() => {
       sessionStorage.setItem('oauth_verifier', 'test-verifier');
     });

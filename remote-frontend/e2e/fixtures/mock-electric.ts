@@ -8,12 +8,26 @@ export interface MockTaskAssignment {
   execution_status: 'pending' | 'in_progress' | 'completed' | 'failed';
 }
 
-export function mockElectricShape(page: Page, assignments: MockTaskAssignment[]) {
+export interface MockNode {
+  id: string;
+  name: string;
+  organization_id?: string;
+  hostname?: string | null;
+  status?: string;
+  last_heartbeat_at?: string | null;
+  public_url?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type TableData = Record<string, unknown[]>;
+
+export function mockElectricShape(page: Page, tableData: TableData) {
   page.route('**/api/electric/v1/shape/*', async (route) => {
     const url = new URL(route.request().url());
     const segments = url.pathname.split('/');
     const tableName = segments[segments.length - 1];
-    const result = tableName === 'node_task_assignments' ? assignments : [];
+    const result = tableData[tableName] ?? [];
     await route.fulfill({
       status: 200,
       contentType: 'application/x-ndjson',

@@ -1,11 +1,6 @@
 import { test, expect } from '@playwright/test';
-import {
-  setupApiMocks,
-  setupTaskApiMocks,
-  setupNodesApiMocks,
-} from './fixtures/mock-api';
+import { setupApiMocks } from './fixtures/mock-api';
 import { mockElectricShape } from './fixtures/mock-electric';
-import type { MockTaskAssignment } from './fixtures/mock-electric';
 
 const MOCK_ASSIGNMENTS: MockTaskAssignment[] = [
   { id: 'a1', task_id: 't1', node_id: 'n1', node_project_id: 'p1', execution_status: 'pending' },
@@ -17,11 +12,13 @@ const MOCK_ASSIGNMENTS: MockTaskAssignment[] = [
 test.describe('kanban board (SC13)', () => {
   test.beforeEach(async ({ page }) => {
     await setupApiMocks(page);
-    mockElectricShape(page, MOCK_ASSIGNMENTS);
-    await setupNodesApiMocks(page, [
-      { id: 'n1', name: 'node-alpha' },
-      { id: 'n2', name: 'node-beta' },
-    ]);
+    mockElectricShape(page, {
+      node_task_assignments: MOCK_ASSIGNMENTS,
+      nodes: [
+        { id: 'n1', name: 'node-alpha' },
+        { id: 'n2', name: 'node-beta' },
+      ],
+    });
     await page.addInitScript(() => {
       sessionStorage.setItem('oauth_verifier', 'test-verifier');
     });

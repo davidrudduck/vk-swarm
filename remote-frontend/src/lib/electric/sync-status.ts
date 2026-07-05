@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 export type SyncStatus = 'synced' | 'reconnecting' | 'disconnected';
+
+let sharedLastUpdateAt = Date.now();
 
 export function getSyncStatus(lastUpdateAt: number | null): SyncStatus {
   if (lastUpdateAt === null) return 'synced';
@@ -11,22 +13,21 @@ export function getSyncStatus(lastUpdateAt: number | null): SyncStatus {
 }
 
 export function useSyncStatus() {
-  const lastUpdateRef = useRef<number>(Date.now());
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('synced');
 
   const markSynced = useCallback(() => {
-    lastUpdateRef.current = Date.now();
+    sharedLastUpdateAt = Date.now();
     setSyncStatus('synced');
   }, []);
 
   useEffect(() => {
     const tick = () => {
-      const status = getSyncStatus(lastUpdateRef.current);
+      const status = getSyncStatus(sharedLastUpdateAt);
       setSyncStatus(status);
     };
 
     const handleOnline = () => {
-      lastUpdateRef.current = Date.now();
+      sharedLastUpdateAt = Date.now();
       setSyncStatus('synced');
     };
     const handleOffline = () => setSyncStatus('disconnected');
