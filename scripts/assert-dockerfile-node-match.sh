@@ -9,8 +9,8 @@ set -euo pipefail
 ROOT_DOCKERFILE="${1:-Dockerfile}"
 REMOTE_DOCKERFILE="${2:-crates/remote/Dockerfile}"
 
-ROOT_NODE=$(grep -oP 'FROM node:\d+-alpine AS builder' "$ROOT_DOCKERFILE" | sed 's/FROM //;s/ AS builder//' || true)
-REMOTE_NODE=$(grep -oP 'FROM node:\d+-alpine AS fe-builder' "$REMOTE_DOCKERFILE" | sed 's/FROM //;s/ AS fe-builder//' || true)
+ROOT_NODE=$(grep -oE 'FROM node:[0-9]+-alpine AS builder' "$ROOT_DOCKERFILE" | sed 's/FROM //;s/ AS builder//' || true)
+REMOTE_NODE=$(grep -oE 'FROM node:[0-9]+-alpine AS fe-builder' "$REMOTE_DOCKERFILE" | sed 's/FROM //;s/ AS fe-builder//' || true)
 
 if [ -z "$ROOT_NODE" ]; then
     echo "ERROR: could not find 'FROM node:<N>-alpine AS builder' in $ROOT_DOCKERFILE" >&2

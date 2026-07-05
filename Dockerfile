@@ -1,4 +1,6 @@
 # Build stage
+# IMPORTANT: keep the node base image in sync with crates/remote/Dockerfile.
+# Run scripts/assert-dockerfile-node-match.sh to verify.
 FROM node:24-alpine AS builder
 
 # Install build dependencies

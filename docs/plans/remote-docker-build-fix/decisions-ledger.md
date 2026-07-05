@@ -86,3 +86,29 @@ Build timed out at Cargo compilation step (10min timeout) — this is pre-existi
 **Additional assertion:** CI workflow copy-paste (`scripts/assert-dockerfile-node-match.sh`) ensures both Dockerfiles stay in sync — the build-time assertion catches the drift that would reintroduce the symptom. All 5 CI simulation checks PASS.
 
 VERDICT: PASS
+
+## Gemini plan-review remediation (2026-07-05)
+
+Report: `.agents/reports/2026-07-05-round-1-gemini-plan-review.md`
+Verdict: FAIL → PASS (all 5 findings remediated or dismissed)
+
+### Finding 1 (CRITICAL): CI simulates build, spec SC6 requires real rebuild.sh
+**Fix:** Added `docker-build` job to `.github/workflows/remote-hive-build.yml`. Runs real `docker compose build --no-cache remote-server`, asserts no `ERR_UNKNOWN_BUILTIN_MODULE` in output. `.env.remote` sourced from `.env.remote.dev` + dummy `LOOPS_EMAIL_API_KEY`.
+- `.github/workflows/remote-hive-build.yml`
+
+### Finding 2 (HIGH): Root Dockerfile uses `npm install -g pnpm@10.25.0` not ARG pattern
+**Dismissed — false positive.** Task 002's design explicitly uses `npm install -g` because the root Dockerfile's `FROM node:24-alpine AS builder` stage runs node tooling directly. The `ARG PNPM_VERSION` + `corepack prepare` pattern from task 001 applies to `crates/remote/Dockerfile` which has `AS fe-builder` (also `node:24-alpine`). Both achieve the same outcome: `pnpm@10.25.0`. Cross-file sync comment exists on both FROM lines. No divergence to fix.
+- Evidence: `Dockerfile:4-7` (FROM comment + npm install), `crates/remote/Dockerfile:5-21` (FROM comment + ARG + corepack prepare)
+
+### Finding 3 (HIGH): rebuild.sh healthcheck hits port 3000 (electric) not server port 9000
+**Fix — real bug.** `rebuild.sh:32` changed `curl -s http://localhost:3000/v1/health` → `curl -s http://localhost:${SERVER_PORT}/v1/health`. Added `export SERVER_PORT=${SERVER_PORT:-9000}` matching compose default (`docker-compose.yml:155`).
+- `crates/remote/rebuild.sh`
+
+### Finding 4 (MEDIUM): Root Dockerfile FROM line missing "keep in sync" comment
+**Fix:** Added comment block above `FROM node:24-alpine AS builder` in root Dockerfile.
+- `Dockerfile:2-3`
+
+### Finding 5 (MEDIUM): `grep -oP` is GNU-only (macOS incompatibility)
+**Fix:** Changed all `grep -oP` to `grep -oE` across both files. Regex patterns updated from PCRE (`\d`, `\w`) to POSIX ERE (`[0-9]`, `[a-zA-Z0-9_]`) where needed.
+- `scripts/assert-dockerfile-node-match.sh`
+- `.github/workflows/remote-hive-build.yml`

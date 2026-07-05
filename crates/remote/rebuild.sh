@@ -13,6 +13,7 @@ cd "$(dirname "$0")"
 export VK_GIT_COMMIT=$(git rev-parse --short HEAD)
 export VK_GIT_BRANCH=$(git branch --show-current)
 export PNPM_VERSION=$(jq -r .packageManager ../../package.json | sed 's/pnpm@//')
+export SERVER_PORT=${SERVER_PORT:-9000}
 
 echo "Building with commit: $VK_GIT_COMMIT, branch: $VK_GIT_BRANCH"
 
@@ -29,4 +30,4 @@ docker compose --env-file .env.remote up -d
 
 echo "Done! Checking health..."
 sleep 3
-curl -s http://localhost:3000/v1/health | jq . || echo "Health check pending..."
+curl -s http://localhost:${SERVER_PORT}/v1/health | jq . || echo "Health check pending..."
