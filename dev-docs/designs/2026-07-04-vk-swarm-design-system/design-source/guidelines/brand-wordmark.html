@@ -1,0 +1,82 @@
+<!-- @dsCard group="Brand" viewport="700x250" name="Wordmark" subtitle="ANSI-art terminal lockup — VK:SWARM" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 18px; background: var(--vks-void); }
+  .crt {
+    position: relative;
+    background: #07070c;
+    border: 2px solid var(--vks-cyan);
+    border-radius: 6px;
+    box-shadow: 0 0 0 1px #07070c, 0 0 22px -4px hsl(var(--vks-cyan-hsl) / 0.5), inset 0 0 60px -20px hsl(var(--vks-cyan-hsl) / 0.25);
+    overflow: hidden;
+    font-family: var(--font-code);
+  }
+  /* BBS reverse-video status strip */
+  .statusbar {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--vks-cyan); color: #07070c;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.14em;
+    padding: 4px 10px; text-transform: uppercase;
+  }
+  .statusbar .blocks { letter-spacing: 0; }
+  .screen { padding: 16px 18px 12px; }
+  pre.banner {
+    margin: 0;
+    color: var(--vks-cyan);
+    font-size: 13.5px;
+    line-height: 0.92;
+    letter-spacing: 0;
+    text-shadow: 1px 1px 0 var(--vks-violet), 0 0 9px hsl(var(--vks-cyan-hsl) / 0.4);
+    white-space: pre;
+    overflow: hidden;
+  }
+  .prompt {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--vks-emerald);
+    display: flex; align-items: center; gap: 0;
+  }
+  .prompt .path { color: var(--vks-amber); }
+  .prompt .tilde { color: var(--text-muted); }
+  .cursor {
+    display: inline-block; width: 9px; height: 15px;
+    background: var(--vks-emerald); margin-left: 4px;
+    animation: blink 1.05s steps(1) infinite;
+    box-shadow: 0 0 8px -1px var(--vks-emerald);
+  }
+  @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+  /* scanlines + faint vignette overlay */
+  .crt::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 4px),
+      radial-gradient(120% 120% at 50% 0%, transparent 62%, rgba(0,0,0,0.45) 100%);
+  }
+  @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+</style>
+</head>
+<body>
+  <div class="crt">
+    <div class="statusbar">
+      <span>▚ VK:SWARM HIVE TERMINAL</span>
+      <span class="blocks">░▒▓ NODE: justX ▓▒░</span>
+      <span>v2.6 ▞</span>
+    </div>
+    <div class="screen">
+<pre class="banner">██╗   ██╗██╗  ██╗    ███████╗██╗    ██╗ █████╗ ██████╗ ███╗   ███╗
+██║   ██║██║ ██╔╝██╗ ██╔════╝██║    ██║██╔══██╗██╔══██╗████╗ ████║
+██║   ██║█████╔╝ ╚═╝ ███████╗██║ █╗ ██║███████║██████╔╝██╔████╔██║
+╚██╗ ██╔╝██╔═██╗ ██╗ ╚════██║██║███╗██║██╔══██║██╔══██╗██║╚██╔╝██║
+ ╚████╔╝ ██║  ██╗╚═╝ ███████║╚███╔███╔╝██║  ██║██║  ██║██║ ╚═╝ ██║
+  ╚═══╝  ╚═╝  ╚═╝    ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝</pre>
+      <div class="prompt">
+        <span class="path">swarm@hive</span><span class="tilde">:~$</span>&nbsp;orchestrate --agents 4<span class="cursor"></span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

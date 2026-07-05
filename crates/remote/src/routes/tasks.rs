@@ -190,6 +190,7 @@ pub async fn get_shared_task(
 ///
 /// ```
 /// use uuid::Uuid;
+/// use remote::routes::tasks::CreateSharedTaskRequest;
 ///
 /// let req = CreateSharedTaskRequest {
 ///     swarm_project_id: Uuid::new_v4(),
@@ -200,6 +201,7 @@ pub async fn get_shared_task(
 ///     start_attempt: false,
 ///     source_task_id: None,
 ///     source_node_id: None,
+///     label_ids: None,
 /// };
 ///
 /// // In integration tests, send `req` to the HTTP handler and assert the response status and body.

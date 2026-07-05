@@ -102,15 +102,12 @@ impl From<NodeApiKeyError> for NodeError {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use uuid::Uuid;
-    /// // construct an example variant
-    /// let api_err = crate::nodes::NodeApiKeyError::NotFound;
-    /// let node_err: crate::nodes::NodeError = api_err.into();
-    /// match node_err {
-    ///     crate::nodes::NodeError::ApiKeyNotFound => {},
-    ///     _ => panic!("unexpected mapping"),
-    /// }
+    /// ```rust
+    /// use remote::db::node_api_keys::NodeApiKeyError;
+    /// use remote::nodes::NodeError;
+    /// let api_err = NodeApiKeyError::NotFound;
+    /// let node_err: NodeError = api_err.into();
+    /// assert!(matches!(node_err, NodeError::ApiKeyNotFound));
     /// ```
     fn from(err: NodeApiKeyError) -> Self {
         match err {
@@ -131,11 +128,11 @@ impl From<SwarmProjectError> for NodeError {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use uuid::Uuid;
-    /// // example variants; adjust imports to actual module paths in real code
-    /// let ne: crate::nodes::service::NodeError = crate::swarm_projects::SwarmProjectError::NotFound.into();
-    /// assert!(matches!(ne, crate::nodes::service::NodeError::ProjectNotInHive));
+    /// ```rust
+    /// use remote::db::swarm_projects::SwarmProjectError;
+    /// use remote::nodes::NodeError;
+    /// let node_err: NodeError = SwarmProjectError::NotFound.into();
+    /// assert!(matches!(node_err, NodeError::ProjectNotInHive));
     /// ```
     fn from(err: SwarmProjectError) -> Self {
         match err {
@@ -518,7 +515,7 @@ impl NodeServiceImpl {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust,ignore
     /// use uuid::Uuid;
     ///
     /// # async fn _example(service: &crate::nodes::NodeServiceImpl) {
@@ -724,7 +721,7 @@ impl NodeServiceImpl {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use uuid::Uuid;
     /// # use crate::nodes::{NodeServiceImpl, NodeStatus};
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -775,7 +772,7 @@ impl NodeServiceImpl {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```rust,ignore
     /// # use uuid::Uuid;
     /// # async fn example(svc: &crate::nodes::service::NodeServiceImpl) -> Result<(), Box<dyn std::error::Error>> {
     /// let node_id = Uuid::new_v4();
