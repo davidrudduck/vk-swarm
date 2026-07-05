@@ -158,3 +158,68 @@ The merged change is reached through three real production entry points:
 **Finding (MEDIUM, Gemini):** When network comes back, `replayPending` replays queued mutations but never clears `optimisticDeletedRef` or `optimisticAssignsRef`. The refs accumulate until page reload, potentially hiding valid live-query rows.
 **Remediation:** Added `optimisticDeletedRef.current.clear()` and `optimisticAssignsRef.current.clear()` inside `replayPending` called from the `useEffect` on `isOnline`.
 **Citing:** Commit 562b154e.
+
+## Execute — Plan-Divergence Sweep (Codex R3 + Gemini R4 + Claude R4, 2026-07-05)
+
+### D-L19: Optimistic assign overlay supersedes plan (2026-07-05)
+**Finding (MEDIUM, Codex PD-017, Claude CLD-001):** Task 205 specified only `useRef<Set<string>>` for deletions. Implementation added `optimisticAssignsRef = useRef<Map<string, string>>(new Map())` for pre-displaying node assignment before API response.
+**Resolution:** Intentional extension. The assign overlay pre-displays the selected node immediately (Tasks.tsx:86,166-168), rolls back on non-network errors (:98), and clears on replay success (:65). The plan described a deletion-only overlay; the implementation evolved to cover both mutation types.
+**Citing:** Task 205 commit bfbeaba6, subsequent tournament fixes.
+
+### D-L20: Workbox-window version + event names (2026-07-05)
+**Finding (MEDIUM, Codex PD-006/007, Claude CLD-002):** (a) Plan specified `workbox-window@^8.0.0` but npm resolved v7.4.1 (latest). (b) Plan's `pwa.test.ts` specified `'need-update'` event which doesn't exist in workbox-window; implementation uses `'waiting'`.
+**Resolution:** v7.4.1 is the current latest on npm (v8 doesn't exist). The `'waiting'` event is the correct workbox-window lifecycle event. The plan had an incorrect event name that was corrected during implementation.
+**Citing:** Evidence: `npm view workbox-window versions --json` confirms v7.4.1 is latest.
+
+### D-L21: Removed optimistic.ts dead code (2026-07-05)
+**Finding (HIGH, Codex PD-010):** `lib/electric/optimistic.ts` and `optimistic.test.ts` were in the plan but removed from the repo.
+**Resolution:** Intentional. Gemini R3 goal-conformance review finding F2 flagged these as dead code — the files manipulated React Query's `queryClient` cache but the board uses `useLiveQuery` (TanStack DB), a separate cache. Removed in commit 59bf8866.
+**Citing:** Gemini R3 report `.agents/reports/2026-07-05-round-3-gemini-goal-conformance.md`, D-L11.
+
+### D-L22: Shared sync status + enqueue serialization (2026-07-05)
+**Finding (HIGH, Codex R2 F-C01/F-C02, Codex R3 PD-011/015):** (a) `useSyncStatus` used per-instance refs; markSynced in Navbar invisible to Tasks. (b) `enqueueMutation` had a read-modify-write race.
+**Resolution:** (a) Changed to `let sharedLastUpdateAt` at module scope — all `useSyncStatus` instances share the same timestamp. (b) Added `enqueueLock` promise-chain serialization — concurrent enqueues queue behind a lock.
+**Citing:** Commit 0d854680 (Tournament R2 fixes).
+
+### D-L23: mockElectricShape generalized to TableData map (2026-07-05)
+**Finding (MEDIUM, Codex R2 codex-r2-002, Codex R3 PD-021):** Board E2E mocks only provided assignment data but board reads Electric nodes/projects collections too. Dropdown had no node options.
+**Resolution:** Changed `mockElectricShape` from a single `data: unknown[]` parameter to `tableData: TableData` (Record<string, unknown[]>) keyed by table name. Board/cross-node specs now pass both node and assignment data via separate electric shape keys.
+**Citing:** Commit 0d854680.
+
+### D-L24: toast→toastSuccess replacement for Undo (2026-07-05)
+**Finding (MEDIUM, Codex PD-004):** Plan specified `toastSuccess` for post-delete feedback but code uses raw `toast()`.
+**Resolution:** Intentional. Gemini R3 F1 required an Undo action button on the delete toast. `toastSuccess()` doesn't accept actions; `toast()` does. The `toast('Task deleted', { action: { label: 'Undo', ... }, duration: 5000 })` call satisfies SC4's "undo toast with 5s timeout" requirement.
+**Citing:** Commit 59bf8866, Gemini R3 report.
+
+### D-L25: Plan-code drift — minor divergences (2026-07-05)
+**Context:** Codex R3 found 8 minor plan-vs-code differences (PD-002/003/005/009/012/014/018/025), Gemini R4 found 3 (GEM-001/002/003), Claude R4 found 2 (CLD-003/005). All are implementation choices that don't break functionality:
+- Test shapes evolved beyond plan templates (PD-002/003/005, CLD-005)
+- `vite.config.ts` excludes e2e/ from vitest (PD-009)
+- `sync-status.test.ts` tests `getSyncStatus` directly, not the hook (PD-012)
+- npm resolved higher patch versions (PD-014)
+- `getAssignmentId` helper not needed — code uses `task_id` directly (PD-018)
+- `cross-node.spec.ts` uses untyped arrays (PD-025)
+- `isSafeReturnTo()` same-origin redirect guard added as security hardening (CLD-003)
+- `offline.test.ts` 4th test case dropped because `wasOffline` field removed per Claude R1 F008 (GEM-002)
+- `.filter()` pre-pass vs `continue` in loop — equivalent, no user impact (GEM-003)
+**Resolution:** All are either deliberate implementation improvements or zero-impact differences. Documented here, no code changes needed beyond those already committed.
+
+### D-L26: markSynced watches all live query sources (2026-07-05)
+**Finding (MEDIUM, Codex PD-013):** `Tasks.tsx` called `markSynced()` only when `assignments.length > 0`. Sync status didn't reflect nodes or projects data arriving.
+**Remediation:** Extended the useEffect dependency to `[assignments, nodes, projects, markSynced]` with condition `assignments.length > 0 || nodes.length > 0 || projects.length > 0`.
+**Citing:** Fixed in this session.
+
+### D-L27: Replay error toast retry action (2026-07-05)
+**Finding (LOW, Codex PD-019):** `replayMutations` error callback showed a toast with no retry option. Users couldn't re-attempt failed queued mutations.
+**Remediation:** Added `{ onClick: () => replayPending() }` to the error toast so users can tap to retry.
+**Citing:** Fixed in this session.
+
+### D-L28: Dead MockNode export removed (2026-07-05)
+**Finding (LOW, Claude CLD-004):** `mock-electric.ts` exported `MockNode` interface with zero importers.
+**Remediation:** Removed the orphaned `MockNode` interface. Only `MockTaskAssignment` and `TableData` are exported and used.
+**Citing:** Fixed in this session.
+
+### D-L29: setupTaskApiMocks signature drift (2026-07-05)
+**Finding (LOW, Codex PD-022):** Plan specified `setupTaskApiMocks(page, tasks)` but implementation has `setupTaskApiMocks(page)`. No test passes task data — all intercept DELETE→204 and PATCH→200.
+**Resolution:** The `tasks` param would allow per-test task data. Currently no test needs it — all E2E board tests use the same mock responses. Documented here; add the param when a test actually needs custom task data.
+**Citing:** Recorded, no code change needed.

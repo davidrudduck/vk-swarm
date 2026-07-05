@@ -49,8 +49,8 @@ export function TasksBoard() {
   const { isOnline } = useOnlineStatus();
 
   useEffect(() => {
-    if (assignments.length > 0) markSynced();
-  }, [assignments, markSynced]);
+    if (assignments.length > 0 || nodes.length > 0 || projects.length > 0) markSynced();
+  }, [assignments, nodes, projects, markSynced]);
 
   const replayPending = useCallback(async () => {
     await replayMutations(
@@ -66,7 +66,7 @@ export function TasksBoard() {
         }
       },
       (_entry, err) => {
-        toastError(`Queued mutation failed: ${err.message}`);
+        toastError(`Queued mutation failed: ${err.message}`, { onClick: () => replayPending() });
       },
     );
   }, []);

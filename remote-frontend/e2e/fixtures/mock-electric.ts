@@ -8,18 +8,6 @@ export interface MockTaskAssignment {
   execution_status: 'pending' | 'in_progress' | 'completed' | 'failed';
 }
 
-export interface MockNode {
-  id: string;
-  name: string;
-  organization_id?: string;
-  hostname?: string | null;
-  status?: string;
-  last_heartbeat_at?: string | null;
-  public_url?: string | null;
-  created_at?: string;
-  updated_at?: string;
-}
-
 export type TableData = Record<string, unknown[]>;
 
 export function mockElectricShape(page: Page, tableData: TableData) {
