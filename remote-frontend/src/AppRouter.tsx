@@ -6,6 +6,7 @@ import InvitationPage from './pages/InvitationPage'
 import InvitationCompletePage from './pages/InvitationCompletePage'
 import NotFoundPage from './pages/NotFoundPage'
 import { oauthApi } from '@/lib/api/oauth'
+import { AuthGuard } from '@/components/AuthGuard'
 import { retrieveVerifier, clearVerifier } from '@/pkce'
 import type { OAuthProvider } from '@/api'
 import { generateVerifier, generateChallenge, storeVerifier } from '@/pkce'
@@ -168,7 +169,7 @@ export function createRoutes() {
     { path: '/invitations/:token/accept', element: <InvitationPage /> },
     { path: '/invitations/:token/complete', element: <InvitationCompletePage /> },
     {
-      element: <NormalLayout />,
+      element: <AuthGuard><NormalLayout /></AuthGuard>,
       children: [
         { path: '/nodes', element: <Suspense fallback={<div className="p-8">Loading nodes...</div>}><Nodes /></Suspense> },
         { path: '/tasks', element: <Suspense fallback={<div className="p-8">Loading tasks...</div>}><TasksBoard /></Suspense> },
