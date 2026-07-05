@@ -72,3 +72,62 @@ No divergence to record.
 - Exposes `markSynced()` for Electric data consumers (Tasks.tsx) to call whenever their live queries update
 - Navbar.tsx imports and uses `useSyncStatus()` directly (no hardcoded value)
 - Tasks.tsx (from task 103) integrates `markSynced()` in a `useEffect` watching the live query data arrays
+
+## Reachability gate
+
+**(a) CALL-PATH TRACE — production entry points to changed code**
+
+The merged change is reached through three real production entry points:
+
+1. **Error resilience path (SC1-SC5):**
+   - Entry: `remote-frontend/src/main.tsx:8` → `<App />` is wrapped in `<ErrorBoundary>` (commit 5262c6b7). An uncaught render error in any child now shows the fallback UI instead of a white screen.
+   - Entry: `remote-frontend/src/App.tsx:14` → `<Toaster richColors position="bottom-right" />` mounted inside `<ProfileProvider>`. Every sonner call from `lib/toast.ts` lands in the same toaster.
+   - Entry: `remote-frontend/src/AppRouter.tsx:166` → `<AuthGuard>` wraps `<NormalLayout>`. Unauthenticated navigation to `/nodes` or `/tasks` redirects to `/login?return_to=...` (per D-L6).
+   - Entry: `remote-frontend/src/pages/Tasks.tsx:97` → `handleAssign` / `confirmDelete` call `toastError` / `toastSuccess` from `@/lib/toast` (re-exported sonner). Confirmed by reading `src/lib/toast.ts` after task 100.
+
+2. **PWA path (SC6-SC11):**
+   - Entry: `remote-frontend/vite.config.ts:5` → `VitePWA({...})` plugin emits `sw.js` and `manifest.webmanifest` at build time. The `registerType: 'autoUpdate'` config triggers SW registration in dev mode.
+   - Entry: `remote-frontend/src/components/layout/NormalLayout.tsx:7` → `useOnlineStatus()` returns `isOnline: false` when `navigator.onLine === false` or after a `window` `offline` event, showing the amber banner.
+   - Entry: `remote-frontend/src/components/layout/Navbar.tsx:14` → `useSyncStatus()` polls `lastUpdateRef` every 10s and renders a green/yellow/red dot. `markSynced()` is called from `TasksBoard` whenever `useLiveQuery(assignmentsCollection)` returns data.
+   - Entry: `remote-frontend/src/pages/Tasks.tsx:73` → `confirmDelete` adds the task id to `optimisticDeletedRef` (per D-L11) before the API call. On success, the live query removes the row; on `TypeError: Failed to fetch`, the id is restored and the mutation is enqueued via `enqueueMutation` to `idb-keyval`. On reconnect, `useEffect(isOnline)` triggers `replayMutations`.
+   - Entry: `remote-frontend/src/lib/mutation-queue.ts:14` → `enqueueMutation` stores `MutationEntry[]` in `idb-keyval` under key `offline-mutation-queue`. `getQueueLength` is read by Navbar every 5s; the queue badge displays the count when > 0.
+
+3. **E2E test path (SC12-SC16):**
+   - Entry: `remote-frontend/e2e/auth.spec.ts:1` exercises the full PKCE flow via mocked `page.route()` handlers, including the `sessionStorage.setItem('oauth_verifier', ...)` pre-seed per D-L10.
+   - Entry: `remote-frontend/e2e/board.spec.ts:1` exercises the kanban board render + assign/delete mutations.
+   - Entry: `remote-frontend/e2e/cross-node.spec.ts:1` exercises multi-node data spanning status columns.
+   - Entry: `remote-frontend/e2e/sc4-guard.spec.ts:1` runs `tsc --noEmit`, `npm run lint`, and `npx vitest run` in the sibling `frontend/` repo as `globalSetup` before any test runs. The config has `testIgnore: ['**/sc4-guard.spec.ts']` to prevent double-scanning.
+
+**(b) REAL-SEAM TEST**
+
+- Phase 1 (Tasks.tsx, SC3-SC5): `remote-frontend/src/pages/Tasks.test.tsx` exercises `<TasksBoard />` with `@testing-library/react` render, dispatches real DOM events (click on Assign / Delete), and asserts on the sonner `toast.success` / `toast.error` mocks being called with the right message. Vitest 6/6 PASS (commit bfbeaba6).
+- Phase 2 (Tasks.tsx PWA wiring): the same test file exercises the offline-queue path — `tasksApi.delete` rejecting with `TypeError: Failed to fetch` triggers `enqueueMutation` and renders a "Deletion queued for sync" toast. The test would FAIL if the overlay ref logic or the enqueue call were absent. 6/6 PASS, 0 unhandled errors.
+- Phase 3 E2E (Tasks.test.tsx covers production component, not mocks past it). The Playwright specs (auth/board/cross-node) launch the real `vite dev` server on port 3002 and drive the real `<TasksBoard />` through real DOM events. The `mockElectricShape` fixture intercepts ONLY the `/api/electric/v1/shape/*` route (per D-L9), letting the rest of the network (OAuth, profile) be mockable or real. The SC4 guard runs the real `tsc` + `lint` + `vitest` against the sibling `frontend/` repo — it's the real call path, not a unit test.
+
+**(c) INCIDENT-SYMPTOM ASSERTION**
+
+- Symptom 1: User clicks Delete on a task and gets no feedback (silent catch). The current Tasks.tsx test asserts the sonner `toast.success` mock IS called with `'Task deleted'` after a successful DELETE. If the old silent-catch pattern were still in place, the test would fail at the `expect(toast.success).toHaveBeenCalledWith('Task deleted')` assertion.
+- Symptom 2: User navigates to `/nodes` while signed out and sees the page attempt to render. AuthGuard test asserts that the `useProfile().isSignedIn === false` path results in a `window.location.assign('/login?return_to=...')` call (URL query param per D-L6), not a partial render.
+- Symptom 3: User loses network mid-mutation and loses the change. Tasks.tsx test asserts that on `TypeError: Failed to fetch`, `enqueueMutation` is called with operation `'DELETE'` and endpoint `/v1/tasks/{taskId}` — the offline queue path. The mutation will be replayed when `isOnline` returns to `true` via the `useEffect` on `isOnline`.
+- Symptom 4: Frontend sibling (`frontend/`) breaks after remote-frontend changes. SC4 guard in `globalSetup` runs `tsc --noEmit` + `npm run lint` + `npx vitest run` against `../frontend` before any E2E test runs. If any of those fail, the guard exits 1 and Playwright aborts the run.
+
+## Final commits (chronological)
+
+| Task | Commit | Files |
+|------|--------|-------|
+| 100 | (preflight) | sonner + lib/toast.ts |
+| 101 | f8f452b0 | ErrorBoundary.tsx |
+| 102 | fcb39d96 | AuthGuard.tsx + AppRouter |
+| 103 | 33b041c0 | Tasks.tsx (toast + AlertDialog) |
+| 104 | 5262c6b7 | main.tsx + App.tsx + AppRouter wraps |
+| 200 | 1abc855f | vite-plugin-pwa + lib/pwa.ts |
+| 201 | 70790db6 | lib/offline.ts + NormalLayout |
+| 202 | dee842d2 | lib/electric/optimistic.ts |
+| 203 | 5beb2acf | lib/electric/sync-status.ts + Navbar |
+| 204 | 0f49805c | lib/mutation-queue.ts + Navbar badge |
+| 205 | bfbeaba6 | Tasks.tsx (PWA overlay + queue) |
+| 300 | 61e48865 | playwright.config.ts + fixtures |
+| 301 | 1299d61f | e2e/auth.spec.ts |
+| 302 | a3f710ab | e2e/board.spec.ts |
+| 303 | 2f415810 | e2e/cross-node.spec.ts |
+| 304 | ef826d69 | e2e/sc4-guard.spec.ts + config |
