@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - remote-frontend/package.json
   - remote-frontend/src/lib/toast.ts
+  - remote-frontend/src/lib/toast.test.ts
 irreversible: false
 scope_test: "remote-frontend/src/lib/toast"
 allowed_change: mixed
@@ -32,22 +33,22 @@ const source = readFileSync(join(__dirname, 'toast.ts'), 'utf-8');
 
 describe('toast wrapper (SC3, SC4)', () => {
   it('exports toast from sonner as re-export', () => {
-    expect(source).toMatch(/export\s+\{\s*toast\s*\}/);
+    expect(source).toMatch(/export\s+\{\s*toast[^}]*\}/);
   });
 
   it('has a toastError convenience that passes action-based retry', () => {
     expect(source).toContain('export function toastError');
     expect(source).toContain('action:');
-    expect(source).toContain("label: 'Retry'");
+    expect(source).toMatch(/label:\s*retry\.label\s*\?\?/);
   });
 
   it('has a toastSuccess convenience with undo action', () => {
     expect(source).toContain('export function toastSuccess');
-    expect(source).toContain("label: 'Undo'");
+    expect(source).toMatch(/label:\s*undo\.label\s*\?\?/);
   });
 
   it('re-exports Toaster from sonner', () => {
-    expect(source).toMatch(/export\s+\{\s*Toaster\s*\}/);
+    expect(source).toMatch(/export\s+\{\s*[^}]*Toaster[^}]*\}/);
   });
 });
 ```
