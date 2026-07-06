@@ -43,6 +43,7 @@ vi.mock('idb-keyval', () => ({
 const onlineControl = { isOnline: true };
 vi.mock('@/lib/offline', () => ({
   useOnlineStatus: () => ({ isOnline: onlineControl.isOnline, wasOffline: false, lastOnlineAt: null }),
+  isNetworkError: (err: unknown) => err instanceof TypeError || (err instanceof DOMException && err.name === 'AbortError'),
 }));
 
 vi.mock('@/lib/mutation-queue', () => ({
@@ -193,6 +194,7 @@ describe('Tasks.tsx PWA offline scenarios (SC8, SC10)', () => {
     await waitFor(() => {
       expect(enqueueMutation).toHaveBeenCalledWith('DELETE', '/v1/tasks/t1', 't1');
     });
-    // enqueueMutation was called — the catch branch ran and the mutation is queued
+    expect(tasksApi.delete).toHaveBeenCalledWith('t1');
+    expect(screen.queryByLabelText('Delete')).not.toBeInTheDocument();
   });
 });

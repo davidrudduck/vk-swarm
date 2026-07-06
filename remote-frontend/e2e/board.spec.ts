@@ -13,7 +13,7 @@ const MOCK_ASSIGNMENTS: MockTaskAssignment[] = [
 test.describe('kanban board (SC13)', () => {
   test.beforeEach(async ({ page }) => {
     await setupApiMocks(page);
-    mockElectricShape(page, {
+    await mockElectricShape(page, {
       node_task_assignments: MOCK_ASSIGNMENTS,
       nodes: [
         { id: 'n1', name: 'node-alpha' },

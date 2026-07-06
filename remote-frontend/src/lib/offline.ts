@@ -32,3 +32,9 @@ export function useOnlineStatus(): OnlineStatus {
 
   return { isOnline, wasOffline, lastOnlineAt };
 }
+
+export function isNetworkError(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  if (err instanceof DOMException && err.name === 'AbortError') return true;
+  return false;
+}

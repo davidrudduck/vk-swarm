@@ -135,5 +135,4 @@
       "totalLinesRemoved": 0
     }
   }
-}Ripgrep is not available. Falling back to GrepTool.
-Error executing tool write_file: Tool execution denied by policy. You are in Plan Mode and cannot modify source code. You may ONLY use write_file or replace to save plans to the designated plans directory as .md files.
+}

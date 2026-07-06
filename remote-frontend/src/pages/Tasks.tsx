@@ -20,7 +20,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useSyncStatus } from '@/lib/electric/sync-status';
-import { useOnlineStatus } from '@/lib/offline';
+import { useOnlineStatus, isNetworkError } from '@/lib/offline';
 import { enqueueMutation, replayMutations } from '@/lib/mutation-queue';
 
 const assignmentsCollection = createTaskAssignmentsCollection();
@@ -88,17 +88,7 @@ export function TasksBoard() {
       await tasksApi.setExecutingNode(taskId, selectedNodeId);
       toastSuccess('Task assigned');
     } catch (err) {
-      if (err instanceof TypeError && err.message === 'Failed to fetch') {
-        try {
-          await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
-            taskId,
-            nodeId: selectedNodeId,
-          });
-          toastSuccess('Assignment queued for sync');
-        } catch {
-          toastError('Failed to queue for sync');
-        }
-      } else if (err instanceof DOMException && err.name === 'AbortError') {
+      if (isNetworkError(err)) {
         try {
           await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
             taskId,
@@ -132,14 +122,7 @@ export function TasksBoard() {
       await tasksApi.delete(taskId);
       toast('Task deleted');
     } catch (err) {
-      if (err instanceof TypeError && err.message === 'Failed to fetch') {
-        try {
-          await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
-          toastSuccess('Deletion queued for sync');
-        } catch {
-          toastError('Failed to queue delete for sync');
-        }
-      } else if (err instanceof DOMException && err.name === 'AbortError') {
+      if (isNetworkError(err)) {
         try {
           await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
           toastSuccess('Deletion queued for sync');

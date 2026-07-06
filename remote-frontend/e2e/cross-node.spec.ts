@@ -17,7 +17,7 @@ const CROSS_NODE_LOGS = [
 test.describe('cross-node correctness (SC14)', () => {
   test.beforeEach(async ({ page }) => {
     await setupApiMocks(page);
-    mockElectricShape(page, {
+    await mockElectricShape(page, {
       node_task_assignments: CROSS_NODE_ASSIGNMENTS,
       nodes: [
         { id: 'n1', name: 'node-alpha' },
