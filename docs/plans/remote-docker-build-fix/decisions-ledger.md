@@ -145,6 +145,17 @@ rebuild.sh adds SERVER_PORT export and fixes healthcheck from port 3000 to ${SER
 Real bug fix per Gemini round-1 Finding 3. Previously documented.
 
 ### F-006 (HIGH, MISSING) — E2E verification partial pass
+
+## Post-review known issues (code-review round 1)
+
+Non-actionable findings from pre-graduation code review. Kept here so subsequent rounds
+do not re-litigate these items.
+
+- **Findings from round 1 (all non-actionable):**
+  - F1: `scripts/assert-dockerfile-node-match.sh:12-13` — `|| true` guards on `grep -oE` are unnecessary under `set -euo pipefail` but are defensive (retained from earlier `set -e`-only version). Non-actionable: removing risks reintroducing the original `set -e` bug if preamble changes. Severity: low, quality.
+  - F2: `.github/workflows/remote-hive-build.yml:82-83` — `docker compose build` in subshell. Verified as false alarm: `set -e` (GitHub Actions default) + `set -o pipefail` correctly propagate subshell exits. Non-actionable.
+
+- **Round 2:** No new findings. Trailing newline (round 1 F1) fixed in 685d8294.
 Plan required all 7 E2E steps pass. Docker build timed out at 10min during Cargo compilation
 (pre-existing timeout, not caused by our changes). Steps 3-4 (docker ps, healthcheck) skipped.
 Key verifications DID pass: node:24-alpine image, pnpm@10.25.0, lockfile up to date, frontend
