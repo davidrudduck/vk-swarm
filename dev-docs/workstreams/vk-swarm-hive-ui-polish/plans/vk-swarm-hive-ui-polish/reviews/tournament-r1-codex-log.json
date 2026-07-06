@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "codex",
+    "exec",
+    "-C",
+    "REPO_ROOT",
+    "--sandbox",
+    "read-only",
+    "--json",
+    "-"
+  ],
+  "cwd": "REPO_ROOT",
+  "exit_code": 0,
+  "finished_at": "2026-07-05T05:21:15.630853+00:00",
+  "notes": [],
+  "prompt_file": "REPO_ROOT/docs/plans/vk-swarm-hive-ui-polish/reviews/tournament-find-prompt.md",
+  "raw_log": "REPO_ROOT/docs/plans/vk-swarm-hive-ui-polish/reviews/tournament-r1-codex-log.raw.log",
+  "report": "REPO_ROOT/docs/plans/vk-swarm-hive-ui-polish/reviews/tournament-r1-codex-find.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-05T05:17:50.672586+00:00",
+  "status": "ok",
+  "task": "plan-review",
+  "tool": "codex",
+  "tool_version": "codex-cli 0.142.5"
+}

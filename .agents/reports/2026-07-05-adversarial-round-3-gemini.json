@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "gemini",
+    "--skip-trust",
+    "--approval-mode=plan",
+    "--output-format=json",
+    "-p",
+    ""
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/proud-panda",
+  "exit_code": 0,
+  "finished_at": "2026-07-05T20:21:57.937347+00:00",
+  "notes": [],
+  "prompt_file": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/proud-panda/.agents/prompts/adversarial-review-r3.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/proud-panda/.agents/reports/2026-07-05-adversarial-round-3-gemini.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/proud-panda/.agents/reports/2026-07-05-adversarial-round-3-gemini-implementation-review.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-05T20:18:18.921022+00:00",
+  "status": "ok",
+  "task": "codebase-review",
+  "tool": "gemini",
+  "tool_version": "0.49.0"
+}

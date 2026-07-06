@@ -1,0 +1,47 @@
+{
+  "model": "codex-cli",
+  "findings": [
+    {
+      "id": "codex-r2-001",
+      "severity": "high",
+      "issue": "The remote frontend lint gate is red on the changed test suite. `npm run lint` fails with `prefer-const` in `src/lib/mutation-queue.test.ts`, and Playwright globalSetup runs that same lint command before E2E, so both the mandatory frontend lint gate and `test:e2e` are blocked.",
+      "citation": "remote-frontend/src/lib/mutation-queue.test.ts:5 declares `let store`; `remote-frontend/playwright.config.ts:6` wires `./e2e/sc4-guard.spec.ts` as globalSetup; `remote-frontend/e2e/sc4-guard.spec.ts:21-27` exits on `npm run lint` failure. Verified by running `npm run lint`, which reports `5:7 error 'store' is never reassigned. Use 'const' instead prefer-const`.",
+      "remediation": "Change the mocked idb store binding to `const store: Record<string, unknown> = {}` or otherwise satisfy the lint rule, then rerun `npm run lint` and `npm run test:e2e:ci`."
+    },
+    {
+      "id": "codex-r2-002",
+      "severity": "high",
+      "issue": "The new Playwright board tests mock nodes through `/v1/nodes`, but `TasksBoard` does not read nodes from that API. It reads `createNodesCollection()` via Electric, while `mockElectricShape` returns rows only for `node_task_assignments`. As a result the node dropdown has no `n1` option and cross-node assertions looking for `node-alpha`/`node-beta` cannot be exercising the real board state once the lint guard is fixed.",
+      "citation": "remote-frontend/src/pages/Tasks.tsx:35-37 reads assignments, nodes, and projects from Electric collections; `remote-frontend/e2e/fixtures/mock-electric.ts:15-16` returns assignments only when the shape table is `node_task_assignments` and `[]` otherwise; `remote-frontend/e2e/board.spec.ts:21-23` mocks `/v1/nodes`, then `remote-frontend/e2e/board.spec.ts:72` selects `n1`; `remote-frontend/e2e/cross-node.spec.ts:34-39` expects node labels from those mocked API nodes.",
+      "remediation": "Extend the Electric fixture to serve `nodes`, `projects`, output logs, and progress events in Electric-compatible shape responses, or change the board to use the mocked API intentionally. Then assert the dropdown options and task-detail panel content come from the actual collection data."
+    },
+    {
+      "id": "codex-r2-003",
+      "severity": "medium",
+      "issue": "Queued offline mutations can be replayed more than once. `TasksBoard` calls `replayPending()` whenever it mounts online, and the app is rendered inside React StrictMode. `replayMutations` reads the whole queue, executes every entry, and only writes the remaining queue after execution, with no lock or drain step. Two overlapping replays, from StrictMode/dev, remounts, or two tabs, can submit duplicate DELETE/PATCH requests.",
+      "citation": "remote-frontend/src/main.tsx:7-12 wraps the app in `<React.StrictMode>`; `remote-frontend/src/pages/Tasks.tsx:74-78` starts replay whenever `isOnline` is true; `remote-frontend/src/lib/mutation-queue.ts:34-48` reads queued entries, executes them, and clears successes only at the end.",
+      "remediation": "Make replay single-flight and durable: acquire an idb/localStorage lock or atomically move entries to an in-flight queue before executing, release/requeue failures, and add tests for overlapping `replayMutations` calls."
+    },
+    {
+      "id": "codex-r2-004",
+      "severity": "medium",
+      "issue": "Offline optimistic state is not restored from the persisted queue. Deletes and assignment changes are stored in `idb-keyval`, but the UI hides deleted tasks and displays optimistic node assignment only from empty in-memory refs. A refresh while still offline shows deleted tasks again and loses pending assignment display even though the queue badge still indicates work to sync.",
+      "citation": "remote-frontend/src/lib/mutation-queue.ts:11-28 persists queued mutations under `offline-mutation-queue`; `remote-frontend/src/pages/Tasks.tsx:45-46` initializes empty refs every mount; `remote-frontend/src/pages/Tasks.tsx:142-143` filters visible tasks only by `optimisticDeletedRef`; `remote-frontend/src/pages/Tasks.tsx:166-167` displays assigned node only from `optimisticAssignsRef`.",
+      "remediation": "On board mount, hydrate pending delete tombstones and assignment overrides from the persisted queue, keep them in state so they render predictably, and clear them only after Electric confirms the server-side change."
+    },
+    {
+      "id": "codex-r2-005",
+      "severity": "medium",
+      "issue": "Offline queuing depends on an exact browser error string. Both assign and delete queue work only when the thrown error is `TypeError` with message exactly `Failed to fetch`; other real offline failures, browser-specific messages, service-worker failures, or wrapped network errors fall into the non-offline branch and are not queued.",
+      "citation": "remote-frontend/src/pages/Tasks.tsx:91-96 queues PATCH only for `err instanceof TypeError && err.message === 'Failed to fetch'`; `remote-frontend/src/pages/Tasks.tsx:127-129` uses the same exact check for DELETE; `remote-frontend/src/pages/Tasks.test.tsx:146-170` covers only that exact message.",
+      "remediation": "Centralize network/offline classification, using `navigator.onLine === false`, fetch error type/name, and known browser messages without requiring exact equality. Add tests for at least one non-`Failed to fetch` network failure and for offline status before the request."
+    },
+    {
+      "id": "codex-r2-006",
+      "severity": "medium",
+      "issue": "The PWA manifest references icons that are not present in the remote frontend package, so installability and icon rendering will fail despite the new PWA plugin config.",
+      "citation": "remote-frontend/vite.config.ts:41-48 declares `/icons/icon-192.png` and `/icons/icon-512.png`; `find remote-frontend/public -maxdepth 3 -type f -print` fails with `remote-frontend/public: No such file or directory`.",
+      "remediation": "Add the referenced icon assets under `remote-frontend/public/icons/` or change the manifest to point at existing assets, then verify the generated manifest and installability audit."
+    }
+  ]
+}

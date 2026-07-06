@@ -1,7 +1,10 @@
 import { Link, useLocation } from 'react-router-dom';
 import { FolderOpen, ListTodo, LogOut } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { oauthApi } from '@/lib/api/oauth';
+import { useSyncStatus } from '@/lib/electric/sync-status';
+import { getQueueLength } from '@/lib/mutation-queue';
 
 const NAV_ITEMS = [
   { label: 'Nodes', icon: FolderOpen, to: '/nodes' },
@@ -10,6 +13,24 @@ const NAV_ITEMS = [
 
 export function Navbar() {
   const location = useLocation();
+
+  const { syncStatus } = useSyncStatus();
+  const syncColor: Record<typeof syncStatus, string> = {
+    synced: 'bg-green-500',
+    reconnecting: 'bg-yellow-500',
+    disconnected: 'bg-red-500',
+  };
+
+  const [queueLength, setQueueLength] = useState(0);
+
+  useEffect(() => {
+    const update = () => {
+      getQueueLength().then(setQueueLength).catch(() => {});
+    };
+    update();
+    const interval = setInterval(update, 5_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleLogout = async () => {
     try {
@@ -25,8 +46,18 @@ export function Navbar() {
       <div className="w-full px-3">
         <div className="flex items-center h-12 py-2">
           <div className="flex-1">
-            <Link to="/nodes" className="text-foreground font-semibold">
+            <Link to="/nodes" className="text-foreground font-semibold flex items-center gap-2">
               VK Swarm
+              <span
+                className={`inline-block w-2 h-2 rounded-full ${syncColor[syncStatus]}`}
+                title={`Sync: ${syncStatus}`}
+                aria-label={`Sync status: ${syncStatus}`}
+              />
+              {queueLength > 0 && (
+                <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-xs bg-amber-500 text-black rounded-full font-bold">
+                  {queueLength} pending
+                </span>
+              )}
             </Link>
           </div>
           <button
