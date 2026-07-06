@@ -1,0 +1,40 @@
+{
+  "model": "codex",
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocking",
+      "issue": "AuthGuard return_to is dropped by the OAuth login flow, so protected deep links return to /nodes instead of the original route.",
+      "citation": "remote-frontend/src/components/AuthGuard.tsx:22; remote-frontend/src/AppRouter.tsx:42-45; remote-frontend/src/AppRouter.tsx:107-108",
+      "remediation": "Read return_to in LoginPage, validate it, and include it in the OAuth callback URL passed to initOAuth; add E2E coverage for /tasks returning to /tasks after OAuth."
+    },
+    {
+      "id": "F002",
+      "severity": "blocking",
+      "issue": "Navbar sync dot is disconnected from Electric updates because TasksBoard and Navbar use separate useSyncStatus instances.",
+      "citation": "remote-frontend/src/pages/Tasks.tsx:47-52; remote-frontend/src/components/layout/Navbar.tsx:17-22",
+      "remediation": "Move sync status to a shared provider/store or central Electric subscription used by Navbar; mark sync on empty result sets too."
+    },
+    {
+      "id": "F003",
+      "severity": "blocking",
+      "issue": "Queued mutation replay clears optimistic overlays before Electric confirms the new data, causing deleted tasks or old assignments to reappear during reconnect.",
+      "citation": "remote-frontend/src/pages/Tasks.tsx:59-64; remote-frontend/src/pages/Tasks.tsx:135-164",
+      "remediation": "Only clear optimistic deletion/assignment refs when the live Electric assignment list confirms deletion or the expected node_id."
+    },
+    {
+      "id": "F004",
+      "severity": "blocking",
+      "issue": "Offline mutation queue can lose actions due non-atomic read-modify-write and replay overwriting new enqueues.",
+      "citation": "remote-frontend/src/lib/mutation-queue.ts:18-27; remote-frontend/src/lib/mutation-queue.ts:34-48",
+      "remediation": "Use idb-keyval update() or a transaction/lock for atomic append, and remove replayed entries by ID from the current queue instead of replacing the snapshot."
+    },
+    {
+      "id": "F005",
+      "severity": "should-fix",
+      "issue": "PWA manifest references missing icon files, breaking installability and causing 404s.",
+      "citation": "remote-frontend/vite.config.ts:41-48",
+      "remediation": "Add the referenced icon files under remote-frontend/public/icons or update the manifest to existing assets; add a manifest asset existence check."
+    }
+  ]
+}

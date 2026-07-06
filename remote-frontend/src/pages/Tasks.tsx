@@ -1,5 +1,5 @@
 import { useLiveQuery } from '@tanstack/react-db';
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   createTaskAssignmentsCollection,
   createTaskOutputLogsCollection,
@@ -9,6 +9,19 @@ import {
   type ElectricTaskAssignment,
 } from '@/lib/electric';
 import { tasksApi } from '@/lib/api/tasks';
+import { toastError, toastSuccess } from '@/lib/toast';
+import { toast } from 'sonner';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { useSyncStatus } from '@/lib/electric/sync-status';
+import { useOnlineStatus, isNetworkError } from '@/lib/offline';
+import { enqueueMutation, replayMutations } from '@/lib/mutation-queue';
 
 const assignmentsCollection = createTaskAssignmentsCollection();
 const outputLogsCollection = createTaskOutputLogsCollection();
@@ -25,23 +38,115 @@ export function TasksBoard() {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string>('');
+  const [isAssigning, setIsAssigning] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
+  const optimisticDeletedRef = useRef<Set<string>>(new Set());
+  const optimisticAssignsRef = useRef<Map<string, string>>(new Map());
+
+  const { markSynced } = useSyncStatus();
+  const { isOnline } = useOnlineStatus();
+
+  useEffect(() => {
+    markSynced();
+  }, [assignments, nodes, projects, markSynced]);
+
+  const replayPending = useCallback(async () => {
+    await replayMutations(
+      async (entry) => {
+        if (entry.operation === 'DELETE') {
+          const taskId = entry.payload as string;
+          await tasksApi.delete(taskId);
+          optimisticDeletedRef.current.delete(taskId);
+        } else if (entry.operation === 'PATCH') {
+          const { taskId, nodeId } = entry.payload as { taskId: string; nodeId: string };
+          await tasksApi.setExecutingNode(taskId, nodeId);
+          optimisticAssignsRef.current.delete(taskId);
+        }
+      },
+      (_entry, err) => {
+        toastError(`Queued mutation failed: ${err.message}`, { onClick: () => replayPending() });
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    if (isOnline) {
+      replayPending();
+    }
+  }, [isOnline, replayPending]);
 
   const nodeNames = new Map(nodes.map((n: { id: string; name: string }) => [n.id, n.name]));
   const projectNames = new Map(projects.map((p: { id: string; name: string }) => [p.id, p.name]));
 
   const handleAssign = async (taskId: string) => {
     if (!selectedNodeId) return;
-    try { await tasksApi.setExecutingNode(taskId, selectedNodeId); } catch (err) { console.error('setExecutingNode failed:', err); }
+    setIsAssigning(taskId);
+    optimisticAssignsRef.current.set(taskId, selectedNodeId);
+    try {
+      await tasksApi.setExecutingNode(taskId, selectedNodeId);
+      toastSuccess('Task assigned');
+    } catch (err) {
+      if (isNetworkError(err)) {
+        try {
+          await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
+            taskId,
+            nodeId: selectedNodeId,
+          });
+          toastSuccess('Assignment queued for sync');
+        } catch {
+          toastError('Failed to queue for sync');
+        }
+      } else {
+        optimisticAssignsRef.current.delete(taskId);
+        toastError(
+          err instanceof Error ? err.message : 'Assignment failed',
+          { onClick: () => handleAssign(taskId) },
+        );
+      }
+    } finally {
+      setIsAssigning(null);
+    }
   };
 
   const handleDelete = async (taskId: string) => {
-    if (!confirm('Delete this task?')) return;
-    try { await tasksApi.delete(taskId); } catch (err) { console.error('delete task failed:', err); }
+    setDeleteTarget(taskId);
   };
 
+  const confirmDelete = async (taskId: string) => {
+    setIsDeleting(taskId);
+    setDeleteTarget(null);
+    optimisticDeletedRef.current.add(taskId);
+    try {
+      await tasksApi.delete(taskId);
+      toast('Task deleted');
+    } catch (err) {
+      if (isNetworkError(err)) {
+        try {
+          await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
+          toastSuccess('Deletion queued for sync');
+        } catch {
+          toastError('Failed to queue delete for sync');
+        }
+      } else {
+        optimisticDeletedRef.current.delete(taskId);
+        toastError(
+          err instanceof Error ? err.message : 'Delete failed',
+          { onClick: () => confirmDelete(taskId) },
+        );
+      }
+    } finally {
+      setIsDeleting(null);
+    }
+  };
+
+  const visibleAssignments = assignments.filter(
+    (a) => !optimisticDeletedRef.current.has(a.task_id),
+  );
   const byStatus = new Map<string, ElectricTaskAssignment[]>();
   for (const status of STATUS_COLUMNS) byStatus.set(status, []);
-  for (const a of assignments) {
+  for (const a of visibleAssignments) {
     const bucket = byStatus.get(a.execution_status) ?? byStatus.get('pending');
     bucket?.push(a);
   }
@@ -59,36 +164,64 @@ export function TasksBoard() {
               ))}
             </select>
             <ul>
-              {(byStatus.get(status) ?? []).map((a) => (
-                <li key={a.id} className="border p-2 my-2" onClick={() => setSelectedAssignmentId(a.id)}>
-                  <div>task {a.task_id}</div>
-                  <div>{nodeNames.get(a.node_id) ?? a.node_id}</div>
-<div>{projectNames.get(a.node_project_id) ?? a.node_project_id}</div>
-                <div className="flex gap-2 mt-1">
-                  <button className="text-xs px-2 py-1 border" onClick={(e) => { e.stopPropagation(); handleAssign(a.task_id); }} aria-label="Assign">Assign</button>
-                  <button className="text-xs px-2 py-1 border text-red-500" onClick={(e) => { e.stopPropagation(); handleDelete(a.task_id); }} aria-label="Delete">Delete</button>
-                </div>
-              </li>
-              ))}
+              {(byStatus.get(status) ?? []).map((a) => {
+                const optimisticNodeId = optimisticAssignsRef.current.get(a.task_id);
+                const displayNodeId = optimisticNodeId ?? a.node_id;
+                return (
+                  <li key={a.id} className="border p-2 my-2" onClick={() => setSelectedAssignmentId(a.id)}>
+                    <div>task {a.task_id}</div>
+                    <div>{nodeNames.get(displayNodeId) ?? displayNodeId}</div>
+                    <div>{projectNames.get(a.node_project_id) ?? a.node_project_id}</div>
+                    <div className="flex gap-2 mt-1">
+                      <button className="text-xs px-2 py-1 border" onClick={(e) => { e.stopPropagation(); handleAssign(a.task_id); }} aria-label="Assign" disabled={isAssigning === a.task_id}>{isAssigning === a.task_id ? 'Assigning...' : 'Assign'}</button>
+                      <button className="text-xs px-2 py-1 border text-red-500" onClick={(e) => { e.stopPropagation(); handleDelete(a.task_id); }} aria-label="Delete" disabled={isDeleting === a.task_id}>{isDeleting === a.task_id ? 'Deleting...' : 'Delete'}</button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ))}
       </div>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this task and all its assignments.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 border rounded-md hover:bg-muted">Cancel</button>
+            <button onClick={() => { if (deleteTarget) confirmDelete(deleteTarget); }} className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600">Delete</button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {selectedAssignmentId && (
         <div className="w-80 border-l p-4">
-          <TaskDetail assignmentId={selectedAssignmentId} />
+          <TaskDetail assignmentId={selectedAssignmentId} assignments={assignments} nodeNames={nodeNames} />
         </div>
       )}
     </div>
   );
 }
 
-export function TaskDetail({ assignmentId }: { assignmentId: string }) {
+export function TaskDetail({ assignmentId, assignments, nodeNames }: {
+  assignmentId: string;
+  assignments: ElectricTaskAssignment[];
+  nodeNames: Map<string, string>;
+}) {
   const { data: logs = [] } = useLiveQuery(outputLogsCollection);
   const { data: events = [] } = useLiveQuery(progressEventsCollection);
 
   const assignmentLogs = logs.filter((l: { assignment_id: string }) => l.assignment_id === assignmentId);
   const assignmentEvents = events.filter((e: { assignment_id: string }) => e.assignment_id === assignmentId);
+
+  const resolveNodeName = (assnId: string): string | null => {
+    const assn = assignments.find((a) => a.id === assnId);
+    if (!assn) return null;
+    return nodeNames.get(assn.node_id) ?? assn.node_id;
+  };
 
   if (assignmentLogs.length === 0 && assignmentEvents.length === 0) {
     return <div className="text-gray-500">No activity yet.</div>;
@@ -110,12 +243,15 @@ export function TaskDetail({ assignmentId }: { assignmentId: string }) {
       <section>
         <h3 className="font-semibold">Output logs</h3>
         <ul>
-          {assignmentLogs.map((l: { id: string; output_type: string; content: string }) => (
-            <li key={l.id}>
-              <span className="font-mono text-xs uppercase">{l.output_type}</span>
-              <pre className="whitespace-pre-wrap">{l.content}</pre>
-            </li>
-          ))}
+          {assignmentLogs.map((l: { id: string; output_type: string; content: string; assignment_id: string }) => {
+            const nodeName = resolveNodeName(l.assignment_id);
+            return (
+              <li key={l.id}>
+                <span className="font-mono text-xs uppercase">{l.output_type}{nodeName ? ` — ${nodeName}` : ''}</span>
+                <pre className="whitespace-pre-wrap">{l.content}</pre>
+              </li>
+            );
+          })}
         </ul>
       </section>
     </div>

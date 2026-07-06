@@ -1,0 +1,109 @@
+{
+  "verdicts": {
+    "claude:F001": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "codex"
+    },
+    "claude:F002": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "gemini"
+    },
+    "claude:F003": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "codex"
+    },
+    "claude:F004": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "gemini"
+    },
+    "claude:F005": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "codex"
+    },
+    "claude:F006": {
+      "valid": false,
+      "remediation_passes": false,
+      "reviewer": "gemini"
+    },
+    "claude:F007": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "codex"
+    },
+    "claude:F008": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "codex"
+    },
+    "claude:F009": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "gemini"
+    },
+    "claude:F010": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "gemini"
+    },
+    "codex:F001": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "claude"
+    },
+    "codex:F002": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "gemini"
+    },
+    "codex:F003": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "claude"
+    },
+    "codex:F004": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "claude"
+    },
+    "codex:F005": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "gemini"
+    },
+    "gemini:F001": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "claude"
+    },
+    "gemini:F002": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "codex"
+    },
+    "gemini:F003": {
+      "valid": false,
+      "remediation_passes": false,
+      "reviewer": "claude"
+    },
+    "gemini:F004": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "codex"
+    },
+    "gemini:F005": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "claude"
+    },
+    "gemini:F006": {
+      "valid": false,
+      "remediation_passes": false,
+      "reviewer": "codex"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "model": "gemini",
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocking",
+      "issue": "Offline mutation queue has a race condition that causes data loss. Parallel writes to the queue read the stale state and overwrite each other.",
+      "citation": "remote-frontend/src/lib/mutation-queue.ts:13",
+      "remediation": "Replace `await get` and `await set` sequence with atomic `update` function from `idb-keyval` for transaction safety."
+    },
+    {
+      "id": "F002",
+      "severity": "blocking",
+      "issue": "PWA service worker immediately forces window.location.reload() on activation without prompt, risking interruption and data loss for active users.",
+      "citation": "remote-frontend/src/lib/pwa.ts:15",
+      "remediation": "Remove automatic page reload on service worker activation. Allow updates to silent-mount, or show a non-intrusive notification toast asking the user to manually refresh."
+    },
+    {
+      "id": "F003",
+      "severity": "blocking",
+      "issue": "Active node dropdown state is shared globally. Changing the active node dropdown inside one status column changes all of them.",
+      "citation": "remote-frontend/src/pages/Tasks.tsx:112",
+      "remediation": "Move the `<select>` node element outside of the `STATUS_COLUMNS` loop, or use a state dictionary indexable by column/task ID."
+    },
+    {
+      "id": "F004",
+      "severity": "should-fix",
+      "issue": "Permanent API server errors are kept in the mutation queue, leading to infinite retry loops and repetitive failure toasts on reconnect.",
+      "citation": "remote-frontend/src/lib/mutation-queue.ts:34",
+      "remediation": "Only retain mutations in `remaining` array if error type is a transient network connection failure (such as `TypeError: Failed to fetch`). Discard for 4xx/5xx API responses."
+    },
+    {
+      "id": "F005",
+      "severity": "should-fix",
+      "issue": "Heartbeat interval timer overrides 'disconnected' status back to 'synced' while still offline, leading to an incorrect green sync dot.",
+      "citation": "remote-frontend/src/lib/electric/sync-status.ts:25",
+      "remediation": "Amend `tick` to check `navigator.onLine` and set status to 'disconnected' if false, bypassing getSyncStatus heartbeat elapsed check."
+    },
+    {
+      "id": "F006",
+      "severity": "should-fix",
+      "issue": "Loading flags are managed via a single string ID. Multiple concurrent requests will overwrite each other, causing pending state spinners to clear prematurely.",
+      "citation": "remote-frontend/src/pages/Tasks.tsx:75",
+      "remediation": "Utilize a `Set<string>` to track multiple concurrent IDs in-flight, or conditionally unset only if the current completed ID matches the stored state value."
+    }
+  ]
+}

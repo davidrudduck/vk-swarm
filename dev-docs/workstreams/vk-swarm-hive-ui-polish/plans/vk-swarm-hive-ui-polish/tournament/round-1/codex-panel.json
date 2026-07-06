@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "codex",
+    "exec",
+    "-C",
+    "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/proud-panda",
+    "--sandbox",
+    "read-only",
+    "--json",
+    "-"
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/proud-panda",
+  "exit_code": 0,
+  "finished_at": "2026-07-05T11:58:14.361477+00:00",
+  "notes": [],
+  "prompt_file": "/tmp/opencode/tournament-round1-prompt.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/proud-panda/docs/plans/vk-swarm-hive-ui-polish/tournament/round-1/codex-panel.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/proud-panda/.agents/reports/2026-07-05-adversarial-round-1-codex-implementation-review.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-05T11:55:15.755010+00:00",
+  "status": "ok",
+  "task": "codebase-review",
+  "tool": "codex",
+  "tool_version": "codex-cli 0.142.5"
+}
