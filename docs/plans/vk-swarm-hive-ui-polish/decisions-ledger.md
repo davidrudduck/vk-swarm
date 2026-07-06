@@ -258,3 +258,11 @@ The merged change is reached through three real production entry points:
 - **F-007 (LOW, fake Undo):** Spec says "if undoable" — no restore API exists. Undo shows explanatory toast. Intentional per D-L24.
 - **F-502 (MEDIUM, Electric NDJSON format):** The `mockElectricShape` emits bare row JSON; the TanStack adapter may expect structured change messages. This affects E2E fidelity but is a mock implementation concern. To be verified during first real Playwright run.
 - **F-504 (MEDIUM, empty sync):** markSynced now called unconditionally on data arrival (including empty arrays). Empty collections correctly show synced status. Fixed in this session.
+
+## Post-review known issues (2026-07-06)
+
+Non-actionable findings from code-review R2 (converged at `Actionable: []`):
+
+- **N-1 (LOW):** `pwa.ts:10-17` redundant Workbox custom handlers with `registerType: 'autoUpdate'`. Harmless dead code; removing risks misbehavior if vite-plugin-pwa config changes.
+- **N-2 (LOW):** `sc4-guard.spec.ts:18,26,34` uses `process.exit(1)` in globalSetup. Intentional CLI pattern for test runner.
+- **N-3 (LOW):** Missing trailing newlines in `e2e/cross-node.spec.ts:60` and `e2e/fixtures/mock-electric.ts:25`. Cosmetic, no functional impact.
