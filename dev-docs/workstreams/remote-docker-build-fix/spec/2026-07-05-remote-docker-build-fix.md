@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: remote-docker-build-fix
 change_kind: bugfix
 ---

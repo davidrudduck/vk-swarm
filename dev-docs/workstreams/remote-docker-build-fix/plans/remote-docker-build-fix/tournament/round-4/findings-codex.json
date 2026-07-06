@@ -1,0 +1,40 @@
+{
+  "model": "codex",
+  "findings": [
+    {
+      "id": "gpt-5-codex-F001",
+      "severity": "blocking",
+      "issue": "[BLOCKING] CI does not run ./crates/remote/rebuild.sh end-to-end as required. It only syntax-checks rebuild.sh, then separately runs docker compose build, so it does not exercise rebuild.sh's real build/up/health path.",
+      "citation": ".github/workflows/remote-hive-build.yml:40-42 only runs bash -n; .github/workflows/remote-hive-build.yml:76-82 runs docker compose build directly. Spec requires rebuild.sh end-to-end at docs/superpowers/specs/2026-07-05-remote-docker-build-fix.md:64-67 and rejects mocked/partial build at lines 215-218.",
+      "remediation": "Change the CI docker-build job to run `(cd crates/remote && ./rebuild.sh 2>&1 | tee /tmp/ci-build.log)` under `set -euo pipefail`, with required CI env setup and teardown, then keep the ERR_UNKNOWN_BUILTIN_MODULE log assertion."
+    },
+    {
+      "id": "gpt-5-codex-F002",
+      "severity": "blocking",
+      "issue": "[BLOCKING] rebuild.sh does not fail when the healthcheck fails. The final curl pipeline is followed by `|| echo`, so a dead or unhealthy server still exits successfully.",
+      "citation": "crates/remote/rebuild.sh:33 \u2014 `curl -s http://localhost:${SERVER_PORT}/v1/health | jq . || echo \"Health check pending...\"`; spec requires HTTP 200 healthcheck at docs/superpowers/specs/2026-07-05-remote-docker-build-fix.md:49-51.",
+      "remediation": "Replace the one-shot non-fatal healthcheck with a bounded poll using `curl -sf`, validate JSON/status if required, and `exit 1` on timeout."
+    },
+    {
+      "id": "gpt-5-codex-F003",
+      "severity": "should-fix",
+      "issue": "[SHOULD-FIX] PNPM_VERSION consistency is only checked for docker-compose.yml, not the Dockerfile ARG defaults. A future packageManager bump can leave Dockerfile defaults stale while CI still passes.",
+      "citation": "Dockerfile:31 and crates/remote/Dockerfile:9 both hardcode `ARG PNPM_VERSION=10.25.0`; .github/workflows/remote-hive-build.yml:44-54 only compares package.json to the compose fallback. Spec says the pin is sourced from package.json and hardcoding was rejected at docs/superpowers/specs/2026-07-05-remote-docker-build-fix.md:181-195 and 261-264.",
+      "remediation": "Extend CI to extract `ARG PNPM_VERSION=` from both Dockerfiles and compare both values to `jq -re '.packageManager | sub(\"^pnpm@\"; \"\")' package.json`, or remove defaults and require explicit build args on all build paths."
+    },
+    {
+      "id": "gpt-5-codex-F004",
+      "severity": "should-fix",
+      "issue": "[SHOULD-FIX] pnpm-lock.yaml includes unrelated package resolution changes despite the spec forbidding new lockfile packages for this build-system fix.",
+      "citation": "pnpm-lock.yaml:346-360 adds i18next/react-i18next entries for remote-frontend; pnpm-lock.yaml:6714-6718 adds a new i18next snapshot; pnpm-lock.yaml:6792 changes jsdom to ws 8.18.3. Spec says no new packages are added to pnpm-lock.yaml at docs/superpowers/specs/2026-07-05-remote-docker-build-fix.md:110-112.",
+      "remediation": "Revert unrelated pnpm-lock.yaml changes. If they are required to fix pre-existing frozen-lockfile drift, document that as a legitimate scope split or explicit remediation in the decisions ledger."
+    },
+    {
+      "id": "gpt-5-codex-F005",
+      "severity": "blocking",
+      "issue": "[BLOCKING] The ledger records E2E verification as partial and skipped the server-running and healthcheck steps, yet the PR is being treated as final.",
+      "citation": "docs/plans/remote-docker-build-fix/decisions-ledger.md:28 says `E2E VERIFICATION: PARTIAL PASS`; lines 42-43 say docker ps and healthcheck were skipped. The phase task says done only when all steps pass at docs/plans/remote-docker-build-fix/phase-3/006-e2e-verification-manual.md:141.",
+      "remediation": "Complete the E2E run through successful compose up and healthcheck, or explicitly split the incomplete E2E verification into a tracked follow-up workstream with ledger documentation before PR submission."
+    }
+  ]
+}

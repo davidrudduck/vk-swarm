@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "claude",
+    "-p",
+    "--permission-mode",
+    "plan",
+    "--output-format",
+    "json"
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest",
+  "exit_code": 0,
+  "finished_at": "2026-07-06T01:19:16.979652+00:00",
+  "notes": [],
+  "prompt_file": "/tmp/tournament-prompt-round4.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest/docs/plans/remote-docker-build-fix/tournament/round-4/claude-panel.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest/.agents/reports/2026-07-06-round-4-opus-post-fix.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-06T01:07:56.776956+00:00",
+  "status": "ok",
+  "task": "codebase-review",
+  "tool": "claude",
+  "tool_version": "2.1.201 (Claude Code)"
+}

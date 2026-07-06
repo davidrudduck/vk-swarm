@@ -17,7 +17,7 @@ workstream: remote-docker-build-fix
 `./crates/remote/rebuild.sh` (or `docker compose --env-file .env.remote build remote-server`)
 fails at the `fe-builder` stage with:
 
-```
+```text
 ! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-11.9.0.tgz
 warn: This version of pnpm requires at least Node.js v22.13
 warn: The current version of Node.js is v20.20.2

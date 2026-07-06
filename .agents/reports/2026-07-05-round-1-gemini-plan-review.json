@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "gemini",
+    "--skip-trust",
+    "--approval-mode=plan",
+    "--output-format=json",
+    "-p",
+    ""
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest",
+  "exit_code": 0,
+  "finished_at": "2026-07-05T20:19:35.248065+00:00",
+  "notes": [],
+  "prompt_file": "/tmp/gemini-review-prompt.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest/.agents/reports/2026-07-05-round-1-gemini-plan-review.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest/.agents/reports/2026-07-05-round-1-gemini-plan-review.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-05T20:16:37.955910+00:00",
+  "status": "ok",
+  "task": "plan-review",
+  "tool": "gemini",
+  "tool_version": "0.49.0"
+}

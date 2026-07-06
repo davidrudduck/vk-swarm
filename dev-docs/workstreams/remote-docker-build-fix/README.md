@@ -1,11 +1,11 @@
 ---
 workstream: remote-docker-build-fix
 doc_type: readme
-status: active
+status: shipped
 title: "Fix crates/remote Docker build — unblock remote/hive standup"
 staging_pointers:
+  - docs/plans/remote-docker-build-fix
   - docs/superpowers/specs/2026-07-05-remote-docker-build-fix.md
-  - docs/superpowers/specs/2026-07-05-remote-docker-build-root-cause.md
 ---
 
 # remote-docker-build-fix

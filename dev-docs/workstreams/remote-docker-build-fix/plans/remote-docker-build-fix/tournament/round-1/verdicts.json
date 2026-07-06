@@ -1,0 +1,54 @@
+{
+  "verdicts": {
+    "gemini-F001": {
+      "valid": true,
+      "remediation_passes": false,
+      "reviewer": "claude-sonnet-4-6",
+      "note": "Valid: pipefail missing from docker compose|tee pipeline. Remediation REJECTED: || true would conceal failures, not fix them."
+    },
+    "codex-F001": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "gemini",
+      "note": "Valid: pipefail missing (overlaps gemini-F001). Remediation PASS: set -o pipefail is exactly correct."
+    },
+    "codex-F002": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "gemini",
+      "note": "Valid: ARG PNPM_VERSION has no default. Remediation PASS: ARG PNPM_VERSION=10.25.0 default is correct."
+    },
+    "opus-F001": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "codex",
+      "note": "Valid: root Dockerfile hardcodes pnpm@10.25.0 with no version-drift guard. Cross-file comment exists but no automated check. Remediation PASS: ARG PNPM_VERSION + variable reference is correct."
+    },
+    "opus-F002": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "gemini",
+      "steal": true,
+      "steal_from": "codex-F002",
+      "note": "Duplicate of codex-F002 (ARG PNPM_VERSION no default). Concurrent but not unique \u2014 steal, 0 points."
+    },
+    "opus-F003": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "codex",
+      "note": "Valid: remote-hive-build.yml missing trailing newline (POSIX). Remediation PASS: trivial fix."
+    },
+    "opus-F004": {
+      "valid": false,
+      "remediation_passes": false,
+      "reviewer": "gemini",
+      "note": "EXCLUDED: debug 4.4.3\u21924.4.1 is transitive-side-effect of pnpm install during merge conflict resolution, not related to our Dockerfile/Node/pnpm changes."
+    },
+    "opus-F005": {
+      "valid": false,
+      "remediation_passes": false,
+      "reviewer": "codex",
+      "note": "REJECTED: [ \"$MAJOR\" -ge 22 ] is intentional FLOOR \u2014 the whole fix tightens engines.node to >=22.13, so enforcing >=22 is correct. Not a bug."
+    }
+  }
+}

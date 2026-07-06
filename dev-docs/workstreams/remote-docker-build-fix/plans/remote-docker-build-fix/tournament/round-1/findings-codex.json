@@ -1,0 +1,19 @@
+{
+  "model": "codex",
+  "findings": [
+    {
+      "id": "codex-F001",
+      "severity": "blocking",
+      "issue": "The Docker build CI step can pass even when `docker compose build` fails because the build command is piped through `tee` without `pipefail`; GitHub's default `bash -e` does not fail on a non-final pipeline command.",
+      "citation": ".github/workflows/remote-hive-build.yml:73 \u2014 `docker compose --env-file .env.remote build --no-cache remote-server 2>&1 | tee /tmp/ci-build.log`; command proof: `bash -e -c 'false 2>&1 | tee /dev/null >/dev/null; echo survived-without-pipefail'; printf 'exit=%s\\n' $?` output `survived-without-pipefail` and `exit=0`; with `bash -e -o pipefail` output `exit=1`.",
+      "remediation": "Add pipefail before the build pipeline:\n```yaml\n      - name: Build remote-server image\n        run: |\n          set -o pipefail\n          export PNPM_VERSION=$(jq -r .packageManager package.json | sed 's/pnpm@//')\n          cp crates/remote/.env.remote.dev crates/remote/.env.remote\n          echo 'LOOPS_EMAIL_API_KEY=ci-placeholder' >> crates/remote/.env.remote\n          (cd crates/remote && docker compose --env-file .env.remote build --no-cache remote-server 2>&1 | tee /tmp/ci-build.log)\n```\n"
+    },
+    {
+      "id": "codex-F002",
+      "severity": "should-fix",
+      "issue": "The remote Dockerfile does not pin a default pnpm version, so direct `docker build -f crates/remote/Dockerfile .` invocations expand the Corepack target to `pnpm@` unless Compose supplies `PNPM_VERSION`.",
+      "citation": "crates/remote/Dockerfile:9-11 \u2014 `ARG PNPM_VERSION` has no default and line 11 runs `corepack prepare \"pnpm@${PNPM_VERSION}\" --activate`; command proof: `PNPM_VERSION=; printf 'expanded corepack argument: pnpm@%s\\n' \"$PNPM_VERSION\"` output `expanded corepack argument: pnpm@`.",
+      "remediation": "Pin the Dockerfile ARG default to the packageManager version:\n```dockerfile\nARG PNPM_VERSION=10.25.0\nRUN corepack enable \\\n && corepack prepare \"pnpm@${PNPM_VERSION}\" --activate\n```\n"
+    }
+  ]
+}

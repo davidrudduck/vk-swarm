@@ -2,10 +2,13 @@
 
 ARG APP_NAME=vks-hive-server
 
-FROM node:20-alpine AS fe-builder
+# keep in sync with root Dockerfile's builder stage (both node:24-alpine)
+FROM node:24-alpine AS fe-builder
 WORKDIR /repo
 
-RUN corepack enable
+ARG PNPM_VERSION=10.25.0
+RUN corepack enable \
+ && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY scripts/ scripts/

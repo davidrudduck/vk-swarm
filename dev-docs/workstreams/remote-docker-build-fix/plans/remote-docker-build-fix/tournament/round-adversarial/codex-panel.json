@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "codex",
+    "exec",
+    "-C",
+    "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest",
+    "--sandbox",
+    "read-only",
+    "--json",
+    "-"
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest",
+  "exit_code": 0,
+  "finished_at": "2026-07-05T23:49:04.291540+00:00",
+  "notes": [],
+  "prompt_file": "/tmp/adversarial-plan-fidelity-prompt.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest/docs/plans/remote-docker-build-fix/tournament/round-adversarial/codex-panel.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-forest/.agents/reports/2026-07-05-round-3-codex-plan-fidelity.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-05T23:47:08.956056+00:00",
+  "status": "ok",
+  "task": "codebase-review",
+  "tool": "codex",
+  "tool_version": "codex-cli 0.142.5"
+}

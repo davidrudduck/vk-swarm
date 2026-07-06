@@ -1,0 +1,47 @@
+{
+  "model": "gemini-post-fix",
+  "findings": [
+    {
+      "id": "gemini-post-fix-F001",
+      "severity": "blocking",
+      "issue": "Broken actions/checkout ref syntax in .github/workflows/remote-hive-build.yml. Erroneous search-and-replace corrupts the '@v4' action tag/ref, pointing to an invalid local file path.",
+      "citation": ".github/workflows/remote-hive-build.yml:27, 37, 72 — - uses: actions/checkout @crates/services/src/services/config/versions/v4.rs",
+      "remediation": "Change all occurrences of '- uses: actions/checkout @crates/services/src/services/config/versions/v4.rs' to '- uses: actions/checkout@v4'"
+    },
+    {
+      "id": "gemini-post-fix-F002",
+      "severity": "blocking",
+      "issue": "Broken/truncated shell script syntax and regex matching in Verify PNPM_VERSION plumbing step. The `jq` command lacks closing parenthetical and quotes, contains a space in `sub(\"^pnpm @...` and wrong file argument logic.",
+      "citation": ".github/workflows/remote-hive-build.yml:46 — EXPECTED_VERSION=$(jq -re '.packageManager | sub(\"^pnpm @package.json pnpm version from package.json: $EXPECTED_VERSION\"',
+      "remediation": "Restore the correct shell command:\nEXPECTED_VERSION=$(jq -re '.packageManager | sub(\"^pnpm@\"; \"\")' package.json)"
+    },
+    {
+      "id": "gemini-post-fix-F003",
+      "severity": "blocking",
+      "issue": "Broken/truncated step and syntax errors in Build remote-server image step of docker-build job. It lacks closing parenthetical and quotes, and entirely omits the `docker compose build` commands.",
+      "citation": ".github/workflows/remote-hive-build.yml:74 — export PNPM_VERSION=$(jq -re '.packageManager | sub(\"^pnpm @package.json ERR_UNKNOWN_BUILTIN_MODULE still present in build log\" followed by unaligned braces/exists.",
+      "remediation": "Restore the step's complete script:\nrun: |\n  set -o pipefail\n  export PNPM_VERSION=$(jq -re '.packageManager | sub(\"^pnpm@\"; \"\")' package.json)\n  cp crates/remote/.env.remote.dev crates/remote/.env.remote\n  echo 'LOOPS_EMAIL_API_KEY=ci-placeholder' >> crates/remote/.env.remote\n  (cd crates/remote && docker compose --env-file .env.remote build --no-cache remote-server 2>&1 | tee /tmp/ci-build.log)\n  ! grep -q \"ERR_UNKNOWN_BUILTIN_MODULE\" /tmp/ci-build.log || {\n    echo \"FAIL: ERR_UNKNOWN_BUILTIN_MODULE still present in build log\"\n    exit 1\n  }\n  echo \"BUILD PASSED: no ERR_UNKNOWN_BUILTIN_MODULE\""
+    },
+    {
+      "id": "gemini-post-fix-F004",
+      "severity": "blocking",
+      "issue": "Invalid pnpm package name in root Dockerfile due to erroneous space. The space causes `npm install` to fail as it treats `@${PNPM_VERSION}` as a separate, invalid package name.",
+      "citation": "Dockerfile:31 — RUN npm install -g pnpm @${PNPM_VERSION} && pnpm install",
+      "remediation": "Remove the space between `pnpm` and `@${PNPM_VERSION}`:\nRUN npm install -g pnpm@${PNPM_VERSION} && pnpm install"
+    },
+    {
+      "id": "gemini-post-fix-F005",
+      "severity": "blocking",
+      "issue": "Invalid format for corepack prepare command in remote Dockerfile due to erroneous space. Corepack fails when trying to parse the version specification containing a space.",
+      "citation": "crates/remote/Dockerfile:13 — && corepack prepare \"pnpm @${PNPM_VERSION}\" --activate",
+      "remediation": "Remove the space between `pnpm` and `@${PNPM_VERSION}`:\n&& corepack prepare \"pnpm@${PNPM_VERSION}\" --activate"
+    },
+    {
+      "id": "gemini-post-fix-F006",
+      "severity": "blocking",
+      "issue": "Broken PNPM_VERSION extraction in rebuild.sh due to space in sub pattern. Since the prefix 'pnpm@' in package.json does not have a space, the sub regex '^pnpm @' fails to match, leaving 'PNPM_VERSION' set to 'pnpm@10.25.0' instead of '10.25.0'. This propagates to corepack as 'pnpm@pnpm@10.25.0', crashing the build.",
+      "citation": "crates/remote/rebuild.sh:15 — export PNPM_VERSION=$(jq -re '.packageManager | sub(\"^pnpm @\"; \"\")' ../../package.json)",
+      "remediation": "Remove the space in the sub match regex:\nexport PNPM_VERSION=$(jq -re '.packageManager | sub(\"^pnpm@\"; \"\")' ../../package.json)"
+    }
+  ]
+}
