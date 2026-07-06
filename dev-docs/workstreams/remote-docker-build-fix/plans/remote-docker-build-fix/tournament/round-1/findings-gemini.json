@@ -1,0 +1,12 @@
+{
+  "model": "gemini",
+  "findings": [
+    {
+      "id": "gemini-F001",
+      "severity": "should-fix",
+      "issue": "Build step will fail early due to pipefail, bypassing custom log assertion",
+      "citation": ".github/workflows/remote-hive-build.yml:74 \u2014 (cd crates/remote && docker compose --env-file .env.remote build --no-cache remote-server 2>&1 | tee /tmp/ci-build.log)",
+      "remediation": "(cd crates/remote && docker compose --env-file .env.remote build --no-cache remote-server 2>&1 | tee /tmp/ci-build.log) || true"
+    }
+  ]
+}

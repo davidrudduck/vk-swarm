@@ -47,7 +47,7 @@
     "vite": "^6.3.5"
   },
   "engines": {
-    "node": ">=18",
+    "node": ">=22.13",
     "pnpm": ">=8"
   },
   "packageManager": "pnpm@10.25.0",

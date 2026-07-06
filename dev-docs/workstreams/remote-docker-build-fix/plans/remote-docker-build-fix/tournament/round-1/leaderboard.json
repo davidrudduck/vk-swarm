@@ -1,0 +1,8 @@
+{
+  "scores": {
+    "gemini": 1.0,
+    "codex": 6.0,
+    "claude-sonnet-4-6": 3.5
+  },
+  "winner": "codex"
+}

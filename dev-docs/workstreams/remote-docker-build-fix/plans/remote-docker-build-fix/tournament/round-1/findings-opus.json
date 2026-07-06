@@ -1,0 +1,40 @@
+{
+  "model": "claude-sonnet-4-6",
+  "findings": [
+    {
+      "id": "opus-F001",
+      "severity": "should-fix",
+      "issue": "Root Dockerfile pnpm version hardcoded; CI assertion gap lets it drift from package.json",
+      "citation": "Dockerfile:31 \u2014 `RUN npm install -g pnpm@10.25.0 && pnpm install` (hardcoded literal). crates/remote/Dockerfile:8-11 \u2014 uses `ARG PNPM_VERSION` + `corepack prepare \"pnpm@${PNPM_VERSION}\" --activate` (driven by compose build-arg). The CI step at .github/workflows/remote-hive-build.yml:44 only verifies the docker-compose.yml fallback against package.json; it never checks the root Dockerfile literal. Bumping packageManager in package.json will not be caught for the root Dockerfile.",
+      "remediation": "Add `ARG PNPM_VERSION=10.25.0` to the root Dockerfile and replace the hardcoded install line:\n\nARG PNPM_VERSION=10.25.0\nRUN npm install -g pnpm@${PNPM_VERSION} && pnpm install\n\nAlternatively, extend the CI assertion in remote-hive-build.yml to also grep the root Dockerfile:\n\nROOT_PNPM=$(grep -oE 'pnpm@[0-9.]+' Dockerfile | head -1 | sed 's/pnpm@//')\n[ \"$ROOT_PNPM\" = \"$EXPECTED_VERSION\" ] || { echo \"Root Dockerfile pnpm@$ROOT_PNPM != package.json $EXPECTED_VERSION\"; exit 1; }"
+    },
+    {
+      "id": "opus-F002",
+      "severity": "should-fix",
+      "issue": "`ARG PNPM_VERSION` in crates/remote/Dockerfile has no default; bare `docker build` produces invalid corepack invocation",
+      "citation": "crates/remote/Dockerfile:9 \u2014 `ARG PNPM_VERSION` (no default value declared). crates/remote/Dockerfile:10-11 \u2014 `RUN corepack enable && corepack prepare \"pnpm@${PNPM_VERSION}\" --activate`. When PNPM_VERSION is unset, this expands to `corepack prepare \"pnpm@\"` which fails. The docker-compose.yml fallback (line 123: `PNPM_VERSION: ${PNPM_VERSION:-10.25.0}`) only protects the docker-compose path; a direct `docker build -f crates/remote/Dockerfile .` has no such protection.",
+      "remediation": "ARG PNPM_VERSION=10.25.0"
+    },
+    {
+      "id": "opus-F003",
+      "severity": "info",
+      "issue": "remote-hive-build.yml missing trailing newline (POSIX violation)",
+      "citation": ".github/workflows/remote-hive-build.yml:78 \u2014 diff annotation `\\ No newline at end of file` on the final `echo \"BUILD PASSED: no ERR_UNKNOWN_BUILTIN_MODULE\"` line. Functionally harmless but violates POSIX text-file convention.",
+      "remediation": "Add a trailing newline after line 78."
+    },
+    {
+      "id": "opus-F004",
+      "severity": "info",
+      "issue": "Unexplained `debug` transitive dependency downgrade from 4.4.3 to 4.4.1 in pnpm lockfile snapshots",
+      "citation": "pnpm-lock.yaml \u2014 http-proxy-agent and https-proxy-agent snapshots: `-      debug: 4.4.3` / `+      debug: 4.4.1`. No entry in the diff explains why the resolved version regressed. This indicates lock file regeneration touched more than the intended i18next/react-i18next additions.",
+      "remediation": "Run `pnpm install` from a clean state and verify the lockfile stabilises at 4.4.3 (or the latest resolved version). If 4.4.1 is the correct resolution, add a comment explaining the constraint that forces it."
+    },
+    {
+      "id": "opus-F005",
+      "severity": "info",
+      "issue": "engines.node CI threshold hardcoded to 22, decoupled from actual package.json constraint",
+      "citation": ".github/workflows/remote-hive-build.yml:56 \u2014 `[ \"$MAJOR\" -ge 22 ]`. package.json engines.node is now `>=22.13`. If a future update raises engines.node to `>=24`, this check still passes with any node >=22 engine string, masking a more permissive-than-intended constraint.",
+      "remediation": "Derive the threshold dynamically from the package.json engines.node value itself rather than hardcoding 22, or document the intentional floor explicitly."
+    }
+  ]
+}

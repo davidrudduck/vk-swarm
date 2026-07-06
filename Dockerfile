@@ -1,4 +1,6 @@
 # Build stage
+# IMPORTANT: keep the node base image in sync with crates/remote/Dockerfile.
+# Run scripts/assert-dockerfile-node-match.sh to verify.
 FROM node:24-alpine AS builder
 
 # Install build dependencies
@@ -25,7 +27,9 @@ COPY frontend/package*.json ./frontend/
 COPY npx-cli/package*.json ./npx-cli/
 
 # Install pnpm and dependencies
-RUN npm install -g pnpm && pnpm install
+# keep in sync with crates/remote/Dockerfile's fe-builder pnpm version
+ARG PNPM_VERSION=10.25.0
+RUN npm install -g pnpm@${PNPM_VERSION} && pnpm install
 
 # Copy source code
 COPY . .
