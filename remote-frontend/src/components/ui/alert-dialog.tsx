@@ -19,6 +19,7 @@ const AlertDialog = React.forwardRef<
       />
       <div
         ref={ref}
+        role="alertdialog"
         className={cn(
           'relative z-[9999] grid w-full max-w-lg gap-4 bg-background p-6 shadow-lg duration-200 sm:rounded-lg my-8',
           className

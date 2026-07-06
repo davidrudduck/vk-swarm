@@ -4,6 +4,11 @@ import { useQuery } from '@tanstack/react-query'
 import App from './App'
 import { useProfile } from '@/components/ProfileProvider'
 
+vi.mock('sonner', () => ({
+  Toaster: () => null,
+  toast: { error: vi.fn(), success: vi.fn(), message: vi.fn() },
+}))
+
 vi.mock('./AppRouter', () => ({
   default: () => {
     const ProfileProbe = () => {

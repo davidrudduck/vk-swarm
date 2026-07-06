@@ -1,0 +1,75 @@
+{
+  "model": "claude",
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocking",
+      "issue": "useSyncStatus() is instantiated independently in both Navbar and Tasks.tsx. The markSynced() call in Tasks writes to a private useRef that has no connection to the Navbar's sync dot. The Navbar's green/yellow/red indicator never reflects actual data arrival.",
+      "citation": "remote-frontend/src/lib/electric/sync-status.ts:17-42; remote-frontend/src/components/layout/Navbar.tsx:17-22; remote-frontend/src/pages/Tasks.tsx:47-52",
+      "remediation": "Move sync status to a shared module-level ref and subscription pattern, or elevate to React context, so markSynced from TasksBoard updates the same state Navbar reads."
+    },
+    {
+      "id": "F002",
+      "severity": "blocking",
+      "issue": "setupTaskApiMocks is imported but never called in board.spec.ts. With eslint --max-warnings 0 and the unused-imports plugin, this is a CI-breaking lint error.",
+      "citation": "remote-frontend/e2e/board.spec.ts:3",
+      "remediation": "Remove the unused import of setupTaskApiMocks from board.spec.ts, or call it if the test needs it."
+    },
+    {
+      "id": "F003",
+      "severity": "blocking",
+      "issue": "E2E logout test asserts localStorage.access_token === null, but handleLogout in Navbar.tsx only calls oauthApi.logout() then window.location.reload() — it never clears the token. Test will fail.",
+      "citation": "remote-frontend/src/components/layout/Navbar.tsx:14-21; remote-frontend/e2e/auth.spec.ts:59-67",
+      "remediation": "Add localStorage.removeItem('access_token') to handleLogout before or after the API call, so the E2E assertion passes."
+    },
+    {
+      "id": "F004",
+      "severity": "blocking",
+      "issue": "replayMutations has no concurrency guard. If isOnline transitions true twice rapidly or component remounts during replay, two concurrent calls read the same queue and each writes back an independent remaining array, corrupting queue state.",
+      "citation": "remote-frontend/src/lib/mutation-queue.ts:34-48; remote-frontend/src/pages/Tasks.tsx:55-66",
+      "remediation": "Add a module-level isReplaying boolean flag to ensure only one replay runs at a time, or use idb-keyval's transactional update to drain the queue atomically."
+    },
+    {
+      "id": "F005",
+      "severity": "should-fix",
+      "issue": "AuthGuard redirects to /login?return_to=… but LoginPage never reads return_to when building the OAuth redirect. Users always land at /nodes after login, ignoring their original destination.",
+      "citation": "remote-frontend/src/components/AuthGuard.tsx:22; remote-frontend/src/AppRouter.tsx:42-50",
+      "remediation": "Read return_to from search params in LoginPage, validate with isSafeReturnTo, and include it in the OAuth callback URL passed to initOAuth."
+    },
+    {
+      "id": "F006",
+      "severity": "should-fix",
+      "issue": "idb-keyval mock returns 0 instead of undefined for missing keys. Tests pass accidentally because 0 is falsy, but the mock type is wrong.",
+      "citation": "remote-frontend/src/pages/Tasks.test.tsx:36",
+      "remediation": "Change the idb-keyval get mock to return undefined for missing keys to match the library's actual behavior."
+    },
+    {
+      "id": "F007",
+      "severity": "should-fix",
+      "issue": "optimistic.ts (optimisticDelete/optimisticUpdate) is entirely unused — no importer. Tasks.tsx uses useRef<Set>/<Map> directly. Dead scaffolding.",
+      "citation": "remote-frontend/src/lib/electric/optimistic.ts:1-48 — grep shows no import of this module",
+      "remediation": "Either wire optimistic.ts into a React Query consumer (Nodes page) or remove it and its tests to avoid misleading future maintainers."
+    },
+    {
+      "id": "F008",
+      "severity": "should-fix",
+      "issue": "cross-node.spec.ts TaskDetail shows correct node_id label test is hollow: TaskDetail shows logs/events (both empty in mock), so the test passes only because node-alpha is visible in the board <li>.",
+      "citation": "remote-frontend/e2e/cross-node.spec.ts:31-35",
+      "remediation": "Add mock output logs or progress events to the Electric mock so TaskDetail renders the assignment-specific content, or verify the node label through the board column li directly."
+    },
+    {
+      "id": "F009",
+      "severity": "info",
+      "issue": "wasOffline exported from useOnlineStatus but never consumed by any component.",
+      "citation": "remote-frontend/src/lib/offline.ts:3",
+      "remediation": "Remove wasOffline from the interface and hook, or add a user-facing notification component that uses it."
+    },
+    {
+      "id": "F010",
+      "severity": "info",
+      "issue": "handleDelete is declared async despite containing no await.",
+      "citation": "remote-frontend/src/pages/Tasks.tsx:96",
+      "remediation": "Remove async keyword from handleDelete since it only sets state synchronously."
+    }
+  ]
+}

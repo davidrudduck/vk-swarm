@@ -61,6 +61,7 @@
           "features/database-maintenance",
           "core-features/completing-a-task",
           "core-features/mobile-experience",
+          "core-features/error-resilience",
           "core-features/task-cards"
         ]
       },
@@ -98,6 +99,7 @@
         "pages": [
           "development/dev-server-lifecycle",
           "development/testing",
+          "development/remote-frontend",
           "architecture/ui-responsive-design",
           "architecture/frontend/file-viewer-components",
           "architecture/storage-paths",

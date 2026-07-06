@@ -6,6 +6,8 @@ import InvitationPage from './pages/InvitationPage'
 import InvitationCompletePage from './pages/InvitationCompletePage'
 import NotFoundPage from './pages/NotFoundPage'
 import { oauthApi } from '@/lib/api/oauth'
+import { AuthGuard } from '@/components/AuthGuard'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { retrieveVerifier, clearVerifier } from '@/pkce'
 import type { OAuthProvider } from '@/api'
 import { generateVerifier, generateChallenge, storeVerifier } from '@/pkce'
@@ -25,6 +27,7 @@ function RootRedirect() {
 }
 
 function LoginPage() {
+  const [searchParams] = useSearchParams()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -38,9 +41,10 @@ function LoginPage() {
       storeVerifier(verifier)
 
       const appBase = import.meta.env.VITE_APP_BASE_URL || window.location.origin
-      const returnTo = `${appBase}/oauth/callback`
+      const returnTo = searchParams.get('return_to') || '/nodes'
+      const callbackUrl = `${appBase}/oauth/callback?return_to=${encodeURIComponent(returnTo)}`
 
-      const result = await initOAuth(provider, returnTo, challenge)
+      const result = await initOAuth(provider, callbackUrl, challenge)
       window.location.assign(result.authorize_url)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'OAuth init failed')
@@ -168,10 +172,10 @@ export function createRoutes() {
     { path: '/invitations/:token/accept', element: <InvitationPage /> },
     { path: '/invitations/:token/complete', element: <InvitationCompletePage /> },
     {
-      element: <NormalLayout />,
+      element: <AuthGuard><NormalLayout /></AuthGuard>,
       children: [
-        { path: '/nodes', element: <Suspense fallback={<div className="p-8">Loading nodes...</div>}><Nodes /></Suspense> },
-        { path: '/tasks', element: <Suspense fallback={<div className="p-8">Loading tasks...</div>}><TasksBoard /></Suspense> },
+        { path: '/nodes', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading nodes...</div>}><Nodes /></Suspense></ErrorBoundary> },
+        { path: '/tasks', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading tasks...</div>}><TasksBoard /></Suspense></ErrorBoundary> },
         { path: '*', element: <NotFoundPage /> },
       ],
     },
