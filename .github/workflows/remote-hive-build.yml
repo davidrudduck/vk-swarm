@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - run: bash scripts/assert-dockerfile-node-match.sh
 
   build-remote:
@@ -33,13 +35,15 @@ jobs:
     needs: assert-dockerfile-match
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Verify rebuild.sh syntax
         run: |
           bash -n crates/remote/rebuild.sh
           echo "rebuild.sh syntax OK"
       - name: Verify PNPM_VERSION plumbing
         run: |
-          EXPECTED_VERSION=$(jq -r .packageManager package.json | sed 's/pnpm@//')
+          EXPECTED_VERSION=$(jq -re '.packageManager | sub("^pnpm@"; "")' package.json)
           echo "Expected pnpm version from package.json: $EXPECTED_VERSION"
           COMPOSE_VERSION=$(grep -oE 'PNPM_VERSION: .*\{[a-zA-Z0-9_]+:-([0-9.]+)\}' crates/remote/docker-compose.yml | grep -oE '[0-9.]+' | tail -1)
           echo "Compose fallback version: $COMPOSE_VERSION"
@@ -52,8 +56,10 @@ jobs:
         run: |
           ENGINE=$(jq -r '.engines.node' package.json)
           echo "engines.node: $ENGINE"
-          MAJOR=$(echo "$ENGINE" | grep -oE '[0-9]+' | head -1)
-          [ "$MAJOR" -ge 22 ] || { echo "engines.node too permissive: $ENGINE"; exit 1; }
+          if [ "$ENGINE" != ">=22.13" ]; then
+            echo "engines.node mismatch: expected >=22.13, got $ENGINE"
+            exit 1
+          fi
       - name: Verify cross-file coupling comments exist
         run: |
           grep -q "keep in sync" Dockerfile || { echo "Missing cross-file comment in root Dockerfile"; exit 1; }
@@ -65,10 +71,12 @@ jobs:
     needs: build-remote
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Build remote-server image
         run: |
           set -o pipefail
-          export PNPM_VERSION=$(jq -r .packageManager package.json | sed 's/pnpm@//')
+          export PNPM_VERSION=$(jq -re '.packageManager | sub("^pnpm@"; "")' package.json)
           cp crates/remote/.env.remote.dev crates/remote/.env.remote
           echo 'LOOPS_EMAIL_API_KEY=ci-placeholder' >> crates/remote/.env.remote
           (cd crates/remote && docker compose --env-file .env.remote build --no-cache remote-server 2>&1 | tee /tmp/ci-build.log)

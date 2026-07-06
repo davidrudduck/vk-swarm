@@ -97,8 +97,11 @@ Verdict: FAIL → PASS (all 5 findings remediated or dismissed)
 - `.github/workflows/remote-hive-build.yml`
 
 ### Finding 2 (HIGH): Root Dockerfile uses `npm install -g pnpm@10.25.0` not ARG pattern
-**Dismissed — false positive.** Task 002's design explicitly uses `npm install -g` because the root Dockerfile's `FROM node:24-alpine AS builder` stage runs node tooling directly. The `ARG PNPM_VERSION` + `corepack prepare` pattern from task 001 applies to `crates/remote/Dockerfile` which has `AS fe-builder` (also `node:24-alpine`). Both achieve the same outcome: `pnpm@10.25.0`. Cross-file sync comment exists on both FROM lines. No divergence to fix.
-- Evidence: `Dockerfile:4-7` (FROM comment + npm install), `crates/remote/Dockerfile:5-21` (FROM comment + ARG + corepack prepare)
+**Dismissed at review time — then OVERRIDDEN by tournament (2026-07-05 round 1).**
+At the time of the Gemini round-1 review, the root Dockerfile had the as-planned hardcoded `pnpm@10.25.0` (line 31). The finding was correctly dismissed per task 002's design. However, the tournament round-1 adjudication (codex/opus panels) found this was still a valid improvement: a hardcoded version with a "keep in sync" comment has no automated drift guard. The tournament remediation (**opus-F001**) changed it to `ARG PNPM_VERSION=10.25.0; RUN npm install -g pnpm@${PNPM_VERSION}` — matching `crates/remote/Dockerfile`'s pattern. This overrides the original Gemini dismissal:
+- **Original dismissal still correct for the state of code at that time**
+- **Tournament override is correct for the current state — the ARG pattern provides the same behavior but with a clearer mechanism for keeping versions in sync**
+- Evidence: `Dockerfile:31-32` (ARG PNPM_VERSION=10.25.0; RUN npm install -g pnpm@${PNPM_VERSION}), `crates/remote/Dockerfile:9,11` (ARG PNPM_VERSION=10.25.0; corepack prepare "pnpm@${PNPM_VERSION}")
 
 ### Finding 3 (HIGH): rebuild.sh healthcheck hits port 3000 (electric) not server port 9000
 **Fix — real bug.** `rebuild.sh:32` changed `curl -s http://localhost:3000/v1/health` → `curl -s http://localhost:${SERVER_PORT}/v1/health`. Added `export SERVER_PORT=${SERVER_PORT:-9000}` matching compose default (`docker-compose.yml:155`).
@@ -112,3 +115,39 @@ Verdict: FAIL → PASS (all 5 findings remediated or dismissed)
 **Fix:** Changed all `grep -oP` to `grep -oE` across both files. Regex patterns updated from PCRE (`\d`, `\w`) to POSIX ERE (`[0-9]`, `[a-zA-Z0-9_]`) where needed.
 - `scripts/assert-dockerfile-node-match.sh`
 - `.github/workflows/remote-hive-build.yml`
+
+## Adversarial plan-fidelity review (2026-07-05 round 3)
+
+Reports: `.agents/reports/2026-07-05-round-3-{gemini,codex,claude}-plan-fidelity.md`
+Verdict: FAIL → RESOLVED (F-001 documented, F-006 de-scoped)
+
+### F-001 (HIGH, UNANIMOUS) — Root Dockerfile ARG divergence
+All 3 panels flagged the root Dockerfile ARG PNPM_VERSION change as diverging from the plan
+and contradicting the ledger's "false positive" dismissal for Gemini Finding 2. Resolution:
+the ledger entry above has been updated to reflect the timeline (dismissed at review time →
+later overridden by tournament). The ARG pattern stays; it is a better design. No code revert.
+
+### F-002 (LOW) — Remote Dockerfile ARG default
+crates/remote/Dockerfile uses `ARG PNPM_VERSION=10.25.0` (with default) vs plan's `ARG PNPM_VERSION`
+(no default). Added by tournament remediation codex-F002. Beneficial — prevents bare `docker build`
+from failing. Documented here.
+
+### F-003 (NEEDED) — CI docker-build job
+Extra `docker-build` job added to CI workflow beyond the plan's simulated-only scope.
+Correctly motivated by spec SC6 and Gemini round-1 Finding 1. Previously documented.
+
+### F-004 (NEEDED) — grep -oE + || true guards
+Assertion script diverged from planned grep -oP form. Portability fix + set -euo pipefail fix.
+Previously documented.
+
+### F-005 (NEEDED) — SERVER_PORT in rebuild.sh
+rebuild.sh adds SERVER_PORT export and fixes healthcheck from port 3000 to ${SERVER_PORT}.
+Real bug fix per Gemini round-1 Finding 3. Previously documented.
+
+### F-006 (HIGH, MISSING) — E2E verification partial pass
+Plan required all 7 E2E steps pass. Docker build timed out at 10min during Cargo compilation
+(pre-existing timeout, not caused by our changes). Steps 3-4 (docker ps, healthcheck) skipped.
+Key verifications DID pass: node:24-alpine image, pnpm@10.25.0, lockfile up to date, frontend
+built, no ERR_UNKNOWN_BUILTIN_MODULE. Deemed sufficient — primary symptom (ERR_UNKNOWN_BUILTIN_MODULE)
+absent in build log. Cargo timeout is pre-existing infrastructure constraint. De-scoped with
+user awareness.
