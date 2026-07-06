@@ -12,7 +12,8 @@ cd "$(dirname "$0")"
 # Get git info for build
 export VK_GIT_COMMIT=$(git rev-parse --short HEAD)
 export VK_GIT_BRANCH=$(git branch --show-current)
-export PNPM_VERSION=$(jq -re '.packageManager | sub("^pnpm@"; "")' ../../package.json)
+PNPM_VERSION=$(jq -re '.packageManager | sub("^pnpm@"; "")' ../../package.json)
+export PNPM_VERSION
 export SERVER_PORT=${SERVER_PORT:-9000}
 
 echo "Building with commit: $VK_GIT_COMMIT, branch: $VK_GIT_BRANCH"

@@ -45,6 +45,14 @@ jobs:
         run: |
           EXPECTED_VERSION=$(jq -re '.packageManager | sub("^pnpm@"; "")' package.json)
           echo "Expected pnpm version from package.json: $EXPECTED_VERSION"
+          grep -q "ARG PNPM_VERSION=${EXPECTED_VERSION}" Dockerfile || {
+            echo "MISMATCH: root Dockerfile ARG default != package.json ($EXPECTED_VERSION)"
+            exit 1
+          }
+          grep -q "ARG PNPM_VERSION=${EXPECTED_VERSION}" crates/remote/Dockerfile || {
+            echo "MISMATCH: remote Dockerfile ARG default != package.json ($EXPECTED_VERSION)"
+            exit 1
+          }
           COMPOSE_VERSION=$(grep -oE 'PNPM_VERSION: .*\{[a-zA-Z0-9_]+:-([0-9.]+)\}' crates/remote/docker-compose.yml | grep -oE '[0-9.]+' | tail -1)
           echo "Compose fallback version: $COMPOSE_VERSION"
           [ "$COMPOSE_VERSION" = "$EXPECTED_VERSION" ] || {
@@ -76,7 +84,8 @@ jobs:
       - name: Build remote-server image
         run: |
           set -o pipefail
-          export PNPM_VERSION=$(jq -re '.packageManager | sub("^pnpm@"; "")' package.json)
+          PNPM_VERSION=$(jq -re '.packageManager | sub("^pnpm@"; "")' package.json)
+          export PNPM_VERSION
           cp crates/remote/.env.remote.dev crates/remote/.env.remote
           echo 'LOOPS_EMAIL_API_KEY=ci-placeholder' >> crates/remote/.env.remote
           (cd crates/remote && docker compose --env-file .env.remote build --no-cache remote-server 2>&1 | tee /tmp/ci-build.log)
