@@ -11,6 +11,7 @@
 | Workstream | Status | Title | Rescued branches | Contradictions | Staging pointers |
 |---|---|---|---|---|---|
 | foundations-followup1 | shipped | foundations-followup1 | - | - | 2 |
+| remote-docker-build-fix | active | Fix crates/remote Docker build — unblock remote/hive standup | - | - | 2 |
 | remote-services-doctest-revival | active | Bring 32 rust,ignore'd doctests in remote + services crates back to live | - | - | 0 |
 | terminal-session-pty-tests | active | Bring 5 #[ignore]'d PTY-spawning tests in terminal_session back to live | - | - | 0 |
 | ui-overhaul | shipped | ui-overhaul | - | - | 2 |
