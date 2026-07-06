@@ -75,6 +75,8 @@ No divergence to record.
 
 ## Reachability gate
 
+VERDICT: PASS
+
 **(a) CALL-PATH TRACE — production entry points to changed code**
 
 The merged change is reached through three real production entry points:
