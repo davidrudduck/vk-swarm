@@ -1,4 +1,4 @@
-import { get, set, update } from 'idb-keyval';
+import { get, update } from 'idb-keyval';
 
 export interface MutationEntry {
   id: string;
@@ -31,8 +31,14 @@ export async function replayMutations(
   execute: (entry: MutationEntry) => Promise<void>,
   onError: (entry: MutationEntry, error: Error) => void,
 ): Promise<void> {
-  const queue = await get<MutationEntry[]>(QUEUE_KEY);
-  if (!queue || queue.length === 0) return;
+  let queue: MutationEntry[] = [];
+
+  await update<MutationEntry[]>(QUEUE_KEY, (current = []) => {
+    queue = current;
+    return [];
+  });
+
+  if (queue.length === 0) return;
 
   const remaining: MutationEntry[] = [];
 
@@ -45,7 +51,10 @@ export async function replayMutations(
     }
   }
 
-  await set(QUEUE_KEY, remaining);
+  await update<MutationEntry[]>(QUEUE_KEY, (current = []) => [
+    ...remaining,
+    ...current,
+  ]);
 }
 
 export async function getQueueLength(): Promise<number> {

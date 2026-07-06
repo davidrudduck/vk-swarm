@@ -89,17 +89,25 @@ export function TasksBoard() {
       toastSuccess('Task assigned');
     } catch (err) {
       if (err instanceof TypeError && err.message === 'Failed to fetch') {
-        await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
-          taskId,
-          nodeId: selectedNodeId,
-        });
-        toastSuccess('Assignment queued for sync');
+        try {
+          await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
+            taskId,
+            nodeId: selectedNodeId,
+          });
+          toastSuccess('Assignment queued for sync');
+        } catch {
+          toastError('Failed to queue for sync');
+        }
       } else if (err instanceof DOMException && err.name === 'AbortError') {
-        await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
-          taskId,
-          nodeId: selectedNodeId,
-        });
-        toastSuccess('Assignment queued for sync');
+        try {
+          await enqueueMutation('PATCH', `/v1/tasks/${taskId}/executing-node`, {
+            taskId,
+            nodeId: selectedNodeId,
+          });
+          toastSuccess('Assignment queued for sync');
+        } catch {
+          toastError('Failed to queue for sync');
+        }
       } else {
         optimisticAssignsRef.current.delete(taskId);
         toastError(
@@ -122,20 +130,22 @@ export function TasksBoard() {
     optimisticDeletedRef.current.add(taskId);
     try {
       await tasksApi.delete(taskId);
-      toast('Task deleted', {
-        action: {
-          label: 'Undo',
-          onClick: () => toast.success('Undo not available for this task'),
-        },
-        duration: 5000,
-      });
+      toast('Task deleted');
     } catch (err) {
       if (err instanceof TypeError && err.message === 'Failed to fetch') {
-        await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
-        toastSuccess('Deletion queued for sync');
+        try {
+          await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
+          toastSuccess('Deletion queued for sync');
+        } catch {
+          toastError('Failed to queue delete for sync');
+        }
       } else if (err instanceof DOMException && err.name === 'AbortError') {
-        await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
-        toastSuccess('Deletion queued for sync');
+        try {
+          await enqueueMutation('DELETE', `/v1/tasks/${taskId}`, taskId);
+          toastSuccess('Deletion queued for sync');
+        } catch {
+          toastError('Failed to queue delete for sync');
+        }
       } else {
         optimisticDeletedRef.current.delete(taskId);
         toastError(

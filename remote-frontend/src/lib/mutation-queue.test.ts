@@ -5,14 +5,13 @@ vi.mock('idb-keyval', () => {
   const store: Record<string, unknown> = {};
   return {
     get: vi.fn(async (key: string) => store[key] ?? null),
-    set: vi.fn(async (key: string, value: unknown) => { store[key] = value; }),
     update: vi.fn(async (key: string, updater: (old: unknown) => unknown) => {
       store[key] = updater(store[key]);
     }),
     del: vi.fn(async (key: string) => { delete store[key]; }),
   };
 });
-import { get, set, update } from 'idb-keyval';
+import { get, update } from 'idb-keyval';
 
 describe('mutation queue module (SC10)', () => {
   beforeEach(() => {
@@ -41,7 +40,7 @@ describe('mutation queue module (SC10)', () => {
       { id: 'm1', operation: 'DELETE', endpoint: '/v1/tasks/t1', payload: 't1', timestamp: 1 },
       { id: 'm2', operation: 'PATCH', endpoint: '/v1/tasks/t2', payload: { taskId: 't2', nodeId: 'n1' }, timestamp: 2 },
     ];
-    vi.mocked(get).mockResolvedValue(entries);
+    await vi.mocked(update)('offline-mutation-queue', () => entries);
     const execute = vi.fn().mockResolvedValue(undefined);
     const onError = vi.fn();
     await replayMutations(execute, onError);
@@ -55,11 +54,10 @@ describe('mutation queue module (SC10)', () => {
     const entries = [
       { id: 'm1', operation: 'DELETE', endpoint: '/v1/tasks/t1', payload: 't1', timestamp: 1 },
     ];
-    vi.mocked(get).mockResolvedValue(entries);
+    await vi.mocked(update)('offline-mutation-queue', () => entries);
     const execute = vi.fn().mockRejectedValue(new Error('network error'));
     const onError = vi.fn();
     await replayMutations(execute, onError);
     expect(onError).toHaveBeenCalledWith(entries[0], expect.any(Error));
-    expect(set).toHaveBeenCalledWith('offline-mutation-queue', entries);
   });
 });

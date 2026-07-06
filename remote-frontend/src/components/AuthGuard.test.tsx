@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AuthGuard } from './AuthGuard';
 
@@ -38,13 +38,18 @@ describe('AuthGuard (SC2)', () => {
     expect(screen.queryByText('protected content')).toBeNull();
   });
 
-  it('redirects to /login when signed out', () => {
+  it('redirects to /login when signed out', async () => {
     mockedUseProfile.mockReturnValue({ isSignedIn: false, isLoaded: true });
-    renderWithRouter(
-      <AuthGuard><div>protected content</div></AuthGuard>,
-      ['/nodes'],
+    render(
+      <MemoryRouter initialEntries={['/nodes']}>
+        <Routes>
+          <Route path="/nodes" element={<AuthGuard><div>protected content</div></AuthGuard>} />
+          <Route path="/login" element={<div>login page</div>} />
+        </Routes>
+      </MemoryRouter>,
     );
-    expect(screen.queryByText('protected content')).toBeNull();
-    expect(screen.queryByText('Loading...')).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByText('login page')).toBeDefined();
+    });
   });
 });

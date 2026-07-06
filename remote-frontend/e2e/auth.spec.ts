@@ -83,6 +83,7 @@ test.describe('OAuth PKCE auth flow (SC12)', () => {
 
     await page.locator('[aria-label="Logout"]').click();
 
+    await page.waitForURL('**/login');
     const token = await page.evaluate(() =>
       localStorage.getItem('access_token'),
     );

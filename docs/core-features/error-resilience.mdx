@@ -1,0 +1,61 @@
+---
+title: Error Resilience
+description: Built-in error recovery, offline mode, and toast notifications in the VK Swarm Console
+audience: user
+component: remote-frontend
+sources:
+  - remote-frontend/package.json
+  - remote-frontend/vite.config.ts
+  - remote-frontend/src/lib/toast.ts
+  - remote-frontend/src/lib/pwa.ts
+  - remote-frontend/src/lib/offline.ts
+generated: 2026-07-06
+---
+
+The VK Swarm Console includes layers of resilience so your workflow continues even when things go wrong — a network blip, a server error, or an unexpected crash.
+
+## Offline Mode
+
+When your connection drops, the Console keeps working. API calls that would normally fail are queued and replayed automatically when you come back online.
+
+A reconnect banner appears at the top of every page while you are offline. Once the connection is restored, pending mutations replay in the background and a toast confirms how many were synced.
+
+A sync status indicator in the navbar shows whether your local data is current:
+
+| Indicator | Meaning |
+|-----------|---------|
+| Green dot | Live data is fully synced |
+| Grey dot | Connecting or reconnecting |
+| Red dot with count | N queued mutations pending sync |
+
+The indicator updates as mutations complete — wait for green to confirm all changes are persisted.
+
+## Installing as a PWA
+
+The Console is installable as a Progressive Web App on desktop and mobile:
+
+1. Visit the Console in Chrome, Edge, or Safari
+2. Look for the install icon in the address bar (desktop) or the "Add to Home Screen" banner (mobile)
+3. The installed app runs in its own window, works offline, and caches API responses for faster load
+
+The PWA manifest registers "VK Swarm Console" as a standalone app with the dark theme colour.
+
+## Toast Notifications
+
+All actions that succeed or fail produce a toast notification so you know what happened:
+
+- **Delete a task:** Shows a confirmation dialog, then a success toast
+- **Assign a node:** Shows a loading state on the button, then a success toast
+- **Errors:** A red toast with the error message and an optional action button
+
+Toasts auto-dismiss after a few seconds. Delete toasts stay for 5 seconds with an Undo button.
+
+## Error Recovery
+
+If a page crashes during rendering, the Console catches the error and shows a fallback screen instead of a blank white page. The fallback includes a **Reload** button that resets the app to a working state.
+
+This Error Boundary wraps every authenticated page, so a crash in one component does not take down the whole app.
+
+## Auth Protection
+
+Routes that require a signed-in user (`/nodes`, `/tasks`) are guarded. Navigating to them without a valid session redirects you to the login page. After signing in, you return to the page you were trying to reach.

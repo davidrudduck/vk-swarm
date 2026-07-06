@@ -1,0 +1,197 @@
+---
+title: Remote Frontend Architecture
+description: Patterns and conventions for extending the VK Swarm Console frontend
+audience: developer
+component: remote-frontend
+sources:
+  - remote-frontend/package.json
+  - remote-frontend/vite.config.ts
+  - remote-frontend/src/components/ErrorBoundary.tsx
+  - remote-frontend/src/components/AuthGuard.tsx
+  - remote-frontend/src/lib/toast.ts
+  - remote-frontend/src/lib/pwa.ts
+  - remote-frontend/src/lib/offline.ts
+  - remote-frontend/src/lib/electric/sync-status.ts
+  - remote-frontend/src/lib/mutation-queue.ts
+  - remote-frontend/e2e/fixtures/mock-api.ts
+  - remote-frontend/e2e/fixtures/mock-electric.ts
+generated: 2026-07-06
+---
+
+The `remote-frontend/` directory is a Vite + React SPA providing the browser interface for VK Swarm. This document covers the resilience patterns added in the hive UI polish workstream.
+
+## Version and Toolchain
+
+| Field | Value |
+|-------|-------|
+| Package | `remote-frontend` v0.0.1 |
+| Bundler | Vite 8 with `@vitejs/plugin-react` |
+| UI Lib | React 18 with shadcn components |
+| State | `@tanstack/react-query` v5 for REST; `@tanstack/react-db` v0.1 for Electric shape streams |
+| Router | `react-router-dom` v7 |
+| Tests | Vitest (unit) + Playwright (E2E) |
+| Lint | ESLint with `--max-warnings 0` |
+
+The dev server runs on port **3002** (`VITE_API_BASE_URL` and `VITE_APP_BASE_URL` default to `http://localhost:3000`).
+
+## File Layout
+
+```
+remote-frontend/
+├── src/
+│   ├── main.tsx              # Entry — mounts <App /> in StrictMode
+│   ├── App.tsx               # QueryClientProvider → ProfileProvider → AppRouter
+│   ├── AppRouter.tsx         # Route definitions + AuthGuard wrappers
+│   ├── pages/
+│   │   ├── Tasks.tsx         # Kanban board with live queries + offline overlay
+│   │   └── Nodes.tsx         # Node list (React Query)
+│   ├── components/
+│   │   ├── ErrorBoundary.tsx  # Class component — catches render crashes
+│   │   ├── AuthGuard.tsx      # Redirects to /login if not signed in
+│   │   └── layout/           # Navbar, BottomNav, NormalLayout
+│   ├── lib/
+│   │   ├── toast.ts          # Sonner wrappers (toastError, toastSuccess)
+│   │   ├── pwa.ts            # registerSW() + workbox-window
+│   │   ├── offline.ts        # useOnlineStatus hook
+│   │   ├── mutation-queue.ts # IndexedDB mutation queue (idb-keyval)
+│   │   ├── electric/
+│   │   │   ├── sync-status.ts # useSyncStatus + markSynced
+│   │   │   ├── config.ts      # Electric shape URLs
+│   │   │   └── collections.ts # 6 TanStack DB collections
+│   │   └── api/              # REST API client modules
+│   └── types/                # Shared type definitions (auto-generated from Rust)
+├── e2e/
+│   ├── auth.spec.ts          # 6 tests — login/redirect/OAuth/callback/logout
+│   ├── board.spec.ts         # 6 tests — columns/data/detail/assign/delete
+│   ├── cross-node.spec.ts    # 3 tests — multi-node task display
+│   ├── sc4-guard.spec.ts     # Dev server build guard (globalSetup)
+│   └── fixtures/
+│       ├── mock-api.ts       # Page-route mocks for REST endpoints
+│       └── mock-electric.ts  # Page-route mocks for Electric shape streams
+├── vite.config.ts            # Vite + React + PWA + test config
+└── playwright.config.ts
+```
+
+## Error Boundary
+
+`ErrorBoundary.tsx` is a React class component wrapping the app's authenticated routes. It catches render-time errors using `getDerivedStateFromError` and `componentDidCatch`, then renders a fallback UI with a **Reload** button.
+
+To add error boundary protection to a new route tree:
+
+```tsx
+import { ErrorBoundary } from '@/components/ErrorBoundary'
+
+// In your route definition:
+element: (
+  <ErrorBoundary>
+    <YourLayout />
+  </ErrorBoundary>
+)
+```
+
+The boundary is mounted in `main.tsx` (top-level, around `<App />`) and `AppRouter.tsx` (around lazy-loaded page routes). Both layers ensure a crash at any depth recovers cleanly.
+
+## Auth Guard
+
+`AuthGuard.tsx` wraps protected route trees and redirects unauthenticated users to `/login` with a `return_to` query parameter:
+
+```tsx
+import { AuthGuard } from '@/components/AuthGuard'
+
+<AuthGuard>
+  <ProtectedPage />
+</AuthGuard>
+```
+
+After successful login, the LoginPage reads `return_to` from the URL search params and redirects there. The guard renders a loading state while `useProfile().isLoaded` is false.
+
+## Toast Notifications
+
+Import toast helpers from `lib/toast.ts` to show user-facing feedback for any mutation:
+
+```tsx
+import { toastError, toastSuccess } from '@/lib/toast'
+
+try {
+  await api.delete(id)
+  toastSuccess('Task deleted')
+} catch (err) {
+  toastError(err, 'Failed to delete task')
+}
+```
+
+`toastError` reads `.message` from the exception. The `Toaster` component is mounted once in `App.tsx`. For toasts with action buttons (Undo, Retry), use `sonner`'s `toast()` directly.
+
+## PWA Service Worker
+
+`lib/pwa.ts` exports `registerSW()` which uses `workbox-window` to register the VitePWA-generated service worker. The SW uses `autoUpdate` mode: when a new version is detected, a dialog prompts the user to reload.
+
+Cache strategy (configured in `vite.config.ts`):
+
+| Cache | URL Pattern | Strategy | Max Age |
+|-------|-------------|----------|---------|
+| API | `/v1/*` | NetworkFirst | 5 minutes |
+| Assets | `/assets/*` | CacheFirst | 7 days |
+| Shell | `/`, `/login`, `/oauth/callback` | StaleWhileRevalidate | 1 day |
+
+## Offline Queue
+
+When the browser is offline, API mutations are queued in IndexedDB via `idb-keyval`. The queue is a promise-locked FIFO — concurrent enqueues are serialized to prevent races.
+
+```tsx
+import { enqueueMutation, replayMutations, getQueueLength } from '@/lib/mutation-queue'
+
+// Queue a mutation when offline
+await enqueueMutation({ endpoint, method, body })
+
+// Replay all queued mutations on reconnect
+const results = await replayMutations(makeRequest)
+```
+
+Each mutation retries up to 3 times. Permanent failures (non-retryable status codes) are dropped. The `markSynced` function in `sync-status.ts` tracks the timestamp of the last successful full sync — it monitors assignments, nodes, and projects from the live queries.
+
+## Electric Shape Streams
+
+Six TanStack DB collections are defined in `lib/electric/collections.ts` for Electric shape streams: nodes, projects, node_projects, task_assignments, task_output_logs, task_progress_events. All stream from `/api/electric/v1/shape/<table>`.
+
+The Tasks board uses `useLiveQuery` for reactive data. Optimistic deletions are handled via a local `useRef<Set<string>>` overlay — deleted task IDs are filtered from the live query results until the server confirms the deletion. This avoids cache-layer mismatch between TanStack DB and React Query.
+
+## E2E Tests
+
+Playwright tests live in `e2e/` and target the Vite dev server on port 3002. They use page-route mocks for both REST API calls and Electric shape streams.
+
+To run:
+
+```bash
+cd remote-frontend
+npx playwright test          # full suite
+npx playwright test --ui     # interactive mode
+```
+
+### Mock Fixtures
+
+- **`mock-api.ts`** — `setupApiMocks(page)` mocks `/v1/profile`, `/v1/nodes/*`, `/v1/tasks/*`, `/v1/oauth/*` with default 200 responses
+- **`mock-electric.ts`** — `mockElectricShape(page, tableData)` mocks `/api/electric/v1/shape/*` with SSE-like JSON streams keyed by table name
+
+### SC4 Guard
+
+`e2e/sc4-guard.spec.ts` runs as a Playwright `globalSetup`. It runs `tsc --noEmit`, `npm run lint`, and `npx vitest run` in the sibling `frontend/` repo, ensuring the main frontend builds correctly before remote-frontend E2E tests execute. Configured via `globalSetup` in `playwright.config.ts` (string path, not an imported function).
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITE_API_BASE_URL` | `http://localhost:3000` | Backend API endpoint |
+| `VITE_APP_BASE_URL` | `http://localhost:3000` | Frontend base URL (used for OAuth callback) |
+
+## Gate Commands
+
+Before merging any change:
+
+```bash
+cd remote-frontend
+npx tsc --noEmit        # typecheck
+npx vitest run          # unit tests
+npm run lint            # ESLint --max-warnings 0
+npx playwright test     # E2E tests
+```

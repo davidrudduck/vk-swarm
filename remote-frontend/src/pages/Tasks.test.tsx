@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 
 vi.mock('@tanstack/react-db', () => ({
   useLiveQuery: vi.fn((collection) => ({
@@ -108,8 +108,8 @@ describe('Tasks.tsx error resilience (SC3, SC4, SC5)', () => {
       expect(screen.getByText('Are you sure?')).toBeInTheDocument();
     });
 
-    const deleteButtons = screen.getAllByText('Delete');
-    fireEvent.click(deleteButtons[deleteButtons.length - 1]);
+    const dialog = screen.getByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
     await waitFor(() => {
       expect(tasksApi.delete).toHaveBeenCalledWith('t1');
     });
@@ -149,7 +149,8 @@ describe('Tasks.tsx PWA offline scenarios (SC8, SC10)', () => {
     render(<TasksBoard />);
     fireEvent.click(screen.getByLabelText('Delete'));
     await waitFor(() => screen.getByText('Are you sure?'));
-    fireEvent.click(screen.getAllByText('Delete').pop()!);
+    const dialog = screen.getByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => {
       expect(enqueueMutation).toHaveBeenCalledWith('DELETE', '/v1/tasks/t1', 't1');
@@ -186,7 +187,8 @@ describe('Tasks.tsx PWA offline scenarios (SC8, SC10)', () => {
     render(<TasksBoard />);
     fireEvent.click(screen.getByLabelText('Delete'));
     await waitFor(() => screen.getByText('Are you sure?'));
-    fireEvent.click(screen.getAllByText('Delete').pop()!);
+    const dialog = screen.getByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => {
       expect(enqueueMutation).toHaveBeenCalledWith('DELETE', '/v1/tasks/t1', 't1');

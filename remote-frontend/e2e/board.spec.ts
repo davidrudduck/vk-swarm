@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import type { MockTaskAssignment } from './fixtures/mock-electric';
 import { setupApiMocks } from './fixtures/mock-api';
 import { mockElectricShape } from './fixtures/mock-electric';
 
