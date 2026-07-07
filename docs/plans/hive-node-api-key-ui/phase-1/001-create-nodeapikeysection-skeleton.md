@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - remote-frontend/src/components/swarm/NodeApiKeySection.tsx
   - remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx
+siblings:
   - remote-frontend/src/components/swarm/index.ts
   - remote-frontend/src/components/swarm/index.test.tsx
   - remote-frontend/src/components/swarm/SwarmHealthSection.tsx
