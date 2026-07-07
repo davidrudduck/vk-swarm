@@ -93,3 +93,192 @@ impl LogMsg {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── LogMsg::name ───────────────────────────────────────────────────
+
+    #[test]
+    fn name_stdout() {
+        let msg = LogMsg::Stdout("hello".into());
+        assert_eq!(msg.name(), EV_STDOUT);
+    }
+
+    #[test]
+    fn name_stderr() {
+        let msg = LogMsg::Stderr("error".into());
+        assert_eq!(msg.name(), EV_STDERR);
+    }
+
+    #[test]
+    fn name_finished() {
+        let msg = LogMsg::Finished;
+        assert_eq!(msg.name(), EV_FINISHED);
+    }
+
+    #[test]
+    fn name_session_id() {
+        let msg = LogMsg::SessionId("abc123".into());
+        assert_eq!(msg.name(), EV_SESSION_ID);
+    }
+
+    #[test]
+    fn name_refresh_required() {
+        let msg = LogMsg::RefreshRequired {
+            reason: "config changed".into(),
+        };
+        assert_eq!(msg.name(), EV_REFRESH_REQUIRED);
+    }
+
+    // ── LogMsg::approx_bytes ───────────────────────────────────────────
+
+    #[test]
+    fn approx_bytes_stdout() {
+        let msg = LogMsg::Stdout("hello".into());
+        let bytes = msg.approx_bytes();
+        assert!(bytes > "hello".len());
+    }
+
+    #[test]
+    fn approx_bytes_finished() {
+        let msg = LogMsg::Finished;
+        let bytes = msg.approx_bytes();
+        assert!(bytes > 0);
+    }
+
+    #[test]
+    fn approx_bytes_refresh_required() {
+        let msg = LogMsg::RefreshRequired {
+            reason: "restart".into(),
+        };
+        let bytes = msg.approx_bytes();
+        assert!(bytes > "restart".len());
+    }
+
+    #[test]
+    fn approx_bytes_empty_stdout() {
+        let msg = LogMsg::Stdout(String::new());
+        let bytes = msg.approx_bytes();
+        assert!(bytes > 0);
+    }
+
+    // ── LogMsg::to_sse_event ───────────────────────────────────────────
+
+    #[test]
+    fn to_sse_event_constructs_without_panic() {
+        let msg = LogMsg::Finished;
+        let _event = msg.to_sse_event();
+    }
+
+    #[test]
+    fn to_sse_event_stdout() {
+        let msg = LogMsg::Stdout("output".into());
+        let event = msg.to_sse_event();
+        let debug = format!("{event:?}");
+        assert!(debug.contains("output"));
+    }
+
+    #[test]
+    fn to_sse_event_refresh_required() {
+        let msg = LogMsg::RefreshRequired {
+            reason: "reload".into(),
+        };
+        let event = msg.to_sse_event();
+        let debug = format!("{event:?}");
+        assert!(debug.contains("reload"));
+    }
+
+    #[test]
+    fn to_sse_event_session_id() {
+        let msg = LogMsg::SessionId("sess-1".into());
+        let event = msg.to_sse_event();
+        let debug = format!("{event:?}");
+        assert!(debug.contains("sess-1"));
+    }
+
+    #[test]
+    fn to_sse_event_stderr() {
+        let msg = LogMsg::Stderr("error output".into());
+        let event = msg.to_sse_event();
+        let debug = format!("{event:?}");
+        assert!(debug.contains("error output"));
+    }
+
+    #[test]
+    fn to_sse_event_json_patch() {
+        let patch: json_patch::Patch = serde_json::from_str(r#"[{"op":"add","path":"/foo","value":1}]"#).unwrap();
+        let msg = LogMsg::JsonPatch(patch);
+        let event = msg.to_sse_event();
+        let debug = format!("{event:?}");
+        assert!(debug.contains("add"));
+    }
+
+    // ── LogMsg::to_ws_message ─────────────────────────────────────────
+
+    #[test]
+    fn to_ws_message_finished() {
+        let msg = LogMsg::Finished;
+        let result = msg.to_ws_message();
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Message::Text(s) => assert!(s.contains("Finished")),
+            _ => panic!("expected Text message"),
+        }
+    }
+
+    #[test]
+    fn to_ws_message_stdout() {
+        let msg = LogMsg::Stdout("data".into());
+        let result = msg.to_ws_message();
+        assert!(result.is_ok());
+    }
+
+    // ── LogMsg::to_ws_message_unchecked ───────────────────────────────
+
+    #[test]
+    fn to_ws_message_unchecked_finished() {
+        let msg = LogMsg::Finished;
+        match msg.to_ws_message_unchecked() {
+            Message::Text(s) => assert!(s.contains("finished")),
+            _ => panic!("expected Text message"),
+        }
+    }
+
+    #[test]
+    fn to_ws_message_unchecked_refresh_required() {
+        let msg = LogMsg::RefreshRequired {
+            reason: "config".into(),
+        };
+        match msg.to_ws_message_unchecked() {
+            Message::Text(s) => {
+                assert!(s.contains("refresh_required"));
+                assert!(s.contains("config"));
+            }
+            _ => panic!("expected Text message"),
+        }
+    }
+
+    #[test]
+    fn to_ws_message_unchecked_refresh_required_escapes_quotes() {
+        let msg = LogMsg::RefreshRequired {
+            reason: r#"file "foo.txt" changed"#.into(),
+        };
+        match msg.to_ws_message_unchecked() {
+            Message::Text(s) => {
+                assert!(s.contains(r#"file \"foo.txt\" changed"#));
+            }
+            _ => panic!("expected Text message"),
+        }
+    }
+
+    #[test]
+    fn to_ws_message_unchecked_stdout() {
+        let msg = LogMsg::Stdout("hello".into());
+        match msg.to_ws_message_unchecked() {
+            Message::Text(s) => assert!(s.contains("Stdout")),
+            _ => panic!("expected Text message"),
+        }
+    }
+}
