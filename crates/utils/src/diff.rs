@@ -238,3 +238,212 @@ pub fn concatenate_diff_hunks(file_path: &str, hunks: &[String]) -> String {
 
     unified_diff
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── create_unified_diff ────────────────────────────────────────────
+
+    #[test]
+    fn create_unified_diff_identical_files() {
+        let content = "line1\nline2\nline3\n";
+        let result = create_unified_diff("test.txt", content, content);
+        assert!(result.contains("--- a/test.txt"));
+        assert!(result.contains("+++ b/test.txt"));
+    }
+
+    #[test]
+    fn create_unified_diff_added_line() {
+        let old = "line1\n";
+        let new = "line1\nline2\n";
+        let result = create_unified_diff("test.txt", old, new);
+        assert!(result.contains("+line2"));
+    }
+
+    #[test]
+    fn create_unified_diff_removed_line() {
+        let old = "line1\nline2\n";
+        let new = "line1\n";
+        let result = create_unified_diff("test.txt", old, new);
+        assert!(result.contains("-line2"));
+    }
+
+    #[test]
+    fn create_unified_diff_modified_line() {
+        let old = "hello world\n";
+        let new = "hello universe\n";
+        let result = create_unified_diff("test.txt", old, new);
+        assert!(result.contains("-hello world"));
+        assert!(result.contains("+hello universe"));
+    }
+
+    #[test]
+    fn create_unified_diff_empty_strings() {
+        let result = create_unified_diff("empty.txt", "", "");
+        assert!(result.contains("--- a/empty.txt"));
+        assert!(result.contains("+++ b/empty.txt"));
+    }
+
+    #[test]
+    fn create_unified_diff_content_without_trailing_newline() {
+        let old = "line1";
+        let new = "line1\nline2";
+        let result = create_unified_diff("test.txt", old, new);
+        assert!(result.contains("+line2"));
+    }
+
+    // ── compute_line_change_counts ─────────────────────────────────────
+
+    #[test]
+    fn compute_line_change_counts_identical() {
+        let content = "a\nb\nc\n";
+        let (additions, deletions) = compute_line_change_counts(content, content);
+        assert_eq!(additions, 0);
+        assert_eq!(deletions, 0);
+    }
+
+    #[test]
+    fn compute_line_change_counts_only_additions() {
+        let old = "";
+        let new = "line1\nline2\nline3\n";
+        let (additions, _) = compute_line_change_counts(old, new);
+        assert!(additions > 0);
+    }
+
+    #[test]
+    fn compute_line_change_counts_only_deletions() {
+        let old = "line1\nline2\nline3\n";
+        let new = "";
+        let (_, deletions) = compute_line_change_counts(old, new);
+        assert!(deletions > 0);
+    }
+
+    #[test]
+    fn compute_line_change_counts_mixed_changes() {
+        let old = "keep\nremove\nkeep2\n";
+        let new = "keep\nkeep2\nadded\n";
+        let (additions, deletions) = compute_line_change_counts(old, new);
+        assert_eq!(additions, 1);
+        assert_eq!(deletions, 1);
+    }
+
+    #[test]
+    fn compute_line_change_counts_empty_both() {
+        let (additions, deletions) = compute_line_change_counts("", "");
+        assert_eq!(additions, 0);
+        assert_eq!(deletions, 0);
+    }
+
+    #[test]
+    fn compute_line_change_counts_no_trailing_newline() {
+        let old = "line1";
+        let new = "line1\nline2";
+        let (additions, deletions) = compute_line_change_counts(old, new);
+        assert_eq!(additions, 1);
+        assert_eq!(deletions, 0);
+    }
+
+    // ── extract_unified_diff_hunks ─────────────────────────────────────
+
+    #[test]
+    fn extract_unified_diff_hunks_no_hunks_header() {
+        let diff = " line1\n-line2\n+line3\n";
+        let hunks = extract_unified_diff_hunks(diff);
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].starts_with("@@"));
+    }
+
+    #[test]
+    fn extract_unified_diff_hunks_empty_input() {
+        let hunks = extract_unified_diff_hunks("");
+        assert!(hunks.is_empty());
+    }
+
+    #[test]
+    fn extract_unified_diff_hunks_with_headers() {
+        let diff = "@@ -1,3 +1,4 @@\n line1\n-line2\n+line3\n+line4\n";
+        let hunks = extract_unified_diff_hunks(diff);
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].starts_with("@@ -1,3 +1,4 @@"));
+        assert!(hunks[0].contains("-line2"));
+        assert!(hunks[0].contains("+line3"));
+    }
+
+    #[test]
+    fn extract_unified_diff_hunks_multiple_hunks() {
+        let diff = "@@ -1,3 +1,3 @@\n line1\n-line2\n+line3\n@@ -10,3 +10,4 @@\n line10\n+line11\n";
+        let hunks = extract_unified_diff_hunks(diff);
+        assert_eq!(hunks.len(), 2);
+    }
+
+    #[test]
+    fn extract_unified_diff_hunks_non_diff_lines_filtered() {
+        let diff = "some header\n line1\n-line2\n+line3\nsome footer\n";
+        let hunks = extract_unified_diff_hunks(diff);
+        assert_eq!(hunks.len(), 1);
+        assert!(!hunks[0].contains("header"));
+        assert!(!hunks[0].contains("footer"));
+    }
+
+    #[test]
+    fn extract_unified_diff_hunks_empty_header_fix() {
+        let diff = "@@\n -old\n +new\n";
+        let hunks = extract_unified_diff_hunks(diff);
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].starts_with("@@ -1,"));
+    }
+
+    // ── concatenate_diff_hunks ─────────────────────────────────────────
+
+    #[test]
+    fn concatenate_diff_hunks_single_hunk() {
+        let hunks = vec!["@@ -1,2 +1,2 @@\n line1\n-line2\n+line3\n".to_string()];
+        let result = concatenate_diff_hunks("test.txt", &hunks);
+        assert!(result.contains("--- a/test.txt"));
+        assert!(result.contains("+++ b/test.txt"));
+        assert!(result.contains("@@ -1,2 +1,2 @@"));
+        assert!(result.contains("-line2"));
+        assert!(result.contains("+line3"));
+    }
+
+    #[test]
+    fn concatenate_diff_hunks_empty_hunks() {
+        let hunks: Vec<String> = vec![];
+        let result = concatenate_diff_hunks("test.txt", &hunks);
+        assert!(result.contains("--- a/test.txt"));
+        assert!(result.contains("+++ b/test.txt"));
+    }
+
+    #[test]
+    fn concatenate_diff_hunks_multiple_hunks() {
+        let hunks = vec![
+            "@@ -1,2 +1,2 @@\n line1\n-line2\n+line3\n".to_string(),
+            "@@ -10,2 +10,2 @@\n line10\n-line11\n+line12\n".to_string(),
+        ];
+        let result = concatenate_diff_hunks("test.txt", &hunks);
+        assert!(result.contains("@@ -1,2 +1,2 @@"));
+        assert!(result.contains("@@ -10,2 +10,2 @@"));
+    }
+
+    #[test]
+    fn concatenate_diff_hunks_ends_with_newline() {
+        let hunks = vec!["@@ -1,1 +1,1 @@\n line1\n".to_string()];
+        let result = concatenate_diff_hunks("test.txt", &hunks);
+        assert!(result.ends_with('\n'));
+    }
+
+    // ── integration: create_unified_diff → extract → concatenate ──────
+
+    #[test]
+    fn round_trip_create_and_parse_diff() {
+        let old = "line1\nline2\nline3\n";
+        let new = "line1\nline2_modified\nline3\nline4\n";
+        let unified = create_unified_diff("roundtrip.txt", old, new);
+        assert!(unified.contains("--- a/roundtrip.txt"));
+        let hunks = extract_unified_diff_hunks(&unified);
+        assert!(!hunks.is_empty());
+        let reconstructed = concatenate_diff_hunks("roundtrip.txt", &hunks);
+        assert!(reconstructed.contains("--- a/roundtrip.txt"));
+    }
+}
