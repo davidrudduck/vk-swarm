@@ -54,3 +54,61 @@ impl<T, E> ApiResponse<T, E> {
         self.message.as_deref()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn success_has_correct_fields() {
+        let response: ApiResponse<i32, ()> = ApiResponse::success(42);
+        assert!(response.is_success());
+        assert_eq!(response.into_data(), Some(42));
+    }
+
+    #[test]
+    fn error_has_message() {
+        let response = ApiResponse::<()>::error("something went wrong");
+        assert!(!response.is_success());
+        assert_eq!(response.message(), Some("something went wrong"));
+        assert!(response.into_data().is_none());
+    }
+
+    #[test]
+    fn error_with_data_stores_error_data() {
+        #[derive(Debug, PartialEq)]
+        struct ErrPayload {
+            code: u32,
+        }
+
+        let payload = ErrPayload { code: 404 };
+        let response = ApiResponse::<(), ErrPayload>::error_with_data(payload);
+        assert!(!response.is_success());
+        assert!(response.message().is_none());
+    }
+
+    #[test]
+    fn success_into_data_consumes_response() {
+        let response: ApiResponse<&str, ()> = ApiResponse::success("hello");
+        assert_eq!(response.into_data(), Some("hello"));
+    }
+
+    #[test]
+    fn message_returns_none_for_success() {
+        let response: ApiResponse<&str, ()> = ApiResponse::success("data");
+        assert_eq!(response.message(), None);
+    }
+
+    #[test]
+    fn message_returns_some_for_error() {
+        let response = ApiResponse::<()>::error("failure");
+        assert_eq!(response.message(), Some("failure"));
+    }
+
+    #[test]
+    fn error_with_data_has_no_message_by_default() {
+        let response = ApiResponse::<(), String>::error_with_data("bad request".to_string());
+        assert!(response.message().is_none());
+        assert!(!response.is_success());
+    }
+}
