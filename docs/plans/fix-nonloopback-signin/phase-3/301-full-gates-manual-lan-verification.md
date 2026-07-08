@@ -2,7 +2,7 @@
 id: "301"
 phase: 3
 title: Record full gates and manual LAN OAuth verification
-status: ready
+status: passed
 depends_on: ["202"]
 parallel: false
 conflicts_with: []

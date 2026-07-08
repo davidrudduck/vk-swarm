@@ -103,6 +103,37 @@ repo's DOM typings, which reject `Uint8Array<ArrayBufferLike>` as a `BufferSourc
 export used by `InvitationPage`, causing the pre-existing invitation route test to render React
 Router's error boundary instead of the loading or invitation state.
 
+## Reachability gate
+
+### (a) CALL-PATH TRACE
+
+Entry points and bug path traced through real merged code:
+
+1. `/login` entry: `remote-frontend/src/AppRouter.tsx:38` calls `generateChallenge(verifier)`.
+2. `generateChallenge()` → `remote-frontend/src/pkce.ts:10-12` calls `sha256(data)`.
+3. `sha256()` at `remote-frontend/src/pkce.ts:14-20` checks `globalThis.crypto?.subtle`. On non-secure HTTP LAN origins (`window.isSecureContext=false`), `crypto.subtle` is `undefined` → falls through to `sha256Fallback()` at line 24.
+4. `sha256Fallback()` returns correct SHA-256 bytes → `bytesToHex()` → 64-char lowercase hex challenge.
+5. Challenge flows to `oauthApi.init(provider, returnTo, challenge)` at `AppRouter.tsx:44` → `oauth.ts:23` POST `/v1/oauth/web/init`.
+6. Same path for invitation: `InvitationPage.tsx:32` calls `generateChallenge()` → same `pkce.ts` fallback path.
+
+Bug path confirmed: `pkce.ts:14-20` (capability-detected fallback) executes on every non-secure origin call to `generateChallenge()`.
+
+### (b) REAL-SEAM TEST
+
+- `remote-frontend/src/AppRouter.test.tsx` drives the real `/login` route via `createMemoryRouter(createRoutes())` (line 61-63) with `crypto.subtle` removed (line 30-38), clicks the real GitHub button (line 102), and asserts `initOAuth` receives a 64-char hex challenge (lines 106-112). This proves the route reaches the changed PKCE code, not a mock past it.
+- `remote-frontend/src/pages/InvitationPage.test.tsx` drives the real `/invitations/:token/accept` route with `crypto.subtle` removed (lines 13-21, 60), clicks the real GitHub button (line 64), and asserts `initOAuth` receives a 64-char hex challenge (lines 66-72).
+- Manual Playwright LAN verification: `http://10.69.96.233:3002/login` navigated to `https://provider.test/authorize?flow=login` with `crypto.subtle` absent and no local error. `http://10.69.96.233:3002/invitations/invite-token/accept` navigated to `https://provider.test/authorize?flow=invitation` with same result.
+
+### (c) INCIDENT-SYMPTOM ASSERTION
+
+The documented incident symptom (F-2026-07-06-02): "Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined)" at `remote-frontend/src/pkce.ts:10`.
+
+Behavioural assertion mapped to symptom: on a non-secure HTTP LAN origin, clicking a provider button on `/login` or `/invitations/:token/accept` reaches the provider authorization URL without throwing a `crypto.subtle` digest error. Both unit tests and manual Playwright verification prove this directly — the old `crypto.subtle.digest()` call at `pkce.ts:10` would have thrown `Cannot read properties of undefined (reading 'digest')` before `initOAuth()` could be called.
+
+Result: all three reachability gate requirements (a), (b), (c) pass.
+
+VERDICT: PASS
+
 ## Acceptance evidence
 
 ### Task 301 — full gates and LAN OAuth verification
