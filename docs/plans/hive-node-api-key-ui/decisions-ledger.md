@@ -116,3 +116,26 @@ decisions needed to satisfy the failing-test-first red step.
 
 ### Task 008
 *(appended by the implementer — full stdout+stderr of the two verification commands)*
+
+**Typecheck (`cd remote-frontend && npx tsc --noEmit`):**
+```
+(exit 0, no output — clean)
+```
+
+**Full vitest suite (`cd remote-frontend && npx vitest run src/components/swarm/NodeApiKeySection.test.tsx src/components/swarm/index.test.tsx src/pages/Nodes.test.tsx`):**
+```
+ RUN  v4.1.3 /home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/backlog-node-api/remote-frontend
+
+ Test Files  3 passed (3)
+      Tests  26 passed (26)
+   Start at  09:28:12
+   Duration  3.30s (transform 777ms, setup 194ms, import 4.79s, tests 1.49s, environment 1.81s)
+```
+
+**Scope verification:**
+- `NodeApiKeySection.test.tsx`: 8 tests (TS1, TS2, TS3, TS4, TS5, TS6, TS7, TS9)
+- `index.test.tsx`: 12 tests (11 original + 1 barrel smoke test)
+- `Nodes.test.tsx`: 6 tests (5 original + 1 TS8)
+- Total: 26 passed, 0 failed
+
+**Note:** Task spec expected 9 tests in NodeApiKeySection.test.tsx but actual count is 8. The spec's list (TS1-TS7 + TS9) sums to 8, not 9 — the "9" in the spec was an arithmetic error.
