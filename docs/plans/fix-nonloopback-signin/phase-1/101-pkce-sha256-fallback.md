@@ -2,7 +2,7 @@
 id: "101"
 phase: 1
 title: Implement browser-safe SHA-256 fallback for PKCE
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
