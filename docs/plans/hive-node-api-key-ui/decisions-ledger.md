@@ -94,6 +94,8 @@ decisions needed to satisfy the failing-test-first red step.
 ### Task 004
 *(appended by the implementer)*
 
+- **TS7 test assertion adjusted**: Task specified `screen.getByText('settings.swarm.apiKeys.error')` but the i18n mock transforms `t('settings.swarm.apiKeys.error', 'Failed: {{message}}', { message: error })` into `"Failed: boom"` (the mock's options branch uses the fallback with interpolation). Changed to `screen.getByRole('alert')` — semantically equivalent ("surfaces a destructive Alert") and compatible with the mock. Second assertion `screen.getByText(/boom/)` kept verbatim.
+
 ### Task 005
 *(appended by the implementer)*
 

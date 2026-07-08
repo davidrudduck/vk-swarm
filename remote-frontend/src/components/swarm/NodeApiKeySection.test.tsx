@@ -210,4 +210,23 @@ describe('NodeApiKeySection', () => {
     });
     confirmSpy.mockRestore();
   });
+
+  it('surfaces a destructive Alert when a mutation rejects; the list does not refetch (TS7)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockRejectedValue(new Error('boom'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    const listSpy = vi.mocked(nodesApi.listApiKeys);
+    const callsBefore = listSpy.mock.calls.length;
+    await u.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.create' }));
+    const nameInput = await screen.findByLabelText('settings.swarm.apiKeys.nameLabel');
+    await u.type(nameInput, 'X');
+    await u.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.createAction' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/boom/)).toBeInTheDocument();
+    });
+    expect(listSpy.mock.calls.length).toBe(callsBefore);
+  });
 });

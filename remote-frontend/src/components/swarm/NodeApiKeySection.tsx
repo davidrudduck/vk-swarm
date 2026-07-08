@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { nodesApi } from '@/lib/api';
@@ -122,6 +123,7 @@ export function NodeApiKeySection({
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [showSecret, setShowSecret] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const { data: apiKeys = [], isLoading } = useQuery({
     queryKey: ['nodeApiKeys', organizationId],
@@ -133,19 +135,35 @@ export function NodeApiKeySection({
   const createMutation = useMutation({
     mutationFn: (name: string) => nodesApi.createApiKey({ organization_id: organizationId, name }),
     onSuccess: (response) => {
+      setError(null);
       setCreatedSecret(response.secret);
       setNewKeyName('');
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : 'Failed');
     },
   });
 
   const revokeMutation = useMutation({
     mutationFn: (keyId: string) => nodesApi.revokeApiKey(keyId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] }),
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : 'Failed');
+    },
   });
   const unblockMutation = useMutation({
     mutationFn: (keyId: string) => nodesApi.unblockApiKey(keyId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] }),
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : 'Failed');
+    },
   });
 
   const handleRevoke = (keyId: string) => {
@@ -214,6 +232,16 @@ export function NodeApiKeySection({
             )}
           </CardDescription>
         </CardHeader>
+
+        {error && (
+          <div className="px-6 pb-4">
+            <Alert variant="destructive">
+              <AlertDescription>
+                {t('settings.swarm.apiKeys.error', 'Failed: {{message}}', { message: error })}
+              </AlertDescription>
+            </Alert>
+          </div>
+        )}
 
         <CardContent>
           {isLoading ? (
