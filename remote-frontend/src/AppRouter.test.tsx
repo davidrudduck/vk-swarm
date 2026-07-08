@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { createRoutes } from './AppRouter'
+import { createRoutes, isSafeReturnTo } from './AppRouter'
 
 vi.mock('@/components/ProfileProvider', () => ({
   useProfile: vi.fn(),
@@ -216,5 +216,126 @@ describe('AppRouter', () => {
     await waitFor(() => {
       expect(screen.getByText('Page not found')).toBeInTheDocument()
     })
+  })
+
+  it('login: shows error when initOAuth fails', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: false,
+      isLoaded: true,
+      profile: null,
+    })
+    vi.mocked(initOAuth).mockRejectedValue(new Error('Network error'))
+    stubGetRandomValuesOnlyCrypto()
+
+    renderWithRouter('/login')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in with GitHub' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Network error')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('button', { name: 'Sign in with GitHub' })).not.toBeDisabled()
+  })
+
+  it('oauth callback: handles oauthError param', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: false,
+      isLoaded: true,
+      profile: null,
+    })
+    const mockAssign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign: mockAssign })
+
+    renderWithRouter('/oauth/callback?error=access_denied')
+
+    await waitFor(() => {
+      expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('/login?error='))
+      expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('access_denied'))
+    })
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+  })
+
+  it('oauth callback: handles missing handoff_id/app_code', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: false,
+      isLoaded: true,
+      profile: null,
+    })
+    const mockAssign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign: mockAssign })
+
+    renderWithRouter('/oauth/callback')
+
+    await waitFor(() => {
+      expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('/login?error='))
+      expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('Missing%20OAuth%20parameters'))
+    })
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+  })
+
+  it('oauth callback: handles missing stored verifier', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: false,
+      isLoaded: true,
+      profile: null,
+    })
+    const mockAssign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign: mockAssign })
+
+    renderWithRouter('/oauth/callback?handoff_id=handoff-123&app_code=app-code-456')
+
+    await waitFor(() => {
+      expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('/login?error='))
+      expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('OAuth%20session%20lost'))
+    })
+  })
+
+  it('oauth callback: handles redeem failure', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: false,
+      isLoaded: true,
+      profile: null,
+    })
+    vi.mocked(oauthApi.redeem).mockRejectedValue(new Error('Redeem failed'))
+    sessionStorage.setItem('oauth_verifier', 'stored-verifier')
+    const mockAssign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign: mockAssign })
+
+    renderWithRouter('/oauth/callback?handoff_id=handoff-123&app_code=app-code-456')
+
+    await waitFor(() => {
+      expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('/login?error='))
+      expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('Redeem%20failed'))
+    })
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+  })
+})
+
+describe('isSafeReturnTo', () => {
+  it('accepts relative paths', () => {
+    expect(isSafeReturnTo('/nodes')).toBe(true)
+    expect(isSafeReturnTo('/invitations/token/complete')).toBe(true)
+  })
+
+  it('rejects cross-origin URLs', () => {
+    expect(isSafeReturnTo('https://evil.com')).toBe(false)
+    expect(isSafeReturnTo('https://evil.com/path')).toBe(false)
+  })
+
+  it('rejects protocol-relative URLs', () => {
+    expect(isSafeReturnTo('//evil.com')).toBe(false)
+    expect(isSafeReturnTo('//evil.com/path')).toBe(false)
+  })
+
+  it('rejects javascript: URLs', () => {
+    expect(isSafeReturnTo('javascript:alert(1)')).toBe(false)
+  })
+
+  it('rejects data: URLs', () => {
+    expect(isSafeReturnTo('data:text/html,<script>alert(1)</script>')).toBe(false)
+  })
+
+  it('handles empty string', () => {
+    expect(isSafeReturnTo('')).toBe(true)
   })
 })

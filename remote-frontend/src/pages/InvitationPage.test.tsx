@@ -104,6 +104,7 @@ describe('InvitationPage OAuth PKCE flow', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Continue with GitHub' }))
 
     await waitFor(() => {
+      expect(screen.getByText('Sign-in failed')).toBeInTheDocument()
       expect(screen.getByText('OAuth init failed')).toBeInTheDocument()
     })
   })

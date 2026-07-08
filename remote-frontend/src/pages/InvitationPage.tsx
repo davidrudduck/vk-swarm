@@ -16,17 +16,19 @@ import {
 export default function InvitationPage() {
   const { token = '' } = useParams()
   const [data, setData] = useState<Invitation | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [fetchError, setFetchError] = useState<string | null>(null)
+  const [oauthError, setOauthError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     getInvitation(token)
       .then(setData)
-      .catch((e) => setError(e.message))
+      .catch((e) => setFetchError(e.message))
   }, [token])
 
   const handleOAuthLogin = async (provider: OAuthProvider) => {
     setLoading(true)
+    setOauthError(null)
     try {
       const verifier = generateVerifier()
       const challenge = await generateChallenge(verifier)
@@ -41,16 +43,25 @@ export default function InvitationPage() {
       const result = await initOAuth(provider, returnTo, challenge)
       window.location.assign(result.authorize_url)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'OAuth init failed')
+      setOauthError(e instanceof Error ? e.message : 'OAuth init failed')
       setLoading(false)
     }
   }
 
-  if (error) {
+  if (fetchError) {
     return (
       <ErrorCard
         title="Invalid or expired invitation"
-        body={error}
+        body={fetchError}
+      />
+    )
+  }
+
+  if (oauthError) {
+    return (
+      <ErrorCard
+        title="Sign-in failed"
+        body={oauthError}
       />
     )
   }

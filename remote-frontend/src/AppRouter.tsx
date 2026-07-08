@@ -88,7 +88,7 @@ function LoginPage() {
   )
 }
 
-function isSafeReturnTo(url: string): boolean {
+export function isSafeReturnTo(url: string): boolean {
   try {
     const parsed = new URL(url, window.location.origin);
     return parsed.origin === window.location.origin;
@@ -114,11 +114,13 @@ function OAuthCallbackPage() {
       const safeReturnTo = isSafeReturnTo(returnTo) ? returnTo : '/nodes'
 
       if (oauthError) {
+        clearVerifier()
         window.location.assign(`/login?error=${encodeURIComponent(`OAuth error: ${oauthError}`)}`)
         return
       }
 
       if (!handoffId || !appCode) {
+        clearVerifier()
         window.location.assign(`/login?error=${encodeURIComponent('Missing OAuth parameters')}`)
         return
       }
@@ -139,8 +141,8 @@ function OAuthCallbackPage() {
         window.location.assign(safeReturnTo)
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Failed to complete OAuth'
-        window.location.assign(`/login?error=${encodeURIComponent(errorMsg)}`)
         clearVerifier()
+        window.location.assign(`/login?error=${encodeURIComponent(errorMsg)}`)
       }
     }
 
