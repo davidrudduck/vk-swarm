@@ -101,6 +101,7 @@ describe('NodeApiKeySection', () => {
 
     const execCommand = vi.fn(() => true);
     document.execCommand = execCommand;
+    const origClipboard = navigator.clipboard;
     // @ts-expect-error — assigning undefined to disable clipboard in test
     navigator.clipboard = undefined;
 
@@ -141,6 +142,7 @@ describe('NodeApiKeySection', () => {
       expect(screen.getByLabelText('Key Name')).toBeInTheDocument();
       expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
     });
+    Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true });
   });
 
   it('revokes a key only after window.confirm; query is invalidated on success (TS5)', async () => {
@@ -221,7 +223,9 @@ describe('NodeApiKeySection', () => {
     const { default: user } = await import('@testing-library/user-event');
     const u = user.setup();
     const listSpy = vi.mocked(nodesApi.listApiKeys);
-    const callsBefore = listSpy.mock.calls.length;
+    await waitFor(() => {
+      expect(listSpy).toHaveBeenCalledTimes(1);
+    });
     await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
     const nameInput = await screen.findByLabelText('Key Name');
     await u.type(nameInput, 'X');
@@ -230,7 +234,7 @@ describe('NodeApiKeySection', () => {
       expect(screen.getByRole('alert')).toBeInTheDocument();
       expect(screen.getByText(/boom/)).toBeInTheDocument();
     });
-    expect(listSpy.mock.calls.length).toBe(callsBefore);
+    expect(listSpy).toHaveBeenCalledTimes(1);
   });
 
   it('every settings.swarm.apiKeys.* key used in NodeApiKeySection.tsx has a matching key in the en locale (TS9)', () => {

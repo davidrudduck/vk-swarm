@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Key, Plus, Copy, Check, Eye, EyeOff, Trash2, Unlock, AlertTriangle } from 'lucide-react';
@@ -45,7 +45,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock }: ApiKeyItemProps) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-sm">{apiKey.name}</span>
             <code className="text-xs text-muted-foreground">{apiKey.key_prefix}</code>
-            {isBlocked ? (
+            {isBlocked && apiKey.blocked_reason ? (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Badge variant="destructive">
@@ -53,12 +53,15 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock }: ApiKeyItemProps) {
                     {t('settings.swarm.apiKeys.blocked', 'Blocked')}
                   </Badge>
                 </TooltipTrigger>
-                {apiKey.blocked_reason && (
-                  <TooltipContent>
-                    <p>{apiKey.blocked_reason}</p>
-                  </TooltipContent>
-                )}
+                <TooltipContent>
+                  <p>{apiKey.blocked_reason}</p>
+                </TooltipContent>
               </Tooltip>
+            ) : isBlocked ? (
+              <Badge variant="destructive">
+                <AlertTriangle className="h-3 w-3 mr-1" />
+                {t('settings.swarm.apiKeys.blocked', 'Blocked')}
+              </Badge>
             ) : isRevoked ? (
               <Badge variant="secondary">
                 {t('settings.swarm.apiKeys.revoked', 'Revoked')}
@@ -128,10 +131,13 @@ export function NodeApiKeySection({
   const [error, setError] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
+  useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
+
   const { data: apiKeys = [], isLoading } = useQuery({
     queryKey: ['nodeApiKeys', organizationId],
     queryFn: () => nodesApi.listApiKeys(organizationId),
     enabled: !!organizationId,
+    staleTime: 30_000,
   });
 
   const queryClient = useQueryClient();
@@ -179,6 +185,7 @@ export function NodeApiKeySection({
   };
 
   const closeDialog = () => {
+    createMutation.reset();
     setShowCreateDialog(false);
     setNewKeyName('');
     setCreatedSecret(null);
@@ -197,15 +204,19 @@ export function NodeApiKeySection({
         const ta = document.createElement('textarea');
         ta.value = createdSecret;
         document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
+        try {
+          ta.focus();
+          ta.select();
+          document.execCommand('copy');
+        } finally {
+          document.body.removeChild(ta);
+        }
       }
       setCopied(true);
       clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
-    } catch (e) {
-      console.error('Failed to copy secret', e);
+    } catch {
+      console.error('Failed to copy to clipboard');
     }
   };
 
@@ -280,8 +291,9 @@ export function NodeApiKeySection({
       <Dialog
         open={showCreateDialog}
         onOpenChange={(open) => {
-          if (!open) closeDialog();
+          if (!open && !createdSecret) closeDialog();
         }}
+        uncloseable={!!createdSecret}
       >
         <DialogContent>
           {!createdSecret ? (
@@ -301,6 +313,7 @@ export function NodeApiKeySection({
                     value={newKeyName}
                     onChange={(e) => setNewKeyName(e.target.value)}
                     placeholder={t('settings.swarm.apiKeys.namePlaceholder', 'e.g. Production Node')}
+                    maxLength={100}
                   />
                 </div>
               </div>
