@@ -22,7 +22,7 @@ vi.mock('react-i18next', () => ({
       if (options && typeof options === 'object') {
         return (fallback || key).replace(/\{\{(\w+)\}\}/g, (_, name) => String(options[name] ?? ''));
       }
-      return key;
+      return fallback || key;
     },
     i18n: { language: 'en' },
   }),
@@ -52,7 +52,7 @@ describe('NodeApiKeySection', () => {
     vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
     renderWith(<NodeApiKeySection organizationId="org-1" />);
     await waitFor(() => {
-      expect(screen.getByText('settings.swarm.apiKeys.empty')).toBeInTheDocument();
+      expect(screen.getByText('No API keys found. Create one to allow nodes to connect.')).toBeInTheDocument();
     });
   });
 
@@ -80,8 +80,8 @@ describe('NodeApiKeySection', () => {
       expect(screen.getByText('vk_abc')).toBeInTheDocument();
       expect(screen.getByText('vk_xyz')).toBeInTheDocument();
     });
-    expect(screen.getByText('settings.swarm.apiKeys.bound')).toBeInTheDocument();
-    expect(screen.getByText('settings.swarm.apiKeys.unbound')).toBeInTheDocument();
+    expect(screen.getByText('Bound')).toBeInTheDocument();
+    expect(screen.getByText('Unbound')).toBeInTheDocument();
     expect(screen.getByText(/Created 2026-01-01/)).toBeInTheDocument();
     expect(screen.getByText(/Last used 2026-01-03/)).toBeInTheDocument();
     expect(screen.queryByText(/Last used 2026-01-02/)).not.toBeInTheDocument();
@@ -107,36 +107,38 @@ describe('NodeApiKeySection', () => {
     const { fireEvent } = await import('@testing-library/react');
     renderWith(<NodeApiKeySection organizationId="org-1" />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.create' }));
-    const nameInput = await screen.findByLabelText('settings.swarm.apiKeys.nameLabel');
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
     fireEvent.change(nameInput, { target: { value: 'Test Key' } });
-    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.createAction' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
     await waitFor(() => {
       expect(nodesApi.createApiKey).toHaveBeenCalledWith({ organization_id: 'org-1', name: 'Test Key' });
     });
 
     await waitFor(() => {
-      expect(screen.getByText('vk_SECRET_VALUE_DO_NOT_SHARE')).toBeInTheDocument();
+      expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
     });
-    const secretWrapper = screen.getByText('vk_SECRET_VALUE_DO_NOT_SHARE').closest('[data-secret-wrapper]')!;
+    const secretWrapper = screen.getByText('••••••••••••••••••••').closest('[data-secret-wrapper]')!;
     expect(secretWrapper).toHaveAttribute('data-hidden', 'true');
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.showSecret' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
     expect(secretWrapper).toHaveAttribute('data-hidden', 'false');
-    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.hideSecret' }));
+    expect(screen.getByText('vk_SECRET_VALUE_DO_NOT_SHARE')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }));
     expect(secretWrapper).toHaveAttribute('data-hidden', 'true');
+    expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.copyToClipboard' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
     expect(execCommand).toHaveBeenCalledWith('copy');
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     await waitFor(() => {
       expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
     await waitFor(() => {
-      expect(screen.getByLabelText('settings.swarm.apiKeys.nameLabel')).toBeInTheDocument();
+      expect(screen.getByLabelText('Key Name')).toBeInTheDocument();
       expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
     });
   });
@@ -164,7 +166,7 @@ describe('NodeApiKeySection', () => {
     );
     const { default: user } = await import('@testing-library/user-event');
     const u = user.setup();
-    const revokeBtn = await screen.findByRole('button', { name: 'settings.swarm.apiKeys.revoke' });
+    const revokeBtn = await screen.findByRole('button', { name: 'Revoke' });
     await u.click(revokeBtn);
     expect(confirmSpy).toHaveBeenCalled();
     await waitFor(() => {
@@ -200,11 +202,11 @@ describe('NodeApiKeySection', () => {
         <TooltipProvider><NodeApiKeySection organizationId="org-1" /></TooltipProvider>
       </QueryClientProvider>
     );
-    expect(await screen.findByText('settings.swarm.apiKeys.blocked')).toBeInTheDocument();
+    expect(await screen.findByText('Blocked')).toBeInTheDocument();
     expect(screen.getByText('Duplicate key use detected')).toBeInTheDocument();
     const { default: user } = await import('@testing-library/user-event');
     const u = user.setup();
-    await u.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.unblock' }));
+    await u.click(screen.getByRole('button', { name: 'Unblock' }));
     await waitFor(() => {
       expect(nodesApi.unblockApiKey).toHaveBeenCalledWith('k2');
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['nodeApiKeys', 'org-1'] });
@@ -220,10 +222,10 @@ describe('NodeApiKeySection', () => {
     const u = user.setup();
     const listSpy = vi.mocked(nodesApi.listApiKeys);
     const callsBefore = listSpy.mock.calls.length;
-    await u.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.create' }));
-    const nameInput = await screen.findByLabelText('settings.swarm.apiKeys.nameLabel');
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
     await u.type(nameInput, 'X');
-    await u.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.createAction' }));
+    await u.click(screen.getByRole('button', { name: 'Create' }));
     await waitFor(() => {
       expect(screen.getByRole('alert')).toBeInTheDocument();
       expect(screen.getByText(/boom/)).toBeInTheDocument();

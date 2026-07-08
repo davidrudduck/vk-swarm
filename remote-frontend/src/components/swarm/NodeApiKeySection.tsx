@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Key, Plus, Copy, Check, Eye, EyeOff, Trash2, Unlock, AlertTriangle } from 'lucide-react';
@@ -47,15 +47,17 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock }: ApiKeyItemProps) {
             <code className="text-xs text-muted-foreground">{apiKey.key_prefix}</code>
             {isBlocked ? (
               <Tooltip>
-                <TooltipTrigger>
+                <TooltipTrigger asChild>
                   <Badge variant="destructive">
                     <AlertTriangle className="h-3 w-3 mr-1" />
                     {t('settings.swarm.apiKeys.blocked', 'Blocked')}
                   </Badge>
                 </TooltipTrigger>
-                <TooltipContent>
-                  <p>{apiKey.blocked_reason}</p>
-                </TooltipContent>
+                {apiKey.blocked_reason && (
+                  <TooltipContent>
+                    <p>{apiKey.blocked_reason}</p>
+                  </TooltipContent>
+                )}
               </Tooltip>
             ) : isRevoked ? (
               <Badge variant="secondary">
@@ -124,6 +126,7 @@ export function NodeApiKeySection({
   const [showSecret, setShowSecret] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   const { data: apiKeys = [], isLoading } = useQuery({
     queryKey: ['nodeApiKeys', organizationId],
@@ -181,6 +184,8 @@ export function NodeApiKeySection({
     setCreatedSecret(null);
     setShowSecret(false);
     setCopied(false);
+    setError(null);
+    clearTimeout(copyTimeoutRef.current);
   };
 
   const handleCopySecret = async () => {
@@ -197,7 +202,8 @@ export function NodeApiKeySection({
         document.body.removeChild(ta);
       }
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
     } catch (e) {
       console.error('Failed to copy secret', e);
     }
@@ -245,8 +251,9 @@ export function NodeApiKeySection({
 
         <CardContent>
           {isLoading ? (
-            <div className="flex items-center justify-center py-8">
+            <div className="flex items-center justify-center py-8" role="status">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="sr-only">{t('settings.swarm.apiKeys.loading', 'Loading API keys...')}</span>
             </div>
           ) : apiKeys.length === 0 ? (
             <p className="text-center py-8 text-muted-foreground">
@@ -293,7 +300,7 @@ export function NodeApiKeySection({
                     id="api-key-name"
                     value={newKeyName}
                     onChange={(e) => setNewKeyName(e.target.value)}
-                    placeholder={t('settings.swarm.apiKeys.namePlaceholder', 'e.g. Production Node') as string}
+                    placeholder={t('settings.swarm.apiKeys.namePlaceholder', 'e.g. Production Node')}
                   />
                 </div>
               </div>
@@ -305,7 +312,7 @@ export function NodeApiKeySection({
                   {t('settings.swarm.apiKeys.cancel', 'Cancel')}
                 </Button>
                 <Button
-                  onClick={() => createMutation.mutate(newKeyName)}
+                  onClick={() => createMutation.mutate(newKeyName.trim())}
                   disabled={!newKeyName.trim() || createMutation.isPending}
                 >
                   {t('settings.swarm.apiKeys.createAction', 'Create')}
@@ -326,9 +333,9 @@ export function NodeApiKeySection({
                 <code
                   data-secret-wrapper
                   data-hidden={!showSecret}
-                  className={`block p-3 rounded bg-muted text-sm break-all ${showSecret ? '' : 'blur-sm select-none'}`}
+                  className="block p-3 rounded bg-muted text-sm break-all"
                 >
-                  {createdSecret}
+                  {showSecret ? createdSecret : '••••••••••••••••••••'}
                 </code>
                 <div className="flex gap-2">
                   <Button
