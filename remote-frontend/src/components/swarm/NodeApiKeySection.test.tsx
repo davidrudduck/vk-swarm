@@ -280,4 +280,121 @@ describe('NodeApiKeySection', () => {
       expect(apiKeysBlock[suffix], `Missing i18n key: ${key}`).toBeDefined();
     }
   });
+
+  it('renders Revoked badge with no action button for revoked keys (TS10)', async () => {
+    const keys: NodeApiKey[] = [{
+      id: 'k3', organization_id: 'org-1', name: 'Old Key', key_prefix: 'vk_old',
+      created_by: null, last_used_at: null, revoked_at: '2026-02-01T00:00:00Z',
+      created_at: '2026-01-01T00:00:00Z', node_id: null,
+      takeover_count: 0, takeover_window_start: null,
+      blocked_at: null, blocked_reason: null,
+    }];
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    expect(await screen.findByText('Revoked')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unblock' })).not.toBeInTheDocument();
+  });
+
+  it('renders last-used timestamp when present and omits when null (TS11)', async () => {
+    const keys: NodeApiKey[] = [
+      {
+        id: 'k1', organization_id: 'org-1', name: 'Used', key_prefix: 'vk_u',
+        created_by: null, last_used_at: '2026-03-15T00:00:00Z', revoked_at: null,
+        created_at: '2026-01-01T00:00:00Z', node_id: null,
+        takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      },
+      {
+        id: 'k2', organization_id: 'org-1', name: 'Unused', key_prefix: 'vk_n',
+        created_by: null, last_used_at: null, revoked_at: null,
+        created_at: '2026-01-01T00:00:00Z', node_id: null,
+        takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      },
+    ];
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    await waitFor(() => {
+      expect(screen.getByText(/Last used 2026-03-15/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Last used 2026-01-01/)).not.toBeInTheDocument();
+  });
+
+  it('renders nothing when organizationId is empty string (TS12)', () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    const { container } = renderWith(<NodeApiKeySection organizationId="" />);
+    expect(container.innerHTML).toBe('');
+  });
+
+  it('unblock mutation error surfaces in the destructive Alert (TS13)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const keys: NodeApiKey[] = [{
+      id: 'k2', organization_id: 'org-1', name: 'Blocked', key_prefix: 'vk_b',
+      created_by: null, last_used_at: null, revoked_at: null,
+      created_at: '2026-01-01T00:00:00Z', node_id: null,
+      takeover_count: 0, takeover_window_start: null,
+      blocked_at: '2026-01-02T00:00:00Z', blocked_reason: 'Duplicate key use detected',
+    }];
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    vi.mocked(nodesApi.unblockApiKey).mockRejectedValue(new Error('unblock failed'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(await screen.findByRole('button', { name: 'Unblock' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/unblock failed/)).toBeInTheDocument();
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('copies secret via navigator.clipboard.writeText when available (TS14)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockResolvedValue({
+      api_key: {
+        id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      },
+      secret: 'vk_SECRET_CLIPBOARD_TEST',
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const origClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true, writable: true });
+
+    const { fireEvent } = await import('@testing-library/react');
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
+    fireEvent.change(nameInput, { target: { value: 'Test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
+    await waitFor(() => {
+      expect(screen.getByText('vk_SECRET_CLIPBOARD_TEST')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('vk_SECRET_CLIPBOARD_TEST');
+      expect(screen.getByText('Copied!')).toBeInTheDocument();
+    });
+    Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true, writable: true });
+  });
+
+  it('dialog close via X button clears state when no secret is shown (TS15)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    const { fireEvent } = await import('@testing-library/react');
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    expect(await screen.findByLabelText('Key Name')).toBeInTheDocument();
+    const closeBtn = screen.getByRole('button', { name: 'Close' });
+    fireEvent.click(closeBtn);
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Key Name')).not.toBeInTheDocument();
+    });
+  });
 });
