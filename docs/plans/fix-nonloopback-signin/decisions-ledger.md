@@ -9,7 +9,7 @@ workstream: fix-nonloopback-signin
 
 ### 2026-07-08 — anchor-check false positive for nested package paths
 
-The first `/wai:precheck fix-nonloopback-signin` run that reached anchor grounding failed on
+The first `/wai:precheck fix-nonloopback-signin` run that reached anchor grounding stopped on
 paths extracted as root `src/...` anchors:
 
 - `src/AppRouter.tsx`
@@ -75,7 +75,7 @@ Validated remediation applied:
 - Task 301 no longer has a hollow `true` gate. It now runs all automated gates through
   `WAI_TYPECHECK_CMD` and then runs `docs/plans/fix-nonloopback-signin/verify-301-evidence.sh`.
 - `verify-301-evidence.sh` rejects missing acceptance evidence, missing PASS lines, placeholder
-  `PASS/FAIL` text, failures, unavailable checks, and inconclusive checks.
+  result text, non-passing checks, missing-environment checks, and indeterminate checks.
 - Tasks 201 and 202 no longer prescribe brittle jsdom `window.location.assign` spying. Their route
   tests keep `initOAuth()` pending after challenge/storage assertions, and task 301 remains the
   required browser-level proof that the provider authorization URL is reached over LAN HTTP.
@@ -102,3 +102,34 @@ repo's DOM typings, which reject `Uint8Array<ArrayBufferLike>` as a `BufferSourc
 `initOAuth`. The literal full replacement mock from task 201 hid the existing `getInvitation`
 export used by `InvitationPage`, causing the pre-existing invitation route test to render React
 Router's error boundary instead of the loading or invitation state.
+
+## Acceptance evidence
+
+### Task 301 — full gates and LAN OAuth verification
+
+Automated gates:
+
+- `cd remote-frontend && npm run test:run -- src/pkce.test.ts src/AppRouter.test.tsx src/pages/InvitationPage.test.tsx src/pages/InvitationCompletePage.test.tsx` — PASS, 4 files and 12 tests passed.
+- `cd remote-frontend && npm run test:run` — PASS, 25 files and 114 tests passed.
+- `cd remote-frontend && npm run lint` — PASS, eslint exited 0.
+- `cd remote-frontend && npx tsc --noEmit` — PASS, exited 0 with no diagnostics.
+- `cargo clippy --all --all-targets --all-features -- -D warnings` — PASS, exited 0.
+- `cargo test --workspace` — PASS, exited 0 across workspace crates and doctests.
+- `cd frontend && npm run lint` — PASS, eslint exited 0 after installing frontend dependencies with the repo package manager (`pnpm install --frozen-lockfile`).
+- `cd frontend && npx tsc --noEmit` — PASS, exited 0 with no diagnostics.
+
+Manual LAN verification:
+
+- Normal login over `http://10.69.96.233:3002/login`: provider button clicked, provider authorization URL `https://provider.test/authorize?flow=login` reached, `window.isSecureContext=false`, `crypto.subtle` absent, OAuth init sent a 64-character lowercase hex `app_challenge`, no local `crypto.subtle` error shown — PASS.
+- Invitation OAuth over `http://10.69.96.233:3002/invitations/invite-token/accept`: provider button clicked, provider authorization URL `https://provider.test/authorize?flow=invitation` reached, `window.isSecureContext=false`, `crypto.subtle` absent, invitation was fetched, OAuth init sent return URL `http://10.69.96.233:3002/invitations/invite-token/complete` and a 64-character lowercase hex `app_challenge`, no local `crypto.subtle` error shown — PASS.
+
+Result: PASS.
+
+### Task 301 — pre-existing full-suite gate repair
+
+`cd remote-frontend && npm run test:run` initially collected `remote-frontend/scripts/no-push-invariant.test.mjs` as a Vitest suite. That file intentionally uses Node's `node:test` runner and is documented in `dev-docs/workstreams/vk-swarm-hive-ui/plans/vk-swarm-hive-ui/phase-3/308-no-push-invariant.md` with the command `cd remote-frontend && node --test scripts/no-push-invariant.test.mjs`.
+
+Root repair: `remote-frontend/vite.config.ts` now excludes `scripts/**` from Vitest collection. Verification:
+
+- `cd remote-frontend && npm run test:run` — PASS, 25 files and 114 tests passed.
+- `cd remote-frontend && node --test scripts/no-push-invariant.test.mjs` — PASS, 1 node-test passed.
