@@ -146,7 +146,7 @@ export function NodeApiKeySection({
   const [error, setError] = useState<string | null>(null);
   const [pendingKeyIds, setPendingKeyIds] = useState<Set<string>>(new Set());
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const createAbortedRef = useRef(false);
+  const createAttemptRef = useRef(0);
 
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
   useEffect(() => setError(null), [organizationId]);
@@ -161,15 +161,16 @@ export function NodeApiKeySection({
   const queryClient = useQueryClient();
   const createMutation = useMutation({
     mutationFn: (name: string) => nodesApi.createApiKey({ organization_id: organizationId, name }),
-    onSuccess: (response) => {
+    onMutate: () => createAttemptRef.current,
+    onSuccess: (response, _vars, attemptId) => {
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
-      if (createAbortedRef.current) return;
+      if (attemptId !== createAttemptRef.current) return;
       setError(null);
       setCreatedSecret(response.secret);
       setNewKeyName('');
     },
-    onError: (err) => {
-      if (createAbortedRef.current) return;
+    onError: (err, _vars, attemptId) => {
+      if (attemptId !== createAttemptRef.current) return;
       setError(parseErrorMessage(err));
     },
   });
@@ -213,7 +214,7 @@ export function NodeApiKeySection({
   };
 
   const closeDialog = () => {
-    createAbortedRef.current = true;
+    createAttemptRef.current += 1;
     createMutation.reset();
     setShowCreateDialog(false);
     setNewKeyName('');
@@ -263,7 +264,7 @@ export function NodeApiKeySection({
               </CardTitle>
             </div>
             <Button
-              onClick={() => { createAbortedRef.current = false; setShowCreateDialog(true); }}
+              onClick={() => setShowCreateDialog(true)}
               size="sm"
               className="gap-2"
             >
@@ -364,7 +365,10 @@ export function NodeApiKeySection({
                   {t('settings.swarm.apiKeys.cancel', 'Cancel')}
                 </Button>
                 <Button
-                  onClick={() => { setError(null); createMutation.mutate(newKeyName.trim()); }}
+                  onClick={() => {
+                    setError(null);
+                    createMutation.mutate(newKeyName.trim());
+                  }}
                   disabled={!newKeyName.trim() || createMutation.isPending}
                 >
                   {t('settings.swarm.apiKeys.createAction', 'Create')}

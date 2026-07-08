@@ -94,7 +94,7 @@ The create dialog has two states:
 1. **Name input view**: Shows name field + Create/Cancel buttons
 2. **Secret reveal view**: Shows the one-time secret + Copy/Reveal/Hide/Done buttons
 
-When `createdSecret` is set, the dialog becomes `uncloseable` (via the Dialog component's prop) — the user must click "Done" to dismiss. This prevents accidental secret loss via Escape or backdrop click.
+When `createdSecret` is set, the dialog becomes `uncloseable` (via the Dialog component's prop) — the backdrop is disabled and no close affordance is rendered while the secret is shown. This prevents accidental secret loss.
 
 ## API Integration
 
@@ -160,7 +160,7 @@ As of the latest run:
 | Functions | 93.75% |
 | Lines | 97.56% |
 
-Uncovered lines: `revokeMutation.onError` non-Error branch (line 181), copy failure catch (line 245).
+Uncovered lines: `revokeMutation.onError` non-Error branch (line 184), copy failure catch (line 248).
 
 ## Composition in Nodes.tsx
 
