@@ -2,7 +2,7 @@
 id: "202"
 phase: 2
 title: Cover non-loopback invitation OAuth and completion storage
-status: ready
+status: passed
 depends_on: ["201"]
 parallel: false
 conflicts_with: []
