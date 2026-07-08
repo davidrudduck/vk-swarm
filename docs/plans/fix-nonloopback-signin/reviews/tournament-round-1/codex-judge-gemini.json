@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "codex",
+    "exec",
+    "-C",
+    "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko",
+    "--sandbox",
+    "read-only",
+    "--json",
+    "-"
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko",
+  "exit_code": 0,
+  "finished_at": "2026-07-08T10:47:45.218822+00:00",
+  "notes": [],
+  "prompt_file": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/judge-codex-on-gemini.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/codex-judge-gemini.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/codex-judge-gemini.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-08T10:45:18.567038+00:00",
+  "status": "ok",
+  "task": "plan-review",
+  "tool": "codex",
+  "tool_version": "codex-cli 0.143.0"
+}
