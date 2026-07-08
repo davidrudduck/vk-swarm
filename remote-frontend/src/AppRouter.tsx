@@ -29,7 +29,14 @@ function RootRedirect() {
 function LoginPage() {
   const [searchParams] = useSearchParams()
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(searchParams.get('error'))
+
+  useEffect(() => {
+    const urlError = searchParams.get('error')
+    if (urlError) {
+      setError(urlError)
+    }
+  }, [searchParams])
 
   const handleOAuthLogin = async (provider: OAuthProvider) => {
     setLoading(true)
@@ -49,6 +56,7 @@ function LoginPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'OAuth init failed')
       setLoading(false)
+      clearVerifier()
     }
   }
 

@@ -11,6 +11,8 @@ import {
   generateChallenge,
   storeVerifier,
   storeInvitationToken,
+  clearVerifier,
+  clearInvitationToken,
 } from '../pkce'
 
 export default function InvitationPage() {
@@ -45,6 +47,8 @@ export default function InvitationPage() {
     } catch (e) {
       setOauthError(e instanceof Error ? e.message : 'OAuth init failed')
       setLoading(false)
+      clearVerifier()
+      clearInvitationToken()
     }
   }
 

@@ -53,6 +53,7 @@ describe('InvitationCompletePage storage handoff', () => {
     expect(screen.getByText('Invitation accepted!')).toBeInTheDocument()
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
     expect(sessionStorage.getItem('invitation_token')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBe('access-123')
   })
 
   it('shows error when oauthError param is present', async () => {

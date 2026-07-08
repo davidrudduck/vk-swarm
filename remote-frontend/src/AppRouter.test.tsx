@@ -235,6 +235,21 @@ describe('AppRouter', () => {
       expect(screen.getByText('Network error')).toBeInTheDocument()
     })
     expect(screen.getByRole('button', { name: 'Sign in with GitHub' })).not.toBeDisabled()
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+  })
+
+  it('login: displays error from URL query parameter', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: false,
+      isLoaded: true,
+      profile: null,
+    })
+
+    renderWithRouter('/login?error=OAuth%20error%3A%20access_denied')
+
+    await waitFor(() => {
+      expect(screen.getByText('OAuth error: access_denied')).toBeInTheDocument()
+    })
   })
 
   it('oauth callback: handles oauthError param', async () => {

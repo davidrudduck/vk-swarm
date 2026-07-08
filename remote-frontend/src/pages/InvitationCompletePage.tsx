@@ -32,11 +32,15 @@ export default function InvitationCompletePage() {
     const completeInvitation = async () => {
       if (oauthError) {
         if (active) setError(`OAuth error: ${oauthError}`)
+        clearVerifier()
+        clearInvitationToken()
         return
       }
 
       if (!handoffId || !appCode) {
         if (active) setError('Missing OAuth parameters. Please try the invitation link again.')
+        clearVerifier()
+        clearInvitationToken()
         return
       }
 
@@ -44,12 +48,14 @@ export default function InvitationCompletePage() {
         const verifier = retrieveVerifier()
         if (!verifier) {
           if (active) setError('OAuth session lost. Please try again.')
+          clearInvitationToken()
           return
         }
 
         const token = urlToken || retrieveInvitationToken()
         if (!token) {
           if (active) setError('Invitation token lost. Please try again.')
+          clearVerifier()
           return
         }
 
@@ -64,6 +70,7 @@ export default function InvitationCompletePage() {
         if (!active) return
         clearVerifier()
         clearInvitationToken()
+        localStorage.setItem('access_token', access_token)
 
         setSuccess(true)
         setOrgSlug(result.organization_slug)
