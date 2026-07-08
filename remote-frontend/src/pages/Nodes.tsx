@@ -31,8 +31,9 @@ export function Nodes() {
       {orgId && <NodeApiKeySection organizationId={orgId} />}
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-8">
+        <div className="flex items-center justify-center py-8" role="status">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <span className="sr-only">Loading nodes...</span>
         </div>
       ) : !orgId ? (
         <p className="text-muted-foreground">

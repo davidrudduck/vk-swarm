@@ -30,9 +30,11 @@ interface ApiKeyItemProps {
   apiKey: NodeApiKey;
   onRevoke: (keyId: string) => void;
   onUnblock: (keyId: string) => void;
+  isRevokePending: boolean;
+  isUnblockPending: boolean;
 }
 
-function ApiKeyItem({ apiKey, onRevoke, onUnblock }: ApiKeyItemProps) {
+function ApiKeyItem({ apiKey, onRevoke, onUnblock, isRevokePending, isUnblockPending }: ApiKeyItemProps) {
   const { t } = useTranslation(['settings', 'common']);
   const isBlocked = apiKey.blocked_at !== null;
   const isRevoked = apiKey.revoked_at !== null;
@@ -99,6 +101,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock }: ApiKeyItemProps) {
           variant="ghost"
           size="sm"
           onClick={() => onUnblock(apiKey.id)}
+          disabled={isUnblockPending}
         >
           <Unlock className="h-4 w-4 mr-1" />
           {t('settings.swarm.apiKeys.unblock', 'Unblock')}
@@ -108,6 +111,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock }: ApiKeyItemProps) {
           variant="ghost"
           size="sm"
           onClick={() => onRevoke(apiKey.id)}
+          disabled={isRevokePending}
         >
           <Trash2 className="h-4 w-4 mr-1" />
           {t('settings.swarm.apiKeys.revoke', 'Revoke')}
@@ -133,7 +137,7 @@ export function NodeApiKeySection({
 
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
 
-  const { data: apiKeys = [], isLoading } = useQuery({
+  const { data: apiKeys = [], isLoading, isError: isListError } = useQuery({
     queryKey: ['nodeApiKeys', organizationId],
     queryFn: () => nodesApi.listApiKeys(organizationId),
     enabled: !!organizationId,
@@ -266,6 +270,12 @@ export function NodeApiKeySection({
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               <span className="sr-only">{t('settings.swarm.apiKeys.loading', 'Loading API keys...')}</span>
             </div>
+          ) : isListError ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                {t('settings.swarm.apiKeys.loadError', 'Failed to load API keys.')}
+              </AlertDescription>
+            </Alert>
           ) : apiKeys.length === 0 ? (
             <p className="text-center py-8 text-muted-foreground">
               {t(
@@ -281,6 +291,8 @@ export function NodeApiKeySection({
                   apiKey={key}
                   onRevoke={handleRevoke}
                   onUnblock={handleUnblock}
+                  isRevokePending={revokeMutation.isPending}
+                  isUnblockPending={unblockMutation.isPending}
                 />
               ))}
             </div>
@@ -302,6 +314,9 @@ export function NodeApiKeySection({
                 <DialogTitle>
                   {t('settings.swarm.apiKeys.createTitle', 'Generate API Key')}
                 </DialogTitle>
+                <DialogDescription>
+                  {t('settings.swarm.apiKeys.createDescription', 'Give your API key a name to identify it later.')}
+                </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
@@ -372,6 +387,7 @@ export function NodeApiKeySection({
                     variant="outline"
                     size="sm"
                     onClick={handleCopySecret}
+                    aria-live="polite"
                   >
                     {copied ? (
                       <>

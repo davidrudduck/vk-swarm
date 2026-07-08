@@ -100,6 +100,7 @@ describe('NodeApiKeySection', () => {
     });
 
     const execCommand = vi.fn(() => true);
+    const origExecCommand = document.execCommand;
     document.execCommand = execCommand;
     const origClipboard = navigator.clipboard;
     // @ts-expect-error — assigning undefined to disable clipboard in test
@@ -143,6 +144,7 @@ describe('NodeApiKeySection', () => {
       expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
     });
     Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true });
+    document.execCommand = origExecCommand;
   });
 
   it('revokes a key only after window.confirm; query is invalidated on success (TS5)', async () => {
@@ -243,6 +245,7 @@ describe('NodeApiKeySection', () => {
       'settings.swarm.apiKeys.description',
       'settings.swarm.apiKeys.create',
       'settings.swarm.apiKeys.createTitle',
+      'settings.swarm.apiKeys.createDescription',
       'settings.swarm.apiKeys.secretTitle',
       'settings.swarm.apiKeys.secretDescription',
       'settings.swarm.apiKeys.copyToClipboard',
@@ -256,6 +259,7 @@ describe('NodeApiKeySection', () => {
       'settings.swarm.apiKeys.createAction',
       'settings.swarm.apiKeys.loading',
       'settings.swarm.apiKeys.empty',
+      'settings.swarm.apiKeys.loadError',
       'settings.swarm.apiKeys.bound',
       'settings.swarm.apiKeys.unbound',
       'settings.swarm.apiKeys.created',
