@@ -84,3 +84,12 @@ Focused re-checks after remediation:
 
 - `bash -n docs/plans/fix-nonloopback-signin/verify-301-evidence.sh` — PASS.
 - `wai-plan-lint.sh fix-nonloopback-signin` — PASS with only acknowledged sibling advisories.
+
+## Task 101 implementation findings
+
+### 2026-07-08 — native digest argument type cast
+
+`remote-frontend/src/pkce.ts` casts the `Uint8Array` passed to `crypto.subtle.digest` as
+`BufferSource`. This preserves the runtime value asserted by `pkce.test.ts` while satisfying the
+repo's DOM typings, which reject `Uint8Array<ArrayBufferLike>` as a `BufferSource` under
+`npx tsc --noEmit`.
