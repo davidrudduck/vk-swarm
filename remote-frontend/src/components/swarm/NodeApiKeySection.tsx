@@ -146,6 +146,7 @@ export function NodeApiKeySection({
   const [error, setError] = useState<string | null>(null);
   const [pendingKeyIds, setPendingKeyIds] = useState<Set<string>>(new Set());
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const createAbortedRef = useRef(false);
 
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
 
@@ -160,6 +161,7 @@ export function NodeApiKeySection({
   const createMutation = useMutation({
     mutationFn: (name: string) => nodesApi.createApiKey({ organization_id: organizationId, name }),
     onSuccess: (response) => {
+      if (createAbortedRef.current) return;
       setError(null);
       setCreatedSecret(response.secret);
       setNewKeyName('');
@@ -209,6 +211,7 @@ export function NodeApiKeySection({
   };
 
   const closeDialog = () => {
+    createAbortedRef.current = true;
     createMutation.reset();
     setShowCreateDialog(false);
     setNewKeyName('');
@@ -258,7 +261,7 @@ export function NodeApiKeySection({
               </CardTitle>
             </div>
             <Button
-              onClick={() => setShowCreateDialog(true)}
+              onClick={() => { createAbortedRef.current = false; setShowCreateDialog(true); }}
               size="sm"
               className="gap-2"
             >
@@ -359,7 +362,7 @@ export function NodeApiKeySection({
                   {t('settings.swarm.apiKeys.cancel', 'Cancel')}
                 </Button>
                 <Button
-                  onClick={() => createMutation.mutate(newKeyName.trim())}
+                  onClick={() => { setError(null); createMutation.mutate(newKeyName.trim()); }}
                   disabled={!newKeyName.trim() || createMutation.isPending}
                 >
                   {t('settings.swarm.apiKeys.createAction', 'Create')}
