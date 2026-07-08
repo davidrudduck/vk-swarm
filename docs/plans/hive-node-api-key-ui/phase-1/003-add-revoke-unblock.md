@@ -9,6 +9,8 @@ conflicts_with: []
 files:
   - remote-frontend/src/components/swarm/NodeApiKeySection.tsx
   - remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx
+  - remote-frontend/package.json
+  - pnpm-lock.yaml
 irreversible: false
 scope_test: "remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx"
 allowed_change: edit

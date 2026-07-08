@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Key, Plus, Copy, Check, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Key, Plus, Copy, Check, Eye, EyeOff, Trash2, Unlock, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { TooltipProvider } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Dialog,
   DialogContent,
@@ -28,10 +28,13 @@ import type { NodeApiKey } from '@/types/nodes';
 interface ApiKeyItemProps {
   apiKey: NodeApiKey;
   onRevoke: (keyId: string) => void;
+  onUnblock: (keyId: string) => void;
 }
 
-function ApiKeyItem({ apiKey, onRevoke }: ApiKeyItemProps) {
+function ApiKeyItem({ apiKey, onRevoke, onUnblock }: ApiKeyItemProps) {
   const { t } = useTranslation(['settings', 'common']);
+  const isBlocked = apiKey.blocked_at !== null;
+  const isRevoked = apiKey.revoked_at !== null;
 
   return (
     <div className="flex items-center justify-between p-3 border rounded-lg">
@@ -41,12 +44,35 @@ function ApiKeyItem({ apiKey, onRevoke }: ApiKeyItemProps) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-sm">{apiKey.name}</span>
             <code className="text-xs text-muted-foreground">{apiKey.key_prefix}</code>
-            <Badge variant={apiKey.node_id ? 'default' : 'secondary'}>
-              {apiKey.node_id
-                ? t('settings.swarm.apiKeys.bound', 'Bound')
-                : t('settings.swarm.apiKeys.unbound', 'Unbound')}
-            </Badge>
+            {isBlocked ? (
+              <Tooltip>
+                <TooltipTrigger>
+                  <Badge variant="destructive">
+                    <AlertTriangle className="h-3 w-3 mr-1" />
+                    {t('settings.swarm.apiKeys.blocked', 'Blocked')}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{apiKey.blocked_reason}</p>
+                </TooltipContent>
+              </Tooltip>
+            ) : isRevoked ? (
+              <Badge variant="secondary">
+                {t('settings.swarm.apiKeys.revoked', 'Revoked')}
+              </Badge>
+            ) : (
+              <Badge variant={apiKey.node_id ? 'default' : 'secondary'}>
+                {apiKey.node_id
+                  ? t('settings.swarm.apiKeys.bound', 'Bound')
+                  : t('settings.swarm.apiKeys.unbound', 'Unbound')}
+              </Badge>
+            )}
           </div>
+          {isBlocked && apiKey.blocked_reason && (
+            <div className="text-xs text-destructive mt-1">
+              {apiKey.blocked_reason}
+            </div>
+          )}
           <div className="text-xs text-muted-foreground">
             {t('settings.swarm.apiKeys.created', 'Created {{when}}', {
               when: apiKey.created_at.slice(0, 10),
@@ -62,13 +88,25 @@ function ApiKeyItem({ apiKey, onRevoke }: ApiKeyItemProps) {
           </div>
         </div>
       </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => onRevoke(apiKey.id)}
-      >
-        {t('settings.swarm.apiKeys.revoke', 'Revoke')}
-      </Button>
+      {isBlocked ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onUnblock(apiKey.id)}
+        >
+          <Unlock className="h-4 w-4 mr-1" />
+          {t('settings.swarm.apiKeys.unblock', 'Unblock')}
+        </Button>
+      ) : isRevoked ? null : (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onRevoke(apiKey.id)}
+        >
+          <Trash2 className="h-4 w-4 mr-1" />
+          {t('settings.swarm.apiKeys.revoke', 'Revoke')}
+        </Button>
+      )}
     </div>
   );
 }
@@ -100,6 +138,24 @@ export function NodeApiKeySection({
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
     },
   });
+
+  const revokeMutation = useMutation({
+    mutationFn: (keyId: string) => nodesApi.revokeApiKey(keyId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] }),
+  });
+  const unblockMutation = useMutation({
+    mutationFn: (keyId: string) => nodesApi.unblockApiKey(keyId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] }),
+  });
+
+  const handleRevoke = (keyId: string) => {
+    if (!confirm(t('settings.swarm.apiKeys.revokeConfirm', 'Are you sure you want to revoke this API key? Nodes using it will no longer be able to connect.'))) return;
+    revokeMutation.mutate(keyId);
+  };
+  const handleUnblock = (keyId: string) => {
+    if (!confirm(t('settings.swarm.apiKeys.unblockConfirm', 'Are you sure you want to unblock this API key? The node will be able to connect again.'))) return;
+    unblockMutation.mutate(keyId);
+  };
 
   const closeDialog = () => {
     setShowCreateDialog(false);
@@ -177,7 +233,8 @@ export function NodeApiKeySection({
                 <ApiKeyItem
                   key={key.id}
                   apiKey={key}
-                  onRevoke={() => {}}
+                  onRevoke={handleRevoke}
+                  onUnblock={handleUnblock}
                 />
               ))}
             </div>

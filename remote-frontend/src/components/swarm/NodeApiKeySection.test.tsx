@@ -139,4 +139,75 @@ describe('NodeApiKeySection', () => {
       expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
     });
   });
+
+  it('revokes a key only after window.confirm; query is invalidated on success (TS5)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const invalidateSpy = vi.fn();
+    const localQueryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    localQueryClient.invalidateQueries = invalidateSpy;
+    const keys: NodeApiKey[] = [{
+      id: 'k1', organization_id: 'org-1', name: 'MacBook', key_prefix: 'vk_abc',
+      created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+      node_id: 'n1', takeover_count: 0, takeover_window_start: null,
+      blocked_at: null, blocked_reason: null,
+    }];
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    vi.mocked(nodesApi.revokeApiKey).mockResolvedValue();
+
+    render(
+      <QueryClientProvider client={localQueryClient}>
+        <TooltipProvider><NodeApiKeySection organizationId="org-1" /></TooltipProvider>
+      </QueryClientProvider>
+    );
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    const revokeBtn = await screen.findByRole('button', { name: 'settings.swarm.apiKeys.revoke' });
+    await u.click(revokeBtn);
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(nodesApi.revokeApiKey).toHaveBeenCalledWith('k1');
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['nodeApiKeys', 'org-1'] });
+    });
+
+    confirmSpy.mockReturnValue(false);
+    vi.mocked(nodesApi.revokeApiKey).mockClear();
+    await u.click(revokeBtn);
+    expect(nodesApi.revokeApiKey).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('renders Blocked badge with reason; Unblock calls confirm + unblockApiKey + invalidates (TS6)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const invalidateSpy = vi.fn();
+    const localQueryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    localQueryClient.invalidateQueries = invalidateSpy;
+    const keys: NodeApiKey[] = [{
+      id: 'k2', organization_id: 'org-1', name: 'Compromised', key_prefix: 'vk_xyz',
+      created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+      node_id: 'n1', takeover_count: 5, takeover_window_start: '2026-01-01T00:00:00Z',
+      blocked_at: '2026-01-02T00:00:00Z', blocked_reason: 'Duplicate key use detected',
+    }];
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    vi.mocked(nodesApi.unblockApiKey).mockResolvedValue(keys[0]);
+
+    render(
+      <QueryClientProvider client={localQueryClient}>
+        <TooltipProvider><NodeApiKeySection organizationId="org-1" /></TooltipProvider>
+      </QueryClientProvider>
+    );
+    expect(await screen.findByText('settings.swarm.apiKeys.blocked')).toBeInTheDocument();
+    expect(screen.getByText('Duplicate key use detected')).toBeInTheDocument();
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.unblock' }));
+    await waitFor(() => {
+      expect(nodesApi.unblockApiKey).toHaveBeenCalledWith('k2');
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['nodeApiKeys', 'org-1'] });
+    });
+    confirmSpy.mockRestore();
+  });
 });

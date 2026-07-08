@@ -86,6 +86,11 @@ decisions needed to satisfy the failing-test-first red step.
 ### Task 003
 *(appended by the implementer)*
 
+- **Installed `@testing-library/user-event`** as a dev dependency in `remote-frontend` — required by TS5/TS6 tests for realistic click interactions (vi.fn() click spies needed `user.setup()` for proper event bubbling). Not in task spec but necessary for the test code to compile.
+- **Blocked key renders both Badge and reason text**: The Tooltip shows the reason on hover, and a separate `text-destructive` div below renders it inline. TS6 asserts `screen.getByText('Duplicate key use detected')` which requires the reason to be in the DOM visibly, not just in a tooltip.
+- **Revoked keys render no action button**: Task spec says "When revoked_at is set: render Badge variant='secondary' with revoked text, no action button". Implemented by conditionally omitting the button entirely (returning `null` in the JSX branch).
+- **Revoke button includes Trash2 icon, Unblock includes Unlock icon**: Task spec didn't specify icons but the lucide imports (`Trash2`, `Unlock`, `AlertTriangle`) were required. Added icons with `mr-1` spacing to match existing button patterns.
+
 ### Task 004
 *(appended by the implementer)*
 
