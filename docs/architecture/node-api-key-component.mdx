@@ -17,7 +17,7 @@ remote-frontend/src/components/swarm/
 
 remote-frontend/src/pages/
 ├── Nodes.tsx                      # Composition point (line 31)
-└── Nodes.test.tsx                 # Integration test (TS8)
+└── Nodes.test.tsx                 # Integration tests (6 cases, including TS8)
 
 frontend/src/i18n/locales/
 ├── en/settings.json               # English locale keys (lines 744-776)
@@ -122,7 +122,7 @@ The `remote-frontend` does not currently initialize an i18n instance — the inl
 
 ### Test Structure
 
-The test file (`NodeApiKeySection.test.tsx`) contains 24 test cases across all 3 test files:
+The test file (`NodeApiKeySection.test.tsx`) contains 24 test cases. Integration with `Nodes.tsx` is covered by `Nodes.test.tsx` (TS8 plus 5 other tests).
 
 | Test | Coverage |
 |------|----------|

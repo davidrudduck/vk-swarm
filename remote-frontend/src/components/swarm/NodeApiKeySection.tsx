@@ -163,7 +163,7 @@ export function NodeApiKeySection({
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const createAttemptRef = useRef(0);
   const orgIdRef = useRef(organizationId);
-  orgIdRef.current = organizationId;
+  useEffect(() => { orgIdRef.current = organizationId; }, [organizationId]);
 
   const isMountedRef = useRef(true);
   useEffect(() => {
@@ -176,6 +176,7 @@ export function NodeApiKeySection({
   const { data: apiKeys = [], isLoading, isError: isListError } = useQuery({
     queryKey: ['nodeApiKeys', organizationId],
     queryFn: () => nodesApi.listApiKeys(organizationId),
+    enabled: !!organizationId,
     staleTime: 30_000,
   });
 
@@ -186,6 +187,7 @@ export function NodeApiKeySection({
     onMutate: () => createAttemptRef.current,
     onSuccess: (response, { orgId }, attemptId) => {
       if (attemptId !== createAttemptRef.current) return;
+      if (orgId !== orgIdRef.current) return;
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
       setError(null);
       setCreatedSecret(response.secret);
@@ -204,6 +206,7 @@ export function NodeApiKeySection({
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
     },
     onError: (err) => {
+      if (!isMountedRef.current) return;
       setError(parseErrorMessage(err));
     },
   });
@@ -214,6 +217,7 @@ export function NodeApiKeySection({
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
     },
     onError: (err) => {
+      if (!isMountedRef.current) return;
       setError(parseErrorMessage(err));
     },
   });
@@ -267,7 +271,9 @@ export function NodeApiKeySection({
         try {
           ta.focus();
           ta.select();
-          document.execCommand('copy');
+          if (!document.execCommand('copy')) {
+            throw new Error('Fallback copy failed');
+          }
         } finally {
           document.body.removeChild(ta);
         }

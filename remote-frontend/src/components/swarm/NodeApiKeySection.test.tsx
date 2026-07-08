@@ -608,4 +608,41 @@ describe('NodeApiKeySection', () => {
     });
     confirmSpy.mockRestore();
   });
+
+  it('renders load-error Alert when listApiKeys rejects (TS22)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockRejectedValue(new Error('network down'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load API keys.')).toBeInTheDocument();
+    });
+  });
+
+  it('hides the Close button when the secret is shown (uncloseable) (TS23)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockResolvedValue({
+      api_key: {
+        id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      },
+      secret: 'vk_UNCLOSEABLE_TEST',
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
+    fireEvent.change(nameInput, { target: { value: 'Test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+  });
+
+  it('does not fire listApiKeys when organizationId is empty (TS24)', () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    renderWith(<NodeApiKeySection organizationId="" />);
+    expect(nodesApi.listApiKeys).not.toHaveBeenCalled();
+  });
 });
