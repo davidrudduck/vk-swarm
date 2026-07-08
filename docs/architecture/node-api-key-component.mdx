@@ -12,7 +12,7 @@ The `NodeApiKeySection` is a React component in `remote-frontend/src/components/
 ```
 remote-frontend/src/components/swarm/
 ├── NodeApiKeySection.tsx          # Component
-├── NodeApiKeySection.test.tsx     # Tests (24 test cases)
+├── NodeApiKeySection.test.tsx     # Tests (27 test cases)
 └── index.ts                       # Barrel export (line 18)
 
 remote-frontend/src/pages/
@@ -122,7 +122,7 @@ The `remote-frontend` does not currently initialize an i18n instance — the inl
 
 ### Test Structure
 
-The test file (`NodeApiKeySection.test.tsx`) contains 24 test cases. Integration with `Nodes.tsx` is covered by `Nodes.test.tsx` (TS8 plus 5 other tests).
+The test file (`NodeApiKeySection.test.tsx`) contains 27 test cases. Integration with `Nodes.tsx` is covered by `Nodes.test.tsx` (TS8 plus 5 other tests).
 
 | Test | Coverage |
 |------|----------|
@@ -150,6 +150,9 @@ The test file (`NodeApiKeySection.test.tsx`) contains 24 test cases. Integration
 | TS19 | Blocked key with null blocked_reason renders without tooltip |
 | TS20 | Unblock button re-enabled after failed unblock mutation |
 | TS21 | Revoke button re-enabled after failed revoke mutation |
+| TS22 | Load-error Alert when listApiKeys rejects |
+| TS23 | Close button hidden when secret is shown (uncloseable) |
+| TS24 | listApiKeys not called when organizationId is empty |
 
 ### Mocking Strategy
 

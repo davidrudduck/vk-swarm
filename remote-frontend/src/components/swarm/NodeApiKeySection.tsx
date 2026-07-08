@@ -171,7 +171,15 @@ export function NodeApiKeySection({
     return () => { isMountedRef.current = false; };
   }, []);
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
-  useEffect(() => setError(null), [organizationId]);
+  useEffect(() => {
+    setError(null);
+    if (showCreateDialog && !createdSecret) {
+      createAttemptRef.current += 1;
+      createMutation.reset();
+      setShowCreateDialog(false);
+      setNewKeyName('');
+    }
+  }, [organizationId]);
 
   const { data: apiKeys = [], isLoading, isError: isListError } = useQuery({
     queryKey: ['nodeApiKeys', organizationId],
@@ -241,6 +249,7 @@ export function NodeApiKeySection({
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (createMutation.isPending) return;
     const trimmed = newKeyName.trim();
     if (!trimmed) return;
     setError(null);

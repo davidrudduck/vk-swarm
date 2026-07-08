@@ -106,45 +106,48 @@ describe('NodeApiKeySection', () => {
     // @ts-expect-error — assigning undefined to disable clipboard in test
     navigator.clipboard = undefined;
 
-    const { fireEvent } = await import('@testing-library/react');
-    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    try {
+      const { fireEvent } = await import('@testing-library/react');
+      renderWith(<NodeApiKeySection organizationId="org-1" />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
-    const nameInput = await screen.findByLabelText('Key Name');
-    fireEvent.change(nameInput, { target: { value: 'Test Key' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+      const nameInput = await screen.findByLabelText('Key Name');
+      fireEvent.change(nameInput, { target: { value: 'Test Key' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
-    await waitFor(() => {
-      expect(nodesApi.createApiKey).toHaveBeenCalledWith({ organization_id: 'org-1', name: 'Test Key' });
-    });
+      await waitFor(() => {
+        expect(nodesApi.createApiKey).toHaveBeenCalledWith({ organization_id: 'org-1', name: 'Test Key' });
+      });
 
-    await waitFor(() => {
-      expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
-    });
-    const secretWrapper = screen.getByText('••••••••••••••••••••').closest('[data-secret-wrapper]')!;
-    expect(secretWrapper).toHaveAttribute('data-hidden', 'true');
+      await waitFor(() => {
+        expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
+      });
+      const secretWrapper = screen.getByText('••••••••••••••••••••').closest('[data-secret-wrapper]')!;
+      expect(secretWrapper).toHaveAttribute('data-hidden', 'true');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
-    expect(secretWrapper).toHaveAttribute('data-hidden', 'false');
-    expect(screen.getByText('vk_SECRET_VALUE_DO_NOT_SHARE')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Hide' }));
-    expect(secretWrapper).toHaveAttribute('data-hidden', 'true');
-    expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
-    expect(execCommand).toHaveBeenCalledWith('copy');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    await waitFor(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
+      expect(secretWrapper).toHaveAttribute('data-hidden', 'false');
+      expect(screen.getByText('vk_SECRET_VALUE_DO_NOT_SHARE')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Hide' }));
+      expect(secretWrapper).toHaveAttribute('data-hidden', 'true');
       expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
-    await waitFor(() => {
-      expect(screen.getByLabelText('Key Name')).toBeInTheDocument();
-      expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
-    });
-    Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true });
-    document.execCommand = origExecCommand;
+
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      expect(execCommand).toHaveBeenCalledWith('copy');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      await waitFor(() => {
+        expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+      await waitFor(() => {
+        expect(screen.getByLabelText('Key Name')).toBeInTheDocument();
+        expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
+      });
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true });
+      document.execCommand = origExecCommand;
+    }
   });
 
   it('revokes a key only after window.confirm; query is invalidated on success (TS5)', async () => {
@@ -409,25 +412,28 @@ describe('NodeApiKeySection', () => {
     const origClipboard = navigator.clipboard;
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true, writable: true });
 
-    const { fireEvent } = await import('@testing-library/react');
-    renderWith(<NodeApiKeySection organizationId="org-1" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
-    const nameInput = await screen.findByLabelText('Key Name');
-    fireEvent.change(nameInput, { target: { value: 'Test' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-    await waitFor(() => {
-      expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
-    await waitFor(() => {
-      expect(screen.getByText('vk_SECRET_CLIPBOARD_TEST')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
-    await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith('vk_SECRET_CLIPBOARD_TEST');
-      expect(screen.getByText('Copied!')).toBeInTheDocument();
-    });
-    Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true, writable: true });
+    try {
+      const { fireEvent } = await import('@testing-library/react');
+      renderWith(<NodeApiKeySection organizationId="org-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+      const nameInput = await screen.findByLabelText('Key Name');
+      fireEvent.change(nameInput, { target: { value: 'Test' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      await waitFor(() => {
+        expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
+      await waitFor(() => {
+        expect(screen.getByText('vk_SECRET_CLIPBOARD_TEST')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith('vk_SECRET_CLIPBOARD_TEST');
+        expect(screen.getByText('Copied!')).toBeInTheDocument();
+      });
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true, writable: true });
+    }
   });
 
   it('dialog close via X button clears state when no secret is shown (TS15)', async () => {
