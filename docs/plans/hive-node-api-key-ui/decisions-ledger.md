@@ -139,3 +139,22 @@ decisions needed to satisfy the failing-test-first red step.
 - Total: 26 passed, 0 failed
 
 **Note:** Task spec expected 9 tests in NodeApiKeySection.test.tsx but actual count is 8. The spec's list (TS1-TS7 + TS9) sums to 8, not 9 — the "9" in the spec was an arithmetic error.
+
+## Reachability gate (bugfix spec, mandatory)
+
+**(a) CALL-PATH TRACE:**
+- Entry point: `remote-frontend/src/pages/Nodes.tsx:31` — `{orgId && <NodeApiKeySection organizationId={orgId} />}`
+- Component: `remote-frontend/src/components/swarm/NodeApiKeySection.tsx:130` — `nodesApi.listApiKeys(organizationId)` (useQuery)
+- Mutations: `:136` createApiKey, `:149` revokeApiKey, `:159` unblockApiKey
+- API layer: `remote-frontend/src/lib/api/nodes.ts:56` listApiKeys, `:67` createApiKey, `:81` revokeApiKey, `:95` unblockApiKey
+- All four API calls are reachable from the Nodes page through the component.
+
+**(b) REAL-SEAM TEST:**
+- `remote-frontend/src/pages/Nodes.test.tsx:178` (TS8) drives the real entry point: renders the full `Nodes` page, verifies `NodeApiKeySection` appears with correct `orgId`, verifies it's omitted when `orgId` is undefined. This is NOT a unit test of the inner component — it tests the actual page-level integration seam.
+
+**(c) INCIDENT-SYMPTOM ASSERTION:**
+- Bug: users cannot manage API keys — no UI section exists on the Nodes page.
+- Fix: NodeApiKeySection renders on the Nodes page when orgId is set, with full CRUD (list, create, revoke, unblock) + error handling + i18n.
+- TS8 asserts the section renders with the correct orgId. TS1-TS7 assert all CRUD flows. TS9 asserts i18n key coverage.
+
+VERDICT: PASS
