@@ -30,8 +30,8 @@ function parseErrorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : 'Failed';
   try {
     const parsed = JSON.parse(raw);
-    return typeof parsed === 'object' && parsed !== null && 'message' in parsed
-      ? String(parsed.message)
+    return typeof parsed === 'object' && parsed !== null && typeof parsed.message === 'string'
+      ? parsed.message
       : raw;
   } catch {
     return raw;
@@ -107,7 +107,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isPending }: ApiKeyItemProps)
           </div>
         </div>
       </div>
-      {isBlocked ? (
+      {isRevoked ? null : isBlocked ? (
         <Button
           variant="ghost"
           size="sm"
@@ -117,7 +117,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isPending }: ApiKeyItemProps)
           <Unlock className="h-4 w-4 mr-1" />
           {t('settings.swarm.apiKeys.unblock', 'Unblock')}
         </Button>
-      ) : isRevoked ? null : (
+      ) : (
         <Button
           variant="ghost"
           size="sm"
@@ -149,6 +149,7 @@ export function NodeApiKeySection({
   const createAbortedRef = useRef(false);
 
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
+  useEffect(() => setError(null), [organizationId]);
 
   const { data: apiKeys = [], isLoading, isError: isListError } = useQuery({
     queryKey: ['nodeApiKeys', organizationId],
@@ -161,13 +162,14 @@ export function NodeApiKeySection({
   const createMutation = useMutation({
     mutationFn: (name: string) => nodesApi.createApiKey({ organization_id: organizationId, name }),
     onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
       if (createAbortedRef.current) return;
       setError(null);
       setCreatedSecret(response.secret);
       setNewKeyName('');
-      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
     },
     onError: (err) => {
+      if (createAbortedRef.current) return;
       setError(parseErrorMessage(err));
     },
   });
