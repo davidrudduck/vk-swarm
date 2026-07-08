@@ -83,8 +83,8 @@ describe('Nodes', () => {
 
     renderNodes();
 
-    // Should show the heading
     expect(screen.getByText('Nodes')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeInTheDocument();
   });
 
   it('renders "no nodes" message when no organization', async () => {

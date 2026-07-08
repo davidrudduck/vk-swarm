@@ -546,4 +546,66 @@ describe('NodeApiKeySection', () => {
       expect(nodesApi.createApiKey).toHaveBeenCalledWith({ organization_id: 'org-1', name: 'Enter Key' });
     });
   });
+
+  it('renders Blocked badge without tooltip when blocked_reason is null (TS19)', async () => {
+    const keys: NodeApiKey[] = [{
+      id: 'k4', organization_id: 'org-1', name: 'Blocked No Reason', key_prefix: 'vk_nr',
+      created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+      node_id: 'n1', takeover_count: 0, takeover_window_start: null,
+      blocked_at: '2026-01-02T00:00:00Z', blocked_reason: null,
+    }];
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    expect(await screen.findByText('Blocked')).toBeInTheDocument();
+    expect(screen.queryByText('Duplicate key use detected')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Unblock' })).toBeInTheDocument();
+  });
+
+  it('re-enables the Unblock button after a failed unblock mutation (TS20)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const keys: NodeApiKey[] = [{
+      id: 'k2', organization_id: 'org-1', name: 'Blocked', key_prefix: 'vk_b',
+      created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+      node_id: null, takeover_count: 0, takeover_window_start: null,
+      blocked_at: '2026-01-02T00:00:00Z', blocked_reason: 'Duplicate',
+    }];
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    vi.mocked(nodesApi.unblockApiKey).mockRejectedValue(new Error('unblock failed'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    const unblockBtn = await screen.findByRole('button', { name: 'Unblock' });
+    await u.click(unblockBtn);
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Unblock' })).not.toBeDisabled();
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('re-enables the Revoke button after a failed revoke mutation (TS21)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const keys: NodeApiKey[] = [{
+      id: 'k1', organization_id: 'org-1', name: 'Active', key_prefix: 'vk_a',
+      created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+      node_id: 'n1', takeover_count: 0, takeover_window_start: null,
+      blocked_at: null, blocked_reason: null,
+    }];
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    vi.mocked(nodesApi.revokeApiKey).mockRejectedValue(new Error('revoke failed'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    const revokeBtn = await screen.findByRole('button', { name: 'Revoke' });
+    await u.click(revokeBtn);
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Revoke' })).not.toBeDisabled();
+    });
+    confirmSpy.mockRestore();
+  });
 });

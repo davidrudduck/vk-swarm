@@ -34,6 +34,8 @@ function parseErrorMessage(err: unknown): string {
     raw = err || 'Failed';
   } else if (err == null) {
     return 'Failed';
+  } else if (typeof err === 'symbol') {
+    return 'Failed';
   } else {
     try {
       raw = JSON.stringify(err);
@@ -164,7 +166,10 @@ export function NodeApiKeySection({
   orgIdRef.current = organizationId;
 
   const isMountedRef = useRef(true);
-  useEffect(() => () => { isMountedRef.current = false; }, []);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
   useEffect(() => setError(null), [organizationId]);
 

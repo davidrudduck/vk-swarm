@@ -12,7 +12,7 @@ The `NodeApiKeySection` is a React component in `remote-frontend/src/components/
 ```
 remote-frontend/src/components/swarm/
 ├── NodeApiKeySection.tsx          # Component
-├── NodeApiKeySection.test.tsx     # Tests (21 test cases)
+├── NodeApiKeySection.test.tsx     # Tests (24 test cases)
 └── index.ts                       # Barrel export (line 18)
 
 remote-frontend/src/pages/
@@ -93,7 +93,7 @@ The create dialog has two states:
 1. **Name input view**: Shows name field + Create/Cancel buttons
 2. **Secret reveal view**: Shows the one-time secret + Copy/Reveal/Hide/Done buttons
 
-When `createdSecret` is set, the dialog becomes `uncloseable` (via the Dialog component's prop) — the backdrop click and Escape key are disabled while the secret is shown. This prevents accidental secret loss.
+When `createdSecret` is set, the dialog becomes `uncloseable` (via the Dialog component's prop) — the backdrop click is disabled while the secret is shown. This prevents accidental secret loss.
 
 ## API Integration
 
@@ -122,7 +122,7 @@ The `remote-frontend` does not currently initialize an i18n instance — the inl
 
 ### Test Structure
 
-The test file (`NodeApiKeySection.test.tsx`) contains 21 test cases across all 3 test files:
+The test file (`NodeApiKeySection.test.tsx`) contains 24 test cases across all 3 test files:
 
 | Test | Coverage |
 |------|----------|
@@ -147,6 +147,9 @@ The test file (`NodeApiKeySection.test.tsx`) contains 21 test cases across all 3
 | TS16d | parseErrorMessage extracts message from JSON error body |
 | TS17 | Revoke mutation error surfaces in Alert |
 | TS18 | Enter key submits create form |
+| TS19 | Blocked key with null blocked_reason renders without tooltip |
+| TS20 | Unblock button re-enabled after failed unblock mutation |
+| TS21 | Revoke button re-enabled after failed revoke mutation |
 
 ### Mocking Strategy
 
