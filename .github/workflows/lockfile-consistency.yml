@@ -1,0 +1,51 @@
+name: Lockfile Consistency
+
+# Guards against pnpm-lock.yaml drifting out of sync with any package.json in the
+# workspace (root, frontend, remote-frontend). This is the PR-level gate that was
+# missing when a manifest-only change (new deps added to remote-frontend/package.json
+# without regenerating the lockfile) shipped to main and only failed later inside the
+# remote hive Docker build, which is the first consumer to enforce --frozen-lockfile.
+on:
+  pull_request:
+    paths:
+      - '**/package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: lockfile-consistency-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frozen-lockfile:
+    name: pnpm --frozen-lockfile (all importers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Read pnpm version from package.json
+        id: pnpm
+        run: echo "version=$(jq -re '.packageManager | sub("^pnpm@"; "")' package.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ steps.pnpm.outputs.version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Assert lockfile is in sync with every package.json
+        run: |
+          echo "Validating pnpm-lock.yaml against all workspace manifests..."
+          # --frozen-lockfile refuses to reconcile a lockfile whose specifiers do not
+          # match the manifests; --ignore-scripts keeps this fast (no builds/postinstall).
+          # Fails with ERR_PNPM_OUTDATED_LOCKFILE if any importer has drifted.
+          pnpm install --frozen-lockfile --ignore-scripts
+          echo "OK: lockfile is consistent with all package.json manifests."

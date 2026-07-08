@@ -49,7 +49,7 @@ services:
     command:
       - |
         echo "Initializing Electric prerequisites..."
-        psql -h remote-db -U $${POSTGRES_USER} -d $${POSTGRES_DB} <<-EOSQL
+        psql -h remote-db -U $${POSTGRES_USER} -d $${POSTGRES_DB} -v ON_ERROR_STOP=1 <<-EOSQL
           -- Create electric_sync role if not exists
           DO \$\$
           BEGIN
@@ -62,7 +62,7 @@ services:
           END \$\$;
 
           -- Grant permissions
-          GRANT CONNECT ON DATABASE $${POSTGRES_DB} TO electric_sync;
+          GRANT CONNECT ON DATABASE "$${POSTGRES_DB}" TO electric_sync;
           GRANT USAGE ON SCHEMA public TO electric_sync;
 
           -- Create publication for Electric (empty - tables added by SQLx migration)
