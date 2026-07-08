@@ -21,9 +21,12 @@ export default function InvitationCompletePage() {
   const oauthError = qp.get('error')
 
   useEffect(() => {
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+
     const completeInvitation = async () => {
       if (oauthError) {
-        setError(`OAuth error: ${oauthError}`)
+        if (active) setError(`OAuth error: ${oauthError}`)
         return
       }
 
@@ -34,13 +37,13 @@ export default function InvitationCompletePage() {
       try {
         const verifier = retrieveVerifier()
         if (!verifier) {
-          setError('OAuth session lost. Please try again.')
+          if (active) setError('OAuth session lost. Please try again.')
           return
         }
 
         const token = retrieveInvitationToken() || urlToken
         if (!token) {
-          setError('Invitation token lost. Please try again.')
+          if (active) setError('Invitation token lost. Please try again.')
           return
         }
 
@@ -52,19 +55,20 @@ export default function InvitationCompletePage() {
 
         const result = await acceptInvitation(token, access_token)
 
+        if (!active) return
         clearVerifier()
         clearInvitationToken()
 
         setSuccess(true)
         setOrgSlug(result.organization_slug)
 
-        const timer = setTimeout(() => {
+        timer = setTimeout(() => {
           const appBase =
             import.meta.env.VITE_APP_BASE_URL || window.location.origin
           window.location.assign(`${appBase}`)
         }, 2000)
-        return () => clearTimeout(timer)
       } catch (e) {
+        if (!active) return
         setError(e instanceof Error ? e.message : 'Failed to complete invitation')
         clearVerifier()
         clearInvitationToken()
@@ -72,6 +76,7 @@ export default function InvitationCompletePage() {
     }
 
     completeInvitation()
+    return () => { active = false; if (timer) clearTimeout(timer) }
   }, [handoffId, appCode, oauthError, urlToken])
 
   if (error) {

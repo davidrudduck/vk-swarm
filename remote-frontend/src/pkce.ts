@@ -108,8 +108,11 @@ function rotateRight(value: number, bits: number): number {
 }
 
 function base64UrlEncode(array: Uint8Array): string {
-  const base64 = btoa(String.fromCharCode(...array))
-  return base64
+  let binary = ''
+  for (let i = 0; i < array.length; i += 1) {
+    binary += String.fromCharCode(array[i])
+  }
+  return btoa(binary)
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=/g, '')
