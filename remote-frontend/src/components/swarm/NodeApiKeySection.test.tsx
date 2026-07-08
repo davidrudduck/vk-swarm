@@ -185,6 +185,50 @@ describe('NodeApiKeySection', () => {
     confirmSpy.mockRestore();
   });
 
+  it('revoke invalidation targets the org active when the mutation started, not the org at callback time (TS5b)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const invalidateSpy = vi.fn();
+    const localQueryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    localQueryClient.invalidateQueries = invalidateSpy;
+    const keysOrg1: NodeApiKey[] = [{
+      id: 'k1', organization_id: 'org-1', name: 'MacBook', key_prefix: 'vk_abc',
+      created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+      node_id: 'n1', takeover_count: 0, takeover_window_start: null,
+      blocked_at: null, blocked_reason: null,
+    }];
+    vi.mocked(nodesApi.listApiKeys).mockImplementation((orgId: string) => Promise.resolve(orgId === 'org-1' ? keysOrg1 : []));
+    let resolveRevoke: () => void = () => {};
+    vi.mocked(nodesApi.revokeApiKey).mockImplementation(() => new Promise((resolve) => { resolveRevoke = resolve; }));
+
+    const result = render(
+      <QueryClientProvider client={localQueryClient}>
+        <TooltipProvider><NodeApiKeySection organizationId="org-1" /></TooltipProvider>
+      </QueryClientProvider>
+    );
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    const revokeBtn = await screen.findByRole('button', { name: 'Revoke' });
+    await u.click(revokeBtn);
+    expect(nodesApi.revokeApiKey).toHaveBeenCalled();
+
+    result.rerender(
+      <QueryClientProvider client={localQueryClient}>
+        <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
+      </QueryClientProvider>
+    );
+    await waitFor(() => expect(nodesApi.listApiKeys).toHaveBeenCalledWith('org-2'));
+
+    resolveRevoke();
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['nodeApiKeys', 'org-1'] });
+    });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['nodeApiKeys', 'org-2'] });
+
+    confirmSpy.mockRestore();
+  });
+
   it('renders Blocked badge with reason; Unblock calls confirm + unblockApiKey + invalidates (TS6)', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const invalidateSpy = vi.fn();
@@ -388,14 +432,118 @@ describe('NodeApiKeySection', () => {
 
   it('dialog close via X button clears state when no secret is shown (TS15)', async () => {
     vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
-    const { fireEvent } = await import('@testing-library/react');
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
     renderWith(<NodeApiKeySection organizationId="org-1" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
     expect(await screen.findByLabelText('Key Name')).toBeInTheDocument();
     const closeBtn = screen.getByRole('button', { name: 'Close' });
-    fireEvent.click(closeBtn);
+    await u.click(closeBtn);
     await waitFor(() => {
       expect(screen.queryByLabelText('Key Name')).not.toBeInTheDocument();
+    });
+  });
+
+  it('parseErrorMessage handles string rejection (TS16a)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockRejectedValue('plain failure');
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    await u.type(await screen.findByLabelText('Key Name'), 'X');
+    await u.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/plain failure/)).toBeInTheDocument();
+    });
+  });
+
+  it('parseErrorMessage handles null rejection (TS16b)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockRejectedValue(null);
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    await u.type(await screen.findByLabelText('Key Name'), 'X');
+    await u.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/Failed/)).toBeInTheDocument();
+    });
+  });
+
+  it('parseErrorMessage handles plain object rejection (TS16c)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockRejectedValue({ code: 'E_DENIED' });
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    await u.type(await screen.findByLabelText('Key Name'), 'X');
+    await u.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/E_DENIED/)).toBeInTheDocument();
+    });
+  });
+
+  it('parseErrorMessage extracts message from JSON error body (TS16d)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockRejectedValue(new Error('{"message":"server denied"}'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    await u.type(await screen.findByLabelText('Key Name'), 'X');
+    await u.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/server denied/)).toBeInTheDocument();
+    });
+  });
+
+  it('revoke mutation error surfaces in the destructive Alert (TS17)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const keys: NodeApiKey[] = [{
+      id: 'k1', organization_id: 'org-1', name: 'Active', key_prefix: 'vk_a',
+      created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+      node_id: 'n1', takeover_count: 0, takeover_window_start: null,
+      blocked_at: null, blocked_reason: null,
+    }];
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    vi.mocked(nodesApi.revokeApiKey).mockRejectedValue(new Error('revoke failed'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(await screen.findByRole('button', { name: 'Revoke' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/revoke failed/)).toBeInTheDocument();
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('pressing Enter in name input submits the create form (TS18)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockResolvedValue({
+      api_key: {
+        id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      },
+      secret: 'vk_ENTER_TEST',
+    });
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
+    await u.type(nameInput, 'Enter Key{Enter}');
+    await waitFor(() => {
+      expect(nodesApi.createApiKey).toHaveBeenCalledWith({ organization_id: 'org-1', name: 'Enter Key' });
     });
   });
 });

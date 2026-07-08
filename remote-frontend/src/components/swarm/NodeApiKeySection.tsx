@@ -163,23 +163,25 @@ export function NodeApiKeySection({
   const orgIdRef = useRef(organizationId);
   orgIdRef.current = organizationId;
 
+  const isMountedRef = useRef(true);
+  useEffect(() => () => { isMountedRef.current = false; }, []);
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
   useEffect(() => setError(null), [organizationId]);
 
   const { data: apiKeys = [], isLoading, isError: isListError } = useQuery({
     queryKey: ['nodeApiKeys', organizationId],
     queryFn: () => nodesApi.listApiKeys(organizationId),
-    enabled: !!organizationId,
     staleTime: 30_000,
   });
 
   const queryClient = useQueryClient();
   const createMutation = useMutation({
-    mutationFn: (name: string) => nodesApi.createApiKey({ organization_id: orgIdRef.current, name }),
+    mutationFn: ({ name, orgId }: { name: string; orgId: string }) =>
+      nodesApi.createApiKey({ organization_id: orgId, name }),
     onMutate: () => createAttemptRef.current,
-    onSuccess: (response, _vars, attemptId) => {
-      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgIdRef.current] });
+    onSuccess: (response, { orgId }, attemptId) => {
       if (attemptId !== createAttemptRef.current) return;
+      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
       setError(null);
       setCreatedSecret(response.secret);
       setNewKeyName('');
@@ -191,20 +193,20 @@ export function NodeApiKeySection({
   });
 
   const revokeMutation = useMutation({
-    mutationFn: (keyId: string) => nodesApi.revokeApiKey(keyId),
-    onSuccess: () => {
+    mutationFn: ({ keyId }: { keyId: string; orgId: string }) => nodesApi.revokeApiKey(keyId),
+    onSuccess: (_data, { orgId }) => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
+      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
     },
     onError: (err) => {
       setError(parseErrorMessage(err));
     },
   });
   const unblockMutation = useMutation({
-    mutationFn: (keyId: string) => nodesApi.unblockApiKey(keyId),
-    onSuccess: () => {
+    mutationFn: ({ keyId }: { keyId: string; orgId: string }) => nodesApi.unblockApiKey(keyId),
+    onSuccess: (_data, { orgId }) => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
+      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
     },
     onError: (err) => {
       setError(parseErrorMessage(err));
@@ -214,18 +216,26 @@ export function NodeApiKeySection({
   const handleRevoke = (keyId: string) => {
     if (!confirm(t('settings.swarm.apiKeys.revokeConfirm', 'Are you sure you want to revoke this API key? Nodes using it will no longer be able to connect.'))) return;
     setError(null);
-    setPendingKeyIds(prev => new Set(prev).add(keyId));
-    revokeMutation.mutate(keyId, {
-      onSettled: () => setPendingKeyIds(prev => { const next = new Set(prev); next.delete(keyId); return next; }),
+    if (isMountedRef.current) setPendingKeyIds(prev => new Set(prev).add(keyId));
+    revokeMutation.mutate({ keyId, orgId: orgIdRef.current }, {
+      onSettled: () => { if (isMountedRef.current) setPendingKeyIds(prev => { const next = new Set(prev); next.delete(keyId); return next; }); },
     });
   };
   const handleUnblock = (keyId: string) => {
     if (!confirm(t('settings.swarm.apiKeys.unblockConfirm', 'Are you sure you want to unblock this API key? The node will be able to connect again.'))) return;
     setError(null);
-    setPendingKeyIds(prev => new Set(prev).add(keyId));
-    unblockMutation.mutate(keyId, {
-      onSettled: () => setPendingKeyIds(prev => { const next = new Set(prev); next.delete(keyId); return next; }),
+    if (isMountedRef.current) setPendingKeyIds(prev => new Set(prev).add(keyId));
+    unblockMutation.mutate({ keyId, orgId: orgIdRef.current }, {
+      onSettled: () => { if (isMountedRef.current) setPendingKeyIds(prev => { const next = new Set(prev); next.delete(keyId); return next; }); },
     });
+  };
+
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newKeyName.trim();
+    if (!trimmed) return;
+    setError(null);
+    createMutation.mutate({ name: trimmed, orgId: orgIdRef.current });
   };
 
   const closeDialog = () => {
@@ -349,7 +359,7 @@ export function NodeApiKeySection({
       >
         <DialogContent>
           {!createdSecret ? (
-            <>
+            <form onSubmit={handleCreateSubmit}>
               <DialogHeader>
                 <DialogTitle>
                   {t('settings.swarm.apiKeys.createTitle', 'Generate API Key')}
@@ -369,27 +379,26 @@ export function NodeApiKeySection({
                     onChange={(e) => setNewKeyName(e.target.value)}
                     placeholder={t('settings.swarm.apiKeys.namePlaceholder', 'e.g. Production Node')}
                     maxLength={100}
+                    autoFocus
                   />
                 </div>
               </div>
               <DialogFooter>
                 <Button
+                  type="button"
                   variant="outline"
                   onClick={closeDialog}
                 >
                   {t('settings.swarm.apiKeys.cancel', 'Cancel')}
                 </Button>
                 <Button
-                  onClick={() => {
-                    setError(null);
-                    createMutation.mutate(newKeyName.trim());
-                  }}
+                  type="submit"
                   disabled={!newKeyName.trim() || createMutation.isPending}
                 >
                   {t('settings.swarm.apiKeys.createAction', 'Create')}
                 </Button>
               </DialogFooter>
-            </>
+            </form>
           ) : (
             <>
               <DialogHeader>

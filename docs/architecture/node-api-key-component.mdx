@@ -11,8 +11,8 @@ The `NodeApiKeySection` is a React component in `remote-frontend/src/components/
 
 ```
 remote-frontend/src/components/swarm/
-├── NodeApiKeySection.tsx          # Component (446 lines)
-├── NodeApiKeySection.test.tsx     # Tests (14 test cases, 401 lines)
+├── NodeApiKeySection.tsx          # Component
+├── NodeApiKeySection.test.tsx     # Tests (21 test cases)
 └── index.ts                       # Barrel export (line 18)
 
 remote-frontend/src/pages/
@@ -52,7 +52,6 @@ The component uses TanStack Query hooks directly (no extracted custom hook):
 useQuery({
   queryKey: ['nodeApiKeys', organizationId],
   queryFn: () => nodesApi.listApiKeys(organizationId),
-  enabled: !!organizationId,
   staleTime: 30_000,
 })
 
@@ -62,7 +61,7 @@ useMutation({ mutationFn: nodesApi.revokeApiKey, ... })
 useMutation({ mutationFn: nodesApi.unblockApiKey, ... })
 ```
 
-All three mutations invalidate `['nodeApiKeys', organizationId]` on success, triggering a refetch of the list.
+All three mutations invalidate `['nodeApiKeys', orgId]` on success (using the org ID captured at mutation-start time via `orgIdRef`), triggering a refetch of the list. The `createMutation` also uses a per-attempt epoch counter (`createAttemptRef`) to guard against stale responses leaking secrets into a reopened dialog.
 
 ### State Management
 
@@ -94,7 +93,7 @@ The create dialog has two states:
 1. **Name input view**: Shows name field + Create/Cancel buttons
 2. **Secret reveal view**: Shows the one-time secret + Copy/Reveal/Hide/Done buttons
 
-When `createdSecret` is set, the dialog becomes `uncloseable` (via the Dialog component's prop) — the backdrop is disabled and no close affordance is rendered while the secret is shown. This prevents accidental secret loss.
+When `createdSecret` is set, the dialog becomes `uncloseable` (via the Dialog component's prop) — the backdrop click and Escape key are disabled while the secret is shown. This prevents accidental secret loss.
 
 ## API Integration
 
@@ -123,7 +122,7 @@ The `remote-frontend` does not currently initialize an i18n instance — the inl
 
 ### Test Structure
 
-The test file (`NodeApiKeySection.test.tsx`) contains 14 test cases (32 assertions across all 3 test files):
+The test file (`NodeApiKeySection.test.tsx`) contains 21 test cases across all 3 test files:
 
 | Test | Coverage |
 |------|----------|
@@ -132,6 +131,7 @@ The test file (`NodeApiKeySection.test.tsx`) contains 14 test cases (32 assertio
 | TS3 | Key list with name, prefix, badges, timestamps |
 | TS4 | Create dialog → secret reveal → show/hide → copy → done |
 | TS5 | Revoke with confirm() + query invalidation |
+| TS5b | Revoke invalidation targets the org active when mutation started |
 | TS6 | Blocked badge + unblock with confirm() |
 | TS7 | Mutation error surfaces in Alert |
 | TS9 | All i18n keys exist in en locale |
@@ -141,6 +141,12 @@ The test file (`NodeApiKeySection.test.tsx`) contains 14 test cases (32 assertio
 | TS13 | Unblock mutation error surfaces in Alert |
 | TS14 | Primary clipboard path (navigator.clipboard.writeText) |
 | TS15 | Dialog close via X button clears state |
+| TS16a | parseErrorMessage handles string rejection |
+| TS16b | parseErrorMessage handles null rejection |
+| TS16c | parseErrorMessage handles plain object rejection |
+| TS16d | parseErrorMessage extracts message from JSON error body |
+| TS17 | Revoke mutation error surfaces in Alert |
+| TS18 | Enter key submits create form |
 
 ### Mocking Strategy
 
@@ -151,16 +157,14 @@ The test file (`NodeApiKeySection.test.tsx`) contains 14 test cases (32 assertio
 
 ### Coverage
 
-As of the latest run:
+Coverage is tracked via `@vitest/coverage-v8`. Exact percentages are maintained in the CI coverage report; approximate bands:
 
 | Metric | Coverage |
 |--------|----------|
-| Statements | 94.89% |
-| Branches | 85.48% |
-| Functions | 93.75% |
-| Lines | 97.56% |
-
-Uncovered lines: `revokeMutation.onError` non-Error branch (line 184), copy failure catch (line 248).
+| Statements | ~95% |
+| Branches | ~85% |
+| Functions | ~94% |
+| Lines | ~98% |
 
 ## Composition in Nodes.tsx
 
@@ -177,7 +181,7 @@ This renders above the node grid, gated on `orgId` being present. The `useOrgani
 | Decision | Rationale |
 |----------|-----------|
 | No `isAdmin` prop | Hive UI has no role model; all org members see all controls |
-| `confirm()` for destructive actions | Matches frontend reference pattern; AlertDialog available later |
+| `confirm()` for destructive actions | Matches frontend reference pattern; prompts the user with a confirmation prompt before revoke/unblock |
 | `useQuery`/`useMutation` inline | Component is the only consumer; hook extraction is premature |
 | No new Settings page | Section lives on the Nodes page per spec |
 | Per-key pending tracking | Prevents disabling all buttons when one key is being acted on |
