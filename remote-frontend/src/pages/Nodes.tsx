@@ -40,7 +40,7 @@ export function Nodes() {
           Nodes are a swarm feature. Connect a hive server to get started.
         </p>
       ) : isError ? (
-        <p className="text-muted-foreground">Failed to load nodes.</p>
+        <p className="text-muted-foreground" role="alert">Failed to load nodes.</p>
       ) : nodes.length === 0 ? (
         <p className="text-muted-foreground">No nodes connected yet.</p>
       ) : (

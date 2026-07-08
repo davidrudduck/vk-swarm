@@ -30,11 +30,10 @@ interface ApiKeyItemProps {
   apiKey: NodeApiKey;
   onRevoke: (keyId: string) => void;
   onUnblock: (keyId: string) => void;
-  isRevokePending: boolean;
-  isUnblockPending: boolean;
+  isPending: boolean;
 }
 
-function ApiKeyItem({ apiKey, onRevoke, onUnblock, isRevokePending, isUnblockPending }: ApiKeyItemProps) {
+function ApiKeyItem({ apiKey, onRevoke, onUnblock, isPending }: ApiKeyItemProps) {
   const { t } = useTranslation(['settings', 'common']);
   const isBlocked = apiKey.blocked_at !== null;
   const isRevoked = apiKey.revoked_at !== null;
@@ -101,7 +100,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isRevokePending, isUnblockPen
           variant="ghost"
           size="sm"
           onClick={() => onUnblock(apiKey.id)}
-          disabled={isUnblockPending}
+          disabled={isPending}
         >
           <Unlock className="h-4 w-4 mr-1" />
           {t('settings.swarm.apiKeys.unblock', 'Unblock')}
@@ -111,7 +110,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isRevokePending, isUnblockPen
           variant="ghost"
           size="sm"
           onClick={() => onRevoke(apiKey.id)}
-          disabled={isRevokePending}
+          disabled={isPending}
         >
           <Trash2 className="h-4 w-4 mr-1" />
           {t('settings.swarm.apiKeys.revoke', 'Revoke')}
@@ -133,6 +132,7 @@ export function NodeApiKeySection({
   const [showSecret, setShowSecret] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingKeyId, setPendingKeyId] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
@@ -181,11 +181,13 @@ export function NodeApiKeySection({
 
   const handleRevoke = (keyId: string) => {
     if (!confirm(t('settings.swarm.apiKeys.revokeConfirm', 'Are you sure you want to revoke this API key? Nodes using it will no longer be able to connect.'))) return;
-    revokeMutation.mutate(keyId);
+    setPendingKeyId(keyId);
+    revokeMutation.mutate(keyId, { onSettled: () => setPendingKeyId(null) });
   };
   const handleUnblock = (keyId: string) => {
     if (!confirm(t('settings.swarm.apiKeys.unblockConfirm', 'Are you sure you want to unblock this API key? The node will be able to connect again.'))) return;
-    unblockMutation.mutate(keyId);
+    setPendingKeyId(keyId);
+    unblockMutation.mutate(keyId, { onSettled: () => setPendingKeyId(null) });
   };
 
   const closeDialog = () => {
@@ -291,8 +293,7 @@ export function NodeApiKeySection({
                   apiKey={key}
                   onRevoke={handleRevoke}
                   onUnblock={handleUnblock}
-                  isRevokePending={revokeMutation.isPending}
-                  isUnblockPending={unblockMutation.isPending}
+                  isPending={pendingKeyId === key.id}
                 />
               ))}
             </div>
