@@ -93,3 +93,12 @@ Focused re-checks after remediation:
 `BufferSource`. This preserves the runtime value asserted by `pkce.test.ts` while satisfying the
 repo's DOM typings, which reject `Uint8Array<ArrayBufferLike>` as a `BufferSource` under
 `npx tsc --noEmit`.
+
+## Task 201 implementation findings
+
+### 2026-07-08 — partial api mock preserves invitation route test
+
+`remote-frontend/src/AppRouter.test.tsx` uses a partial `@/api` mock that overrides only
+`initOAuth`. The literal full replacement mock from task 201 hid the existing `getInvitation`
+export used by `InvitationPage`, causing the pre-existing invitation route test to render React
+Router's error boundary instead of the loading or invitation state.
