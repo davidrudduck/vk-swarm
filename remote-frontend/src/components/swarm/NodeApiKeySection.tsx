@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery } from '@tanstack/react-query';
-import { Loader2, Key, Plus } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Loader2, Key, Plus, Copy, Check, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -12,6 +12,16 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { nodesApi } from '@/lib/api';
 import type { NodeApiKey } from '@/types/nodes';
 
@@ -69,13 +79,55 @@ export function NodeApiKeySection({
   organizationId: string;
 }) {
   const { t } = useTranslation(['settings', 'common']);
-  const [_showCreateDialog, setShowCreateDialog] = useState(false);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+  const [showSecret, setShowSecret] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const { data: apiKeys = [], isLoading } = useQuery({
     queryKey: ['nodeApiKeys', organizationId],
     queryFn: () => nodesApi.listApiKeys(organizationId),
     enabled: !!organizationId,
   });
+
+  const queryClient = useQueryClient();
+  const createMutation = useMutation({
+    mutationFn: (name: string) => nodesApi.createApiKey({ organization_id: organizationId, name }),
+    onSuccess: (response) => {
+      setCreatedSecret(response.secret);
+      setNewKeyName('');
+      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
+    },
+  });
+
+  const closeDialog = () => {
+    setShowCreateDialog(false);
+    setNewKeyName('');
+    setCreatedSecret(null);
+    setShowSecret(false);
+    setCopied(false);
+  };
+
+  const handleCopySecret = async () => {
+    if (!createdSecret) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(createdSecret);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = createdSecret;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.error('Failed to copy secret', e);
+    }
+  };
 
   if (!organizationId) return null;
 
@@ -132,6 +184,113 @@ export function NodeApiKeySection({
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={showCreateDialog}
+        onOpenChange={(open) => {
+          if (!open) closeDialog();
+        }}
+      >
+        <DialogContent>
+          {!createdSecret ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {t('settings.swarm.apiKeys.createTitle', 'Generate API Key')}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="api-key-name">
+                    {t('settings.swarm.apiKeys.nameLabel', 'Key Name')}
+                  </Label>
+                  <Input
+                    id="api-key-name"
+                    value={newKeyName}
+                    onChange={(e) => setNewKeyName(e.target.value)}
+                    placeholder={t('settings.swarm.apiKeys.namePlaceholder', 'e.g. Production Node') as string}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={closeDialog}
+                >
+                  {t('settings.swarm.apiKeys.cancel', 'Cancel')}
+                </Button>
+                <Button
+                  onClick={() => createMutation.mutate(newKeyName)}
+                  disabled={!newKeyName.trim() || createMutation.isPending}
+                >
+                  {t('settings.swarm.apiKeys.createAction', 'Create')}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {t('settings.swarm.apiKeys.secretTitle', 'API Key Created')}
+                </DialogTitle>
+                <DialogDescription>
+                  {t('settings.swarm.apiKeys.secretDescription', 'Copy this secret now. It will not be shown again.')}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <code
+                  data-secret-wrapper
+                  data-hidden={!showSecret}
+                  className={`block p-3 rounded bg-muted text-sm break-all ${showSecret ? '' : 'blur-sm select-none'}`}
+                >
+                  {createdSecret}
+                </code>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowSecret(!showSecret)}
+                  >
+                    {showSecret ? (
+                      <>
+                        <EyeOff className="h-4 w-4 mr-2" />
+                        {t('settings.swarm.apiKeys.hideSecret', 'Hide')}
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="h-4 w-4 mr-2" />
+                        {t('settings.swarm.apiKeys.showSecret', 'Reveal')}
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopySecret}
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="h-4 w-4 mr-2" />
+                        {t('settings.swarm.apiKeys.copied', 'Copied!')}
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-4 w-4 mr-2" />
+                        {t('settings.swarm.apiKeys.copyToClipboard', 'Copy')}
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button onClick={closeDialog}>
+                  {t('settings.swarm.apiKeys.cancel', 'Done')}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </TooltipProvider>
   );
 }

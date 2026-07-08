@@ -85,4 +85,58 @@ describe('NodeApiKeySection', () => {
     expect(screen.getByText(/Last used 2026-01-03/)).toBeInTheDocument();
     expect(screen.queryByText(/Last used 2026-01-02/)).not.toBeInTheDocument();
   });
+
+  it('opens the create Dialog, reveals the one-time secret, and supports show/hide + copy (TS4)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockResolvedValue({
+      api_key: {
+        id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      },
+      secret: 'vk_SECRET_VALUE_DO_NOT_SHARE',
+    });
+
+    const execCommand = vi.fn(() => true);
+    document.execCommand = execCommand;
+    // @ts-expect-error — assigning undefined to disable clipboard in test
+    navigator.clipboard = undefined;
+
+    const { fireEvent } = await import('@testing-library/react');
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.create' }));
+    const nameInput = await screen.findByLabelText('settings.swarm.apiKeys.nameLabel');
+    fireEvent.change(nameInput, { target: { value: 'Test Key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.createAction' }));
+
+    await waitFor(() => {
+      expect(nodesApi.createApiKey).toHaveBeenCalledWith({ organization_id: 'org-1', name: 'Test Key' });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('vk_SECRET_VALUE_DO_NOT_SHARE')).toBeInTheDocument();
+    });
+    const secretWrapper = screen.getByText('vk_SECRET_VALUE_DO_NOT_SHARE').closest('[data-secret-wrapper]')!;
+    expect(secretWrapper).toHaveAttribute('data-hidden', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.showSecret' }));
+    expect(secretWrapper).toHaveAttribute('data-hidden', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.hideSecret' }));
+    expect(secretWrapper).toHaveAttribute('data-hidden', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.copyToClipboard' }));
+    expect(execCommand).toHaveBeenCalledWith('copy');
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.create' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('settings.swarm.apiKeys.nameLabel')).toBeInTheDocument();
+      expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
+    });
+  });
 });

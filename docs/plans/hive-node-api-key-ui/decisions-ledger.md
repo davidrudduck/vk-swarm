@@ -74,6 +74,15 @@ decisions needed to satisfy the failing-test-first red step.
 ### Task 002
 *(appended by the implementer)*
 
+- Extracted `closeDialog()` helper to centralize dialog state reset (`showCreateDialog`, `newKeyName`, `createdSecret`, `showSecret`, `copied`). Required because the custom Dialog component's `onOpenChange` only fires on backdrop/X clicks — the Cancel and Done buttons call state setters directly, bypassing cleanup. Without this, `createdSecret` persisted after cancel, causing the secret view to re-render on reopen instead of the name-input view.
+- [Task 002 orchestrator] i18n key renames (adversarial panel finding, cosmetic, no behavioral impact):
+  - `settings.swarm.apiKeys.createdTitle` → `settings.swarm.apiKeys.secretTitle` (line 234)
+  - `settings.swarm.apiKeys.copySecret` → `settings.swarm.apiKeys.secretDescription` (line 237)
+  - Fallback text changed: "You won't be able to see it again." → "It will not be shown again."
+  - Input id: `key-name` → `api-key-name` (line 208); Label htmlFor matches.
+  - Added `settings.swarm.apiKeys.namePlaceholder` (line 211) — not in spec, inert.
+  **Task 007 must use the new key names** (`secretTitle`, `secretDescription`, `namePlaceholder`) when adding locale strings.
+
 ### Task 003
 *(appended by the implementer)*
 
