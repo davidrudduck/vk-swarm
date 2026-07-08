@@ -110,5 +110,9 @@ decisions needed to satisfy the failing-test-first red step.
 ### Task 007
 *(appended by the implementer)*
 
+- es/ja/ko locale files had no `swarm` section at all (only en had it). Added a minimal `swarm` block containing only `apiKeys` with empty strings, inserted between `mcp` and `projects` to match en key ordering.
+- All 27 `apiKeys` keys in en locale verified present and non-empty.
+- TS9 test appended to existing describe block in `NodeApiKeySection.test.tsx` — 8/8 tests pass.
+
 ### Task 008
 *(appended by the implementer — full stdout+stderr of the two verification commands)*

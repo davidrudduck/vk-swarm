@@ -467,6 +467,37 @@
         "loading": "Cargando configuración actual del servidor MCP..."
       }
     },
+    "swarm": {
+      "apiKeys": {
+        "title": "",
+        "description": "",
+        "create": "",
+        "createTitle": "",
+        "secretTitle": "",
+        "secretDescription": "",
+        "copyToClipboard": "",
+        "copied": "",
+        "showSecret": "",
+        "hideSecret": "",
+        "nameLabel": "",
+        "namePlaceholder": "",
+        "cancel": "",
+        "createAction": "",
+        "loading": "",
+        "empty": "",
+        "bound": "",
+        "unbound": "",
+        "created": "",
+        "lastUsed": "",
+        "revoked": "",
+        "blocked": "",
+        "revoke": "",
+        "revokeConfirm": "",
+        "unblock": "",
+        "unblockConfirm": "",
+        "error": ""
+      }
+    },
     "projects": {
       "title": "Configuración de Proyectos",
       "description": "Configura scripts y ajustes específicos del proyecto.",

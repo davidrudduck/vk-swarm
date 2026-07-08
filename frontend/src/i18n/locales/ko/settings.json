@@ -467,6 +467,37 @@
         "loading": "현재 MCP 서버 구성 로딩 중..."
       }
     },
+    "swarm": {
+      "apiKeys": {
+        "title": "",
+        "description": "",
+        "create": "",
+        "createTitle": "",
+        "secretTitle": "",
+        "secretDescription": "",
+        "copyToClipboard": "",
+        "copied": "",
+        "showSecret": "",
+        "hideSecret": "",
+        "nameLabel": "",
+        "namePlaceholder": "",
+        "cancel": "",
+        "createAction": "",
+        "loading": "",
+        "empty": "",
+        "bound": "",
+        "unbound": "",
+        "created": "",
+        "lastUsed": "",
+        "revoked": "",
+        "blocked": "",
+        "revoke": "",
+        "revokeConfirm": "",
+        "unblock": "",
+        "unblockConfirm": "",
+        "error": ""
+      }
+    },
     "projects": {
       "title": "프로젝트 구성",
       "description": "프로젝트별 스크립트 및 설정을 구성하세요.",

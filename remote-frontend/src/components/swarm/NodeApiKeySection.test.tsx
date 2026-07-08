@@ -5,6 +5,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { NodeApiKeySection } from './NodeApiKeySection';
 import { nodesApi } from '@/lib/api';
 import type { NodeApiKey } from '@/types/nodes';
+import enSettings from '../../../../frontend/src/i18n/locales/en/settings.json';
 
 vi.mock('@/lib/api', () => ({
   nodesApi: {
@@ -228,5 +229,42 @@ describe('NodeApiKeySection', () => {
       expect(screen.getByText(/boom/)).toBeInTheDocument();
     });
     expect(listSpy.mock.calls.length).toBe(callsBefore);
+  });
+
+  it('every settings.swarm.apiKeys.* key used in NodeApiKeySection.tsx has a matching key in the en locale (TS9)', () => {
+    const requiredKeys = [
+      'settings.swarm.apiKeys.title',
+      'settings.swarm.apiKeys.description',
+      'settings.swarm.apiKeys.create',
+      'settings.swarm.apiKeys.createTitle',
+      'settings.swarm.apiKeys.secretTitle',
+      'settings.swarm.apiKeys.secretDescription',
+      'settings.swarm.apiKeys.copyToClipboard',
+      'settings.swarm.apiKeys.copied',
+      'settings.swarm.apiKeys.showSecret',
+      'settings.swarm.apiKeys.hideSecret',
+      'settings.swarm.apiKeys.nameLabel',
+      'settings.swarm.apiKeys.namePlaceholder',
+      'settings.swarm.apiKeys.cancel',
+      'settings.swarm.apiKeys.createAction',
+      'settings.swarm.apiKeys.loading',
+      'settings.swarm.apiKeys.empty',
+      'settings.swarm.apiKeys.bound',
+      'settings.swarm.apiKeys.unbound',
+      'settings.swarm.apiKeys.created',
+      'settings.swarm.apiKeys.lastUsed',
+      'settings.swarm.apiKeys.revoked',
+      'settings.swarm.apiKeys.blocked',
+      'settings.swarm.apiKeys.revoke',
+      'settings.swarm.apiKeys.revokeConfirm',
+      'settings.swarm.apiKeys.unblock',
+      'settings.swarm.apiKeys.unblockConfirm',
+      'settings.swarm.apiKeys.error',
+    ];
+    const apiKeysBlock = (enSettings as any).settings?.swarm?.apiKeys ?? {};
+    for (const key of requiredKeys) {
+      const suffix = key.replace('settings.swarm.apiKeys.', '');
+      expect(apiKeysBlock[suffix], `Missing i18n key: ${key}`).toBeDefined();
+    }
   });
 });

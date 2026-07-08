@@ -740,6 +740,35 @@
           "description": "This will make the template available across all nodes in the organization.",
           "confirm": "Promote"
         }
+      },
+      "apiKeys": {
+        "title": "Node API Keys",
+        "description": "API keys allow nodes to authenticate with the hive server",
+        "create": "Create API Key",
+        "createTitle": "Create Node API Key",
+        "secretTitle": "API Key Created",
+        "secretDescription": "Copy this secret now. It will not be shown again.",
+        "copyToClipboard": "Copy to Clipboard",
+        "copied": "Copied!",
+        "showSecret": "Show secret",
+        "hideSecret": "Hide secret",
+        "nameLabel": "Key Name",
+        "namePlaceholder": "e.g., MacBook Pro, Build Server",
+        "cancel": "Cancel",
+        "createAction": "Create",
+        "loading": "Loading API keys...",
+        "empty": "No API keys found. Create one to allow nodes to connect.",
+        "bound": "Bound",
+        "unbound": "Unbound",
+        "created": "Created {{when}}",
+        "lastUsed": "Last used {{when}}",
+        "revoked": "Revoked",
+        "blocked": "Blocked",
+        "revoke": "Revoke",
+        "revokeConfirm": "Are you sure you want to revoke this API key? Nodes using it will no longer be able to connect.",
+        "unblock": "Unblock",
+        "unblockConfirm": "Are you sure you want to unblock this API key? The node will be able to connect again.",
+        "error": "Failed: {{message}}"
       }
     },
     "projects": {
