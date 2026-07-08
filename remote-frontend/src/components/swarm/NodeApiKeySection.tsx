@@ -27,7 +27,20 @@ import { nodesApi } from '@/lib/api';
 import type { NodeApiKey } from '@/types/nodes';
 
 function parseErrorMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : 'Failed';
+  let raw: string;
+  if (err instanceof Error) {
+    raw = err.message;
+  } else if (typeof err === 'string') {
+    raw = err || 'Failed';
+  } else if (err == null) {
+    return 'Failed';
+  } else {
+    try {
+      raw = JSON.stringify(err);
+    } catch {
+      return 'Failed';
+    }
+  }
   try {
     const parsed = JSON.parse(raw);
     return typeof parsed === 'object' && parsed !== null && typeof parsed.message === 'string'
@@ -56,7 +69,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isPending }: ApiKeyItemProps)
         <Key className="h-5 w-5 text-muted-foreground" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-sm">{apiKey.name}</span>
+            <span className="font-medium text-sm truncate">{apiKey.name}</span>
             <code className="text-xs text-muted-foreground">{apiKey.key_prefix}</code>
             {isRevoked ? (
               <Badge variant="secondary">
@@ -147,6 +160,8 @@ export function NodeApiKeySection({
   const [pendingKeyIds, setPendingKeyIds] = useState<Set<string>>(new Set());
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const createAttemptRef = useRef(0);
+  const orgIdRef = useRef(organizationId);
+  orgIdRef.current = organizationId;
 
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
   useEffect(() => setError(null), [organizationId]);
@@ -160,10 +175,10 @@ export function NodeApiKeySection({
 
   const queryClient = useQueryClient();
   const createMutation = useMutation({
-    mutationFn: (name: string) => nodesApi.createApiKey({ organization_id: organizationId, name }),
+    mutationFn: (name: string) => nodesApi.createApiKey({ organization_id: orgIdRef.current, name }),
     onMutate: () => createAttemptRef.current,
     onSuccess: (response, _vars, attemptId) => {
-      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
+      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgIdRef.current] });
       if (attemptId !== createAttemptRef.current) return;
       setError(null);
       setCreatedSecret(response.secret);
