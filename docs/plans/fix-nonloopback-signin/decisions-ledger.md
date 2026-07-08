@@ -109,11 +109,11 @@ Router's error boundary instead of the loading or invitation state.
 
 Entry points and bug path traced through real merged code:
 
-1. `/login` entry: `remote-frontend/src/AppRouter.tsx:38` calls `generateChallenge(verifier)`.
+1. `/login` entry: `remote-frontend/src/AppRouter.tsx:39` calls `generateChallenge(verifier)`.
 2. `generateChallenge()` → `remote-frontend/src/pkce.ts:10-12` calls `sha256(data)`.
 3. `sha256()` at `remote-frontend/src/pkce.ts:14-20` checks `globalThis.crypto?.subtle`. On non-secure HTTP LAN origins (`window.isSecureContext=false`), `crypto.subtle` is `undefined` → falls through to `sha256Fallback()` at line 24.
 4. `sha256Fallback()` returns correct SHA-256 bytes → `bytesToHex()` → 64-char lowercase hex challenge.
-5. Challenge flows to `oauthApi.init(provider, returnTo, challenge)` at `AppRouter.tsx:44` → `oauth.ts:23` POST `/v1/oauth/web/init`.
+5. Challenge flows to `oauthApi.init(provider, returnTo, challenge)` at `AppRouter.tsx:47` → `oauth.ts:23` POST `/v1/oauth/web/init`.
 6. Same path for invitation: `InvitationPage.tsx:32` calls `generateChallenge()` → same `pkce.ts` fallback path.
 
 Bug path confirmed: `pkce.ts:14-20` (capability-detected fallback) executes on every non-secure origin call to `generateChallenge()`.
