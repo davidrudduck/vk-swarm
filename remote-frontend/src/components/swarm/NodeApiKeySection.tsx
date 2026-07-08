@@ -369,7 +369,7 @@ export function NodeApiKeySection({
               </div>
               <DialogFooter>
                 <Button onClick={closeDialog}>
-                  {t('settings.swarm.apiKeys.cancel', 'Done')}
+                  {t('settings.swarm.apiKeys.done', 'Done')}
                 </Button>
               </DialogFooter>
             </>

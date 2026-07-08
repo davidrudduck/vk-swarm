@@ -130,7 +130,7 @@ describe('NodeApiKeySection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.copyToClipboard' }));
     expect(execCommand).toHaveBeenCalledWith('copy');
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.swarm.apiKeys.done' }));
     await waitFor(() => {
       expect(screen.queryByText('vk_SECRET_VALUE_DO_NOT_SHARE')).not.toBeInTheDocument();
     });
@@ -246,6 +246,7 @@ describe('NodeApiKeySection', () => {
       'settings.swarm.apiKeys.nameLabel',
       'settings.swarm.apiKeys.namePlaceholder',
       'settings.swarm.apiKeys.cancel',
+      'settings.swarm.apiKeys.done',
       'settings.swarm.apiKeys.createAction',
       'settings.swarm.apiKeys.loading',
       'settings.swarm.apiKeys.empty',

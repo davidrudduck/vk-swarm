@@ -744,7 +744,7 @@
       "apiKeys": {
         "title": "Node API Keys",
         "description": "API keys allow nodes to authenticate with the hive server",
-        "create": "Create API Key",
+        "create": "Generate API Key",
         "createTitle": "Create Node API Key",
         "secretTitle": "API Key Created",
         "secretDescription": "Copy this secret now. It will not be shown again.",
@@ -755,6 +755,7 @@
         "nameLabel": "Key Name",
         "namePlaceholder": "e.g., MacBook Pro, Build Server",
         "cancel": "Cancel",
+        "done": "Done",
         "createAction": "Create",
         "loading": "Loading API keys...",
         "empty": "No API keys found. Create one to allow nodes to connect.",
