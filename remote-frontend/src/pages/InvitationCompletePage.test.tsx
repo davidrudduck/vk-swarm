@@ -31,7 +31,7 @@ describe('InvitationCompletePage storage handoff', () => {
     sessionStorage.clear()
   })
 
-  it('redeems with stored verifier and accepts with stored invitation token', async () => {
+  it('redeems with stored verifier and accepts with URL invitation token', async () => {
     sessionStorage.setItem('oauth_verifier', 'stored-verifier')
     sessionStorage.setItem('invitation_token', 'stored-token')
     vi.mocked(redeemOAuth).mockResolvedValue({
@@ -48,10 +48,86 @@ describe('InvitationCompletePage storage handoff', () => {
 
     await waitFor(() => {
       expect(redeemOAuth).toHaveBeenCalledWith('handoff-123', 'app-code-456', 'stored-verifier')
-      expect(acceptInvitation).toHaveBeenCalledWith('stored-token', 'access-123')
+      expect(acceptInvitation).toHaveBeenCalledWith('url-token', 'access-123')
     })
     expect(screen.getByText('Invitation accepted!')).toBeInTheDocument()
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
     expect(sessionStorage.getItem('invitation_token')).toBeNull()
+  })
+
+  it('shows error when oauthError param is present', async () => {
+    render(
+      <MemoryRouter initialEntries={['/invitations/url-token/complete?error=access_denied']}>
+        <Routes>
+          <Route path="/invitations/:token/complete" element={<InvitationCompletePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('OAuth error: access_denied')).toBeInTheDocument()
+    })
+  })
+
+  it('shows error when stored verifier is missing', async () => {
+    sessionStorage.setItem('invitation_token', 'stored-token')
+    vi.mocked(redeemOAuth).mockResolvedValue({
+      access_token: 'access-123',
+      refresh_token: 'refresh-123',
+    })
+
+    renderInvitationComplete()
+
+    await waitFor(() => {
+      expect(screen.getByText('OAuth session lost. Please try again.')).toBeInTheDocument()
+    })
+  })
+
+  it('shows error when invitation token is missing', async () => {
+    sessionStorage.setItem('oauth_verifier', 'stored-verifier')
+    vi.mocked(redeemOAuth).mockResolvedValue({
+      access_token: 'access-123',
+      refresh_token: 'refresh-123',
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/invitations/complete?handoff_id=handoff-123&app_code=app-code-456']}>
+        <Routes>
+          <Route path="/invitations/complete" element={<InvitationCompletePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Invitation token lost. Please try again.')).toBeInTheDocument()
+    })
+  })
+
+  it('shows error when redeemOAuth fails', async () => {
+    sessionStorage.setItem('oauth_verifier', 'stored-verifier')
+    sessionStorage.setItem('invitation_token', 'stored-token')
+    vi.mocked(redeemOAuth).mockRejectedValue(new Error('OAuth redemption failed'))
+
+    renderInvitationComplete()
+
+    await waitFor(() => {
+      expect(screen.getByText('OAuth redemption failed')).toBeInTheDocument()
+    })
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
+  })
+
+  it('shows error when handoff_id and app_code are missing', async () => {
+    render(
+      <MemoryRouter initialEntries={['/invitations/url-token/complete']}>
+        <Routes>
+          <Route path="/invitations/:token/complete" element={<InvitationCompletePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Missing OAuth parameters. Please try the invitation link again.')).toBeInTheDocument()
+    })
   })
 })

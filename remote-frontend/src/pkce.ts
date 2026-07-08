@@ -104,7 +104,7 @@ function sha256Fallback(data: Uint8Array): Uint8Array {
 }
 
 function rotateRight(value: number, bits: number): number {
-  return (value >>> bits) | (value << (32 - bits))
+  return ((value >>> bits) | (value << (32 - bits))) >>> 0
 }
 
 function base64UrlEncode(array: Uint8Array): string {

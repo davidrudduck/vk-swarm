@@ -23,9 +23,9 @@ function stubGetRandomValuesOnlyCrypto() {
 
 function renderInvitationAccept() {
   return render(
-    <MemoryRouter initialEntries={['/invitations/invite-token' + '/accept']}>
+    <MemoryRouter initialEntries={['/invitations/invite-token/accept']}>
       <Routes>
-        <Route path={'/invitations/:token' + '/accept'} element={<InvitationPage />} />
+        <Route path="/invitations/:token/accept" element={<InvitationPage />} />
       </Routes>
     </MemoryRouter>
   )
@@ -74,5 +74,37 @@ describe('InvitationPage OAuth PKCE flow', () => {
     expect(sessionStorage.getItem('invitation_token')).toBe('invite-token')
     expect(screen.queryByText(/crypto\.subtle/i)).not.toBeInTheDocument()
     expect(resolveInitOAuth).toBeTypeOf('function')
+  })
+
+  it('shows error when getInvitation fails', async () => {
+    vi.mocked(getInvitation).mockRejectedValue(new Error('Invalid or expired invitation'))
+    stubGetRandomValuesOnlyCrypto()
+
+    renderInvitationAccept()
+
+    await waitFor(() => {
+      const errorElements = screen.getAllByText('Invalid or expired invitation')
+      expect(errorElements.length).toBeGreaterThan(0)
+    })
+  })
+
+  it('shows error when initOAuth fails', async () => {
+    vi.mocked(getInvitation).mockResolvedValue({
+      id: 'invitation-1',
+      organization_slug: 'test-org',
+      organization_name: 'Test Org',
+      role: 'admin',
+      expires_at: '2026-08-01T00:00:00Z',
+    })
+    vi.mocked(initOAuth).mockRejectedValue(new Error('OAuth init failed'))
+    stubGetRandomValuesOnlyCrypto()
+
+    renderInvitationAccept()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue with GitHub' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('OAuth init failed')).toBeInTheDocument()
+    })
   })
 })

@@ -1,5 +1,5 @@
 import { createBrowserRouter, RouterProvider, Navigate, useSearchParams } from 'react-router-dom'
-import { useEffect, useState, lazy, Suspense } from 'react'
+import { useEffect, useState, lazy, Suspense, useRef } from 'react'
 import { useProfile } from '@/components/ProfileProvider'
 import { NormalLayout } from '@/components/layout/NormalLayout'
 import InvitationPage from './pages/InvitationPage'
@@ -100,8 +100,12 @@ function isSafeReturnTo(url: string): boolean {
 function OAuthCallbackPage() {
   const [searchParams] = useSearchParams()
   const [isRedirecting, setIsRedirecting] = useState(false)
+  const hasRun = useRef(false)
 
   useEffect(() => {
+    if (hasRun.current) return
+    hasRun.current = true
+
     const completeOAuth = async () => {
       const handoffId = searchParams.get('handoff_id')
       const appCode = searchParams.get('app_code')

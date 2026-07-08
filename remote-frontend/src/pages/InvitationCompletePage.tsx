@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 import { redeemOAuth, acceptInvitation } from '../api'
 import {
@@ -20,7 +20,12 @@ export default function InvitationCompletePage() {
   const appCode = qp.get('app_code')
   const oauthError = qp.get('error')
 
+  const hasRun = useRef(false)
+
   useEffect(() => {
+    if (hasRun.current) return
+    hasRun.current = true
+
     let active = true
     let timer: ReturnType<typeof setTimeout> | undefined
 
@@ -31,6 +36,7 @@ export default function InvitationCompletePage() {
       }
 
       if (!handoffId || !appCode) {
+        if (active) setError('Missing OAuth parameters. Please try the invitation link again.')
         return
       }
 
@@ -41,7 +47,7 @@ export default function InvitationCompletePage() {
           return
         }
 
-        const token = retrieveInvitationToken() || urlToken
+        const token = urlToken || retrieveInvitationToken()
         if (!token) {
           if (active) setError('Invitation token lost. Please try again.')
           return

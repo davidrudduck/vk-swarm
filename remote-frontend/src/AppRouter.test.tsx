@@ -20,11 +20,12 @@ vi.mock('@/lib/api/oauth', () => ({
 vi.mock('@/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api')>()),
   initOAuth: vi.fn(),
+  getInvitation: vi.fn(),
 }))
 
 import { useProfile } from '@/components/ProfileProvider'
 import { oauthApi } from '@/lib/api/oauth'
-import { initOAuth } from '@/api'
+import { initOAuth, getInvitation } from '@/api'
 
 describe('AppRouter', () => {
   function stubGetRandomValuesOnlyCrypto() {
@@ -182,19 +183,19 @@ describe('AppRouter', () => {
       isLoaded: true,
       profile: null,
     })
+    vi.mocked(getInvitation).mockResolvedValue({
+      id: 'test-invitation',
+      organization_slug: 'test-org',
+      organization_name: 'Test Org',
+      role: 'admin',
+      expires_at: '2026-08-01T00:00:00Z',
+    })
 
     renderWithRouter('/invitations/test-token/accept')
 
-    // InvitationPage will try to fetch the invitation, so it'll show loading state
-    // Check for either the loading text or the page heading
-    await waitFor(
-      () => {
-        const loadingText = screen.queryByText('Loading invitation...')
-        const headingText = screen.queryByText("You've been invited")
-        expect(loadingText || headingText).toBeTruthy()
-      },
-      { timeout: 2000 }
-    )
+    await waitFor(() => {
+      expect(screen.getByText("You've been invited")).toBeInTheDocument()
+    })
   })
 
   it('unknown path renders NotFoundPage', async () => {

@@ -43,6 +43,10 @@ describe('PKCE challenge generation', () => {
     await expect(generateChallenge('abc')).resolves.toBe(
       'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
     )
+    // FIPS 180-2 multi-block vector (56 bytes, exercises padding and multi-block compression)
+    await expect(generateChallenge('abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq')).resolves.toBe(
+      '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1'
+    )
   })
 
   it('keeps verifier generation working with getRandomValues-only browser crypto', async () => {
