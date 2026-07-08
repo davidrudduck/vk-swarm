@@ -58,7 +58,11 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isPending }: ApiKeyItemProps)
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-sm">{apiKey.name}</span>
             <code className="text-xs text-muted-foreground">{apiKey.key_prefix}</code>
-            {isBlocked && apiKey.blocked_reason ? (
+            {isRevoked ? (
+              <Badge variant="secondary">
+                {t('settings.swarm.apiKeys.revoked', 'Revoked')}
+              </Badge>
+            ) : isBlocked && apiKey.blocked_reason ? (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Badge variant="destructive">
@@ -75,10 +79,6 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isPending }: ApiKeyItemProps)
                 <AlertTriangle className="h-3 w-3 mr-1" />
                 {t('settings.swarm.apiKeys.blocked', 'Blocked')}
               </Badge>
-            ) : isRevoked ? (
-              <Badge variant="secondary">
-                {t('settings.swarm.apiKeys.revoked', 'Revoked')}
-              </Badge>
             ) : (
               <Badge variant={apiKey.node_id ? 'default' : 'secondary'}>
                 {apiKey.node_id
@@ -87,7 +87,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isPending }: ApiKeyItemProps)
               </Badge>
             )}
           </div>
-          {isBlocked && apiKey.blocked_reason && (
+          {!isRevoked && isBlocked && apiKey.blocked_reason && (
             <div className="text-xs text-destructive mt-1">
               {apiKey.blocked_reason}
             </div>
