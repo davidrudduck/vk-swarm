@@ -171,14 +171,22 @@ export function NodeApiKeySection({
     return () => { isMountedRef.current = false; };
   }, []);
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
+  // Reset all create/pending state when organizationId changes.
+  // We intentionally run only on org change, not on every mutation/dialog state change.
   useEffect(() => {
     setError(null);
-    if (showCreateDialog && !createdSecret) {
+    setPendingKeyIds(new Set());
+    if (showCreateDialog) {
       createAttemptRef.current += 1;
       createMutation.reset();
       setShowCreateDialog(false);
       setNewKeyName('');
+      setCreatedSecret(null);
+      setShowSecret(false);
+      setCopied(false);
+      clearTimeout(copyTimeoutRef.current);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizationId]);
 
   const { data: apiKeys = [], isLoading, isError: isListError } = useQuery({
