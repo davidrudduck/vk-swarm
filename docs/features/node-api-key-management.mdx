@@ -1,0 +1,102 @@
+---
+title: "Node API Key Management"
+description: "Generate, view, revoke, and unblock API keys for connecting nodes to your swarm from the Hive console"
+---
+
+The Nodes page in the Hive console includes a full API key management section. This allows operators to generate keys for onboarding new nodes, view existing keys, and manage their lifecycle — all without leaving the browser.
+
+## Overview
+
+Every node that connects to your swarm authenticates with an API key (`VK_NODE_API_KEY`). The API key management section on the Nodes page lets you:
+
+- **Generate** new API keys for onboarding nodes
+- **View** all existing keys with their status, prefix, and timestamps
+- **Revoke** keys that are no longer needed
+- **Unblock** keys that were blocked by duplicate-use detection
+
+The section appears above the connected nodes list on the Nodes page, gated on your organization being loaded.
+
+## Generating an API Key
+
+1. Navigate to the **Nodes** page in the Hive console
+2. Click the **Generate API Key** button in the API Keys section
+3. Enter a descriptive name for the key (e.g., "MacBook Pro", "Build Server")
+4. Click **Create**
+
+The dialog transitions to a **one-time secret view** showing the full API key. This is the only time the full secret is displayed — copy it immediately.
+
+### Copying the Secret
+
+- Click **Copy** to copy the secret to your clipboard
+- Click **Reveal** / **Hide** to toggle the secret's visibility
+- The secret is masked by default to prevent accidental exposure
+
+<Warning>
+Copy the secret before clicking Done. Once the dialog closes, the secret cannot be recovered. If you lose it, revoke the key and generate a new one.
+</Warning>
+
+### Using the Key
+
+Pass the copied secret as the `VK_NODE_API_KEY` environment variable when starting a node:
+
+```bash
+VK_NODE_API_KEY=your_secret_here vk-swarm-node
+```
+
+## Viewing API Keys
+
+The API Keys section displays a list of all keys for your organization. Each entry shows:
+
+| Field | Description |
+|-------|-------------|
+| **Name** | The descriptive name you assigned |
+| **Key Prefix** | The first few characters of the key (for identification) |
+| **Status Badge** | Bound, Unbound, Blocked, or Revoked |
+| **Created** | When the key was generated |
+| **Last Used** | When the key was last used to authenticate (if ever) |
+
+### Key Statuses
+
+| Status | Meaning |
+|--------|---------|
+| **Bound** | The key is connected to a specific node |
+| **Unbound** | The key exists but no node has used it yet |
+| **Blocked** | Duplicate-use detection triggered; the key is temporarily disabled |
+| **Revoked** | The key has been permanently deactivated |
+
+## Revoking a Key
+
+To permanently deactivate a key:
+
+1. Click the **Revoke** button next to the key
+2. Confirm the action in the dialog
+3. The key is immediately removed from the active list
+
+Nodes using a revoked key will no longer be able to authenticate. If the key is still needed, generate a new one.
+
+## Unblocking a Key
+
+If a key is blocked due to duplicate-use detection (multiple nodes attempting to use the same key simultaneously):
+
+1. The key shows a **Blocked** badge with the reason
+2. Click the **Unblock** button
+3. Confirm the action in the dialog
+4. The key returns to Active status
+
+## API Endpoints
+
+The key management operations use these endpoints:
+
+| Operation | Endpoint | Method |
+|-----------|----------|--------|
+| List keys | `/v1/nodes/api-keys?organization_id=...` | GET |
+| Create key | `/v1/nodes/api-keys` | POST |
+| Revoke key | `/v1/nodes/api-keys/:id` | DELETE |
+| Unblock key | `/v1/nodes/api-keys/:id/unblock` | POST |
+
+All endpoints require authentication via Bearer token.
+
+## Related Documentation
+
+- [Swarm/Hive Setup](../swarm-hive-setup.mdx) — How to configure nodes to connect to a hive
+- [Database: Node API Keys](../architecture/db/functions/postgresql-node-api-keys.mdx) — Backend API key storage and functions
