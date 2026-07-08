@@ -218,22 +218,24 @@ export function NodeApiKeySection({
   const revokeMutation = useMutation({
     mutationFn: ({ keyId }: { keyId: string; orgId: string }) => nodesApi.revokeApiKey(keyId),
     onSuccess: (_data, { orgId }) => {
-      setError(null);
+      if (orgId === orgIdRef.current) setError(null);
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
     },
-    onError: (err) => {
+    onError: (err, { orgId }) => {
       if (!isMountedRef.current) return;
+      if (orgId !== orgIdRef.current) return;
       setError(parseErrorMessage(err));
     },
   });
   const unblockMutation = useMutation({
     mutationFn: ({ keyId }: { keyId: string; orgId: string }) => nodesApi.unblockApiKey(keyId),
     onSuccess: (_data, { orgId }) => {
-      setError(null);
+      if (orgId === orgIdRef.current) setError(null);
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
     },
-    onError: (err) => {
+    onError: (err, { orgId }) => {
       if (!isMountedRef.current) return;
+      if (orgId !== orgIdRef.current) return;
       setError(parseErrorMessage(err));
     },
   });
