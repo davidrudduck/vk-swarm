@@ -14,6 +14,9 @@ export { MergeProjectsDialog } from './MergeProjectsDialog';
 // Node Card
 export { NodeCard } from './NodeCard';
 
+// Node API Keys (lives on the Nodes page; not a Settings section)
+export { NodeApiKeySection } from './NodeApiKeySection';
+
 // Node Projects (for linking to swarm projects)
 export { NodeProjectsSection } from './NodeProjectsSection';
 

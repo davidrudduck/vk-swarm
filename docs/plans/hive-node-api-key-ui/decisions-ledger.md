@@ -99,6 +99,8 @@ decisions needed to satisfy the failing-test-first red step.
 ### Task 005
 *(appended by the implementer)*
 
+- **No discretionary choices**: All changes were dictated verbatim by the task — export line placement, comment text, mock additions, and test assertion. No decisions required.
+
 ### Task 006
 *(appended by the implementer)*
 
