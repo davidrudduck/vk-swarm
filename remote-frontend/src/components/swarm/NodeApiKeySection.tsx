@@ -26,6 +26,18 @@ import { Label } from '@/components/ui/label';
 import { nodesApi } from '@/lib/api';
 import type { NodeApiKey } from '@/types/nodes';
 
+function parseErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : 'Failed';
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && 'message' in parsed
+      ? String(parsed.message)
+      : raw;
+  } catch {
+    return raw;
+  }
+}
+
 interface ApiKeyItemProps {
   apiKey: NodeApiKey;
   onRevoke: (keyId: string) => void;
@@ -154,7 +166,7 @@ export function NodeApiKeySection({
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : 'Failed');
+      setError(parseErrorMessage(err));
     },
   });
 
@@ -165,7 +177,7 @@ export function NodeApiKeySection({
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : 'Failed');
+      setError(parseErrorMessage(err));
     },
   });
   const unblockMutation = useMutation({
@@ -175,7 +187,7 @@ export function NodeApiKeySection({
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', organizationId] });
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : 'Failed');
+      setError(parseErrorMessage(err));
     },
   });
 

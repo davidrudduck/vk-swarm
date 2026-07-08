@@ -274,6 +274,7 @@ describe('NodeApiKeySection', () => {
       'settings.swarm.apiKeys.unblockConfirm',
       'settings.swarm.apiKeys.error',
     ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const apiKeysBlock = (enSettings as any).settings?.swarm?.apiKeys ?? {};
     for (const key of requiredKeys) {
       const suffix = key.replace('settings.swarm.apiKeys.', '');
