@@ -132,7 +132,7 @@ export function NodeApiKeySection({
   const [showSecret, setShowSecret] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pendingKeyId, setPendingKeyId] = useState<string | null>(null);
+  const [pendingKeyIds, setPendingKeyIds] = useState<Set<string>>(new Set());
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
@@ -181,13 +181,19 @@ export function NodeApiKeySection({
 
   const handleRevoke = (keyId: string) => {
     if (!confirm(t('settings.swarm.apiKeys.revokeConfirm', 'Are you sure you want to revoke this API key? Nodes using it will no longer be able to connect.'))) return;
-    setPendingKeyId(keyId);
-    revokeMutation.mutate(keyId, { onSettled: () => setPendingKeyId(null) });
+    setError(null);
+    setPendingKeyIds(prev => new Set(prev).add(keyId));
+    revokeMutation.mutate(keyId, {
+      onSettled: () => setPendingKeyIds(prev => { const next = new Set(prev); next.delete(keyId); return next; }),
+    });
   };
   const handleUnblock = (keyId: string) => {
     if (!confirm(t('settings.swarm.apiKeys.unblockConfirm', 'Are you sure you want to unblock this API key? The node will be able to connect again.'))) return;
-    setPendingKeyId(keyId);
-    unblockMutation.mutate(keyId, { onSettled: () => setPendingKeyId(null) });
+    setError(null);
+    setPendingKeyIds(prev => new Set(prev).add(keyId));
+    unblockMutation.mutate(keyId, {
+      onSettled: () => setPendingKeyIds(prev => { const next = new Set(prev); next.delete(keyId); return next; }),
+    });
   };
 
   const closeDialog = () => {
@@ -293,7 +299,7 @@ export function NodeApiKeySection({
                   apiKey={key}
                   onRevoke={handleRevoke}
                   onUnblock={handleUnblock}
-                  isPending={pendingKeyId === key.id}
+                  isPending={pendingKeyIds.has(key.id)}
                 />
               ))}
             </div>
@@ -363,6 +369,7 @@ export function NodeApiKeySection({
                   data-secret-wrapper
                   data-hidden={!showSecret}
                   className="block p-3 rounded bg-muted text-sm break-all"
+                  aria-label={showSecret ? t('settings.swarm.apiKeys.secretVisible', 'API key secret') : t('settings.swarm.apiKeys.secretHidden', 'API key secret (hidden)')}
                 >
                   {showSecret ? createdSecret : '••••••••••••••••••••'}
                 </code>

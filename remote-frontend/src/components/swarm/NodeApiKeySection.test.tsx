@@ -260,6 +260,8 @@ describe('NodeApiKeySection', () => {
       'settings.swarm.apiKeys.loading',
       'settings.swarm.apiKeys.empty',
       'settings.swarm.apiKeys.loadError',
+      'settings.swarm.apiKeys.secretVisible',
+      'settings.swarm.apiKeys.secretHidden',
       'settings.swarm.apiKeys.bound',
       'settings.swarm.apiKeys.unbound',
       'settings.swarm.apiKeys.created',

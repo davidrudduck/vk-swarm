@@ -761,6 +761,8 @@
         "loading": "Loading API keys...",
         "empty": "No API keys found. Create one to allow nodes to connect.",
         "loadError": "Failed to load API keys.",
+        "secretVisible": "API key secret",
+        "secretHidden": "API key secret (hidden)",
         "bound": "Bound",
         "unbound": "Unbound",
         "created": "Created {{when}}",
