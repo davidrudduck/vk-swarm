@@ -2,7 +2,7 @@
 id: "201"
 phase: 2
 title: Cover non-loopback normal login and callback storage
-status: ready
+status: passed
 depends_on: ["101"]
 parallel: false
 conflicts_with: []
