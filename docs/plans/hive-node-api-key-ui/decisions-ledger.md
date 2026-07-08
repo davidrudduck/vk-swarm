@@ -65,6 +65,12 @@ decisions needed to satisfy the failing-test-first red step.
 ### Task 001
 *(appended by the implementer)*
 
+- **Sibling-read structural findings**: Pattern siblings (SwarmHealthSection, NodeProjectsSection, NodeTemplatesSection, SwarmLabelsSection) all use `useState`, `useTranslation(['settings', 'common'])`, Card+CardContent+CardHeader+CardTitle pattern, `Loader2` spinner, `Badge`, `nodesApi` from `@/lib/api`. Reference impl (`frontend/src/components/org/NodeApiKeySection.tsx`) has `isAdmin` prop, `formatDistanceToNow`, `activeKeys` filter, full mutations, error Alert, show/hide toggle, clipboard copy. Remote version diverges per task: no `isAdmin`, no `formatDistanceToNow`, no `activeKeys` filter, no mutations yet. Dialogs (Merge*, SwarmLabel*, SwarmProject*, SwarmTemplate*) are NOT pattern siblings — they are modals.
+- **i18n mock divergence**: Task specified mock returns `fallback || key` in both branches. Test expectations TS2 (`screen.getByText('settings.swarm.apiKeys.empty')`) and TS3 (`screen.getByText('settings.swarm.apiKeys.bound')`) require the KEY to be rendered, while TS3 timestamp assertions (`/Created 2026-01-01/`) require the FALLBACK to be interpolated. Mock was adjusted: no-options returns `key`, options branch returns `(fallback || key).replace(...)` to satisfy both.
+- **ApiKeyItem sub-component**: Defined as a separate named function with typed `ApiKeyItemProps` interface (not inline), matching the reference impl's pattern. Each ApiKeyItem calls its own `useTranslation` — necessary since it's a separate component, not extracted into a shared scope.
+- **TooltipProvider wrapping**: Task requires `<TooltipProvider>` wrapping the Card. Sibling SwarmLabelsSection imports `TooltipProvider` from `@/components/ui/tooltip` and uses it similarly. Import and wrapping added as specified.
+- [Task 001 orchestrator] Prefixed `showCreateDialog` with `_` (→ `_showCreateDialog`) to suppress TS6133 unused-variable error. The state hook is required for task 002's Dialog body; `setShowCreateDialog` is consumed by the "Generate API Key" button, but the read-side variable is unused until the Dialog lands. Standard `_` convention; no behavioral change.
+
 ### Task 002
 *(appended by the implementer)*
 
