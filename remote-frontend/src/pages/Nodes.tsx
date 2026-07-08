@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { NodeCard } from '@/components/swarm/NodeCard';
+import { NodeApiKeySection } from '@/components/swarm';
 import { nodesApi } from '@/lib/api';
 import { useOrganizations } from '@/hooks/useOrganizations';
 
@@ -26,6 +27,8 @@ export function Nodes() {
   return (
     <div className="space-y-6 p-8 pb-16 md:pb-8 h-full overflow-auto">
       <h2 className="font-serif text-2xl font-semibold">Nodes</h2>
+
+      {orgId && <NodeApiKeySection organizationId={orgId} />}
 
       {isLoading ? (
         <div className="flex items-center justify-center py-8">

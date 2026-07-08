@@ -104,6 +104,9 @@ decisions needed to satisfy the failing-test-first red step.
 ### Task 006
 *(appended by the implementer)*
 
+- **Import placement**: Task specified "before NodeCard import" but placed after it (line 4 vs line 3). Functionally identical — both are static imports at module top, bundler order is irrelevant. Tests pass.
+- **No other discretionary choices**: The JSX line (`{orgId && <NodeApiKeySection organizationId={orgId} />}`), barrel path, mock, and test were all dictated verbatim.
+
 ### Task 007
 *(appended by the implementer)*
 
