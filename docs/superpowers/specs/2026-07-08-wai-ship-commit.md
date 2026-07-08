@@ -65,8 +65,14 @@ matching the existing executor-experiment pattern (`wai-executor-experiment.sh:1
 
 ## Approach
 
-**Single insertion point in `wai-ship.sh`.** The safety commit step is added between the
-branch guard (`wai-branch-guard.sh --ensure`, line 39) and the `fail()` helper (line 41).
+**Single insertion point in `wai-ship.sh`.** The safety commit step is added after the
+`fail()` helper definition (line 41) and the already-shipped skip check (lines 114–119),
+but before the spec resolution (line 122). This ordering is mandatory for two reasons:
+
+1. `fail()` must be defined before the safety block calls it (kimi/deepseek finding).
+2. The already-shipped skip must run before the safety commit to avoid creating a stranded
+   local commit when re-running ship on an already-shipped workstream (gpt-5.5 finding).
+
 No other file is modified. `wai-close.sh` is untouched — it already handles its own
 deterministic commit scope correctly and must not be burdened with a general "save everything"
 concern.
@@ -79,7 +85,11 @@ and the only place where losing work is irreversible.
 
 ## Design / architecture
 
-### Step: safety commit (inserted after line 39 in `wai-ship.sh`)
+### Step: safety commit (inserted after the already-shipped check in `wai-ship.sh`)
+
+**Insertion point:** After the already-shipped skip block (current line 119: `exit 0`),
+before the spec resolution (current line 122). At this point `fail()` is already defined
+(line 41) and the already-shipped check has confirmed ship will proceed.
 
 ```bash
 # --- Safety commit: save all outstanding work before graduation ---
@@ -94,7 +104,7 @@ if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   git add -A \
     || fail "safety commit: git add -A failed (see output above)."
   git commit -q -m "ship($TOPIC): save outstanding work before graduation" \
-    || fail "safety commit: git commit failed (see output above). No files have been modified by ship yet."
+    || fail "safety commit: git commit failed (see output above). No ship frontmatter edits have been made; note that 'git add -A' already staged the working tree."
   echo "  safety commit: all outstanding working-tree changes committed" >&2
 else
   echo "  safety commit: working tree clean, nothing to commit" >&2
@@ -106,10 +116,10 @@ fi
 1. Validate slug
 2. `repo_root` + `cd`
 3. **Branch guard** (`wai-branch-guard.sh --ensure`) — move to `wai/<topic>`
-4. **Safety commit** (NEW) — `git add -A && git commit` if working tree is dirty
-5. `fail()` helper defined
-6. Workstream README exists check
-7. Already-shipped skip check
+4. `fail()` helper defined
+5. Workstream README exists check
+6. Already-shipped skip check (exits 0 if already shipped — no safety commit runs)
+7. **Safety commit** (NEW) — `git add -A && git commit` if working tree is dirty
 8. Resolve spec
 9. Pre-flight evidence gate
 10. Flip spec status → shipped
@@ -173,6 +183,12 @@ remote in one push. No new push logic is needed in `wai-ship.sh`.
    commit runs before any frontmatter edits), so the workstream is in a clean retry state.
    — Reversible: can downgrade to warn-and-continue if needed.
 
+6. **Already-shipped skip runs before safety commit.** The already-shipped idempotency
+   check (lines 114–119) must run before the safety commit. If the workstream is already
+   shipped, ship exits immediately without creating any new commits. This prevents a
+   stranded local commit on re-runs where `wai-close.sh` (and its push logic) never fires.
+   — Reversible: reordering would re-introduce the stranded-commit bug.
+
 ## Test strategy
 
 1. **Unit test: dirty working tree → safety commit created.** Set up a workstream with an
@@ -193,3 +209,7 @@ remote in one push. No new push logic is needed in `wai-ship.sh`.
 5. **Integration test: wai-close.sh index guard still passes.** Dirty tree → ship → close
    → verify close's `git diff --cached --quiet` guard does not fire (index is clean because
    the safety commit ran first).
+
+6. **Unit test: already-shipped re-run → no safety commit.** Set up a workstream that is
+   already shipped (README status: shipped), with a dirty working tree, run `wai-ship.sh`,
+   verify no commit was created and the script exited with `SHIP SKIPPED`.
