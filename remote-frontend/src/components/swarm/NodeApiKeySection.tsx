@@ -82,10 +82,12 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isPending }: ApiKeyItemProps)
             ) : isBlocked && apiKey.blocked_reason ? (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Badge variant="destructive">
-                    <AlertTriangle className="h-3 w-3 mr-1" />
-                    {t('settings.swarm.apiKeys.blocked', 'Blocked')}
-                  </Badge>
+                  <span>
+                    <Badge variant="destructive">
+                      <AlertTriangle className="h-3 w-3 mr-1" />
+                      {t('settings.swarm.apiKeys.blocked', 'Blocked')}
+                    </Badge>
+                  </span>
                 </TooltipTrigger>
                 <TooltipContent>
                   <p>{apiKey.blocked_reason}</p>
@@ -207,12 +209,14 @@ export function NodeApiKeySection({
       if (attemptId !== createAttemptRef.current) return;
       if (orgId !== orgIdRef.current) return;
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
+      if (!isMountedRef.current) return;
       setError(null);
       setCreatedSecret(response.secret);
       setNewKeyName('');
     },
     onError: (err, _vars, attemptId) => {
       if (attemptId !== createAttemptRef.current) return;
+      if (!isMountedRef.current) return;
       setError(parseErrorMessage(err));
     },
   });
@@ -220,7 +224,7 @@ export function NodeApiKeySection({
   const revokeMutation = useMutation({
     mutationFn: ({ keyId }: { keyId: string; orgId: string }) => nodesApi.revokeApiKey(keyId),
     onSuccess: (_data, { orgId }) => {
-      if (orgId === orgIdRef.current) setError(null);
+      if (isMountedRef.current && orgId === orgIdRef.current) setError(null);
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
     },
     onError: (err, { orgId }) => {
@@ -232,7 +236,7 @@ export function NodeApiKeySection({
   const unblockMutation = useMutation({
     mutationFn: ({ keyId }: { keyId: string; orgId: string }) => nodesApi.unblockApiKey(keyId),
     onSuccess: (_data, { orgId }) => {
-      if (orgId === orgIdRef.current) setError(null);
+      if (isMountedRef.current && orgId === orgIdRef.current) setError(null);
       queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
     },
     onError: (err, { orgId }) => {

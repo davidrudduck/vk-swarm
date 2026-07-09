@@ -61,7 +61,7 @@ useMutation({ mutationFn: nodesApi.revokeApiKey, ... })
 useMutation({ mutationFn: nodesApi.unblockApiKey, ... })
 ```
 
-All three mutations invalidate `['nodeApiKeys', orgId]` on success (using the org ID captured at mutation-start time via `orgIdRef`), triggering a refetch of the list. The `createMutation` also uses a per-attempt epoch counter (`createAttemptRef`) to guard against stale responses leaking secrets into a reopened dialog.
+All three mutations invalidate `['nodeApiKeys', orgId]` on success (using the org ID submitted in the mutation variables), while `orgIdRef` is used to ignore callbacks whose org context has changed. The `createMutation` also uses a per-attempt epoch counter (`createAttemptRef`) to guard against stale responses leaking secrets into a reopened dialog.
 
 ### State Management
 
