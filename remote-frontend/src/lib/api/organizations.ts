@@ -1,7 +1,7 @@
 import { makeRequest, ApiError } from './utils';
 import type { Organization } from '@/types/shared/types';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 
 export const organizationsApi = {
   async list(): Promise<Organization[]> {
