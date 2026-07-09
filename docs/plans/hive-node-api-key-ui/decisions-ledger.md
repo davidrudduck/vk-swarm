@@ -158,3 +158,22 @@ decisions needed to satisfy the failing-test-first red step.
 - TS8 asserts the section renders with the correct orgId. TS1-TS7 assert all CRUD flows. TS9 asserts i18n key coverage.
 
 VERDICT: PASS
+
+## Post-review known issues (pre-graduation code review)
+
+Non-actionable findings from code-review-round-1.md (2026-07-09, 3 reviewers):
+
+1. **`parseErrorMessage` not shared across codebase** (MiniMax) — pre-existing pattern; all other dialogs use inline `err instanceof Error ? err.message : 'An error occurred'`. Extract to `src/lib/errors.ts` in follow-up.
+2. **i18n key prefix `settings.swarm.apiKeys.*` misnamed for Nodes page** (MiniMax) — component lives on Nodes page, not Settings. Rename to `nodes.apiKeys.*` in follow-up (4-locale fan-out).
+3. **iOS Safari `execCommand('copy')` fallback may silently fail** (DeepSeek) — edge case; modern browsers use Clipboard API. Non-critical.
+4. **Redundant `TooltipProvider` wrapper** (DeepSeek) — established pattern in this codebase; pre-existing.
+5. **`isMountedRef.current = true` reassignment is dead** (MiniMax) — cosmetic; the ref is initialized to `true`.
+6. **`data-secret-wrapper`/`data-hidden` are test-only attributes** (MiniMax) — cosmetic; used as selectors in TS4/TS14.
+7. **`parseErrorMessage` returns `'Failed'` for many shapes → "Failed: Failed"** (MiniMax) — display polish.
+8. **`onMutate` return value repurposed as attempt-id context** (MiniMax) — works correctly; confusing but not a bug.
+9. **Test imports locale JSON across package boundary** (DeepSeek/MiniMax/Kimi) — pre-existing structural debt.
+10. **Custom Dialog does not trap focus or handle Escape** (Kimi) — pre-existing component limitation; shared Dialog issue.
+11. **Fallback clipboard copy steals focus** (Kimi) — minor UX edge case.
+12. **Nodes.tsx non-i18n hard-coded strings** (Kimi) — pre-existing, unrelated to API-key flow.
+13. **Dynamic test imports inside test bodies** (Kimi) — cosmetic test style.
+14. **Duplicate revoke/unblock mutation handlers** (Kimi) — maintainability cleanup, no functional defect.

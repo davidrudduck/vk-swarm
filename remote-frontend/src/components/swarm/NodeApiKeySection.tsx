@@ -51,6 +51,7 @@ function parseErrorMessage(err: unknown): string {
   if (!raw) return 'Failed';
   try {
     const parsed = JSON.parse(raw);
+    if (typeof parsed === 'string' && parsed) return parsed;
     if (parsed !== null && typeof parsed === 'object') {
       if (typeof parsed.message === 'string' && parsed.message) return parsed.message;
       if (typeof parsed.error === 'string' && parsed.error) return parsed.error;
@@ -532,11 +533,11 @@ export function NodeApiKeySection({
                     {copied ? t('settings.swarm.apiKeys.copied', 'Copied!') : copyFailed ? t('settings.swarm.apiKeys.copyFailedSr', 'Copy failed') : ''}
                   </span>
                 </div>
-                {copyFailed && (
-                  <p className="text-sm text-destructive">
-                    {t('settings.swarm.apiKeys.copyFailed', 'Failed to copy. Please select and copy the secret manually.')}
-                  </p>
-                )}
+                  {copyFailed && (
+                    <p className="text-sm text-destructive">
+                      {t('settings.swarm.apiKeys.copyFailed', 'Failed to copy. Click Reveal, then select and copy the secret manually.')}
+                    </p>
+                  )}
               </div>
               <DialogFooter>
                 <Button onClick={closeDialog}>

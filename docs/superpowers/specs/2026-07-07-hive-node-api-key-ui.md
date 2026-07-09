@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: hive-node-api-key-ui
 change_kind: bugfix
 ---
