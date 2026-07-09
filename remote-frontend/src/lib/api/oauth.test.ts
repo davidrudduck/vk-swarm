@@ -184,4 +184,77 @@ describe('OAuth API', () => {
       oauthApi.redeem('handoff-123', 'auth-code-xyz', 'verifier-abc')
     ).rejects.toThrow();
   });
+
+  it('oauthApi.logout() does not call fetch when no token in localStorage', async () => {
+    const mockFetch = vi.mocked(g.fetch) as ReturnType<typeof vi.fn>;
+
+    await oauthApi.logout();
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(localStorage.getItem('access_token')).toBeNull();
+  });
+
+  it('oauthApi.logout() clears localStorage even when fetch fails', async () => {
+    localStorage.setItem('access_token', 'test-token-123');
+
+    const mockFetch = vi.mocked(g.fetch) as ReturnType<typeof vi.fn>;
+    mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await oauthApi.logout();
+
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(consoleSpy).toHaveBeenCalledWith('Logout request failed:', expect.any(Error));
+
+    consoleSpy.mockRestore();
+  });
+
+  it('oauthApi.init() passes AbortSignal to makeRequest', async () => {
+    const controller = new AbortController();
+    const mockResponse = {
+      handoff_id: 'test-handoff-123',
+      authorize_url: 'https://auth.example.com/authorize',
+    };
+
+    const mockFetch = vi.mocked(g.fetch) as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => mockResponse,
+    } as Response);
+
+    await oauthApi.init('github', 'http://localhost/callback', 'challenge-123', controller.signal);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        signal: expect.anything(),
+      })
+    );
+  });
+
+  it('oauthApi.redeem() passes AbortSignal to makeRequest', async () => {
+    const controller = new AbortController();
+    const mockResponse = {
+      access_token: 'token-123',
+      refresh_token: 'refresh-456',
+    };
+
+    const mockFetch = vi.mocked(g.fetch) as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => mockResponse,
+    } as Response);
+
+    await oauthApi.redeem('handoff-123', 'app-code', 'verifier', controller.signal);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        signal: expect.anything(),
+      })
+    );
+  });
 });
