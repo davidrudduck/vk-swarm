@@ -54,6 +54,7 @@ function LoginPage() {
       setLoading(false)
       clearVerifier()
       clearInvitationToken()
+      localStorage.removeItem('access_token')
     }
   }
 

@@ -67,11 +67,10 @@ describe('ProfileProvider', () => {
       isLoaded: true,
     });
 
-    expect(globalThis.fetch).toHaveBeenCalledWith('/v1/profile', {
-      headers: {
-        Authorization: `Bearer ${mockToken}`,
-      },
-    });
+    // Verify fetch was called with Authorization header
+    const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(fetchCall[0]).toContain('/v1/profile');
+    expect((fetchCall[1]?.headers as Headers).get('Authorization')).toBe(`Bearer ${mockToken}`);
   });
 
   it('should not fetch when no token in localStorage (signed-out, no fetch)', async () => {
@@ -82,6 +81,10 @@ describe('ProfileProvider', () => {
     );
 
     const { result } = renderHook(() => useProfile(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoaded).toBe(true);
+    });
 
     expect(result.current).toEqual({
       profile: null,
