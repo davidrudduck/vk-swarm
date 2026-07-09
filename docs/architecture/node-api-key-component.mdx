@@ -12,7 +12,7 @@ The `NodeApiKeySection` is a React component in `remote-frontend/src/components/
 ```
 remote-frontend/src/components/swarm/
 ├── NodeApiKeySection.tsx          # Component
-├── NodeApiKeySection.test.tsx     # Tests (27 test cases)
+├── NodeApiKeySection.test.tsx     # Tests (32 test cases)
 └── index.ts                       # Barrel export (line 18)
 
 remote-frontend/src/pages/
@@ -122,7 +122,7 @@ The `remote-frontend` does not currently initialize an i18n instance — the inl
 
 ### Test Structure
 
-The test file (`NodeApiKeySection.test.tsx`) contains 27 test cases. Integration with `Nodes.tsx` is covered by `Nodes.test.tsx` (TS8 plus 5 other tests).
+The test file (`NodeApiKeySection.test.tsx`) contains 32 test cases. Integration with `Nodes.tsx` is covered by `Nodes.test.tsx` (TS8 plus 5 other tests).
 
 | Test | Coverage |
 |------|----------|
@@ -153,6 +153,11 @@ The test file (`NodeApiKeySection.test.tsx`) contains 27 test cases. Integration
 | TS22 | Load-error Alert when listApiKeys rejects |
 | TS23 | Close button hidden when secret is shown (uncloseable) |
 | TS24 | listApiKeys not called when organizationId is empty |
+| TS25 | Org-change while dialog is open resets all state |
+| TS26 | execCommand returning false shows no Copied! feedback |
+| TS27 | Clipboard writeText rejection handled gracefully |
+| TS16e | parseErrorMessage handles symbol rejection |
+| TS16f | parseErrorMessage handles circular reference object |
 
 ### Mocking Strategy
 
@@ -163,14 +168,14 @@ The test file (`NodeApiKeySection.test.tsx`) contains 27 test cases. Integration
 
 ### Coverage
 
-Coverage is tracked via `@vitest/coverage-v8`. Exact percentages are maintained in the CI coverage report; approximate bands:
+Coverage is tracked via `@vitest/coverage-v8`. Approximate bands:
 
 | Metric | Coverage |
 |--------|----------|
-| Statements | ~95% |
-| Branches | ~85% |
-| Functions | ~94% |
-| Lines | ~98% |
+| Statements | ~91% |
+| Branches | ~80% |
+| Functions | ~97% |
+| Lines | 100% |
 
 ## Composition in Nodes.tsx
 
