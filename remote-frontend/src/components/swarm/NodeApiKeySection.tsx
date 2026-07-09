@@ -38,20 +38,21 @@ function parseErrorMessage(err: unknown): string {
     return 'Failed';
   } else {
     try {
-      raw = JSON.stringify(err);
+      raw = JSON.stringify(err) ?? 'Failed';
     } catch {
       return 'Failed';
     }
   }
+  if (!raw) return 'Failed';
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed === 'object' && parsed !== null) {
-      if (typeof parsed.message === 'string') return parsed.message;
-      if (typeof parsed.error === 'string') return parsed.error;
+      if (typeof parsed.message === 'string' && parsed.message) return parsed.message;
+      if (typeof parsed.error === 'string' && parsed.error) return parsed.error;
     }
-    return raw;
+    return raw || 'Failed';
   } catch {
-    return raw;
+    return raw || 'Failed';
   }
 }
 
@@ -163,7 +164,7 @@ export function NodeApiKeySection({
   const [showSecret, setShowSecret] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pendingKeyIds, setPendingKeyIds] = useState<Set<string>>(new Set());
+  const [pendingKeyIds, setPendingKeyIds] = useState<Map<string, number>>(new Map());
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const createAttemptRef = useRef(0);
   const orgIdRef = useRef(organizationId);
@@ -179,7 +180,7 @@ export function NodeApiKeySection({
   // We intentionally run only on org change, not on every mutation/dialog state change.
   useEffect(() => {
     setError(null);
-    setPendingKeyIds(new Set());
+    setPendingKeyIds(new Map());
     if (showCreateDialog) {
       createAttemptRef.current += 1;
       createMutation.reset();
@@ -249,17 +250,17 @@ export function NodeApiKeySection({
   const handleRevoke = (keyId: string) => {
     if (!confirm(t('settings.swarm.apiKeys.revokeConfirm', 'Are you sure you want to revoke this API key? Nodes using it will no longer be able to connect.'))) return;
     setError(null);
-    if (isMountedRef.current) setPendingKeyIds(prev => new Set(prev).add(keyId));
+    if (isMountedRef.current) setPendingKeyIds(prev => new Map(prev).set(keyId, (prev.get(keyId) ?? 0) + 1));
     revokeMutation.mutate({ keyId, orgId: orgIdRef.current }, {
-      onSettled: () => { if (isMountedRef.current) setPendingKeyIds(prev => { const next = new Set(prev); next.delete(keyId); return next; }); },
+      onSettled: () => { if (isMountedRef.current) setPendingKeyIds(prev => { const next = new Map(prev); const count = (next.get(keyId) ?? 1) - 1; if (count <= 0) next.delete(keyId); else next.set(keyId, count); return next; }); },
     });
   };
   const handleUnblock = (keyId: string) => {
     if (!confirm(t('settings.swarm.apiKeys.unblockConfirm', 'Are you sure you want to unblock this API key? The node will be able to connect again.'))) return;
     setError(null);
-    if (isMountedRef.current) setPendingKeyIds(prev => new Set(prev).add(keyId));
+    if (isMountedRef.current) setPendingKeyIds(prev => new Map(prev).set(keyId, (prev.get(keyId) ?? 0) + 1));
     unblockMutation.mutate({ keyId, orgId: orgIdRef.current }, {
-      onSettled: () => { if (isMountedRef.current) setPendingKeyIds(prev => { const next = new Set(prev); next.delete(keyId); return next; }); },
+      onSettled: () => { if (isMountedRef.current) setPendingKeyIds(prev => { const next = new Map(prev); const count = (next.get(keyId) ?? 1) - 1; if (count <= 0) next.delete(keyId); else next.set(keyId, count); return next; }); },
     });
   };
 
@@ -377,7 +378,7 @@ export function NodeApiKeySection({
                   apiKey={key}
                   onRevoke={handleRevoke}
                   onUnblock={handleUnblock}
-                  isPending={pendingKeyIds.has(key.id)}
+                  isPending={(pendingKeyIds.get(key.id) ?? 0) > 0}
                 />
               ))}
             </div>
