@@ -32,6 +32,14 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
     let cancelled = false;
 
     const fetchProfile = async () => {
+      if (!localStorage.getItem('access_token')) {
+        if (!cancelled) {
+          setProfile(null);
+          setIsSignedIn(false);
+          setIsLoaded(true);
+        }
+        return;
+      }
       try {
         const data = await profileApi.get();
         if (cancelled) return;

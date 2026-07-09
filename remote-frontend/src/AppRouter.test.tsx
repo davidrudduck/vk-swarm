@@ -40,7 +40,7 @@ describe('AppRouter', () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
     localStorage.clear()
     sessionStorage.clear()
   })

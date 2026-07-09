@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { oauthApi } from './oauth';
 import { profileApi } from './profile';
+import { ApiError } from './utils';
 
 // Mock localStorage if not available
 const g = globalThis as Record<string, unknown>;
@@ -180,9 +181,9 @@ describe('OAuth API', () => {
       url: 'http://localhost/v1/oauth/web/redeem',
     } as Response);
 
-    await expect(
-      oauthApi.redeem('handoff-123', 'auth-code-xyz', 'verifier-abc')
-    ).rejects.toThrow();
+    const error = await oauthApi.redeem('handoff-123', 'auth-code-xyz', 'verifier-abc').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toHaveProperty('status', 410);
   });
 
   it('oauthApi.logout() does not call fetch when no token in localStorage', async () => {

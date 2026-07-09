@@ -42,7 +42,7 @@ describe('ProfileProvider', () => {
       ],
     };
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -98,7 +98,7 @@ describe('ProfileProvider', () => {
   it('should clear token from localStorage on 401 response', async () => {
     const mockToken = 'expired-token';
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: false,
       status: 401,
@@ -127,7 +127,7 @@ describe('ProfileProvider', () => {
   it('should not clear token on network error (transient failure)', async () => {
     const mockToken = 'test-token';
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error('Network error'));
 
     const wrapper = ({ children }: { children: ReactNode }) => (
@@ -152,7 +152,7 @@ describe('ProfileProvider', () => {
   it('should not clear token on non-401 server error (500)', async () => {
     const mockToken = 'test-token';
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: false,
       status: 500,
@@ -181,7 +181,7 @@ describe('ProfileProvider', () => {
   it('should have isLoaded false before fetch resolves (loading state)', () => {
     const mockToken = 'test-token';
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockImplementationOnce(
       () => new Promise(() => {}) // Never resolves
     );
