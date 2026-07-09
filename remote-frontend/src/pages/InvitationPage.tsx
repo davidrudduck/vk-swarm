@@ -38,7 +38,6 @@ export default function InvitationPage() {
   const handleOAuthLogin = async (provider: OAuthProvider) => {
     setLoading(true)
     setOauthError(null)
-    const abortController = new AbortController()
     try {
       const verifier = generateVerifier()
       const challenge = await generateChallenge(verifier)
@@ -50,10 +49,9 @@ export default function InvitationPage() {
         import.meta.env.VITE_APP_BASE_URL || window.location.origin
       const returnTo = `${appBase}/invitations/${token}/complete`
 
-      const result = await initOAuth(provider, returnTo, challenge, abortController.signal)
+      const result = await initOAuth(provider, returnTo, challenge)
       window.location.assign(result.authorize_url)
     } catch (e) {
-      if (abortController.signal.aborted) return
       setOauthError(e instanceof Error ? e.message : 'OAuth init failed')
       setLoading(false)
       clearVerifier()

@@ -67,8 +67,7 @@ describe('InvitationPage OAuth PKCE flow', () => {
       expect(initOAuth).toHaveBeenCalledWith(
         'github',
         expect.stringContaining('/invitations/invite-token/complete'),
-        expect.stringMatching(/^[0-9a-f]{64}$/),
-        expect.any(AbortSignal)
+        expect.stringMatching(/^[0-9a-f]{64}$/)
       )
     })
     expect(sessionStorage.getItem('oauth_verifier')).toMatch(/^[A-Za-z0-9_-]+$/)
@@ -111,5 +110,8 @@ describe('InvitationPage OAuth PKCE flow', () => {
     expect(screen.getByText("You've been invited")).toBeInTheDocument()
     // Verify OAuth buttons are still visible for retry
     expect(screen.getByRole('button', { name: 'Continue with GitHub' })).toBeInTheDocument()
+    // Verify sessionStorage cleanup
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
   })
 })
