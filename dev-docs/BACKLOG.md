@@ -12,7 +12,7 @@
 | F-2026-07-04-02 | orphan spec reference-architecture-alignment-design unreferenced pre-fork | low | wontfix | docs/superpowers/specs/2026-04-20-reference-architecture-alignment-design.md | sweep/2026-07-04 | 2026-07-04 | — | — |
 | F-2026-07-04-03 | stale repo-root PLAN.md planning doc | low | wontfix | PLAN.md | sweep/2026-07-04 | 2026-07-04 | — | — |
 | F-2026-07-04-04 | crisp-river uncommitted Cargo.toml doctest edits on merged branch | medium | open | crates/remote/Cargo.toml | sweep/2026-07-04 | 2026-07-04 | — | — |
-| F-2026-07-06-01 | Hive UI lacks Generate API key button — node onboarding blocked | high | promoted | remote-frontend/src/pages/Nodes.tsx:7-51 | session/2026-07-06 | 2026-07-06 | hive-node-api-key-ui | docs/superpowers/specs/2026-07-07-hive-node-api-key-ui.md |
+| F-2026-07-06-01 | Hive UI lacks Generate API key button — node onboarding blocked | high | shipped | remote-frontend/src/pages/Nodes.tsx:7-51 | session/2026-07-06 | 2026-07-06 | hive-node-api-key-ui | docs/superpowers/specs/2026-07-07-hive-node-api-key-ui.md |
 | F-2026-07-06-02 | Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined) | high | open | remote-frontend/src/pkce.ts:10 | session/2026-07-06 | 2026-07-06 | — | — |
 <!-- WAI:BACKLOG:END -->
 
