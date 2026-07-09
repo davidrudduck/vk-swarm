@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 import { redeemOAuth, acceptInvitation } from '../api'
 import {
@@ -20,25 +20,20 @@ export default function InvitationCompletePage() {
   const appCode = qp.get('app_code')
   const oauthError = qp.get('error')
 
-  const hasRun = useRef(false)
-
   useEffect(() => {
-    if (hasRun.current) return
-    hasRun.current = true
-
-    let active = true
+    const abortController = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
 
     const completeInvitation = async () => {
       if (oauthError) {
-        if (active) setError(`OAuth error: ${oauthError}`)
+        if (!abortController.signal.aborted) setError(`OAuth error: ${oauthError}`)
         clearVerifier()
         clearInvitationToken()
         return
       }
 
       if (!handoffId || !appCode) {
-        if (active) setError('Missing OAuth parameters. Please try the invitation link again.')
+        if (!abortController.signal.aborted) setError('Missing OAuth parameters. Please try the invitation link again.')
         clearVerifier()
         clearInvitationToken()
         return
@@ -47,14 +42,14 @@ export default function InvitationCompletePage() {
       try {
         const verifier = retrieveVerifier()
         if (!verifier) {
-          if (active) setError('OAuth session lost. Please try again.')
+          if (!abortController.signal.aborted) setError('OAuth session lost. Please try again.')
           clearInvitationToken()
           return
         }
 
         const token = urlToken || retrieveInvitationToken()
         if (!token) {
-          if (active) setError('Invitation token lost. Please try again.')
+          if (!abortController.signal.aborted) setError('Invitation token lost. Please try again.')
           clearVerifier()
           return
         }
@@ -65,13 +60,15 @@ export default function InvitationCompletePage() {
           verifier
         )
 
+        if (abortController.signal.aborted) return
+
         const result = await acceptInvitation(token, access_token)
 
         clearVerifier()
         clearInvitationToken()
         localStorage.setItem('access_token', access_token)
 
-        if (!active) return
+        if (abortController.signal.aborted) return
 
         setSuccess(true)
         setOrgSlug(result.organization_slug)
@@ -84,13 +81,16 @@ export default function InvitationCompletePage() {
       } catch (e) {
         clearVerifier()
         clearInvitationToken()
-        if (!active) return
+        if (abortController.signal.aborted) return
         setError(e instanceof Error ? e.message : 'Failed to complete invitation')
       }
     }
 
     completeInvitation()
-    return () => { active = false; if (timer) clearTimeout(timer) }
+    return () => {
+      abortController.abort()
+      if (timer) clearTimeout(timer)
+    }
   }, [handoffId, appCode, oauthError, urlToken])
 
   if (error) {

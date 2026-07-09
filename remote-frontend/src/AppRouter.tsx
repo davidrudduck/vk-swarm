@@ -8,7 +8,7 @@ import NotFoundPage from './pages/NotFoundPage'
 import { oauthApi } from '@/lib/api/oauth'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { retrieveVerifier, clearVerifier } from '@/pkce'
+import { retrieveVerifier, clearVerifier, clearInvitationToken } from '@/pkce'
 import type { OAuthProvider } from '@/api'
 import { generateVerifier, generateChallenge, storeVerifier } from '@/pkce'
 import { initOAuth } from '@/api'
@@ -133,6 +133,8 @@ function OAuthCallbackPage() {
       try {
         const appVerifier = retrieveVerifier()
         if (!appVerifier) {
+          clearVerifier()
+          clearInvitationToken()
           window.location.assign(`/login?error=${encodeURIComponent('OAuth session lost. Please try again.')}`)
           return
         }

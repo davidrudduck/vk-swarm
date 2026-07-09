@@ -31,7 +31,7 @@ export default defineConfig({
             },
           },
           {
-            urlPattern: ({ url }) => ['/', '/login', '/oauth/callback'].includes(url.pathname),
+            urlPattern: ({ url }) => ['/', '/login', '/oauth/callback'].includes(url.pathname) || url.pathname.startsWith('/invitations/'),
             handler: 'StaleWhileRevalidate',
             options: {
               cacheName: 'shell-cache',
