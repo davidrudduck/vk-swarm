@@ -35,12 +35,14 @@ describe('InvitationPage OAuth PKCE flow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     sessionStorage.clear()
+    localStorage.clear()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
     sessionStorage.clear()
+    localStorage.clear()
   })
 
   it('starts invitation OAuth with fallback PKCE challenge when crypto.subtle is unavailable', async () => {
