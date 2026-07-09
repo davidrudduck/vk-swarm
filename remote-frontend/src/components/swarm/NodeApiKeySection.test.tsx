@@ -103,8 +103,7 @@ describe('NodeApiKeySection', () => {
     const origExecCommand = document.execCommand;
     document.execCommand = execCommand;
     const origClipboard = navigator.clipboard;
-    // @ts-expect-error — assigning undefined to disable clipboard in test
-    navigator.clipboard = undefined;
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true, writable: true });
 
     try {
       const { fireEvent } = await import('@testing-library/react');
@@ -542,6 +541,21 @@ describe('NodeApiKeySection', () => {
     });
   });
 
+  it('parseErrorMessage extracts error from JSON body with {error} key (TS16g)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockRejectedValue(new Error('{"error":"API key not found"}'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    await u.type(await screen.findByLabelText('Key Name'), 'X');
+    await u.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/API key not found/)).toBeInTheDocument();
+    });
+  });
+
   it('revoke mutation error surfaces in the destructive Alert (TS17)', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const keys: NodeApiKey[] = [{
@@ -779,5 +793,59 @@ describe('NodeApiKeySection', () => {
       Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true, writable: true });
       consoleSpy.mockRestore();
     }
+  });
+
+  it('does not render error Alert when unblock fails after org change (TS5c)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const keys: NodeApiKey[] = [{
+      id: 'k2', organization_id: 'org-1', name: 'Blocked', key_prefix: 'vk_b',
+      created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+      node_id: null, takeover_count: 0, takeover_window_start: null,
+      blocked_at: '2026-01-02T00:00:00Z', blocked_reason: 'Duplicate',
+    }];
+    let resolveUnblock: (v: unknown) => void;
+    const unblockPromise = new Promise((resolve) => { resolveUnblock = resolve; });
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+    vi.mocked(nodesApi.unblockApiKey).mockReturnValue(unblockPromise as ReturnType<typeof nodesApi.unblockApiKey>);
+    const result = renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(await screen.findByRole('button', { name: 'Unblock' }));
+    result.rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
+      </QueryClientProvider>
+    );
+    resolveUnblock!(new Error('unblock failed'));
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('only calls createApiKey once on rapid double-click (TS28)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    let resolveCreate: (v: unknown) => void;
+    const createPromise = new Promise((resolve) => { resolveCreate = resolve; });
+    vi.mocked(nodesApi.createApiKey).mockReturnValue(createPromise as ReturnType<typeof nodesApi.createApiKey>);
+    const { fireEvent } = await import('@testing-library/react');
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
+    fireEvent.change(nameInput, { target: { value: 'Test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(nodesApi.createApiKey).toHaveBeenCalledTimes(1);
+    });
+    resolveCreate!({
+      api_key: {
+        id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      },
+      secret: 'vk_DOUBLE_CLICK_TEST',
+    });
   });
 });
