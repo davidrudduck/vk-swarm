@@ -14,7 +14,11 @@ export async function generateChallenge(verifier: string): Promise<string> {
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
   const subtle = globalThis.crypto?.subtle
   if (typeof subtle?.digest === 'function') {
-    return new Uint8Array(await subtle.digest('SHA-256', data as BufferSource))
+    try {
+      return new Uint8Array(await subtle.digest('SHA-256', data as BufferSource))
+    } catch {
+      return sha256Fallback(data)
+    }
   }
   return sha256Fallback(data)
 }

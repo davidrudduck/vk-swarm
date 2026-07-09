@@ -145,6 +145,7 @@ function OAuthCallbackPage() {
 
         localStorage.setItem('access_token', access_token)
         clearVerifier()
+        clearInvitationToken()
 
         setIsRedirecting(true)
         window.location.assign(safeReturnTo)
