@@ -18,7 +18,8 @@ export const oauthApi = {
   async init(
     provider: OAuthProvider,
     returnTo: string,
-    appChallenge: string
+    appChallenge: string,
+    signal?: AbortSignal
   ): Promise<HandoffInitResponse> {
     const response = await makeRequest(`${API_BASE}/v1/oauth/web/init`, {
       method: 'POST',
@@ -27,6 +28,7 @@ export const oauthApi = {
         return_to: returnTo,
         app_challenge: appChallenge,
       }),
+      signal,
     });
 
     if (!response.ok) {

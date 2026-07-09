@@ -63,7 +63,7 @@ export default function InvitationCompletePage() {
 
         if (abortController.signal.aborted) return
 
-        const result = await acceptInvitation(token, access_token)
+        const result = await acceptInvitation(token, access_token, abortController.signal)
 
         if (abortController.signal.aborted) return
 
@@ -80,9 +80,9 @@ export default function InvitationCompletePage() {
           window.location.assign(`${appBase}`)
         }, 2000)
       } catch (e) {
+        if (abortController.signal.aborted) return
         clearVerifier()
         clearInvitationToken()
-        if (abortController.signal.aborted) return
         setError(e instanceof Error ? e.message : 'Failed to complete invitation')
       }
     }

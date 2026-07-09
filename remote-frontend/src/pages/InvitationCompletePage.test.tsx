@@ -50,7 +50,7 @@ describe('InvitationCompletePage storage handoff', () => {
 
     await waitFor(() => {
       expect(redeemOAuth).toHaveBeenCalledWith('handoff-123', 'app-code-456', 'stored-verifier', expect.any(AbortSignal))
-      expect(acceptInvitation).toHaveBeenCalledWith('url-token', 'access-123')
+      expect(acceptInvitation).toHaveBeenCalledWith('url-token', 'access-123', expect.any(AbortSignal))
     })
     expect(screen.getByText('Invitation accepted!')).toBeInTheDocument()
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()

@@ -4,6 +4,7 @@ import {
   type HandoffInitResponse,
   type HandoffRedeemResponse,
 } from './lib/api/oauth';
+import { makeRequest, ApiError } from './lib/api/utils';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -33,10 +34,10 @@ export const redeemOAuth = (
   signal?: AbortSignal
 ) => oauthApi.redeem(handoffId, appCode, appVerifier, signal);
 
-export async function getInvitation(token: string): Promise<Invitation> {
-  const res = await fetch(`${API_BASE}/v1/invitations/${token}`);
+export async function getInvitation(token: string, signal?: AbortSignal): Promise<Invitation> {
+  const res = await makeRequest(`${API_BASE}/v1/invitations/${token}`, { signal });
   if (!res.ok) {
-    throw new Error(`Invitation not found (${res.status})`);
+    throw new ApiError(`Invitation not found (${res.status})`, res.status, res);
   }
   return res.json();
 }
@@ -44,16 +45,17 @@ export async function getInvitation(token: string): Promise<Invitation> {
 export async function acceptInvitation(
   token: string,
   accessToken: string,
+  signal?: AbortSignal,
 ): Promise<AcceptInvitationResponse> {
-  const res = await fetch(`${API_BASE}/v1/invitations/${token}/accept`, {
+  const res = await makeRequest(`${API_BASE}/v1/invitations/${token}/accept`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
       Authorization: `Bearer ${accessToken}`,
     },
+    signal,
   });
   if (!res.ok) {
-    throw new Error(`Failed to accept invitation (${res.status})`);
+    throw new ApiError(`Failed to accept invitation (${res.status})`, res.status, res);
   }
   return res.json();
 }

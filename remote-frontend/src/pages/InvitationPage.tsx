@@ -23,15 +23,16 @@ export default function InvitationPage() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
+    const abortController = new AbortController()
     let active = true
-    getInvitation(token)
+    getInvitation(token, abortController.signal)
       .then((data) => {
         if (active) setData(data)
       })
       .catch((e) => {
         if (active) setFetchError(e instanceof Error ? e.message : 'Failed to load invitation')
       })
-    return () => { active = false }
+    return () => { active = false; abortController.abort() }
   }, [token])
 
   const handleOAuthLogin = async (provider: OAuthProvider) => {
