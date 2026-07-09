@@ -89,7 +89,7 @@ function ApiKeyItem({ apiKey, onRevoke, onUnblock, isPending }: ApiKeyItemProps)
             ) : isBlocked && apiKey.blocked_reason ? (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span>
+                  <span tabIndex={0} aria-label={apiKey.blocked_reason}>
                     <Badge variant="destructive">
                       <AlertTriangle className="h-3 w-3 mr-1" />
                       {t('settings.swarm.apiKeys.blocked', 'Blocked')}
@@ -174,6 +174,7 @@ export function NodeApiKeySection({
   const [pendingKeyCount, setPendingKeyCount] = useState<Map<string, number>>(new Map());
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const createAttemptRef = useRef(0);
+  const revealButtonRef = useRef<HTMLButtonElement>(null);
   const orgIdRef = useRef(organizationId);
   useEffect(() => { orgIdRef.current = organizationId; }, [organizationId]);
 
@@ -183,6 +184,12 @@ export function NodeApiKeySection({
     return () => { isMountedRef.current = false; };
   }, []);
   useEffect(() => () => clearTimeout(copyTimeoutRef.current), []);
+  // Focus the Reveal button when a secret is created (keyboard/SR UX).
+  useEffect(() => {
+    if (createdSecret && showCreateDialog) {
+      revealButtonRef.current?.focus();
+    }
+  }, [createdSecret, showCreateDialog]);
   // Reset all create/pending state when organizationId changes.
   // We intentionally run only on org change, not on every mutation/dialog state change.
   useEffect(() => {
@@ -297,6 +304,7 @@ export function NodeApiKeySection({
     setShowSecret(false);
     setCopied(false);
     setCopyFailed(false);
+    setError(null);
     clearTimeout(copyTimeoutRef.current);
   };
 
@@ -479,12 +487,13 @@ export function NodeApiKeySection({
                   data-secret-wrapper
                   data-hidden={!showSecret}
                   className="block p-3 rounded bg-muted text-sm break-all"
-                  aria-label={showSecret ? undefined : t('settings.swarm.apiKeys.secretHidden', 'API key secret (hidden)')}
+                  aria-label={showSecret ? t('settings.swarm.apiKeys.secretVisible', 'API key secret') : t('settings.swarm.apiKeys.secretHidden', 'API key secret (hidden)')}
                 >
                   {showSecret ? createdSecret : SECRET_MASK}
                 </code>
                 <div className="flex gap-2 items-center">
                   <Button
+                    ref={revealButtonRef}
                     variant="outline"
                     size="sm"
                     aria-pressed={showSecret}
@@ -520,7 +529,7 @@ export function NodeApiKeySection({
                     )}
                   </Button>
                   <span aria-live="polite" className="sr-only">
-                    {copied ? t('settings.swarm.apiKeys.copied', 'Copied!') : ''}
+                    {copied ? t('settings.swarm.apiKeys.copied', 'Copied!') : copyFailed ? t('settings.swarm.apiKeys.copyFailedSr', 'Copy failed') : ''}
                   </span>
                 </div>
                 {copyFailed && (

@@ -751,6 +751,8 @@
         "secretDescription": "Copy this secret now. It will not be shown again.",
         "copyToClipboard": "Copy to Clipboard",
         "copied": "Copied!",
+        "copyFailed": "Failed to copy. Please select and copy the secret manually.",
+        "copyFailedSr": "Copy failed",
         "showSecret": "Show secret",
         "hideSecret": "Hide secret",
         "nameLabel": "Key Name",
