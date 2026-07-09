@@ -467,6 +467,38 @@
         "loading": "現在のMCPサーバー設定を読み込み中..."
       }
     },
+    "swarm": {
+      "apiKeys": {
+        "title": "",
+        "description": "",
+        "create": "",
+        "createTitle": "",
+        "secretTitle": "",
+        "secretDescription": "",
+        "copyToClipboard": "",
+        "copied": "",
+        "showSecret": "",
+        "hideSecret": "",
+        "nameLabel": "",
+        "namePlaceholder": "",
+        "cancel": "",
+        "done": "",
+        "createAction": "",
+        "loading": "",
+        "empty": "",
+        "bound": "",
+        "unbound": "",
+        "created": "",
+        "lastUsed": "",
+        "revoked": "",
+        "blocked": "",
+        "revoke": "",
+        "revokeConfirm": "",
+        "unblock": "",
+        "unblockConfirm": "",
+        "error": ""
+      }
+    },
     "projects": {
       "title": "プロジェクト設定",
       "description": "プロジェクト固有のスクリプトと設定を構成します。",
