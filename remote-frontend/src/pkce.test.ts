@@ -34,6 +34,20 @@ describe('PKCE challenge generation', () => {
     expect(Array.from(subtleDigest.mock.calls[0][1] as Uint8Array)).toEqual([97, 98, 99])
   })
 
+  it('falls back to in-repo SHA-256 when crypto.subtle.digest throws', async () => {
+    subtleDigest.mockRejectedValue(new Error('quota exceeded'))
+    vi.stubGlobal('crypto', {
+      subtle: { digest: subtleDigest },
+      getRandomValues: vi.fn(),
+    })
+
+    await expect(generateChallenge('abc')).resolves.toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+    )
+
+    expect(subtleDigest).toHaveBeenCalledTimes(1)
+  })
+
   it('falls back to in-repo SHA-256 when crypto.subtle is unavailable', async () => {
     stubCryptoWithoutSubtle()
 

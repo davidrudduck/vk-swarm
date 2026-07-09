@@ -67,15 +67,6 @@ export default function InvitationPage() {
     )
   }
 
-  if (oauthError) {
-    return (
-      <ErrorCard
-        title="Sign-in failed"
-        body={oauthError}
-      />
-    )
-  }
-
   if (!data) {
     return <LoadingCard text="Loading invitation..." />
   }
@@ -104,6 +95,12 @@ export default function InvitationPage() {
             </span>
           </div>
         </div>
+
+        {oauthError && (
+          <div className="bg-red-50 border border-red-200 rounded p-3">
+            <p className="text-sm text-red-700">{oauthError}</p>
+          </div>
+        )}
 
         <div className="border-t border-gray-200 pt-4 space-y-3">
           <p className="text-sm text-gray-600">

@@ -104,8 +104,11 @@ describe('InvitationPage OAuth PKCE flow', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Continue with GitHub' }))
 
     await waitFor(() => {
-      expect(screen.getByText('Sign-in failed')).toBeInTheDocument()
       expect(screen.getByText('OAuth init failed')).toBeInTheDocument()
     })
+    // Verify the invitation card is still visible (not replaced by ErrorCard)
+    expect(screen.getByText("You've been invited")).toBeInTheDocument()
+    // Verify OAuth buttons are still visible for retry
+    expect(screen.getByRole('button', { name: 'Continue with GitHub' })).toBeInTheDocument()
   })
 })
