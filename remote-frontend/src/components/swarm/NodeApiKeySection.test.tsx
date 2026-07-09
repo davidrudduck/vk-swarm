@@ -490,7 +490,7 @@ describe('NodeApiKeySection', () => {
     await u.click(screen.getByRole('button', { name: 'Create' }));
     await waitFor(() => {
       expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByText(/E_DENIED/)).toBeInTheDocument();
+      expect(screen.getByText(/Failed/)).toBeInTheDocument();
     });
   });
 
@@ -803,8 +803,8 @@ describe('NodeApiKeySection', () => {
       node_id: null, takeover_count: 0, takeover_window_start: null,
       blocked_at: '2026-01-02T00:00:00Z', blocked_reason: 'Duplicate',
     }];
-    let resolveUnblock: (v: unknown) => void;
-    const unblockPromise = new Promise((resolve) => { resolveUnblock = resolve; });
+    let rejectUnblock: (v: unknown) => void;
+    const unblockPromise = new Promise((_, reject) => { rejectUnblock = reject; });
     vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
     vi.mocked(nodesApi.unblockApiKey).mockReturnValue(unblockPromise as ReturnType<typeof nodesApi.unblockApiKey>);
     const result = renderWith(<NodeApiKeySection organizationId="org-1" />);
@@ -815,7 +815,7 @@ describe('NodeApiKeySection', () => {
         <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
       </QueryClientProvider>
     );
-    resolveUnblock!(new Error('unblock failed'));
+    rejectUnblock!(new Error('unblock failed'));
     await waitFor(() => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });

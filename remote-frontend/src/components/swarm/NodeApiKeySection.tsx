@@ -49,6 +49,7 @@ function parseErrorMessage(err: unknown): string {
     if (typeof parsed === 'object' && parsed !== null) {
       if (typeof parsed.message === 'string' && parsed.message) return parsed.message;
       if (typeof parsed.error === 'string' && parsed.error) return parsed.error;
+      return 'Failed';
     }
     return raw || 'Failed';
   } catch {
@@ -252,7 +253,10 @@ export function NodeApiKeySection({
     setError(null);
     if (isMountedRef.current) setPendingKeyCount(prev => new Map(prev).set(keyId, (prev.get(keyId) ?? 0) + 1));
     revokeMutation.mutate({ keyId, orgId: orgIdRef.current }, {
-      onSettled: () => { if (isMountedRef.current) setPendingKeyCount(prev => { const next = new Map(prev); const count = (next.get(keyId) ?? 1) - 1; if (count <= 0) next.delete(keyId); else next.set(keyId, count); return next; }); },
+      onSettled: (_data, _err, vars) => {
+        if (vars.orgId !== orgIdRef.current) return;
+        if (isMountedRef.current) setPendingKeyCount(prev => { const next = new Map(prev); const count = (next.get(keyId) ?? 1) - 1; if (count <= 0) next.delete(keyId); else next.set(keyId, count); return next; });
+      },
     });
   };
   const handleUnblock = (keyId: string) => {
@@ -260,7 +264,10 @@ export function NodeApiKeySection({
     setError(null);
     if (isMountedRef.current) setPendingKeyCount(prev => new Map(prev).set(keyId, (prev.get(keyId) ?? 0) + 1));
     unblockMutation.mutate({ keyId, orgId: orgIdRef.current }, {
-      onSettled: () => { if (isMountedRef.current) setPendingKeyCount(prev => { const next = new Map(prev); const count = (next.get(keyId) ?? 1) - 1; if (count <= 0) next.delete(keyId); else next.set(keyId, count); return next; }); },
+      onSettled: (_data, _err, vars) => {
+        if (vars.orgId !== orgIdRef.current) return;
+        if (isMountedRef.current) setPendingKeyCount(prev => { const next = new Map(prev); const count = (next.get(keyId) ?? 1) - 1; if (count <= 0) next.delete(keyId); else next.set(keyId, count); return next; });
+      },
     });
   };
 
@@ -389,9 +396,9 @@ export function NodeApiKeySection({
       <Dialog
         open={showCreateDialog}
         onOpenChange={(open) => {
-          if (!open && !createdSecret) closeDialog();
+          if (!open && !createdSecret && !createMutation.isPending) closeDialog();
         }}
-        uncloseable={!!createdSecret}
+        uncloseable={!!createdSecret || createMutation.isPending}
       >
         <DialogContent>
           {!createdSecret ? (
