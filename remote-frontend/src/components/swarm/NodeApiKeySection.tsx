@@ -274,7 +274,6 @@ export function NodeApiKeySection({
     setCreatedSecret(null);
     setShowSecret(false);
     setCopied(false);
-    setError(null);
     clearTimeout(copyTimeoutRef.current);
   };
 
