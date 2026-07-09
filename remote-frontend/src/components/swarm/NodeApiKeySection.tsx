@@ -206,9 +206,9 @@ export function NodeApiKeySection({
       nodesApi.createApiKey({ organization_id: orgId, name }),
     onMutate: () => createAttemptRef.current,
     onSuccess: (response, { orgId }, attemptId) => {
+      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
       if (attemptId !== createAttemptRef.current) return;
       if (orgId !== orgIdRef.current) return;
-      queryClient.invalidateQueries({ queryKey: ['nodeApiKeys', orgId] });
       if (!isMountedRef.current) return;
       setError(null);
       setCreatedSecret(response.secret);
