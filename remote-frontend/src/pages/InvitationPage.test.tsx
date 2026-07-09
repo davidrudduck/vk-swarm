@@ -67,7 +67,8 @@ describe('InvitationPage OAuth PKCE flow', () => {
       expect(initOAuth).toHaveBeenCalledWith(
         'github',
         expect.stringContaining('/invitations/invite-token/complete'),
-        expect.stringMatching(/^[0-9a-f]{64}$/)
+        expect.stringMatching(/^[0-9a-f]{64}$/),
+        expect.any(AbortSignal)
       )
     })
     expect(sessionStorage.getItem('oauth_verifier')).toMatch(/^[A-Za-z0-9_-]+$/)

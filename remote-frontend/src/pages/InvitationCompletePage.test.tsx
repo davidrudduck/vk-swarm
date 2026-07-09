@@ -59,6 +59,8 @@ describe('InvitationCompletePage storage handoff', () => {
   })
 
   it('shows error when oauthError param is present', async () => {
+    sessionStorage.setItem('oauth_verifier', 'stored-verifier')
+    sessionStorage.setItem('invitation_token', 'stored-token')
     render(
       <MemoryRouter initialEntries={['/invitations/url-token/complete?error=access_denied']}>
         <Routes>
@@ -70,6 +72,8 @@ describe('InvitationCompletePage storage handoff', () => {
     await waitFor(() => {
       expect(screen.getByText('OAuth error: access_denied')).toBeInTheDocument()
     })
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
   })
 
   it('shows error when stored verifier is missing', async () => {
@@ -84,6 +88,7 @@ describe('InvitationCompletePage storage handoff', () => {
     await waitFor(() => {
       expect(screen.getByText('OAuth session lost. Please try again.')).toBeInTheDocument()
     })
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
   })
 
   it('shows error when invitation token is missing', async () => {
@@ -104,6 +109,7 @@ describe('InvitationCompletePage storage handoff', () => {
     await waitFor(() => {
       expect(screen.getByText('Invitation token lost. Please try again.')).toBeInTheDocument()
     })
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
   })
 
   it('shows error when redeemOAuth fails', async () => {
@@ -140,6 +146,8 @@ describe('InvitationCompletePage storage handoff', () => {
   })
 
   it('shows error when handoff_id and app_code are missing', async () => {
+    sessionStorage.setItem('oauth_verifier', 'stored-verifier')
+    sessionStorage.setItem('invitation_token', 'stored-token')
     render(
       <MemoryRouter initialEntries={['/invitations/url-token/complete']}>
         <Routes>
@@ -151,5 +159,7 @@ describe('InvitationCompletePage storage handoff', () => {
     await waitFor(() => {
       expect(screen.getByText('Missing OAuth parameters. Please try the invitation link again.')).toBeInTheDocument()
     })
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
   })
 })

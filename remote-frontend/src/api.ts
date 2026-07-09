@@ -26,7 +26,12 @@ export type AcceptInvitationResponse = {
 export type { OAuthProvider, HandoffInitResponse, HandoffRedeemResponse };
 
 // Re-export OAuth functions for backwards compatibility
-export const initOAuth = oauthApi.init.bind(oauthApi);
+export const initOAuth = (
+  provider: OAuthProvider,
+  returnTo: string,
+  appChallenge: string,
+  signal?: AbortSignal
+) => oauthApi.init(provider, returnTo, appChallenge, signal);
 export const redeemOAuth = (
   handoffId: string,
   appCode: string,
