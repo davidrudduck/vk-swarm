@@ -113,5 +113,6 @@ describe('InvitationPage OAuth PKCE flow', () => {
     // Verify sessionStorage cleanup
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
     expect(sessionStorage.getItem('invitation_token')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 })

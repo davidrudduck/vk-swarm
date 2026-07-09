@@ -74,6 +74,7 @@ describe('InvitationCompletePage storage handoff', () => {
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
     expect(sessionStorage.getItem('invitation_token')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 
   it('shows error when stored verifier is missing', async () => {
@@ -89,6 +90,7 @@ describe('InvitationCompletePage storage handoff', () => {
       expect(screen.getByText('OAuth session lost. Please try again.')).toBeInTheDocument()
     })
     expect(sessionStorage.getItem('invitation_token')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 
   it('shows error when invitation token is missing', async () => {
@@ -110,6 +112,7 @@ describe('InvitationCompletePage storage handoff', () => {
       expect(screen.getByText('Invitation token lost. Please try again.')).toBeInTheDocument()
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 
   it('shows error when redeemOAuth fails', async () => {
@@ -124,6 +127,7 @@ describe('InvitationCompletePage storage handoff', () => {
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
     expect(sessionStorage.getItem('invitation_token')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 
   it('shows error when acceptInvitation fails after successful redeem', async () => {
@@ -161,5 +165,6 @@ describe('InvitationCompletePage storage handoff', () => {
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
     expect(sessionStorage.getItem('invitation_token')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 })

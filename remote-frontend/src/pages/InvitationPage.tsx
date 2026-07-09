@@ -47,7 +47,7 @@ export default function InvitationPage() {
 
       const appBase =
         import.meta.env.VITE_APP_BASE_URL || window.location.origin
-      const returnTo = `${appBase}/invitations/${token}/complete`
+      const returnTo = `${appBase}/invitations/${encodeURIComponent(token)}/complete`
 
       const result = await initOAuth(provider, returnTo, challenge)
       window.location.assign(result.authorize_url)

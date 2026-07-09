@@ -14,7 +14,6 @@ export default function InvitationCompletePage() {
   const qp = useMemo(() => new URLSearchParams(search), [search])
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
-  const [orgSlug, setOrgSlug] = useState<string | null>(null)
 
   const handoffId = qp.get('handoff_id')
   const appCode = qp.get('app_code')
@@ -63,7 +62,7 @@ export default function InvitationCompletePage() {
 
         if (abortController.signal.aborted) return
 
-        const result = await acceptInvitation(token, access_token, abortController.signal)
+        await acceptInvitation(token, access_token, abortController.signal)
 
         if (abortController.signal.aborted) return
 
@@ -72,7 +71,6 @@ export default function InvitationCompletePage() {
         localStorage.setItem('access_token', access_token)
 
         setSuccess(true)
-        setOrgSlug(result.organization_slug)
 
         timer = setTimeout(() => {
           const appBase =
@@ -108,7 +106,7 @@ export default function InvitationCompletePage() {
     return (
       <StatusCard
         title="Invitation accepted!"
-        body={orgSlug ? `Redirecting to ${orgSlug}...` : 'Redirecting...'}
+        body="Redirecting..."
         isSuccess
       />
     )
