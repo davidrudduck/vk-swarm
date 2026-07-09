@@ -231,6 +231,7 @@ describe('AppRouter', () => {
     })
     vi.mocked(initOAuth).mockRejectedValue(new Error('Network error'))
     stubGetRandomValuesOnlyCrypto()
+    localStorage.setItem('access_token', 'stale-token')
 
     renderWithRouter('/login')
 
@@ -241,6 +242,7 @@ describe('AppRouter', () => {
     })
     expect(screen.getByRole('button', { name: 'Sign in with GitHub' })).not.toBeDisabled()
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 
   it('login: displays error from URL query parameter', async () => {

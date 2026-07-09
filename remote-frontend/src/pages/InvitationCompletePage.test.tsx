@@ -137,6 +137,7 @@ describe('InvitationCompletePage storage handoff', () => {
   it('shows error when acceptInvitation fails after successful redeem', async () => {
     sessionStorage.setItem('oauth_verifier', 'stored-verifier')
     sessionStorage.setItem('invitation_token', 'stored-token')
+    localStorage.setItem('access_token', 'stale-token')
     vi.mocked(redeemOAuth).mockResolvedValue({
       access_token: 'access-123',
       refresh_token: 'refresh-123',
@@ -156,6 +157,7 @@ describe('InvitationCompletePage storage handoff', () => {
   it('shows error when handoff_id and app_code are missing', async () => {
     sessionStorage.setItem('oauth_verifier', 'stored-verifier')
     sessionStorage.setItem('invitation_token', 'stored-token')
+    localStorage.setItem('access_token', 'stale-token')
     render(
       <MemoryRouter initialEntries={['/invitations/url-token/complete']}>
         <Routes>

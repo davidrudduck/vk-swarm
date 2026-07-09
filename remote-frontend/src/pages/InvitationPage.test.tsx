@@ -100,6 +100,7 @@ describe('InvitationPage OAuth PKCE flow', () => {
     })
     vi.mocked(initOAuth).mockRejectedValue(new Error('OAuth init failed'))
     stubGetRandomValuesOnlyCrypto()
+    localStorage.setItem('access_token', 'stale-token')
 
     renderInvitationAccept()
 
