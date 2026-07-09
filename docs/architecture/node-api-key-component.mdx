@@ -20,7 +20,7 @@ remote-frontend/src/pages/
 └── Nodes.test.tsx                 # Integration tests (6 cases, including TS8)
 
 frontend/src/i18n/locales/
-├── en/settings.json               # English locale keys (lines 744-776)
+├── en/settings.json               # English locale keys (lines 744-791, includes copyFailed/copyFailedSr)
 ├── es/settings.json               # Spanish (empty stubs)
 ├── ja/settings.json               # Japanese (empty stubs)
 └── ko/settings.json               # Korean (empty stubs)
@@ -123,6 +123,10 @@ t('settings.swarm.apiKeys.title', 'Node API Keys')
 
 The `remote-frontend` does not currently initialize an i18n instance — the inline English fallbacks render at runtime. The locale files in `frontend/src/i18n/locales/` are prepared for future localization.
 
+Notable i18n keys added in the final review:
+- `settings.swarm.apiKeys.copyFailed` — visible copy-failure message (shown below Copy button)
+- `settings.swarm.apiKeys.copyFailedSr` — screen-reader announcement on copy failure (via `aria-live` region)
+
 ## Testing
 
 ### Test Structure
@@ -212,3 +216,7 @@ This renders above the node grid, gated on `orgId` being present. The `useOrgani
 - [Node API Key Management](../features/node-api-key-management.mdx) — User-facing feature documentation
 - [Database: Node API Keys](./db/functions/postgresql-node-api-keys.mdx) — Backend storage and functions
 - [Swarm API Patterns](./swarm-api-patterns.mdx) — General API request flow patterns
+
+## Admin Documentation
+
+Admin-specific documentation is **not applicable** for this component. The Hive UI has no role model — all org members see all controls (see Design Decisions). There are no admin-only settings, service configurations, or administrative overrides for API key management. All management operations (create, revoke, unblock) are available to any authenticated org member.
