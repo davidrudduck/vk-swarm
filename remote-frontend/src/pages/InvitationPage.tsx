@@ -23,9 +23,15 @@ export default function InvitationPage() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
+    let active = true
     getInvitation(token)
-      .then(setData)
-      .catch((e) => setFetchError(e.message))
+      .then((data) => {
+        if (active) setData(data)
+      })
+      .catch((e) => {
+        if (active) setFetchError(e instanceof Error ? e.message : 'Failed to load invitation')
+      })
+    return () => { active = false }
   }, [token])
 
   const handleOAuthLogin = async (provider: OAuthProvider) => {

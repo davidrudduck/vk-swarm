@@ -32,10 +32,7 @@ function LoginPage() {
   const [error, setError] = useState<string | null>(searchParams.get('error'))
 
   useEffect(() => {
-    const urlError = searchParams.get('error')
-    if (urlError) {
-      setError(urlError)
-    }
+    setError(searchParams.get('error'))
   }, [searchParams])
 
   const handleOAuthLogin = async (provider: OAuthProvider) => {

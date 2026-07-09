@@ -67,10 +67,11 @@ export default function InvitationCompletePage() {
 
         const result = await acceptInvitation(token, access_token)
 
-        if (!active) return
         clearVerifier()
         clearInvitationToken()
         localStorage.setItem('access_token', access_token)
+
+        if (!active) return
 
         setSuccess(true)
         setOrgSlug(result.organization_slug)
@@ -81,10 +82,10 @@ export default function InvitationCompletePage() {
           window.location.assign(`${appBase}`)
         }, 2000)
       } catch (e) {
-        if (!active) return
-        setError(e instanceof Error ? e.message : 'Failed to complete invitation')
         clearVerifier()
         clearInvitationToken()
+        if (!active) return
+        setError(e instanceof Error ? e.message : 'Failed to complete invitation')
       }
     }
 
