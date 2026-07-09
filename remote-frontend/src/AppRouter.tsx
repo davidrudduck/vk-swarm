@@ -155,7 +155,7 @@ function OAuthCallbackPage() {
         window.location.assign(safeReturnTo)
       } catch (err) {
         if (abortController.signal.aborted) return
-        const errorMsg = err instanceof Error ? err.message : 'Failed to complete OAuth'
+        const errorMsg = err instanceof Error || err instanceof DOMException ? err.message : 'Failed to complete OAuth'
         clearVerifier()
         clearInvitationToken()
         localStorage.removeItem('access_token')

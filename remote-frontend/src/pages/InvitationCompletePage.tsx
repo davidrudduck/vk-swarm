@@ -88,7 +88,8 @@ export default function InvitationCompletePage() {
         clearVerifier()
         clearInvitationToken()
         localStorage.removeItem('access_token')
-        setError(e instanceof Error ? e.message : 'Failed to complete invitation')
+        const message = e instanceof Error || e instanceof DOMException ? e.message : 'Failed to complete invitation'
+        setError(message)
       }
     }
 

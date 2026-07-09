@@ -127,6 +127,9 @@ describe('AppRouter', () => {
       refresh_token: 'refresh-123',
     })
     sessionStorage.setItem('oauth_verifier', 'stored-verifier')
+    sessionStorage.setItem('invitation_token', 'stored-token')
+    const mockAssign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign: mockAssign })
 
     renderWithRouter('/oauth/callback?handoff_id=handoff-123&app_code=app-code-456&return_to=/nodes')
 
@@ -135,6 +138,8 @@ describe('AppRouter', () => {
     })
     expect(localStorage.getItem('access_token')).toBe('access-123')
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
+    expect(mockAssign).toHaveBeenCalledWith('/nodes')
   })
 
   it('authenticated: hitting / redirects to /nodes', async () => {
@@ -258,6 +263,7 @@ describe('AppRouter', () => {
       isLoaded: true,
       profile: null,
     })
+    sessionStorage.setItem('invitation_token', 'stored-token')
     const mockAssign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign: mockAssign })
 
@@ -268,6 +274,7 @@ describe('AppRouter', () => {
       expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('access_denied'))
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
     expect(localStorage.getItem('access_token')).toBeNull()
   })
 
@@ -277,6 +284,7 @@ describe('AppRouter', () => {
       isLoaded: true,
       profile: null,
     })
+    sessionStorage.setItem('invitation_token', 'stored-token')
     const mockAssign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign: mockAssign })
 
@@ -287,6 +295,7 @@ describe('AppRouter', () => {
       expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('Missing%20OAuth%20parameters'))
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
     expect(localStorage.getItem('access_token')).toBeNull()
   })
 
@@ -296,6 +305,7 @@ describe('AppRouter', () => {
       isLoaded: true,
       profile: null,
     })
+    sessionStorage.setItem('invitation_token', 'stored-token')
     const mockAssign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign: mockAssign })
 
@@ -306,6 +316,7 @@ describe('AppRouter', () => {
       expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('OAuth%20session%20lost'))
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
     expect(localStorage.getItem('access_token')).toBeNull()
   })
 
@@ -317,6 +328,7 @@ describe('AppRouter', () => {
     })
     vi.mocked(oauthApi.redeem).mockRejectedValue(new Error('Redeem failed'))
     sessionStorage.setItem('oauth_verifier', 'stored-verifier')
+    sessionStorage.setItem('invitation_token', 'stored-token')
     const mockAssign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign: mockAssign })
 
@@ -327,6 +339,7 @@ describe('AppRouter', () => {
       expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('Redeem%20failed'))
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
     expect(localStorage.getItem('access_token')).toBeNull()
   })
 })
