@@ -43,7 +43,7 @@ function LoginPage() {
 
       storeVerifier(verifier)
 
-      const appBase = import.meta.env.VITE_APP_BASE_URL || window.location.origin
+      const appBase = (import.meta.env.VITE_APP_BASE_URL || window.location.origin).replace(/\/+$/, '')
       const returnTo = searchParams.get('return_to') || '/nodes'
       const callbackUrl = `${appBase}/oauth/callback?return_to=${encodeURIComponent(returnTo)}`
 

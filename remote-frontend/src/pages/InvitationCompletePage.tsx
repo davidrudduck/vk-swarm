@@ -80,8 +80,8 @@ export default function InvitationCompletePage() {
 
         timer = setTimeout(() => {
           const appBase =
-            import.meta.env.VITE_APP_BASE_URL || window.location.origin
-          window.location.assign(`${appBase}`)
+            (import.meta.env.VITE_APP_BASE_URL || window.location.origin).replace(/\/+$/, '')
+          window.location.assign(appBase)
         }, 2000)
       } catch (e) {
         if (abortController.signal.aborted) return

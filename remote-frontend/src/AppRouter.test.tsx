@@ -264,6 +264,7 @@ describe('AppRouter', () => {
       profile: null,
     })
     sessionStorage.setItem('invitation_token', 'stored-token')
+    localStorage.setItem('access_token', 'stale-token')
     const mockAssign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign: mockAssign })
 
@@ -285,6 +286,7 @@ describe('AppRouter', () => {
       profile: null,
     })
     sessionStorage.setItem('invitation_token', 'stored-token')
+    localStorage.setItem('access_token', 'stale-token')
     const mockAssign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign: mockAssign })
 
@@ -306,6 +308,7 @@ describe('AppRouter', () => {
       profile: null,
     })
     sessionStorage.setItem('invitation_token', 'stored-token')
+    localStorage.setItem('access_token', 'stale-token')
     const mockAssign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign: mockAssign })
 

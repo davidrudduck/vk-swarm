@@ -61,6 +61,7 @@ describe('InvitationCompletePage storage handoff', () => {
   it('shows error when oauthError param is present', async () => {
     sessionStorage.setItem('oauth_verifier', 'stored-verifier')
     sessionStorage.setItem('invitation_token', 'stored-token')
+    localStorage.setItem('access_token', 'stale-token')
     render(
       <MemoryRouter initialEntries={['/invitations/url-token/complete?error=access_denied']}>
         <Routes>
@@ -79,6 +80,7 @@ describe('InvitationCompletePage storage handoff', () => {
 
   it('shows error when stored verifier is missing', async () => {
     sessionStorage.setItem('invitation_token', 'stored-token')
+    localStorage.setItem('access_token', 'stale-token')
     vi.mocked(redeemOAuth).mockResolvedValue({
       access_token: 'access-123',
       refresh_token: 'refresh-123',
@@ -95,6 +97,7 @@ describe('InvitationCompletePage storage handoff', () => {
 
   it('shows error when invitation token is missing', async () => {
     sessionStorage.setItem('oauth_verifier', 'stored-verifier')
+    localStorage.setItem('access_token', 'stale-token')
     vi.mocked(redeemOAuth).mockResolvedValue({
       access_token: 'access-123',
       refresh_token: 'refresh-123',
@@ -118,6 +121,7 @@ describe('InvitationCompletePage storage handoff', () => {
   it('shows error when redeemOAuth fails', async () => {
     sessionStorage.setItem('oauth_verifier', 'stored-verifier')
     sessionStorage.setItem('invitation_token', 'stored-token')
+    localStorage.setItem('access_token', 'stale-token')
     vi.mocked(redeemOAuth).mockRejectedValue(new Error('OAuth redemption failed'))
 
     renderInvitationComplete()

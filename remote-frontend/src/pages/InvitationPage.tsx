@@ -46,7 +46,7 @@ export default function InvitationPage() {
       storeInvitationToken(token)
 
       const appBase =
-        import.meta.env.VITE_APP_BASE_URL || window.location.origin
+        (import.meta.env.VITE_APP_BASE_URL || window.location.origin).replace(/\/+$/, '')
       const returnTo = `${appBase}/invitations/${encodeURIComponent(token)}/complete`
 
       const result = await initOAuth(provider, returnTo, challenge)
