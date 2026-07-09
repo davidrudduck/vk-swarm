@@ -45,9 +45,11 @@ function parseErrorMessage(err: unknown): string {
   }
   try {
     const parsed = JSON.parse(raw);
-    return typeof parsed === 'object' && parsed !== null && typeof parsed.message === 'string'
-      ? parsed.message
-      : raw;
+    if (typeof parsed === 'object' && parsed !== null) {
+      if (typeof parsed.message === 'string') return parsed.message;
+      if (typeof parsed.error === 'string') return parsed.error;
+    }
+    return raw;
   } catch {
     return raw;
   }
