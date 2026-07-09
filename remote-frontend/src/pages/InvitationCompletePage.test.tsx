@@ -120,6 +120,25 @@ describe('InvitationCompletePage storage handoff', () => {
     expect(sessionStorage.getItem('invitation_token')).toBeNull()
   })
 
+  it('shows error when acceptInvitation fails after successful redeem', async () => {
+    sessionStorage.setItem('oauth_verifier', 'stored-verifier')
+    sessionStorage.setItem('invitation_token', 'stored-token')
+    vi.mocked(redeemOAuth).mockResolvedValue({
+      access_token: 'access-123',
+      refresh_token: 'refresh-123',
+    })
+    vi.mocked(acceptInvitation).mockRejectedValue(new Error('Accept failed'))
+
+    renderInvitationComplete()
+
+    await waitFor(() => {
+      expect(screen.getByText('Accept failed')).toBeInTheDocument()
+    })
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(sessionStorage.getItem('invitation_token')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
+  })
+
   it('shows error when handoff_id and app_code are missing', async () => {
     render(
       <MemoryRouter initialEntries={['/invitations/url-token/complete']}>
