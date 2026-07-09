@@ -1,0 +1,15 @@
+{
+  "done": true,
+  "files_changed": [
+    "remote-frontend/src/components/swarm/NodeApiKeySection.tsx",
+    "remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx"
+  ],
+  "stop_reason": "",
+  "evidence": [
+    "CONFORMS: task 001 passed all deterministic gates",
+    "A\tremote-frontend/src/components/swarm/NodeApiKeySection.test.tsx",
+    "A\tremote-frontend/src/components/swarm/NodeApiKeySection.tsx",
+    "typecheck: override command exit 0",
+    "tests: scope 'remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx' green"
+  ]
+}

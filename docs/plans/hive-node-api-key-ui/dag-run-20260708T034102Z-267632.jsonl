@@ -1,0 +1,2 @@
+{"task_id": "001", "status": "failed", "attempts": 0, "executor": "claude", "stop_reason": "precondition-violated:not-retried: remote-frontend/src/components/swarm/index.ts already exists (introduced by fe52c507)"}
+{"task_id": "001", "status": "failed", "attempts": 4, "executor": "claude", "stop_reason": "orchestrator-abort:gate-fail: Stage-1 gate rejected"}

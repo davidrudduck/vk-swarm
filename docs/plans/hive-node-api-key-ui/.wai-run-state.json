@@ -1,0 +1,25 @@
+{
+  "topic": "hive-node-api-key-ui",
+  "repoRoot": ".",
+  "completedTaskIds": [],
+  "failedTaskIds": [
+    "001"
+  ],
+  "pendingTaskIds": [
+    "002",
+    "003",
+    "004",
+    "005",
+    "006",
+    "007",
+    "008"
+  ],
+  "currentTaskId": null,
+  "blockedTaskIds": [],
+  "attempts": "001=4 002=4",
+  "reportJournal": "001\tfailed\t0\tclaude\tprecondition-violated:not-retried: remote-frontend/src/components/swarm/index.ts already exists (introduced by fe52c507)\n001\tfailed\t4\tclaude\torchestrator-abort:gate-fail: Stage-1 gate rejected",
+  "attentionItems": [],
+  "runId": "20260708T034102Z-267632",
+  "phase": "Failed",
+  "lastUpdated": "2026-07-08T04:31:10Z"
+}

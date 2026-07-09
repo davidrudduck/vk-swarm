@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "codex",
+    "exec",
+    "-C",
+    "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/backlog-node-api",
+    "--sandbox",
+    "read-only",
+    "--json",
+    "-"
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/backlog-node-api",
+  "exit_code": 0,
+  "finished_at": "2026-07-07T13:08:24.699534+00:00",
+  "notes": [],
+  "prompt_file": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/backlog-node-api/docs/plans/hive-node-api-key-ui/reviews/tournament-find-prompt.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/backlog-node-api/docs/plans/hive-node-api-key-ui/reviews/round-1-codex.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/backlog-node-api/docs/plans/hive-node-api-key-ui/reviews/round-1-codex.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-07T13:05:48.801599+00:00",
+  "status": "ok",
+  "task": "plan-review",
+  "tool": "codex",
+  "tool_version": "codex-cli 0.142.5"
+}

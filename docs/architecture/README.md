@@ -8,6 +8,7 @@ This folder contains technical architecture documentation for Vibe Kanban's inte
 |----------|-------------|
 | [Database Documentation](./db/README.md) | Complete database architecture, schema, and function reference |
 | [Frontend Task Sorting](./frontend-sorting.mdx) | Task sorting strategy, implementation, and state management |
+| [Node API Key Component](./node-api-key-component.mdx) | Architecture and implementation of the NodeApiKeySection component |
 
 ## Quick Reference
 

@@ -20,6 +20,16 @@ vi.mock('@/components/swarm/NodeCard', () => ({
   ),
 }));
 
+vi.mock('@/components/swarm', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@/components/swarm')>();
+  return {
+    ...mod,
+    NodeApiKeySection: ({ organizationId }: { organizationId: string }) => (
+      <div data-testid="node-api-key-section">org={organizationId}</div>
+    ),
+  };
+});
+
 import { useOrganizations } from '@/hooks/useOrganizations';
 import { nodesApi } from '@/lib/api';
 
@@ -73,8 +83,8 @@ describe('Nodes', () => {
 
     renderNodes();
 
-    // Should show the heading
     expect(screen.getByText('Nodes')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeInTheDocument();
   });
 
   it('renders "no nodes" message when no organization', async () => {
@@ -163,5 +173,25 @@ describe('Nodes', () => {
     await waitFor(() => {
       expect(screen.getByText('Failed to load nodes.')).toBeInTheDocument();
     });
+  });
+
+  it('renders the NodeApiKeySection when orgId is set, and omits it when orgId is undefined (TS8)', async () => {
+    const orgSet = { id: 'org1', name: 'Test Org', slug: 'test-org', is_personal: false, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' };
+    vi.mocked(useOrganizations).mockReturnValue(
+      createMockQuery<Organization[]>([orgSet], false, false, null)
+    );
+    vi.mocked(nodesApi.list).mockResolvedValue([]);
+    const { unmount } = renderNodes();
+    await waitFor(() => {
+      expect(screen.getByTestId('node-api-key-section')).toBeInTheDocument();
+      expect(screen.getByTestId('node-api-key-section').textContent).toBe('org=org1');
+    });
+    unmount();
+
+    vi.mocked(useOrganizations).mockReturnValue(
+      createMockQuery<Organization[]>([], false, false, null)
+    );
+    renderNodes();
+    expect(screen.queryByTestId('node-api-key-section')).not.toBeInTheDocument();
   });
 });

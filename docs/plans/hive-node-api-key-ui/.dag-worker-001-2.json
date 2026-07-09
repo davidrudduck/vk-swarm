@@ -1,0 +1,15 @@
+{
+  "done": true,
+  "files_changed": [
+    "remote-frontend/src/components/swarm/NodeApiKeySection.tsx",
+    "remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx"
+  ],
+  "stop_reason": "",
+  "evidence": [
+    "CONFORMS: task 001 passed all deterministic gates",
+    "Tests: scope 'remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx' green",
+    "Typecheck: exit 0",
+    "File-set: only declared files changed (2 paths), create: addition recorded",
+    "All 3 tests pass: TS1 (render without throwing), TS2 (empty state), TS3 (list rendering with badges and timestamps)"
+  ]
+}

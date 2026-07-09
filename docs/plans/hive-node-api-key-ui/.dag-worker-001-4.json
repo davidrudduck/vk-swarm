@@ -1,0 +1,15 @@
+{
+  "done": true,
+  "files_changed": [
+    "remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx",
+    "remote-frontend/src/components/swarm/NodeApiKeySection.tsx"
+  ],
+  "stop_reason": "",
+  "evidence": [
+    "WAI gate: task 001 passed all deterministic gates",
+    "CONFORMS: task 001 passed all deterministic gates",
+    "Test results: 3 tests passing (TS1, TS2, TS3)",
+    "TypeScript: no type errors",
+    "git log: commit 7f2d7eed dag-worker: 001"
+  ]
+}

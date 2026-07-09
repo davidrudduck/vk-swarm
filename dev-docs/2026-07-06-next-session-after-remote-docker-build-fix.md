@@ -1,5 +1,7 @@
 # Next Session — remote-docker-build-fix
 
+**Status: IN-FLIGHT** — PR #458 needs `/wai:ship` to merge. Round-4 adversarial findings unreviewed.
+
 ## Current State
 
 - **Workstream:** `remote-docker-build-fix`
