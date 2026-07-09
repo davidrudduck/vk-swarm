@@ -250,7 +250,6 @@ export function NodeApiKeySection({
   });
 
   const handleRevoke = (keyId: string) => {
-    if (revokeMutation.isPending) return;
     if (!confirm(t('settings.swarm.apiKeys.revokeConfirm', 'Are you sure you want to revoke this API key? Nodes using it will no longer be able to connect.'))) return;
     setError(null);
     if (isMountedRef.current) setPendingKeyCount(prev => new Map(prev).set(keyId, (prev.get(keyId) ?? 0) + 1));
@@ -262,7 +261,6 @@ export function NodeApiKeySection({
     });
   };
   const handleUnblock = (keyId: string) => {
-    if (unblockMutation.isPending) return;
     if (!confirm(t('settings.swarm.apiKeys.unblockConfirm', 'Are you sure you want to unblock this API key? The node will be able to connect again.'))) return;
     setError(null);
     if (isMountedRef.current) setPendingKeyCount(prev => new Map(prev).set(keyId, (prev.get(keyId) ?? 0) + 1));
@@ -433,6 +431,7 @@ export function NodeApiKeySection({
                 <Button
                   type="button"
                   variant="outline"
+                  disabled={createMutation.isPending}
                   onClick={closeDialog}
                 >
                   {t('settings.swarm.apiKeys.cancel', 'Cancel')}
