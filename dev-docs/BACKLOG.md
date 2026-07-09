@@ -12,7 +12,7 @@
 | F-2026-07-04-02 | orphan spec reference-architecture-alignment-design unreferenced pre-fork | low | wontfix | docs/superpowers/specs/2026-04-20-reference-architecture-alignment-design.md | sweep/2026-07-04 | 2026-07-04 | — | — |
 | F-2026-07-04-03 | stale repo-root PLAN.md planning doc | low | wontfix | PLAN.md | sweep/2026-07-04 | 2026-07-04 | — | — |
 | F-2026-07-04-04 | crisp-river uncommitted Cargo.toml doctest edits on merged branch | medium | open | crates/remote/Cargo.toml | sweep/2026-07-04 | 2026-07-04 | — | — |
-| F-2026-07-06-01 | Hive UI lacks Generate API key button — node onboarding blocked | high | open | remote-frontend/src/pages/Nodes.tsx:7-51 | session/2026-07-06 | 2026-07-06 | — | — |
+| F-2026-07-06-01 | Hive UI lacks Generate API key button — node onboarding blocked | high | shipped | remote-frontend/src/pages/Nodes.tsx:7-51 | session/2026-07-06 | 2026-07-06 | hive-node-api-key-ui | docs/superpowers/specs/2026-07-07-hive-node-api-key-ui.md |
 | F-2026-07-06-02 | Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined) | high | open | remote-frontend/src/pkce.ts:10 | session/2026-07-06 | 2026-07-06 | — | — |
 <!-- WAI:BACKLOG:END -->
 
@@ -48,3 +48,15 @@
   by any code on main, so its relevance depends on the crisp-river session's unmerged test
   changes. Per the user's instruction the crisp-river worktree is an ACTIVE session and must
   not be touched from here; the finding stays `open` and is owned by that session.
+
+### 2026-07-07 — F-2026-07-06-01 promoted
+
+- **F-2026-07-06-01 → promoted (workstream `hive-node-api-key-ui`).** The finding (Hive UI
+  lacks a Generate API Key button, blocking node onboarding) was promoted via
+  `/wai:finding-promote`. Intent spec at
+  `docs/superpowers/specs/2026-07-07-hive-node-api-key-ui.md`; workstream tracker at
+  `dev-docs/workstreams/hive-node-api-key-ui/README.md`. Confirmed the gap is UI-only: the
+  `/v1/nodes/api-keys` backend, the `remote-frontend` API client
+  (`nodesApi.{listApiKeys,createApiKey,revokeApiKey,unblockApiKey}`), and the
+  `NodeApiKey`/`CreateNodeApiKey*` types already exist. Next: `/wai:spec hive-node-api-key-ui`
+  to add the design, then `/wai:precheck`.

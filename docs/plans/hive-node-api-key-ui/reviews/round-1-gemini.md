@@ -1,0 +1,9 @@
+| # | severity | task | file:line (evidence) | issue (1 sentence) | remediation (concrete, applicable) |
+|---|----------|------|----------------------|--------------------|------------------------------------|
+| 1 | BLOCKING | 001 | remote-frontend/src/types/nodes.ts:63 | The task instructions use the nonexistent property `key_id` to determine the "Bound" badge state, but the actual type property is `node_id`. | Update Task 001 instructions to say "when `node_id`'s value is non-null" instead of `key_id`. |
+| 2 | BLOCKING | 004 | remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx:0 | Test `TS7` expects the interpolated error `boom` in the DOM, but the `useTranslation` mock from Task 001 discards interpolations, guaranteeing a test failure. | Update the `useTranslation` mock in Task 001 to include options (e.g., `(key, fallback, opts) => opts?.message ? key + opts.message : key`) or remove the `/boom/` assertion in `TS7`. |
+| 3 | BLOCKING | 001 | docs/superpowers/specs/2026-07-07-hive-node-api-key-ui.md:46 | Task 001 claims to cover SC3 but completely omits the `created` and `last-used` timestamps from its component layout instructions and the `TS3` test assertions. | Update Task 001 `ApiKeyItem` instructions to render the `created_at` and `last_used_at` timestamps and assert their presence in `TS3`. |
+| 4 | BLOCKING | 007 | frontend/src/i18n/locales/en/settings.json:743 | The Before-text anchor searches for `"promoteConfirm": "Promote"`, but the actual JSON uses `"confirm": "Promote"` nested inside a `"promoteDialog"` object. | Update Task 007's Before-text to match the actual JSON structure (`"promoteDialog": { ... "confirm": "Promote" }`). |
+
+FINDINGS: 4
+SELF-ASSESSMENT: These are concrete, file-backed errors mapping perfectly to Axes 8 (Control-flow/symbol), 7 (Untestable/HOLLOW), 9 (Fidelity), and 2 (Anchor mismatch) that would absolutely fail a real implementation pass.

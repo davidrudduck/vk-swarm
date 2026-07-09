@@ -1,0 +1,222 @@
+---
+title: "Node API Key Component"
+description: "Architecture and implementation details for the NodeApiKeySection component in the Hive remote-frontend"
+---
+
+The `NodeApiKeySection` is a React component in `remote-frontend/src/components/swarm/` that surfaces API key management on the Hive Nodes page. This document covers its architecture, data flow, testing strategy, and integration patterns for developers.
+
+## Component Architecture
+
+### File Layout
+
+```
+remote-frontend/src/components/swarm/
+├── NodeApiKeySection.tsx          # Component
+├── NodeApiKeySection.test.tsx     # Tests (36 test cases)
+└── index.ts                       # Barrel export (line 18)
+
+remote-frontend/src/pages/
+├── Nodes.tsx                      # Composition point (line 31)
+└── Nodes.test.tsx                 # Integration tests (6 cases, including TS8)
+
+frontend/src/i18n/locales/
+├── en/settings.json               # English locale keys (lines 744-791, includes copyFailed/copyFailedSr)
+├── es/settings.json               # Spanish (empty stubs)
+├── ja/settings.json               # Japanese (empty stubs)
+└── ko/settings.json               # Korean (empty stubs)
+```
+
+### Component Structure
+
+```
+NodeApiKeySection
+├── Card > CardHeader              # Title + "Generate API Key" button
+├── Alert (error, conditional)     # Rendered outside CardContent for visibility
+├── CardContent
+│   ├── Loader2 (loading, conditional)
+│   ├── empty-state text
+│   └── ApiKeyItem[]               # One per key
+└── Dialog                         # Create flow
+    ├── Name input + Create/Cancel
+    └── Secret reveal + Copy + show/hide
+```
+
+`ApiKeyItem` is an internal subcomponent (not exported) that renders a single key row with name, prefix, status badge, timestamps, and action button.
+
+### Data Flow
+
+The component uses TanStack Query hooks directly (no extracted custom hook):
+
+```typescript
+// List query — scoped by organizationId
+useQuery({
+  queryKey: ['nodeApiKeys', organizationId],
+  queryFn: () => nodesApi.listApiKeys(organizationId),
+  staleTime: 30_000,
+})
+
+// Mutations — each invalidates the list query on success
+useMutation({ mutationFn: nodesApi.createApiKey, ... })
+useMutation({ mutationFn: nodesApi.revokeApiKey, ... })
+useMutation({ mutationFn: nodesApi.unblockApiKey, ... })
+```
+
+All three mutations invalidate `['nodeApiKeys', orgId]` on success (using the org ID submitted in the mutation variables), while `orgIdRef` is used to ignore callbacks whose org context has changed. The `createMutation` also uses a per-attempt epoch counter (`createAttemptRef`) to guard against stale responses leaking secrets into a reopened dialog.
+
+### State Management
+
+| State | Type | Purpose |
+|-------|------|---------|
+| `showCreateDialog` | `boolean` | Controls dialog visibility |
+| `newKeyName` | `string` | Name input value |
+| `createdSecret` | `string \| null` | One-time secret after creation |
+| `showSecret` | `boolean` | Toggle secret visibility |
+| `copied` | `boolean` | Copy success feedback (auto-resets after 2s) |
+| `copyFailed` | `boolean` | Copy failure feedback (visible error + SR announcement) |
+| `error` | `string \| null` | Mutation error message |
+| `pendingKeyCount` | `Map<string, number>` | Tracks per-key in-flight mutation count |
+
+The `pendingKeyCount` Map uses a reference count per key, allowing concurrent mutations on the same key (e.g., rapid double-click). A key's button is disabled when its count is > 0. Revoke/unblock handlers also guard against double-submit via `isPending`.
+
+### Clipboard Handling
+
+The copy flow uses a two-tier strategy:
+
+1. **Primary**: `navigator.clipboard.writeText()` (modern browsers, secure contexts)
+2. **Fallback**: `document.execCommand('copy')` via a temporary textarea (HTTP contexts, older browsers)
+
+The textarea fallback is wrapped in `try/finally` to ensure cleanup. The `copyTimeoutRef` tracks the 2-second "Copied!" feedback timer and is cleared on unmount and dialog close. On copy failure, `copyFailed` is set to `true` and announced to screen readers via the existing `aria-live` region.
+
+### Focus Management
+
+When a secret is created, the Reveal button receives focus via `revealButtonRef` (a `useRef<HTMLButtonElement>`). This ensures keyboard and screen-reader users land on the most relevant action after the dialog transitions from the name-input form to the secret-reveal view.
+
+### Dialog Behavior
+
+The create dialog has two states:
+
+1. **Name input view**: Shows name field + Create/Cancel buttons
+2. **Secret reveal view**: Shows the one-time secret + Copy/Reveal/Hide/Done buttons
+
+When `createdSecret` is set or a create mutation is pending, the dialog becomes `uncloseable` (via the Dialog component's prop) — the backdrop click is disabled while the secret is shown or the request is in flight. This prevents accidental secret loss.
+
+## API Integration
+
+The component uses the existing `nodesApi` client from `remote-frontend/src/lib/api/nodes.ts`:
+
+| Function | Endpoint | Used By |
+|----------|----------|---------|
+| `listApiKeys(orgId)` | `GET /v1/nodes/api-keys?organization_id=...` | `useQuery` |
+| `createApiKey({ organization_id, name })` | `POST /v1/nodes/api-keys` | `createMutation` |
+| `revokeApiKey(keyId)` | `DELETE /v1/nodes/api-keys/:id` | `revokeMutation` |
+| `unblockApiKey(keyId)` | `POST /v1/nodes/api-keys/:id/unblock` | `unblockMutation` |
+
+Types are defined in `remote-frontend/src/types/nodes.ts` (lines 46-75): `NodeApiKey`, `CreateNodeApiKeyRequest`, `CreateNodeApiKeyResponse`.
+
+## i18n
+
+All user-facing strings use `useTranslation(['settings', 'common'])` with keys under `settings.swarm.apiKeys.*`. English fallbacks are passed as the second argument to `t()`:
+
+```typescript
+t('settings.swarm.apiKeys.title', 'Node API Keys')
+```
+
+The `remote-frontend` does not currently initialize an i18n instance — the inline English fallbacks render at runtime. The locale files in `frontend/src/i18n/locales/` are prepared for future localization.
+
+Notable i18n keys added in the final review:
+- `settings.swarm.apiKeys.copyFailed` — visible copy-failure message (shown below Copy button)
+- `settings.swarm.apiKeys.copyFailedSr` — screen-reader announcement on copy failure (via `aria-live` region)
+
+## Testing
+
+### Test Structure
+
+The test file (`NodeApiKeySection.test.tsx`) contains 36 test cases. Integration with `Nodes.tsx` is covered by `Nodes.test.tsx` (TS8 plus 5 other tests).
+
+| Test | Coverage |
+|------|----------|
+| TS1 | Renders without throwing when loading |
+| TS2 | Empty state when no keys |
+| TS3 | Key list with name, prefix, badges, timestamps |
+| TS4 | Create dialog → secret reveal → show/hide → copy → done |
+| TS5 | Revoke with confirm() + query invalidation |
+| TS5b | Revoke invalidation targets the org active when mutation started |
+| TS6 | Blocked badge + unblock with confirm() |
+| TS7 | Mutation error surfaces in Alert |
+| TS9 | All i18n keys exist in en locale |
+| TS10 | Revoked key renders "Revoked" badge, no action button |
+| TS11 | Last-used timestamp present/absent |
+| TS12 | Empty organizationId returns null |
+| TS13 | Unblock mutation error surfaces in Alert |
+| TS14 | Primary clipboard path (navigator.clipboard.writeText) |
+| TS15 | Dialog close via X button clears state |
+| TS16a | parseErrorMessage handles string rejection |
+| TS16b | parseErrorMessage handles null rejection |
+| TS16c | parseErrorMessage handles plain object rejection |
+| TS16d | parseErrorMessage extracts message from JSON error body |
+| TS17 | Revoke mutation error surfaces in Alert |
+| TS18 | Enter key submits create form |
+| TS19 | Blocked key with null blocked_reason renders without tooltip |
+| TS20 | Unblock button re-enabled after failed unblock mutation |
+| TS21 | Revoke button re-enabled after failed revoke mutation |
+| TS22 | Load-error Alert when listApiKeys rejects |
+| TS23 | Close button hidden when secret is shown (uncloseable) |
+| TS24 | listApiKeys not called when organizationId is empty |
+| TS25 | Org-change while dialog is open resets all state |
+| TS26 | execCommand returning false shows no Copied! feedback |
+| TS27 | Clipboard writeText rejection handled gracefully |
+| TS16e | parseErrorMessage handles symbol rejection |
+| TS16f | parseErrorMessage handles circular reference object |
+| TS16g | parseErrorMessage extracts {error} key from JSON body |
+| TS16h | parseErrorMessage handles Error with JSON-parseable primitive message |
+| TS5c | Unblock error after org change not shown |
+| TS28 | Double-click create guard (only 1 mutation) |
+
+### Mocking Strategy
+
+- `react-i18next` is mocked to return fallback strings (not keys)
+- `nodesApi` functions are mocked with `vi.fn()`
+- `@testing-library/user-event` is used for realistic click interactions
+- `navigator.clipboard` and `document.execCommand` are saved/restored per test
+
+### Coverage
+
+Coverage is tracked via `@vitest/coverage-v8`. Approximate bands:
+
+| Metric | Coverage |
+|--------|----------|
+| Statements | ~91% |
+| Branches | ~80% |
+| Functions | ~97% |
+| Lines | 100% |
+
+## Composition in Nodes.tsx
+
+The component is composed into `Nodes.tsx` at line 31:
+
+```tsx
+{orgId && <NodeApiKeySection organizationId={orgId} />}
+```
+
+This renders above the node grid, gated on `orgId` being present. The `useOrganizations` hook in `Nodes.tsx` owns the org-loading logic; the section receives `organizationId` as a prop.
+
+## Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| No `isAdmin` prop | Hive UI has no role model; all org members see all controls |
+| `confirm()` for destructive actions | Matches frontend reference pattern; prompts the user with a confirmation prompt before revoke/unblock |
+| `useQuery`/`useMutation` inline | Component is the only consumer; hook extraction is premature |
+| No new Settings page | Section lives on the Nodes page per spec |
+| Per-key pending tracking | Prevents disabling all buttons when one key is being acted on |
+| `uncloseable` dialog for secret | Prevents accidental secret loss via backdrop click; also locked during create-pending |
+
+## Related Documentation
+
+- [Node API Key Management](../features/node-api-key-management.mdx) — User-facing feature documentation
+- [Database: Node API Keys](./db/functions/postgresql-node-api-keys.mdx) — Backend storage and functions
+- [Swarm API Patterns](./swarm-api-patterns.mdx) — General API request flow patterns
+
+## Admin Documentation
+
+Admin-specific documentation is **not applicable** for this component. The Hive UI has no role model — all org members see all controls (see Design Decisions). There are no admin-only settings, service configurations, or administrative overrides for API key management. All management operations (create, revoke, unblock) are available to any authenticated org member.

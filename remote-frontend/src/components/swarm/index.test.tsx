@@ -3,6 +3,7 @@ import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import {
+  NodeApiKeySection,
   NodeCard,
   NodeProjectsSection,
   NodeTemplatesSection,
@@ -80,6 +81,10 @@ vi.mock('@/hooks/useSwarmTemplates', () => ({
 vi.mock('@/lib/api', () => ({
   nodesApi: {
     list: vi.fn(),
+    listApiKeys: vi.fn().mockResolvedValue([]),
+    createApiKey: vi.fn(),
+    revokeApiKey: vi.fn(),
+    unblockApiKey: vi.fn(),
   },
   swarmProjectsApi: {
     list: vi.fn(),
@@ -279,6 +284,12 @@ describe('Swarm Components', () => {
           onUnlinkNode={() => {}}
         />
       );
+    }).not.toThrow();
+  });
+
+  it('renders NodeApiKeySection without throwing (smoke test from the barrel)', () => {
+    expect(() => {
+      renderWithProviders(<NodeApiKeySection organizationId="test-org" />);
     }).not.toThrow();
   });
 });

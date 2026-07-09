@@ -1,0 +1,16 @@
+{
+  "done": true,
+  "files_changed": [
+    "remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx",
+    "remote-frontend/src/components/swarm/NodeApiKeySection.tsx"
+  ],
+  "stop_reason": "",
+  "evidence": [
+    "git show --stat HEAD: 2 files changed, 215 insertions(+)",
+    "WAI gate: CONFORMS: task 001 passed all deterministic gates",
+    "typecheck: override command exit 0",
+    "tests: scope 'remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx' green",
+    "Test Files  1 passed (1)",
+    "Tests  3 passed (3)"
+  ]
+}

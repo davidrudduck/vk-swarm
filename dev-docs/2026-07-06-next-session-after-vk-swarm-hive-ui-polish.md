@@ -1,5 +1,7 @@
 # Next Session After vk-swarm-hive-ui-polish
 
+**Status: IN-FLIGHT** — PR #457 needs `/wai:ship` to merge.
+
 **Workstream:** vk-swarm-hive-ui-polish (remote-frontend error resilience + offline PWA)
 **Current state:** PR #457 open, all gates green, code-review converged, `/wai:close` ran (spec still `status: active`), `/wai:ship` pending
 **Branch:** `opencode/proud-panda`
