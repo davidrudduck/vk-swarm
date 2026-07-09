@@ -1,5 +1,5 @@
 import { createBrowserRouter, RouterProvider, Navigate, useSearchParams } from 'react-router-dom'
-import { useEffect, useState, lazy, Suspense, useRef } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { useProfile } from '@/components/ProfileProvider'
 import { NormalLayout } from '@/components/layout/NormalLayout'
 import InvitationPage from './pages/InvitationPage'
@@ -105,11 +105,9 @@ export function isSafeReturnTo(url: string): boolean {
 function OAuthCallbackPage() {
   const [searchParams] = useSearchParams()
   const [isRedirecting, setIsRedirecting] = useState(false)
-  const hasRun = useRef(false)
 
   useEffect(() => {
-    if (hasRun.current) return
-    hasRun.current = true
+    const abortController = new AbortController()
 
     const completeOAuth = async () => {
       const handoffId = searchParams.get('handoff_id')
@@ -120,12 +118,14 @@ function OAuthCallbackPage() {
 
       if (oauthError) {
         clearVerifier()
+        clearInvitationToken()
         window.location.assign(`/login?error=${encodeURIComponent(`OAuth error: ${oauthError}`)}`)
         return
       }
 
       if (!handoffId || !appCode) {
         clearVerifier()
+        clearInvitationToken()
         window.location.assign(`/login?error=${encodeURIComponent('Missing OAuth parameters')}`)
         return
       }
@@ -141,19 +141,24 @@ function OAuthCallbackPage() {
 
         const { access_token } = await oauthApi.redeem(handoffId, appCode, appVerifier)
 
+        if (abortController.signal.aborted) return
+
         localStorage.setItem('access_token', access_token)
         clearVerifier()
 
         setIsRedirecting(true)
         window.location.assign(safeReturnTo)
       } catch (err) {
+        if (abortController.signal.aborted) return
         const errorMsg = err instanceof Error ? err.message : 'Failed to complete OAuth'
         clearVerifier()
+        clearInvitationToken()
         window.location.assign(`/login?error=${encodeURIComponent(errorMsg)}`)
       }
     }
 
     completeOAuth()
+    return () => { abortController.abort() }
   }, [searchParams])
 
   if (isRedirecting) {
