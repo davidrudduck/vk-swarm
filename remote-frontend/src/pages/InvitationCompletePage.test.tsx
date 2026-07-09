@@ -49,7 +49,7 @@ describe('InvitationCompletePage storage handoff', () => {
     renderInvitationComplete()
 
     await waitFor(() => {
-      expect(redeemOAuth).toHaveBeenCalledWith('handoff-123', 'app-code-456', 'stored-verifier')
+      expect(redeemOAuth).toHaveBeenCalledWith('handoff-123', 'app-code-456', 'stored-verifier', expect.any(AbortSignal))
       expect(acceptInvitation).toHaveBeenCalledWith('url-token', 'access-123')
     })
     expect(screen.getByText('Invitation accepted!')).toBeInTheDocument()

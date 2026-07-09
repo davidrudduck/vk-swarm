@@ -57,7 +57,8 @@ export default function InvitationCompletePage() {
         const { access_token } = await redeemOAuth(
           handoffId,
           appCode,
-          verifier
+          verifier,
+          abortController.signal
         )
 
         if (abortController.signal.aborted) return

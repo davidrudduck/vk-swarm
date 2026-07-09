@@ -140,7 +140,7 @@ function OAuthCallbackPage() {
           return
         }
 
-        const { access_token } = await oauthApi.redeem(handoffId, appCode, appVerifier)
+        const { access_token } = await oauthApi.redeem(handoffId, appCode, appVerifier, abortController.signal)
 
         if (abortController.signal.aborted) return
 

@@ -131,7 +131,7 @@ describe('AppRouter', () => {
     renderWithRouter('/oauth/callback?handoff_id=handoff-123&app_code=app-code-456&return_to=/nodes')
 
     await waitFor(() => {
-      expect(oauthApi.redeem).toHaveBeenCalledWith('handoff-123', 'app-code-456', 'stored-verifier')
+      expect(oauthApi.redeem).toHaveBeenCalledWith('handoff-123', 'app-code-456', 'stored-verifier', expect.any(AbortSignal))
     })
     expect(localStorage.getItem('access_token')).toBe('access-123')
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()

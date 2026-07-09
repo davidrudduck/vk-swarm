@@ -42,7 +42,8 @@ export const oauthApi = {
   async redeem(
     handoffId: string,
     appCode: string,
-    appVerifier: string
+    appVerifier: string,
+    signal?: AbortSignal
   ): Promise<HandoffRedeemResponse> {
     const response = await makeRequest(`${API_BASE}/v1/oauth/web/redeem`, {
       method: 'POST',
@@ -51,6 +52,7 @@ export const oauthApi = {
         app_code: appCode,
         app_verifier: appVerifier,
       }),
+      signal,
     });
 
     if (!response.ok) {

@@ -26,7 +26,12 @@ export type { OAuthProvider, HandoffInitResponse, HandoffRedeemResponse };
 
 // Re-export OAuth functions for backwards compatibility
 export const initOAuth = oauthApi.init.bind(oauthApi);
-export const redeemOAuth = oauthApi.redeem.bind(oauthApi);
+export const redeemOAuth = (
+  handoffId: string,
+  appCode: string,
+  appVerifier: string,
+  signal?: AbortSignal
+) => oauthApi.redeem(handoffId, appCode, appVerifier, signal);
 
 export async function getInvitation(token: string): Promise<Invitation> {
   const res = await fetch(`${API_BASE}/v1/invitations/${token}`);
