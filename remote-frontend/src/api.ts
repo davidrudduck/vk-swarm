@@ -35,7 +35,7 @@ export const redeemOAuth = (
 ) => oauthApi.redeem(handoffId, appCode, appVerifier, signal);
 
 export async function getInvitation(token: string, signal?: AbortSignal): Promise<Invitation> {
-  const res = await makeRequest(`${API_BASE}/v1/invitations/${token}`, { signal });
+  const res = await makeRequest(`${API_BASE}/v1/invitations/${encodeURIComponent(token)}`, { signal });
   if (!res.ok) {
     throw new ApiError(`Invitation not found (${res.status})`, res.status, res);
   }
@@ -47,7 +47,7 @@ export async function acceptInvitation(
   accessToken: string,
   signal?: AbortSignal,
 ): Promise<AcceptInvitationResponse> {
-  const res = await makeRequest(`${API_BASE}/v1/invitations/${token}/accept`, {
+  const res = await makeRequest(`${API_BASE}/v1/invitations/${encodeURIComponent(token)}/accept`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,

@@ -8,9 +8,8 @@ import NotFoundPage from './pages/NotFoundPage'
 import { oauthApi } from '@/lib/api/oauth'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { retrieveVerifier, clearVerifier, clearInvitationToken } from '@/pkce'
+import { retrieveVerifier, clearVerifier, clearInvitationToken, generateVerifier, generateChallenge, storeVerifier } from '@/pkce'
 import type { OAuthProvider } from '@/api'
-import { generateVerifier, generateChallenge, storeVerifier } from '@/pkce'
 import { initOAuth } from '@/api'
 
 const Nodes = lazy(() => import('./pages/Nodes').then(m => ({ default: m.Nodes })))

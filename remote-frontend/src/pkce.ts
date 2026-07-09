@@ -1,6 +1,6 @@
 export function generateVerifier(): string {
   const array = new Uint8Array(32)
-  crypto.getRandomValues(array)
+  globalThis.crypto.getRandomValues(array)
   return base64UrlEncode(array)
 }
 
