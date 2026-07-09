@@ -268,6 +268,7 @@ describe('AppRouter', () => {
       expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('access_denied'))
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 
   it('oauth callback: handles missing handoff_id/app_code', async () => {
@@ -286,6 +287,7 @@ describe('AppRouter', () => {
       expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('Missing%20OAuth%20parameters'))
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 
   it('oauth callback: handles missing stored verifier', async () => {
@@ -303,6 +305,8 @@ describe('AppRouter', () => {
       expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('/login?error='))
       expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('OAuth%20session%20lost'))
     })
+    expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 
   it('oauth callback: handles redeem failure', async () => {
@@ -323,6 +327,7 @@ describe('AppRouter', () => {
       expect(mockAssign).toHaveBeenCalledWith(expect.stringContaining('Redeem%20failed'))
     })
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
+    expect(localStorage.getItem('access_token')).toBeNull()
   })
 })
 
