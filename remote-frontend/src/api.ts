@@ -6,7 +6,7 @@ import {
 } from './lib/api/oauth';
 import { makeRequest, ApiError } from './lib/api/utils';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 
 export type Invitation = {
   id: string;

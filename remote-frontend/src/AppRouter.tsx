@@ -35,6 +35,7 @@ function LoginPage() {
   }, [searchParams])
 
   const handleOAuthLogin = async (provider: OAuthProvider) => {
+    if (loading) return
     setLoading(true)
     setError(null)
     try {

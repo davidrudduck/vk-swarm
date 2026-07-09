@@ -36,6 +36,7 @@ export default function InvitationPage() {
   }, [token])
 
   const handleOAuthLogin = async (provider: OAuthProvider) => {
+    if (loading) return
     setLoading(true)
     setOauthError(null)
     try {

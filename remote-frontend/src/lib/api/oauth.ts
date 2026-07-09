@@ -1,6 +1,6 @@
 import { makeRequest, ApiError } from './utils';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 
 export type OAuthProvider = 'github' | 'google';
 
