@@ -510,6 +510,38 @@ describe('NodeApiKeySection', () => {
     });
   });
 
+  it('parseErrorMessage handles symbol rejection (TS16e)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockRejectedValue(Symbol('boom'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    await u.type(await screen.findByLabelText('Key Name'), 'X');
+    await u.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/Failed/)).toBeInTheDocument();
+    });
+  });
+
+  it('parseErrorMessage handles circular reference object (TS16f)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    vi.mocked(nodesApi.createApiKey).mockRejectedValue(circular);
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    await u.type(await screen.findByLabelText('Key Name'), 'X');
+    await u.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/Failed/)).toBeInTheDocument();
+    });
+  });
+
   it('revoke mutation error surfaces in the destructive Alert (TS17)', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const keys: NodeApiKey[] = [{
@@ -650,5 +682,102 @@ describe('NodeApiKeySection', () => {
     vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
     renderWith(<NodeApiKeySection organizationId="" />);
     expect(nodesApi.listApiKeys).not.toHaveBeenCalled();
+  });
+
+  it('closes create dialog and resets state when organizationId changes (TS25)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    const { fireEvent } = await import('@testing-library/react');
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    const result = renderWith(<NodeApiKeySection organizationId="org-1" />);
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    expect(await screen.findByLabelText('Key Name')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Key Name'), { target: { value: 'Test' } });
+    result.rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
+      </QueryClientProvider>
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Key Name')).not.toBeInTheDocument();
+    });
+  });
+
+  it('does not show Copied! feedback when execCommand returns false (TS26)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockResolvedValue({
+      api_key: {
+        id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      },
+      secret: 'vk_EXEC_FAIL_TEST',
+    });
+    const execCommand = vi.fn(() => false);
+    const origExecCommand = document.execCommand;
+    document.execCommand = execCommand;
+    const origClipboard = navigator.clipboard;
+    // @ts-expect-error — assigning undefined to disable clipboard in test
+    navigator.clipboard = undefined;
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const { fireEvent } = await import('@testing-library/react');
+      renderWith(<NodeApiKeySection organizationId="org-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+      const nameInput = await screen.findByLabelText('Key Name');
+      fireEvent.change(nameInput, { target: { value: 'Test' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      await waitFor(() => {
+        expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      await waitFor(() => {
+        expect(consoleSpy).toHaveBeenCalledWith('Failed to copy to clipboard');
+      });
+      expect(screen.queryByText('Copied!')).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true });
+      document.execCommand = origExecCommand;
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it('handles clipboard writeText rejection gracefully (TS27)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockResolvedValue({
+      api_key: {
+        id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      },
+      secret: 'vk_CLIPBOARD_REJECT_TEST',
+    });
+    const writeText = vi.fn().mockRejectedValue(new Error('not allowed'));
+    const origClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true, writable: true });
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const { fireEvent } = await import('@testing-library/react');
+      renderWith(<NodeApiKeySection organizationId="org-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+      const nameInput = await screen.findByLabelText('Key Name');
+      fireEvent.change(nameInput, { target: { value: 'Test' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      await waitFor(() => {
+        expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      await waitFor(() => {
+        expect(consoleSpy).toHaveBeenCalledWith('Failed to copy to clipboard');
+      });
+      expect(screen.queryByText('Copied!')).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true, writable: true });
+      consoleSpy.mockRestore();
+    }
   });
 });
