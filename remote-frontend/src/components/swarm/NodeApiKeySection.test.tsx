@@ -556,6 +556,21 @@ describe('NodeApiKeySection', () => {
     });
   });
 
+  it('parseErrorMessage handles Error with JSON-parseable primitive message (TS16h)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockRejectedValue(new Error('"just a string"'));
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    const { default: user } = await import('@testing-library/user-event');
+    const u = user.setup();
+    await u.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    await u.type(await screen.findByLabelText('Key Name'), 'X');
+    await u.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/just a string/)).toBeInTheDocument();
+    });
+  });
+
   it('revoke mutation error surfaces in the destructive Alert (TS17)', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const keys: NodeApiKey[] = [{

@@ -73,9 +73,9 @@ All three mutations invalidate `['nodeApiKeys', orgId]` on success (using the or
 | `showSecret` | `boolean` | Toggle secret visibility |
 | `copied` | `boolean` | Copy feedback (auto-resets after 2s) |
 | `error` | `string \| null` | Mutation error message |
-| `pendingKeyIds` | `Map<string, number>` | Tracks per-key in-flight mutation count |
+| `pendingKeyCount` | `Map<string, number>` | Tracks per-key in-flight mutation count |
 
-The `pendingKeyIds` Map uses a reference count per key, allowing concurrent mutations on the same key (e.g., rapid double-click). A key's button is disabled when its count is > 0.
+The `pendingKeyCount` Map uses a reference count per key, allowing concurrent mutations on the same key (e.g., rapid double-click). A key's button is disabled when its count is > 0. Revoke/unblock handlers also guard against double-submit via `isPending`.
 
 ### Clipboard Handling
 
@@ -93,7 +93,7 @@ The create dialog has two states:
 1. **Name input view**: Shows name field + Create/Cancel buttons
 2. **Secret reveal view**: Shows the one-time secret + Copy/Reveal/Hide/Done buttons
 
-When `createdSecret` is set, the dialog becomes `uncloseable` (via the Dialog component's prop) — the backdrop click is disabled while the secret is shown. This prevents accidental secret loss.
+When `createdSecret` is set or a create mutation is pending, the dialog becomes `uncloseable` (via the Dialog component's prop) — the backdrop click is disabled while the secret is shown or the request is in flight. This prevents accidental secret loss.
 
 ## API Integration
 
@@ -199,7 +199,7 @@ This renders above the node grid, gated on `orgId` being present. The `useOrgani
 | `useQuery`/`useMutation` inline | Component is the only consumer; hook extraction is premature |
 | No new Settings page | Section lives on the Nodes page per spec |
 | Per-key pending tracking | Prevents disabling all buttons when one key is being acted on |
-| `uncloseable` dialog for secret | Prevents accidental secret loss via Escape/backdrop |
+| `uncloseable` dialog for secret | Prevents accidental secret loss via backdrop click; also locked during create-pending |
 
 ## Related Documentation
 
