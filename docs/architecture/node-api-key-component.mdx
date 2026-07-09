@@ -73,9 +73,9 @@ All three mutations invalidate `['nodeApiKeys', orgId]` on success (using the or
 | `showSecret` | `boolean` | Toggle secret visibility |
 | `copied` | `boolean` | Copy feedback (auto-resets after 2s) |
 | `error` | `string \| null` | Mutation error message |
-| `pendingKeyIds` | `Set<string>` | Tracks per-key in-flight mutations |
+| `pendingKeyIds` | `Map<string, number>` | Tracks per-key in-flight mutation count |
 
-The `pendingKeyIds` Set ensures only the targeted key's button is disabled during a mutation, not all keys.
+The `pendingKeyIds` Map uses a reference count per key, allowing concurrent mutations on the same key (e.g., rapid double-click). A key's button is disabled when its count is > 0.
 
 ### Clipboard Handling
 
