@@ -1,0 +1,345 @@
+---
+title: "PKCE Implementation"
+description: "Technical documentation of the PKCE implementation with SHA-256 fallback for non-secure contexts"
+sidebarTitle: "PKCE Implementation"
+audience: developer
+component: remote-frontend
+sources:
+  - remote-frontend/src/pkce.ts
+  - remote-frontend/src/pkce.test.ts
+  - remote-frontend/src/AppRouter.tsx
+  - remote-frontend/src/pages/InvitationPage.tsx
+  - remote-frontend/src/pages/InvitationCompletePage.tsx
+  - remote-frontend/src/api.ts
+  - remote-frontend/src/lib/api/oauth.ts
+  - remote-frontend/src/lib/api/utils.ts
+generated: 2026-07-09
+---
+
+This document describes the PKCE (Proof Key for Code Exchange) implementation in the remote frontend, including the SHA-256 fallback for non-secure contexts.
+
+## Overview
+
+The PKCE implementation provides secure OAuth authentication that works in both secure contexts (localhost, HTTPS) and non-secure contexts (plain HTTP on LAN). The implementation uses capability detection to choose the appropriate SHA-256 method.
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                    PKCE Challenge Generation                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  [generateVerifier()]  →  [generateChallenge(verifier)]        │
+│         │                           │                           │
+│         ▼                           ▼                           │
+│  crypto.getRandomValues()    sha256(verifier)                  │
+│         │                           │                           │
+│         ▼                           ▼                           │
+│  32-byte random bytes        SHA-256 digest                    │
+│         │                           │                           │
+│         ▼                           ▼                           │
+│  base64url encode            bytesToHex(digest)                │
+│         │                           │                           │
+│         ▼                           ▼                           │
+│  verifier string             challenge string                  │
+│                              (64 hex chars)                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Module Structure
+
+### `pkce.ts`
+
+The PKCE module exports two public functions:
+
+```typescript
+export function generateVerifier(): string
+export async function generateChallenge(verifier: string): Promise<string>
+```
+
+Internal helper functions:
+
+```typescript
+function sha256(data: Uint8Array): Promise<Uint8Array>
+function sha256Fallback(data: Uint8Array): Uint8Array
+function bytesToHex(bytes: Uint8Array): string
+function base64UrlEncode(array: Uint8Array): string
+```
+
+### Capability Detection
+
+The `sha256()` function uses capability detection to choose the SHA-256 implementation:
+
+```typescript
+async function sha256(data: Uint8Array): Promise<Uint8Array> {
+  const subtleDigest = globalThis.crypto?.subtle?.digest
+  if (typeof subtleDigest === 'function') {
+    // Use native crypto.subtle (secure contexts)
+    return new Uint8Array(
+      await subtleDigest.call(globalThis.crypto.subtle, 'SHA-256', data)
+    )
+  }
+  // Fallback for non-secure contexts
+  return sha256Fallback(data)
+}
+```
+
+**Why capability detection?**
+- Works in browsers, jsdom, and embedded environments
+- Doesn't rely on origin string parsing
+- Handles future browser changes gracefully
+
+### SHA-256 Fallback
+
+The fallback implementation is a pure TypeScript SHA-256 implementation that runs in non-secure contexts:
+
+```typescript
+function sha256Fallback(data: Uint8Array): Uint8Array {
+  // 1. Append 0x80 after the message
+  // 2. Pad with zero bytes until length ≡ 56 (mod 64)
+  // 3. Append original bit length as 64-bit big-endian integer
+  // 4. Initialize eight SHA-256 hash words
+  // 5. Expand 16 input words to 64-word message schedule
+  // 6. Run 64 SHA-256 rounds with standard constants
+  // 7. Emit eight final words as 32 big-endian bytes
+}
+```
+
+The fallback handles:
+- Empty strings
+- ASCII text (e.g., "abc")
+- Multi-block messages
+- UTF-8 encoded data
+
+## OAuth Flow
+
+### Login Flow (`/login`)
+
+```typescript
+// 1. Generate PKCE verifier and challenge
+const verifier = generateVerifier()
+const challenge = await generateChallenge(verifier)
+
+// 2. Store verifier for callback
+storeVerifier(verifier)
+
+// 3. Initialize OAuth with provider
+const { url } = await initOAuth(provider, callbackUrl, challenge)
+
+// 4. Redirect to provider
+window.location.assign(url)
+```
+
+**Files**: `AppRouter.tsx:38-39`, `api.ts:initOAuth()`
+
+### Invitation Flow (`/invitations/:token/accept`)
+
+```typescript
+// 1. Generate PKCE verifier and challenge
+const verifier = generateVerifier()
+const challenge = await generateChallenge(verifier)
+
+// 2. Store verifier and invitation token
+storeVerifier(verifier)
+storeInvitationToken(token)
+
+// 3. Initialize OAuth with invitation return URL
+const { url } = await initOAuth(provider, returnTo, challenge)
+
+// 4. Redirect to provider
+window.location.assign(url)
+```
+
+**Files**: `InvitationPage.tsx:31-32`, `api.ts:initOAuth()`
+
+### Callback Flow (`/oauth/callback`)
+
+```typescript
+// 1. Retrieve stored verifier
+const verifier = retrieveVerifier()
+
+// 2. Redeem OAuth handoff
+const { access_token } = await redeemOAuth(handoffId, appCode, verifier)
+
+// 3. Store access token
+localStorage.setItem('access_token', access_token)
+
+// 4. Clear verifier
+clearVerifier()
+
+// 5. Redirect to safe return target
+window.location.assign(returnTo)
+```
+
+**Files**: `AppRouter.tsx`, `api.ts:redeemOAuth()`
+
+### Invitation Completion Flow (`/invitations/:token/complete`)
+
+```typescript
+// 1. Retrieve stored invitation token
+const invitationToken = retrieveInvitationToken()
+
+// 2. Complete invitation with access token
+await acceptInvitation(invitationToken, access_token)
+
+// 3. Clear invitation token
+clearInvitationToken()
+
+// 4. Redirect to dashboard
+window.location.assign('/')
+```
+
+**Files**: `InvitationCompletePage.tsx`, `api.ts:acceptInvitation()`
+
+## API Functions
+
+### `initOAuth(provider, callbackUrl, challenge)`
+
+Initializes OAuth flow with PKCE challenge.
+
+```typescript
+export async function initOAuth(
+  provider: 'github' | 'google',
+  callbackUrl: string,
+  challenge: string
+): Promise<{ url: string }>
+```
+
+**Implementation**: `lib/api/oauth.ts:init()`
+
+### `redeemOAuth(handoffId, appCode, verifier)`
+
+Redeems OAuth handoff with PKCE verifier.
+
+```typescript
+export async function redeemOAuth(
+  handoffId: string,
+  appCode: string,
+  appVerifier: string
+): Promise<{ access_token: string }>
+```
+
+**Implementation**: `lib/api/oauth.ts:redeem()`
+
+### `getInvitation(token)`
+
+Retrieves invitation details.
+
+```typescript
+export async function getInvitation(
+  token: string
+): Promise<InvitationResponse>
+```
+
+**Implementation**: `api.ts:getInvitation()`
+
+### `acceptInvitation(token, accessToken)`
+
+Accepts invitation with access token.
+
+```typescript
+export async function acceptInvitation(
+  token: string,
+  accessToken: string
+): Promise<void>
+```
+
+**Implementation**: `api.ts:acceptInvitation()`
+
+## Storage
+
+### Session Storage Keys
+
+| Key | Purpose | Set By | Cleared By |
+|-----|---------|--------|------------|
+| `pkce_verifier` | PKCE verifier for OAuth callback | `storeVerifier()` | `clearVerifier()` |
+| `invitation_token` | Invitation token for completion | `storeInvitationToken()` | `clearInvitationToken()` |
+| `oauth_state` | OAuth state parameter | `initOAuth()` | `OAuthCallbackPage` |
+
+### Local Storage Keys
+
+| Key | Purpose | Set By | Cleared By |
+|-----|---------|--------|------------|
+| `access_token` | User authentication token | `OAuthCallbackPage` | `logout()` |
+
+## Error Handling
+
+### OAuth Init Failure
+
+If `initOAuth()` fails:
+
+1. Clear `access_token` from localStorage
+2. Clear `pkce_verifier` from sessionStorage
+3. Clear `invitation_token` from sessionStorage (if present)
+4. Show error message to user
+
+**Files**: `AppRouter.tsx`, `InvitationPage.tsx`
+
+### OAuth Callback Failure
+
+If `redeemOAuth()` fails:
+
+1. Clear `access_token` from localStorage
+2. Clear `pkce_verifier` from sessionStorage
+3. Clear `invitation_token` from sessionStorage
+4. Redirect to `/login` with error parameter
+
+**Files**: `AppRouter.tsx:OAuthCallbackPage`
+
+### Invitation Completion Failure
+
+If `acceptInvitation()` fails:
+
+1. Clear `access_token` from localStorage
+2. Clear `invitation_token` from sessionStorage
+3. Show error message to user
+
+**Files**: `InvitationCompletePage.tsx`
+
+## AbortController Usage
+
+All OAuth-related API calls use `AbortController` to handle cleanup in React StrictMode:
+
+```typescript
+const controller = new AbortController()
+
+try {
+  const result = await initOAuth(provider, callbackUrl, challenge, {
+    signal: controller.signal
+  })
+  // ...
+} finally {
+  controller.abort()
+}
+```
+
+**Files**: `AppRouter.tsx`, `InvitationPage.tsx`, `InvitationCompletePage.tsx`
+
+## Testing
+
+### Unit Tests
+
+- `pkce.test.ts`: Tests SHA-256 native and fallback paths
+- `api.test.ts`: Tests API functions (getInvitation, acceptInvitation, initOAuth, redeemOAuth)
+- `lib/api/utils.test.ts`: Tests makeRequest, anySignal, ApiError
+- `lib/api/oauth.test.ts`: Tests OAuth API functions
+- `lib/api/organizations.test.ts`: Tests organizations API
+
+### Route-Level Tests
+
+- `AppRouter.test.tsx`: Tests login page, OAuth callback, error handling
+- `InvitationPage.test.tsx`: Tests invitation OAuth flow
+- `InvitationCompletePage.test.tsx`: Tests invitation completion
+
+### Test Coverage
+
+| File | Statements | Branches | Functions | Lines |
+|------|------------|----------|-----------|-------|
+| `oauth.ts` | 100% | 100% | 100% | 100% |
+| `organizations.ts` | 100% | 100% | 100% | 100% |
+| `profile.ts` | 100% | 100% | 100% | 100% |
+| `utils.ts` | 88.46% | 79.16% | 100% | 90.19% |
+
+## Related Documentation
+
+- [Non-Loopback Sign-In](/features/non-loopback-signin) - User guide for LAN sign-in
+- [Remote Frontend Architecture](/development/remote-frontend) - Frontend architecture overview
+- [Authentication Token Management](/architecture/auth-token-management) - Token handling details
