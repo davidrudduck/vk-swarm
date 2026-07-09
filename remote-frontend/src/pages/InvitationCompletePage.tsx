@@ -44,6 +44,7 @@ export default function InvitationCompletePage() {
         const verifier = retrieveVerifier()
         if (!verifier) {
           if (!abortController.signal.aborted) setError('OAuth session lost. Please try again.')
+          clearVerifier()
           clearInvitationToken()
           localStorage.removeItem('access_token')
           return
@@ -53,6 +54,7 @@ export default function InvitationCompletePage() {
         if (!token) {
           if (!abortController.signal.aborted) setError('Invitation token lost. Please try again.')
           clearVerifier()
+          clearInvitationToken()
           localStorage.removeItem('access_token')
           return
         }

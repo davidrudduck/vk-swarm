@@ -9,6 +9,7 @@ import {
 
 import type { ProfileResponse } from '@/types/shared/types';
 import { profileApi } from '@/lib/api/profile';
+import { ApiError } from '@/lib/api/utils';
 
 interface ProfileState {
   profile: ProfileResponse | null;
@@ -40,7 +41,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
       } catch (err) {
         if (cancelled) return;
         // Clear stale token on 401
-        if (err instanceof Error && err.message.includes('401')) {
+        if (err instanceof ApiError && err.status === 401) {
           localStorage.removeItem('access_token');
         }
         setProfile(null);
