@@ -26,6 +26,11 @@ import { Label } from '@/components/ui/label';
 import { nodesApi } from '@/lib/api';
 import type { NodeApiKey } from '@/types/nodes';
 
+const API_KEY_NAME_MAX_LENGTH = 100;
+const QUERY_STALE_TIME_MS = 30_000;
+const COPY_FEEDBACK_DURATION_MS = 2000;
+const SECRET_MASK = '••••••••••••••••••••';
+
 function parseErrorMessage(err: unknown): string {
   let raw: string;
   if (err instanceof Error) {
@@ -164,6 +169,7 @@ export function NodeApiKeySection({
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [showSecret, setShowSecret] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingKeyCount, setPendingKeyCount] = useState<Map<string, number>>(new Map());
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
@@ -190,6 +196,7 @@ export function NodeApiKeySection({
       setCreatedSecret(null);
       setShowSecret(false);
       setCopied(false);
+      setCopyFailed(false);
       clearTimeout(copyTimeoutRef.current);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -199,7 +206,7 @@ export function NodeApiKeySection({
     queryKey: ['nodeApiKeys', organizationId],
     queryFn: () => nodesApi.listApiKeys(organizationId),
     enabled: !!organizationId,
-    staleTime: 30_000,
+    staleTime: QUERY_STALE_TIME_MS,
   });
 
   const queryClient = useQueryClient();
@@ -289,6 +296,7 @@ export function NodeApiKeySection({
     setCreatedSecret(null);
     setShowSecret(false);
     setCopied(false);
+    setCopyFailed(false);
     clearTimeout(copyTimeoutRef.current);
   };
 
@@ -300,6 +308,8 @@ export function NodeApiKeySection({
       } else {
         const ta = document.createElement('textarea');
         ta.value = createdSecret;
+        ta.style.position = 'absolute';
+        ta.style.left = '-9999px';
         document.body.appendChild(ta);
         try {
           ta.focus();
@@ -312,10 +322,13 @@ export function NodeApiKeySection({
         }
       }
       setCopied(true);
+      setCopyFailed(false);
       clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_DURATION_MS);
     } catch {
       console.error('Failed to copy to clipboard');
+      setCopyFailed(true);
+      setCopied(false);
     }
   };
 
@@ -349,7 +362,7 @@ export function NodeApiKeySection({
           </CardDescription>
         </CardHeader>
 
-        {error && (
+        {error && !showCreateDialog && (
           <div className="px-6 pb-4">
             <Alert variant="destructive">
               <AlertDescription>
@@ -412,6 +425,13 @@ export function NodeApiKeySection({
                   {t('settings.swarm.apiKeys.createDescription', 'Give your API key a name to identify it later.')}
                 </DialogDescription>
               </DialogHeader>
+              {error && (
+                <Alert variant="destructive" className="mt-4">
+                  <AlertDescription>
+                    {t('settings.swarm.apiKeys.error', 'Failed: {{message}}', { message: error })}
+                  </AlertDescription>
+                </Alert>
+              )}
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
                   <Label htmlFor="api-key-name">
@@ -422,7 +442,7 @@ export function NodeApiKeySection({
                     value={newKeyName}
                     onChange={(e) => setNewKeyName(e.target.value)}
                     placeholder={t('settings.swarm.apiKeys.namePlaceholder', 'e.g. Production Node')}
-                    maxLength={100}
+                    maxLength={API_KEY_NAME_MAX_LENGTH}
                     autoFocus
                   />
                 </div>
@@ -459,11 +479,11 @@ export function NodeApiKeySection({
                   data-secret-wrapper
                   data-hidden={!showSecret}
                   className="block p-3 rounded bg-muted text-sm break-all"
-                  aria-label={showSecret ? t('settings.swarm.apiKeys.secretVisible', 'API key secret') : t('settings.swarm.apiKeys.secretHidden', 'API key secret (hidden)')}
+                  aria-label={showSecret ? undefined : t('settings.swarm.apiKeys.secretHidden', 'API key secret (hidden)')}
                 >
-                  {showSecret ? createdSecret : '••••••••••••••••••••'}
+                  {showSecret ? createdSecret : SECRET_MASK}
                 </code>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
                   <Button
                     variant="outline"
                     size="sm"
@@ -486,7 +506,6 @@ export function NodeApiKeySection({
                     variant="outline"
                     size="sm"
                     onClick={handleCopySecret}
-                    aria-live="polite"
                   >
                     {copied ? (
                       <>
@@ -500,7 +519,15 @@ export function NodeApiKeySection({
                       </>
                     )}
                   </Button>
+                  <span aria-live="polite" className="sr-only">
+                    {copied ? t('settings.swarm.apiKeys.copied', 'Copied!') : ''}
+                  </span>
                 </div>
+                {copyFailed && (
+                  <p className="text-sm text-destructive">
+                    {t('settings.swarm.apiKeys.copyFailed', 'Failed to copy. Please select and copy the secret manually.')}
+                  </p>
+                )}
               </div>
               <DialogFooter>
                 <Button onClick={closeDialog}>

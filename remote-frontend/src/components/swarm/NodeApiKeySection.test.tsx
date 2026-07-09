@@ -428,7 +428,7 @@ describe('NodeApiKeySection', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
       await waitFor(() => {
         expect(writeText).toHaveBeenCalledWith('vk_SECRET_CLIPBOARD_TEST');
-        expect(screen.getByText('Copied!')).toBeInTheDocument();
+        expect(screen.getAllByText('Copied!').length).toBeGreaterThan(0);
       });
     } finally {
       Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true, writable: true });
