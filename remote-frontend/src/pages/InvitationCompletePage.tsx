@@ -64,11 +64,11 @@ export default function InvitationCompletePage() {
 
         const result = await acceptInvitation(token, access_token)
 
+        if (abortController.signal.aborted) return
+
         clearVerifier()
         clearInvitationToken()
         localStorage.setItem('access_token', access_token)
-
-        if (abortController.signal.aborted) return
 
         setSuccess(true)
         setOrgSlug(result.organization_slug)

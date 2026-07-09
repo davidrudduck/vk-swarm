@@ -54,6 +54,7 @@ function LoginPage() {
       setError(err instanceof Error ? err.message : 'OAuth init failed')
       setLoading(false)
       clearVerifier()
+      clearInvitationToken()
     }
   }
 
