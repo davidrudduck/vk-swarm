@@ -71,7 +71,8 @@ All three mutations invalidate `['nodeApiKeys', orgId]` on success (using the or
 | `newKeyName` | `string` | Name input value |
 | `createdSecret` | `string \| null` | One-time secret after creation |
 | `showSecret` | `boolean` | Toggle secret visibility |
-| `copied` | `boolean` | Copy feedback (auto-resets after 2s) |
+| `copied` | `boolean` | Copy success feedback (auto-resets after 2s) |
+| `copyFailed` | `boolean` | Copy failure feedback (visible error + SR announcement) |
 | `error` | `string \| null` | Mutation error message |
 | `pendingKeyCount` | `Map<string, number>` | Tracks per-key in-flight mutation count |
 
@@ -84,7 +85,11 @@ The copy flow uses a two-tier strategy:
 1. **Primary**: `navigator.clipboard.writeText()` (modern browsers, secure contexts)
 2. **Fallback**: `document.execCommand('copy')` via a temporary textarea (HTTP contexts, older browsers)
 
-The textarea fallback is wrapped in `try/finally` to ensure cleanup. The `copyTimeoutRef` tracks the 2-second "Copied!" feedback timer and is cleared on unmount and dialog close.
+The textarea fallback is wrapped in `try/finally` to ensure cleanup. The `copyTimeoutRef` tracks the 2-second "Copied!" feedback timer and is cleared on unmount and dialog close. On copy failure, `copyFailed` is set to `true` and announced to screen readers via the existing `aria-live` region.
+
+### Focus Management
+
+When a secret is created, the Reveal button receives focus via `revealButtonRef` (a `useRef<HTMLButtonElement>`). This ensures keyboard and screen-reader users land on the most relevant action after the dialog transitions from the name-input form to the secret-reveal view.
 
 ### Dialog Behavior
 
