@@ -56,6 +56,7 @@ export default function InvitationPage() {
       setLoading(false)
       clearVerifier()
       clearInvitationToken()
+      localStorage.removeItem('access_token')
     }
   }
 

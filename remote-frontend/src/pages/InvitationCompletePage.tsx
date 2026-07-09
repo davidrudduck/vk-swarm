@@ -28,6 +28,7 @@ export default function InvitationCompletePage() {
         if (!abortController.signal.aborted) setError(`OAuth error: ${oauthError}`)
         clearVerifier()
         clearInvitationToken()
+        localStorage.removeItem('access_token')
         return
       }
 
@@ -35,6 +36,7 @@ export default function InvitationCompletePage() {
         if (!abortController.signal.aborted) setError('Missing OAuth parameters. Please try the invitation link again.')
         clearVerifier()
         clearInvitationToken()
+        localStorage.removeItem('access_token')
         return
       }
 
@@ -43,6 +45,7 @@ export default function InvitationCompletePage() {
         if (!verifier) {
           if (!abortController.signal.aborted) setError('OAuth session lost. Please try again.')
           clearInvitationToken()
+          localStorage.removeItem('access_token')
           return
         }
 
@@ -50,6 +53,7 @@ export default function InvitationCompletePage() {
         if (!token) {
           if (!abortController.signal.aborted) setError('Invitation token lost. Please try again.')
           clearVerifier()
+          localStorage.removeItem('access_token')
           return
         }
 
@@ -81,6 +85,7 @@ export default function InvitationCompletePage() {
         if (abortController.signal.aborted) return
         clearVerifier()
         clearInvitationToken()
+        localStorage.removeItem('access_token')
         setError(e instanceof Error ? e.message : 'Failed to complete invitation')
       }
     }

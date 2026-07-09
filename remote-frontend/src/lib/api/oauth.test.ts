@@ -170,4 +170,18 @@ describe('OAuth API', () => {
       oauthApi.init('github', 'http://localhost/callback', 'invalid-challenge')
     ).rejects.toThrow();
   });
+
+  it('oauthApi.redeem() throws ApiError when response.ok is false', async () => {
+    const mockFetch = vi.mocked(g.fetch) as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 410,
+      json: async () => ({ message: 'already redeemed' }),
+      url: 'http://localhost/v1/oauth/web/redeem',
+    } as Response);
+
+    await expect(
+      oauthApi.redeem('handoff-123', 'auth-code-xyz', 'verifier-abc')
+    ).rejects.toThrow();
+  });
 });

@@ -119,6 +119,7 @@ function OAuthCallbackPage() {
       if (oauthError) {
         clearVerifier()
         clearInvitationToken()
+        localStorage.removeItem('access_token')
         window.location.assign(`/login?error=${encodeURIComponent(`OAuth error: ${oauthError}`)}`)
         return
       }
@@ -126,6 +127,7 @@ function OAuthCallbackPage() {
       if (!handoffId || !appCode) {
         clearVerifier()
         clearInvitationToken()
+        localStorage.removeItem('access_token')
         window.location.assign(`/login?error=${encodeURIComponent('Missing OAuth parameters')}`)
         return
       }
@@ -135,6 +137,7 @@ function OAuthCallbackPage() {
         if (!appVerifier) {
           clearVerifier()
           clearInvitationToken()
+          localStorage.removeItem('access_token')
           window.location.assign(`/login?error=${encodeURIComponent('OAuth session lost. Please try again.')}`)
           return
         }
@@ -154,6 +157,7 @@ function OAuthCallbackPage() {
         const errorMsg = err instanceof Error ? err.message : 'Failed to complete OAuth'
         clearVerifier()
         clearInvitationToken()
+        localStorage.removeItem('access_token')
         window.location.assign(`/login?error=${encodeURIComponent(errorMsg)}`)
       }
     }
