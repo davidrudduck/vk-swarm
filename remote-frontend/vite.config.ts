@@ -31,7 +31,12 @@ export default defineConfig({
             },
           },
           {
-            urlPattern: ({ url }) => ['/', '/login', '/oauth/callback'].includes(url.pathname) || url.pathname.startsWith('/invitations/'),
+            urlPattern: ({ url }) => {
+              const path = url.pathname
+              // Exclude OAuth callback/completion URLs with query parameters
+              if (path === '/oauth/callback' || path.endsWith('/complete')) return false
+              return ['/', '/login'].includes(path) || path.startsWith('/invitations/')
+            },
             handler: 'StaleWhileRevalidate',
             options: {
               cacheName: 'shell-cache',

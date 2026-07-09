@@ -24,11 +24,13 @@ describe('InvitationCompletePage storage handoff', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     sessionStorage.clear()
+    localStorage.clear()
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
     sessionStorage.clear()
+    localStorage.clear()
   })
 
   it('redeems with stored verifier and accepts with URL invitation token', async () => {
