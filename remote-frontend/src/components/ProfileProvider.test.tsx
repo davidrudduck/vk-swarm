@@ -149,6 +149,35 @@ describe('ProfileProvider', () => {
     expect(vi.mocked(localStorage.removeItem)).not.toHaveBeenCalled();
   });
 
+  it('should not clear token on non-401 server error (500)', async () => {
+    const mockToken = 'test-token';
+
+    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: 'Internal server error' }),
+    } as Response);
+
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ProfileProvider>{children}</ProfileProvider>
+    );
+
+    const { result } = renderHook(() => useProfile(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoaded).toBe(true);
+    });
+
+    expect(result.current).toEqual({
+      profile: null,
+      isSignedIn: false,
+      isLoaded: true,
+    });
+
+    expect(vi.mocked(localStorage.removeItem)).not.toHaveBeenCalled();
+  });
+
   it('should have isLoaded false before fetch resolves (loading state)', () => {
     const mockToken = 'test-token';
 
