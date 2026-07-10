@@ -9,7 +9,7 @@ Continue the debug process by performing a review using Playwright, and examinin
 1. **Get Current Working Directory `cwd`**
 2. **Reset on origin/main to make sure you are up to date with any recent changes**
 
-Read @CLAUDE.md and @README.md to understand the project, coding styles and best practices.
+Read @AGENTS.md and @README.md to understand the project, coding styles and best practices.
 
 Read key files in the project.
 
