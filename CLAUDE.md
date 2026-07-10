@@ -614,6 +614,48 @@ npm run generate-types               # Regenerate TypeScript from Rust
 npm run generate-types:check        # Verify types are current
 ```
 
+### E2E Testing (Docker)
+
+Full-stack E2E testing against a real PostgreSQL + remote server:
+
+```bash
+# One command: spin up Docker, seed DB, run Playwright, tear down
+cd remote-frontend && ./scripts/e2e-test.sh
+
+# Keep Docker running after tests (for manual testing)
+./scripts/e2e-test.sh --keep
+
+# Seed only (Docker already running)
+./scripts/e2e-test.sh --seed-only
+
+# Run Playwright against existing Docker (skip spin-up)
+./scripts/e2e-test.sh --skip-docker
+```
+
+**What it tests:**
+- PostgreSQL migrations (29 remote migrations applied automatically)
+- Database seeding (users, orgs, API keys, nodes, tasks, labels)
+- Server health endpoint (`/v1/health`)
+- Frontend serving (static files from `remote-frontend/dist`)
+- OAuth flow (mocked in Playwright)
+- API key authentication (node WebSocket)
+- Error handling (404, API errors)
+
+**Manual testing after `--keep`:**
+- Hive frontend: http://localhost:9000
+- PostgreSQL: localhost:5434 (postgres/postgres/vibe_remote)
+- Test API key: `vk_e2e-primary-key-12345678`
+- Blocked API key: `vk_e2e-blocked-key-xyz`
+- Revocable API key: `vk_e2e-revocable-key-abcdef`
+
+**Files:**
+- `crates/remote/docker-compose.dev.yml` — Docker Compose for dev/E2E
+- `crates/remote/.env.dev` — Environment variables
+- `crates/remote/scripts/seed-e2e-db.sql` — Comprehensive seed data
+- `remote-frontend/playwright.docker.config.ts` — Playwright config for Docker
+- `remote-frontend/e2e/docker-e2e.spec.ts` — Docker-specific E2E tests
+- `remote-frontend/scripts/e2e-test.sh` — Orchestration script
+
 ### Database
 
 **Location:**

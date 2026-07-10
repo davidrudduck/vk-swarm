@@ -92,7 +92,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-vibe_remote}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
     volumes:
-      - ./scripts/seed-dev-db.sql:/seed.sql:ro
+      - ./scripts/seed-e2e-db.sql:/seed.sql:ro
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
