@@ -1,0 +1,33 @@
+{
+  "model": "kimi-k2.7-code",
+  "findings": [
+    {
+      "id": "kimi-F1",
+      "severity": "low",
+      "issue": "LoginPage OAuth init failure leaves a stale invitation_token in sessionStorage, unlike the invitation accept flow and OAuth callback which both clear it. This creates asymmetric cleanup and can pollute a later invitation-complete fallback if the URL token is missing.",
+      "citation": "remote-frontend/src/AppRouter.tsx:53-57",
+      "remediation": "Add clearInvitationToken() alongside clearVerifier() in the LoginPage handleOAuthLogin catch block."
+    },
+    {
+      "id": "kimi-F2",
+      "severity": "medium",
+      "issue": "React.StrictMode double-mount still allows the first (abandoned) redeemOAuth/acceptInvitation request to hit the network in OAuthCallbackPage and InvitationCompletePage. The AbortController only suppresses state updates after each await, so a single-use authorization code may be consumed by the ghost effect and the visible second effect can fail in development.",
+      "citation": "remote-frontend/src/AppRouter.tsx:109-163, remote-frontend/src/pages/InvitationCompletePage.tsx:23-94",
+      "remediation": "Thread the AbortSignal into fetch/makeRequest (redeemOAuth, acceptInvitation) so outgoing requests are actually cancelled on cleanup, or guard each async boundary with the aborted signal before issuing the request and before setting state."
+    },
+    {
+      "id": "kimi-F3",
+      "severity": "info",
+      "issue": "The decisions ledger acceptance evidence reports the remote-frontend suite as 25 files and 114 tests, but the current run is 133 tests. Stale counts make the ledger a less trustworthy gate record.",
+      "citation": "docs/plans/fix-nonloopback-signin/decisions-ledger.md:143-150",
+      "remediation": "Re-run the listed gate commands and update the test counts in the acceptance evidence to match the current suite (25 files, 133 tests)."
+    },
+    {
+      "id": "kimi-F4",
+      "severity": "info",
+      "issue": "AppRouter.tsx imports from @/pkce twice on separate lines, leaving a minor import duplication smell.",
+      "citation": "remote-frontend/src/AppRouter.tsx:11,13",
+      "remediation": "Consolidate the two @/pkce imports into a single import statement."
+    }
+  ]
+}

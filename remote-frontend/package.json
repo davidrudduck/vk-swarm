@@ -10,6 +10,7 @@
     "lint": "eslint src --max-warnings 0",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:invariants": "node --test scripts/no-push-invariant.test.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ci": "playwright test --reporter=list"
   },

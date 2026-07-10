@@ -8,9 +8,8 @@ import NotFoundPage from './pages/NotFoundPage'
 import { oauthApi } from '@/lib/api/oauth'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { retrieveVerifier, clearVerifier } from '@/pkce'
+import { retrieveVerifier, clearVerifier, clearInvitationToken, generateVerifier, generateChallenge, storeVerifier } from '@/pkce'
 import type { OAuthProvider } from '@/api'
-import { generateVerifier, generateChallenge, storeVerifier } from '@/pkce'
 import { initOAuth } from '@/api'
 
 const Nodes = lazy(() => import('./pages/Nodes').then(m => ({ default: m.Nodes })))
@@ -29,9 +28,14 @@ function RootRedirect() {
 function LoginPage() {
   const [searchParams] = useSearchParams()
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(searchParams.get('error'))
+
+  useEffect(() => {
+    setError(searchParams.get('error'))
+  }, [searchParams])
 
   const handleOAuthLogin = async (provider: OAuthProvider) => {
+    if (loading) return
     setLoading(true)
     setError(null)
     try {
@@ -40,7 +44,7 @@ function LoginPage() {
 
       storeVerifier(verifier)
 
-      const appBase = import.meta.env.VITE_APP_BASE_URL || window.location.origin
+      const appBase = (import.meta.env.VITE_APP_BASE_URL || window.location.origin).replace(/\/+$/, '')
       const returnTo = searchParams.get('return_to') || '/nodes'
       const callbackUrl = `${appBase}/oauth/callback?return_to=${encodeURIComponent(returnTo)}`
 
@@ -49,6 +53,9 @@ function LoginPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'OAuth init failed')
       setLoading(false)
+      clearVerifier()
+      clearInvitationToken()
+      localStorage.removeItem('access_token')
     }
   }
 
@@ -88,7 +95,7 @@ function LoginPage() {
   )
 }
 
-function isSafeReturnTo(url: string): boolean {
+export function isSafeReturnTo(url: string): boolean {
   try {
     const parsed = new URL(url, window.location.origin);
     return parsed.origin === window.location.origin;
@@ -102,6 +109,8 @@ function OAuthCallbackPage() {
   const [isRedirecting, setIsRedirecting] = useState(false)
 
   useEffect(() => {
+    const abortController = new AbortController()
+
     const completeOAuth = async () => {
       const handoffId = searchParams.get('handoff_id')
       const appCode = searchParams.get('app_code')
@@ -110,11 +119,17 @@ function OAuthCallbackPage() {
       const safeReturnTo = isSafeReturnTo(returnTo) ? returnTo : '/nodes'
 
       if (oauthError) {
+        clearVerifier()
+        clearInvitationToken()
+        localStorage.removeItem('access_token')
         window.location.assign(`/login?error=${encodeURIComponent(`OAuth error: ${oauthError}`)}`)
         return
       }
 
       if (!handoffId || !appCode) {
+        clearVerifier()
+        clearInvitationToken()
+        localStorage.removeItem('access_token')
         window.location.assign(`/login?error=${encodeURIComponent('Missing OAuth parameters')}`)
         return
       }
@@ -122,25 +137,35 @@ function OAuthCallbackPage() {
       try {
         const appVerifier = retrieveVerifier()
         if (!appVerifier) {
+          clearVerifier()
+          clearInvitationToken()
+          localStorage.removeItem('access_token')
           window.location.assign(`/login?error=${encodeURIComponent('OAuth session lost. Please try again.')}`)
           return
         }
 
-        const { access_token } = await oauthApi.redeem(handoffId, appCode, appVerifier)
+        const { access_token } = await oauthApi.redeem(handoffId, appCode, appVerifier, abortController.signal)
+
+        if (abortController.signal.aborted) return
 
         localStorage.setItem('access_token', access_token)
         clearVerifier()
+        clearInvitationToken()
 
         setIsRedirecting(true)
         window.location.assign(safeReturnTo)
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : 'Failed to complete OAuth'
-        window.location.assign(`/login?error=${encodeURIComponent(errorMsg)}`)
+        if (abortController.signal.aborted) return
+        const errorMsg = err instanceof Error || err instanceof DOMException ? err.message : 'Failed to complete OAuth'
         clearVerifier()
+        clearInvitationToken()
+        localStorage.removeItem('access_token')
+        window.location.assign(`/login?error=${encodeURIComponent(errorMsg)}`)
       }
     }
 
     completeOAuth()
+    return () => { abortController.abort() }
   }, [searchParams])
 
   if (isRedirecting) {

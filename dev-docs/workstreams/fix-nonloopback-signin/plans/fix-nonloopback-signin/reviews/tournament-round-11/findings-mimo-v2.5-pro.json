@@ -1,0 +1,40 @@
+{
+  "model": "mimo-v2.5-pro",
+  "findings": [
+    {
+      "id": "mimo-F1",
+      "severity": "low",
+      "issue": "InvitationCompletePage missing test for acceptInvitation failure. The test at InvitationCompletePage.test.tsx:109 covers redeemOAuth failure, but there is no test where redeemOAuth succeeds and acceptInvitation fails. These are distinct code paths: the catch block at InvitationCompletePage.tsx:81-86 fires for both, but acceptInvitation failure means the OAuth code was already consumed (server-side) while the invitation was not accepted. The user sees a generic error and loses the access_token (not stored because acceptInvitation failed before line 71). Testing this path would verify correct storage cleanup and error message propagation from the acceptInvitation API.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:109-121",
+      "remediation": "Add a test case: mock redeemOAuth to resolve successfully, mock acceptInvitation to reject with an error. Verify the error message is displayed, sessionStorage is cleared, and localStorage does NOT contain access_token."
+    },
+    {
+      "id": "mimo-F2",
+      "severity": "low",
+      "issue": "InvitationCompletePage error path tests do not verify sessionStorage cleanup. The four error tests (oauthError at line 61, missing verifier at line 75, missing token at line 89, missing params at line 123) all verify error message display but do not assert that sessionStorage keys (oauth_verifier, invitation_token) are removed. The production code does clear them (lines 30-31, 37-38, 46, 53), but a regression in cleanup logic would go undetected. Only the redeemOAuth failure test (line 109) and the success test (line 36) verify storage state.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:61-135",
+      "remediation": "Add sessionStorage assertions to each error path test: expect(sessionStorage.getItem('oauth_verifier')).toBeNull() and expect(sessionStorage.getItem('invitation_token')).toBeNull() where applicable."
+    },
+    {
+      "id": "mimo-F3",
+      "severity": "info",
+      "issue": "OAuthCallbackPage synchronous error redirects are not guarded by abortController.signal.aborted. Lines 123, 130, and 139 call window.location.assign() synchronously (before any await) without checking the abort signal. In StrictMode, both effects execute these redirects. Since they redirect to the same URL, this is functionally harmless, but it is inconsistent with the async paths (lines 145, 154) which do check abort state. The synchronous paths cannot be aborted because they complete before the cleanup function runs.",
+      "citation": "remote-frontend/src/AppRouter.tsx:120-141",
+      "remediation": ""
+    },
+    {
+      "id": "mimo-F4",
+      "severity": "info",
+      "issue": "oauthApi.redeem does not accept an AbortSignal, so the AbortController pattern in OAuthCallbackPage and InvitationCompletePage cannot cancel in-flight HTTP requests. The makeRequest utility (utils.ts:75-77) supports options.signal via anySignal, but oauthApi.redeem (oauth.ts:42-63) does not pass one through. In StrictMode, both effects fire redeem requests; for single-use OAuth codes, the first request may consume the code server-side, causing the second to fail. This is a development-only issue.",
+      "citation": "remote-frontend/src/lib/api/oauth.ts:42-63",
+      "remediation": ""
+    },
+    {
+      "id": "mimo-F5",
+      "severity": "info",
+      "issue": "isSafeReturnTo returns true for empty string input. new URL('', window.location.origin) resolves to the origin itself, so parsed.origin === window.location.origin is true. In practice this path is unreachable because OAuthCallbackPage uses searchParams.get('return_to') || '/nodes' (line 117), which falls through to '/nodes' for null/empty values. The test at AppRouter.test.tsx:353 exercises a dead code path. Not a bug, but the test creates a false impression that empty return_to is a handled scenario.",
+      "citation": "remote-frontend/src/AppRouter.tsx:97-104",
+      "remediation": ""
+    }
+  ]
+}

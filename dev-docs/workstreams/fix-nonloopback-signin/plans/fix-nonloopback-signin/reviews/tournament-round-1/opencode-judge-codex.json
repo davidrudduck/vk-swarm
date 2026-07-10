@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "opencode",
+    "run",
+    "--dir",
+    "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko",
+    "--auto",
+    "--agent",
+    "plan",
+    "--format",
+    "json",
+    "Read the full task instructions from /home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/judge-opencode-on-codex.md and execute them."
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko",
+  "exit_code": 0,
+  "finished_at": "2026-07-08T10:47:13.988666+00:00",
+  "notes": [],
+  "prompt_file": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/judge-opencode-on-codex.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/opencode-judge-codex.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/opencode-judge-codex.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-08T10:45:40.835724+00:00",
+  "status": "ok",
+  "task": "plan-review",
+  "tool": "opencode",
+  "tool_version": "1.17.15"
+}

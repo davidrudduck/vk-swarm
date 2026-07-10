@@ -1,0 +1,244 @@
+---
+title: "Network Access Configuration"
+description: "Configure Vibe Kanban for network access with OAuth support on non-secure origins"
+sidebarTitle: "Network Access"
+audience: admin
+component: remote-frontend
+sources:
+  - remote-frontend/vite.config.ts
+  - remote-frontend/.env.example
+  - crates/remote/.env.remote.example
+generated: 2026-07-09
+---
+
+This guide covers configuring Vibe Kanban for network access, including OAuth setup for non-secure origins (plain HTTP on LAN).
+
+## Overview
+
+Vibe Kanban supports three network access modes:
+
+| Mode | Use Case | Security |
+|------|----------|----------|
+| **Localhost** | Single-user development | High (loopback only) |
+| **LAN Access** | Team on local network | Medium (trusted network) |
+| **Public Access** | Remote team access | Requires HTTPS + firewall |
+
+## Quick Setup
+
+### 1. Enable Network Access
+
+Start Vibe Kanban with `HOST=0.0.0.0` to bind to all interfaces:
+
+```bash
+HOST=0.0.0.0 npx vibe-kanban
+```
+
+The server will be accessible at:
+- `http://localhost:3002` (local machine)
+- `http://<your-ip>:3002` (other devices on network)
+
+### 2. Configure OAuth Callback URL
+
+Set `VITE_APP_BASE_URL` to your server's accessible URL:
+
+```bash
+# For LAN access
+VITE_APP_BASE_URL=http://192.168.1.100:3002 HOST=0.0.0.0 npx vibe-kanban
+
+# For localhost (default)
+npx vibe-kanban
+```
+
+<Note>
+The OAuth callback URL must match the URL users access the server from. If using a custom hostname or IP, set `VITE_APP_BASE_URL` accordingly.
+</Note>
+
+### 3. Configure OAuth Providers
+
+#### GitHub OAuth
+
+1. Go to https://github.com/settings/developers
+2. Create a new OAuth App
+3. Set **Authorization callback URL** to:
+   ```
+   http://<your-server-url>/oauth/callback
+   ```
+4. Copy Client ID and Client Secret to your environment:
+   ```bash
+   GITHUB_OAUTH_CLIENT_ID=your_client_id
+   GITHUB_OAUTH_CLIENT_SECRET=your_client_secret
+   ```
+
+#### Google OAuth
+
+1. Go to https://console.cloud.google.com/apis/credentials
+2. Create OAuth 2.0 Client ID
+3. Add authorized redirect URI:
+   ```
+   http://<your-server-url>/oauth/callback
+   ```
+4. Copy Client ID and Client Secret to your environment:
+   ```bash
+   GOOGLE_OAUTH_CLIENT_ID=your_client_id
+   GOOGLE_OAUTH_CLIENT_SECRET=your_client_secret
+   ```
+
+## Environment Variables
+
+### Remote Frontend
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITE_API_BASE_URL` | `http://localhost:3000` | Backend API endpoint |
+| `VITE_APP_BASE_URL` | `http://localhost:3000` | Frontend base URL (used for OAuth callback) |
+| `HOST` | `localhost` | Server bind address (use `0.0.0.0` for network access) |
+| `PORT` | `3002` | Server port |
+
+### Hive Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SERVER_PUBLIC_BASE_URL` | `http://localhost:9000` | Public URL for OAuth callbacks |
+| `SERVER_PORT` | `9000` | Server port |
+| `VIBEKANBAN_REMOTE_JWT_SECRET` | (required) | JWT secret (base64-encoded, min 32 bytes) |
+| `GITHUB_OAUTH_CLIENT_ID` | (required) | GitHub OAuth Client ID |
+| `GITHUB_OAUTH_CLIENT_SECRET` | (required) | GitHub OAuth Client Secret |
+| `GOOGLE_OAUTH_CLIENT_ID` | (required) | Google OAuth Client ID |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | (required) | Google OAuth Client Secret |
+
+## Security Configuration
+
+### Firewall Rules
+
+Restrict access to trusted IPs:
+
+```bash
+# Allow only specific IPs
+sudo ufw allow from 192.168.1.100 to any port 3002
+sudo ufw allow from 192.168.1.101 to any port 3002
+
+# Allow entire subnet
+sudo ufw allow from 192.168.1.0/24 to any port 3002
+```
+
+### HTTPS Setup
+
+For production or public access, use a reverse proxy with HTTPS:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name vibe-kanban.example.com;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://localhost:3002;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+<Note>
+When using HTTPS, set `VITE_APP_BASE_URL=https://vibe-kanban.example.com` and configure OAuth callbacks accordingly.
+</Note>
+
+### VPN Access
+
+For remote teams, use a VPN instead of exposing services directly:
+
+1. Set up a VPN server (WireGuard, OpenVPN, etc.)
+2. Connect all team members to the VPN
+3. Access Vibe Kanban via VPN IP (e.g., `http://10.0.0.5:3002`)
+
+## PWA Service Worker
+
+The remote frontend includes a PWA service worker for offline support:
+
+| Cache | URL Pattern | Strategy | Max Age |
+|-------|-------------|----------|---------|
+| API | `/v1/*` | NetworkFirst | 5 minutes |
+| Assets | `/assets/*` | CacheFirst | 7 days |
+| Shell | `/`, `/login`, `/oauth/callback` | StaleWhileRevalidate | 1 day |
+
+<Note>
+The service worker excludes `/oauth/callback` and `/invitations/:token/complete` from caching to ensure OAuth flows work correctly.
+</Note>
+
+## Troubleshooting
+
+### OAuth Callback URL Mismatch
+
+**Symptoms**: OAuth fails with "redirect_uri_mismatch" error.
+
+**Cause**: The OAuth callback URL doesn't match the configured redirect URI.
+
+**Solution**:
+1. Verify `VITE_APP_BASE_URL` matches the URL users access
+2. Update OAuth provider settings with the correct callback URL
+3. Restart the server
+
+### CORS Errors
+
+**Symptoms**: API requests fail with CORS errors.
+
+**Cause**: The frontend and backend are on different origins.
+
+**Solution**:
+1. Ensure `VITE_API_BASE_URL` points to the correct backend URL
+2. Configure CORS on the backend to allow the frontend origin
+3. Use the same domain for frontend and backend when possible
+
+### Service Worker Caching Issues
+
+**Symptoms**: Old version of the app is served after update.
+
+**Cause**: The service worker is caching stale assets.
+
+**Solution**:
+1. Open browser DevTools → Application → Service Workers
+2. Click "Unregister" to remove the old service worker
+3. Hard refresh (Ctrl+Shift+R or Cmd+Shift+R)
+
+### OAuth State Mismatch
+
+**Symptoms**: OAuth fails with "state mismatch" error.
+
+**Cause**: The OAuth state parameter doesn't match (usually due to sessionStorage being cleared).
+
+**Solution**:
+1. Clear browser sessionStorage manually
+2. Try signing in again
+3. Check if browser extensions are blocking sessionStorage
+
+## Monitoring
+
+### Logs
+
+Enable debug logging for OAuth and PKCE:
+
+```bash
+# For remote frontend
+RUST_LOG=services::remote_client=debug pnpm run dev
+
+# For hive server
+RUST_LOG=services::oauth=debug cargo run
+```
+
+### Health Checks
+
+Monitor these endpoints:
+
+- Frontend: `http://<server>:3002/` (should return 200)
+- Backend API: `http://<server>:9000/v1/health` (should return 200)
+
+## Related Documentation
+
+- [Non-Loopback Sign-In](/features/non-loopback-signin) - User guide for LAN sign-in
+- [Swarm/Hive Setup](/swarm-hive-setup) - Full swarm architecture configuration
+- [Authentication Token Management](/architecture/auth-token-management) - Token handling details
+- [Global Settings](/configuration-customisation/global-settings) - Application settings

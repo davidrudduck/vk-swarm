@@ -1,0 +1,47 @@
+{
+  "model": "minimax-m3",
+  "findings": [
+    {
+      "id": "minimax-F1",
+      "severity": "medium",
+      "issue": "AppRouter.test.tsx:89-117 covers the /login happy path but never tests the initOAuth rejection branch. The parallel InvitationPage test (InvitationPage.test.tsx:91-109) does test this branch. AppRouter.tsx:49-52 sets the error state and resets loading on initOAuth rejection, but no test exercises this. A regression that breaks the error display in LoginPage (e.g., forgetting to reset loading) would not be caught.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:89-117",
+      "remediation": "Add a test case to AppRouter.test.tsx that mocks initOAuth to reject with an Error, clicks the GitHub button, and asserts both that the error message is rendered and that the loading state is reset (button re-enabled, label reverts from 'Signing in...' to 'Sign in with GitHub')."
+    },
+    {
+      "id": "minimax-F2",
+      "severity": "medium",
+      "issue": "AppRouter.test.tsx:119-138 is the only test for OAuthCallbackPage. It covers only the success path. The four error paths at AppRouter.tsx:116-124 (oauthError present, missing handoffId/appCode) and 128-131 (missing stored verifier) and 140-144 (redeem rejection) are untested. Each calls window.location.assign('/login?error=...') — in jsdom this throws 'Not implemented: navigation to another Document', which the success path also hits but is never asserted on. These error paths are user-visible: a malformed callback URL silently redirects to /login with an error query param, and the test suite would not catch a regression where the error message is wrong or the redirect target is wrong.",
+      "citation": "remote-frontend/src/AppRouter.tsx:116-144",
+      "remediation": "Add four test cases to AppRouter.test.tsx for the OAuthCallbackPage error paths: (1) oauthError param present, (2) missing handoffId or appCode, (3) missing stored verifier, (4) oauthApi.redeem rejects. Each test should assert that window.location.assign is called with the expected /login?error=... URL. To avoid jsdom's 'Not implemented' throw, spy on window.location.assign before the test (e.g., vi.spyOn(window.location, 'assign').mockImplementation(() => {})) and assert the spy was called with the right argument."
+    },
+    {
+      "id": "minimax-F3",
+      "severity": "medium",
+      "issue": "isSafeReturnTo at AppRouter.tsx:91-98 is a security-critical open-redirect prevention function that gates the post-OAuth return target, but it has zero unit-test coverage. I verified the logic independently against the WHATWG URL spec and it correctly rejects https://evil.com, //evil.com, javascript:alert(1), and data:text/html,...; it accepts /relative/path and http://localhost/x (same origin). However, the catch-block fallback 'return url.startsWith('/')' is a second code path that is also untested. A future change (e.g., swapping the origin check for a regex, or removing the startsWith fallback) could silently introduce an open-redirect vulnerability and no test would fail.",
+      "citation": "remote-frontend/src/AppRouter.tsx:91-98",
+      "remediation": "Add a unit test file (e.g., remote-frontend/src/AppRouter.test.tsx or a new remote-frontend/src/lib/safeReturnTo.test.ts if the function is extracted) that exercises isSafeReturnTo with: '/nodes' (true), 'https://evil.com' (false), '//evil.com' (false), 'javascript:alert(1)' (false), 'data:text/html,<script>' (false), '' (true via base-resolution), and an unparseable string that triggers the catch block (false unless it starts with /). Export isSafeReturnTo from AppRouter.tsx or extract it to a standalone module so it can be imported by the test."
+    },
+    {
+      "id": "minimax-F4",
+      "severity": "low",
+      "issue": "OAuthCallbackPage catch block at AppRouter.tsx:140-144 calls window.location.assign('/login?error=...') BEFORE clearVerifier(). In a real browser this works because navigation is async, but the ordering is inconsistent with the success path at AppRouter.tsx:135-139 which clears BEFORE assigning. If the assignment were ever to throw synchronously (e.g., in a sandboxed iframe where navigation is blocked), the verifier would remain in sessionStorage and be reused by a subsequent callback attempt. The success path's clear-before-assign ordering is the safer pattern; the catch block should match it.",
+      "citation": "remote-frontend/src/AppRouter.tsx:140-144",
+      "remediation": "Swap the order in the catch block to call clearVerifier() before window.location.assign(...). This makes the cleanup ordering consistent with the success path and ensures the verifier is always cleared before any navigation attempt."
+    },
+    {
+      "id": "minimax-F5",
+      "severity": "info",
+      "issue": "setIsRedirecting(true) at AppRouter.tsx:138 is dead code. The state update is scheduled, but window.location.assign(safeReturnTo) at line 139 navigates away synchronously before React commits the re-render. The 'Redirecting...' UI block at lines 150-158 is never observed by the user. The state, the setter, and the conditional render are all unused. This is pre-existing (not introduced by this workstream), but the workstream touches the surrounding code and could clean it up.",
+      "citation": "remote-frontend/src/AppRouter.tsx:138,150-158",
+      "remediation": "Remove the isRedirecting state, the setIsRedirecting setter, the useState(false) initializer, and the conditional render block at lines 150-158. The initial 'Processing...' render at lines 160-166 is sufficient as the callback's loading state."
+    },
+    {
+      "id": "minimax-F6",
+      "severity": "low",
+      "issue": "InvitationCompletePage.test.tsx error-path tests (lines 58-132) verify that the error message is rendered, but none of them verify the sessionStorage side-effects. For the 'missing stored verifier' (line 72-84) and 'missing invitation token' (line 86-104) paths, the code returns early WITHOUT clearing the sessionStorage keys (InvitationCompletePage.tsx:45-48 and 51-54). The 'redeemOAuth fails' test (line 106-118) does verify the keys are cleared, but the other two error paths leave the stale keys in sessionStorage. A future change that accidentally clears the keys on these error paths (or that fails to clear them on the redeem-failure path) would not be caught by the current test suite.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:72-104",
+      "remediation": "In the 'missing stored verifier' test, assert that sessionStorage.getItem('invitation_token') remains 'stored-token' (proving the code did not clear it on this error path). In the 'missing invitation token' test, assert that sessionStorage.getItem('oauth_verifier') remains 'stored-verifier' (same reasoning). This pins down the intended behavior so a regression that clears or fails to clear the keys is caught."
+    }
+  ]
+}

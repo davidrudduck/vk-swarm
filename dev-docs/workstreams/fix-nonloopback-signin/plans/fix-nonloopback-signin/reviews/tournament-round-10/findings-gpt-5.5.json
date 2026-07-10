@@ -1,0 +1,33 @@
+{
+  "model": "gpt-5.5",
+  "findings": [
+    {
+      "id": "gpt55-F1",
+      "severity": "medium",
+      "issue": "OAuthCallbackPage still performs a one-time redeem request from a StrictMode-mounted effect without making the request cancellable or idempotent. The app is mounted under React.StrictMode, but the effect starts oauthApi.redeem() and only checks abortController.signal after the await. StrictMode's first effect cleanup cannot stop the already-started redeem request, so development/LAN sign-in can send the same handoff_id/app_code twice; if the backend consumes the code on the first request, the live second effect can fail and redirect back to /login.",
+      "citation": "remote-frontend/src/AppRouter.tsx:143",
+      "remediation": "Add a StrictMode regression test that asserts only one redeem reaches the API. Make callback redemption idempotent under StrictMode, for example by sharing an in-flight redeem promise keyed by handoff_id/app_code/verifier and applying the result only from the live effect, and/or by threading AbortSignal through oauthApi.redeem/makeRequest so cleanup can cancel the fetch before it reaches the backend."
+    },
+    {
+      "id": "gpt55-F2",
+      "severity": "medium",
+      "issue": "InvitationCompletePage has the same incomplete AbortController pattern on the invitation OAuth completion path. The first StrictMode effect can start redeemOAuth(), cleanup marks it aborted but does not cancel the request, and the second effect starts another redeem for the same one-time app_code. A consumed first redemption leaves the live second run showing an error before acceptInvitation() can run, so invitation acceptance remains flaky on the LAN/dev path this workstream is meant to protect.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:57",
+      "remediation": "Cover InvitationCompletePage with a StrictMode test and make the redeem/accept chain idempotent for a given handoff_id/app_code/verifier/token. Reuse one in-flight completion promise or thread AbortSignal through redeemOAuth and acceptInvitation so the simulated cleanup cannot leave an uncancelled one-time backend operation racing the live effect."
+    },
+    {
+      "id": "gpt55-F3",
+      "severity": "medium",
+      "issue": "The shell-cache runtime rule matches every /invitations/ URL, including /invitations/:token/complete?handoff_id=...&app_code=... callback URLs. Workbox runtime caching uses the request URL as the cache key by default, so StaleWhileRevalidate can persist one-time OAuth callback parameters and invitation tokens in Cache Storage and churn the 10-entry shell cache with per-login URLs.",
+      "citation": "remote-frontend/vite.config.ts:34",
+      "remediation": "Do not runtime-cache OAuth callback/completion URLs with their search strings. Exclude /oauth/callback and /invitations/*/complete from shell-cache, or add a Workbox cache-key plugin that strips search parameters before caching the app shell while leaving API/network requests uncached."
+    },
+    {
+      "id": "gpt55-F4",
+      "severity": "low",
+      "issue": "InvitationCompletePage.test.tsx writes access_token to localStorage in the success-path test but only clears sessionStorage in beforeEach/afterEach. That violates the spec's test-isolation requirement and can mask regressions or contaminate later tests if order changes or additional localStorage-sensitive assertions are added.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:29",
+      "remediation": "Clear localStorage alongside sessionStorage in this file's beforeEach and afterEach hooks."
+    }
+  ]
+}

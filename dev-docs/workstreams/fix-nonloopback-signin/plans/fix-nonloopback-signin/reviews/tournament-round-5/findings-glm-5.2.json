@@ -1,0 +1,19 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "medium",
+      "issue": "InvitationCompletePage gates storage cleanup (clearVerifier, clearInvitationToken) and access_token persistence (localStorage.setItem) behind `if (!active) return` at line 70 (success path) and line 84 (catch block). The app wraps its entire tree in <React.StrictMode> (main.tsx:8), which double-invokes effects in development: the first mount starts the async completeInvitation() (which awaits redeemOAuth + acceptInvitation), then the StrictMode cleanup fires synchronously setting active=false, then the second mount is skipped by the hasRun ref. When the async resolves, `if (!active) return` fires and SKIPS clearVerifier(), clearInvitationToken(), localStorage.setItem('access_token', ...), setSuccess(), setOrgSlug(), and the redirect timer. In development this ALWAYS breaks invitation completion: the invitation is accepted server-side but access_token is never persisted (user unauthenticated), sessionStorage secrets are never cleared, success UI never shows, and the redirect never fires. In production (no StrictMode double-invoke), the same skip occurs if the user navigates away (unmount) during the redeem/accept network round-trip. This is a regression introduced by combining the Round 1 `active` flag (fix #3) with the Round 2 `hasRun` ref (fix #2). OAuthCallbackPage (AppRouter.tsx:108-157) does NOT have this bug because it has `hasRun` but no `active` flag — its storage operations complete unconditionally. The existing success test (InvitationCompletePage.test.tsx:34-57) does not wrap in StrictMode so it passes without catching this bug.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:70",
+      "remediation": "Move storage operations (clearVerifier, clearInvitationToken, localStorage.setItem) BEFORE the `if (!active)` guard so they execute regardless of mount state. The `active` flag should only gate React state setters (setSuccess, setOrgSlug, setError) and the timer, not storage side effects. Apply the same fix to the catch block (line 84): call clearVerifier()/clearInvitationToken() before the `if (!active) return`, then guard only setError. Add a StrictMode-wrapped success test to InvitationCompletePage.test.tsx (render with <React.StrictMode> around the MemoryRouter) to catch this class of regression."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "low",
+      "issue": "InvitationPage's invitation-fetch catch uses `e.message` without an `instanceof Error` guard, unlike every other catch in the workstream (AppRouter.tsx:57 uses `err instanceof Error ? err.message : 'OAuth init failed'`, InvitationCompletePage.tsx:85 uses `e instanceof Error ? e.message : 'Failed to complete invitation'`, and even InvitationPage's own OAuth catch at line 48 uses `e instanceof Error ? e.message : 'OAuth init failed'`). If getInvitation ever rejects with a non-Error value (e.g., a string, null, or a bare object), `e.message` evaluates to `undefined`, `setFetchError(undefined)` sets a falsy state, the `if (fetchError)` check at line 55 is false, the ErrorCard is never rendered, and the user is stuck on the 'Loading invitation...' screen indefinitely with no way to retry or see an error.",
+      "citation": "remote-frontend/src/pages/InvitationPage.tsx:28",
+      "remediation": "Replace `.catch((e) => setFetchError(e.message))` with `.catch((e) => setFetchError(e instanceof Error ? e.message : 'Failed to load invitation'))` to match the guarded pattern used in every other catch block in the workstream."
+    }
+  ]
+}

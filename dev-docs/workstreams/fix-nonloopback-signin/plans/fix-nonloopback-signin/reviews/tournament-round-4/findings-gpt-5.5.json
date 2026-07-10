@@ -1,0 +1,19 @@
+{
+  "model": "gpt-5.5",
+  "findings": [
+    {
+      "id": "gpt55-F1",
+      "severity": "medium",
+      "issue": "OAuth init failures leave stale PKCE state in sessionStorage. Both entry points store the verifier, and the invitation flow also stores the invitation token, before awaiting initOAuth; if initOAuth rejects, the catch blocks only render an error and never clear those values. That leaves an oauth_verifier/invitation_token for a flow that was never started, which can contaminate a later callback or retry path.",
+      "citation": "remote-frontend/src/AppRouter.tsx:41-51; remote-frontend/src/pages/InvitationPage.tsx:36-47",
+      "remediation": "In the initOAuth catch paths, call clearVerifier(); in the invitation flow also call clearInvitationToken(). Add rejection tests that assert the storage keys are removed."
+    },
+    {
+      "id": "gpt55-F2",
+      "severity": "low",
+      "issue": "OAuth callback errors are redirected to /login?error=..., but LoginPage never reads the error query parameter. The callback can correctly build an error redirect while the user still lands on a normal login screen with no explanation, so the added callback error paths are not actually user-visible after navigation.",
+      "citation": "remote-frontend/src/AppRouter.tsx:30-32; remote-frontend/src/AppRouter.tsx:116-145",
+      "remediation": "Initialize or derive the LoginPage error state from searchParams.get('error') and cover a /login?error=... route render test."
+    }
+  ]
+}

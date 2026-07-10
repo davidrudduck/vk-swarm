@@ -1,0 +1,40 @@
+{
+  "model": "kimi-k2.7-code",
+  "findings": [
+    {
+      "id": "kimi-F1",
+      "severity": "medium",
+      "issue": "InvitationCompletePage still breaks under React.StrictMode after the Round 5 partial fix. The app wraps the tree in <React.StrictMode> (main.tsx:8), which mounts-unmounts-remounts effects in development. The `hasRun` ref at line 23 prevents the second mount from running the effect, while the first effect's cleanup sets `active=false`. When the async redeem/accept resolves, the success path hits `if (!active) return` at line 74 and skips `setSuccess`, `setOrgSlug`, and the redirect timer; the catch block also skips `setError`. The Round 5 remediation only moved storage side effects before that guard, so secrets are cleared and the access token is persisted, but the user is left staring at 'Completing invitation...' and the redirect never fires in development.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:23-94; remote-frontend/src/main.tsx:8",
+      "remediation": "Drop the persistent `hasRun` guard and let each StrictMode invocation run the flow, using an abort/operation-id pattern so the second effect can cancel or dedupe the first instead of skipping UI updates. Gate only the React state setters/timer with a per-effect `cancelled` flag; do not gate them on `active` after StrictMode cleanup. Add a StrictMode-wrapped success test to reproduce and prevent regression."
+    },
+    {
+      "id": "kimi-F2",
+      "severity": "low",
+      "issue": "The Workbox runtimeCaching shell-cache only registers '/', '/login', and '/oauth/callback'. The two invitation routes added by this workstream, '/invitations/:token/accept' and '/invitations/:token/complete', are not in the shell cache. On a registered PWA, direct navigation or reload on an invitation URL will miss the cached index.html shell and can fall through to a 404 or network failure instead of the SPA.",
+      "citation": "remote-frontend/vite.config.ts:34",
+      "remediation": "Add the invitation route patterns to the shell-cache runtimeCaching entry, e.g. with a path-prefix predicate `url.pathname.startsWith('/invitations/')`, so the service worker serves the app shell for those entry points."
+    },
+    {
+      "id": "kimi-F3",
+      "severity": "low",
+      "issue": "No test covers the 'redeem succeeds but acceptInvitation fails' path in InvitationCompletePage. The catch block at line 84-88 handles an acceptInvitation rejection, and the mock exists, but the test suite only exercises redeemOAuth failure. A regression that broke message rendering or storage cleanup specifically in the acceptInvitation-failure branch would not be caught.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:84-88; remote-frontend/src/pages/InvitationCompletePage.test.tsx:107-119",
+      "remediation": "Add a test that calls `vi.mocked(redeemOAuth).mockResolvedValue(...)` and `vi.mocked(acceptInvitation).mockRejectedValue(new Error('Accept failed'))`, then assert the error is displayed and sessionStorage is cleared."
+    },
+    {
+      "id": "kimi-F4",
+      "severity": "low",
+      "issue": "Acceptance evidence test counts in the decisions ledger are stale. The ledger records the targeted four-file run as '12 tests passed' and the full suite as '114 tests passed', but the actual current output is 31 tests for the targeted run and 133 tests for the full suite. Stale counts undermine the Finish-What-We-Start evidence requirement.",
+      "citation": "docs/plans/fix-nonloopback-signin/decisions-ledger.md:143-144",
+      "remediation": "Re-run the exact gate commands and update the counts to the current values (31 and 133), or replace hard-coded counts with a pointer to the re-runnable command so the evidence cannot drift again."
+    },
+    {
+      "id": "kimi-F5",
+      "severity": "info",
+      "issue": "AppRouter.tsx imports PKCE helpers from '@/pkce' in two separate import statements on adjacent lines, importing `retrieveVerifier`/`clearVerifier` and `generateVerifier`/`generateChallenge`/`storeVerifier` separately. This is a minor readability/maintainability smell in a file that otherwise has coherent grouped imports.",
+      "citation": "remote-frontend/src/AppRouter.tsx:11; remote-frontend/src/AppRouter.tsx:13",
+      "remediation": "Consolidate both imports into a single `import { generateVerifier, generateChallenge, storeVerifier, retrieveVerifier, clearVerifier } from '@/pkce'` statement."
+    }
+  ]
+}

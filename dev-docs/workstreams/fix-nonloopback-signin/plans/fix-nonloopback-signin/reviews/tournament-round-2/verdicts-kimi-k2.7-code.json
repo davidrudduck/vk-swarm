@@ -1,0 +1,40 @@
+{
+  "verdicts": {
+    "kimi-k2.7-code:kimi-F1": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "deepseek-v4-pro",
+      "notes": "Valid. StrictMode double-mount causes duplicate redeemOAuth/acceptInvitation API calls (active flag only guards state updates, not the async calls). AbortController in cleanup with signal passed to fetch calls is the correct fix. hasRun ref alone is wrong for StrictMode (second mount should be authoritative). Remediation passes because 'and/or' includes AbortController."
+    },
+    "kimi-k2.7-code:kimi-F2": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "deepseek-v4-pro",
+      "notes": "Valid. OAuthCallbackPage useEffect has no active guard or cleanup (line 143-144), so StrictMode double-mount causes two redeem + two window.location.assign calls racing. Adding active flag and/or AbortController is the correct fix."
+    },
+    "kimi-k2.7-code:kimi-F3": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "deepseek-v4-pro",
+      "notes": "Valid. When handoff_id and app_code are missing with no error param, the early return at line 34 leaves error=null and success=false, so the component renders the spinner forever. Setting error before returning fixes this completely."
+    },
+    "kimi-k2.7-code:kimi-F4": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "deepseek-v4-pro",
+      "notes": "Valid. The test's partial @/api mock uses importOriginal to get the real module, so getInvitation remains the real function calling fetch('/v1/invitations/test-token'). InvitationPage imports from '../api' which resolves to the same file. In jsdom, either fetch is unavailable (throwing ReferenceError) or fails with no server, causing the test to timeout or assert incorrectly. Mocking getInvitation to resolve to a valid invitation is correct — the test should explicitly mock it alongside initOAuth."
+    },
+    "kimi-k2.7-code:kimi-F5": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "deepseek-v4-pro",
+      "notes": "Valid. Both test vectors (empty string, 'abc') fit in a single 64-byte SHA-256 block and do not exercise multi-block padding, multi-block compression, or the full 64-word message schedule expansion. Adding multi-block test vectors (e.g., a 55+ byte input) is the correct remediation."
+    },
+    "kimi-k2.7-code:kimi-F6": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "deepseek-v4-pro",
+      "notes": "Valid. Line 44 uses retrieveInvitationToken() || urlToken, preferring sessionStorage over the URL route param. If sessionStorage contains a stale token from a prior incomplete flow, it overrides the current URL token. The URL token is the authoritative source for the current invitation; using it as primary is correct and safe."
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "verdicts": {
+    "minimax-m3:minimax-F1": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "deepseek-v4-pro"
+    },
+    "minimax-m3:minimax-F2": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "deepseek-v4-pro"
+    },
+    "minimax-m3:minimax-F3": {
+      "valid": false,
+      "remediation_passes": false,
+      "reviewer": "deepseek-v4-pro"
+    },
+    "minimax-m3:minimax-F4": {
+      "valid": true,
+      "remediation_passes": true,
+      "reviewer": "deepseek-v4-pro"
+    }
+  }
+}

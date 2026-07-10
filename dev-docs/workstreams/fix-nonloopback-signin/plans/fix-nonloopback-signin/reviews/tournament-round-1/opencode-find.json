@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "opencode",
+    "run",
+    "--dir",
+    "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko",
+    "--auto",
+    "--agent",
+    "plan",
+    "--format",
+    "json",
+    "Read the full task instructions from /home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/find-prompt.md and execute them."
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko",
+  "exit_code": 0,
+  "finished_at": "2026-07-08T10:44:29.113180+00:00",
+  "notes": [],
+  "prompt_file": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/find-prompt.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/opencode-find.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/disco-gecko/docs/plans/fix-nonloopback-signin/reviews/tournament-round-1/opencode-find.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-08T10:33:57.334373+00:00",
+  "status": "ok",
+  "task": "plan-review",
+  "tool": "opencode",
+  "tool_version": "1.17.15"
+}

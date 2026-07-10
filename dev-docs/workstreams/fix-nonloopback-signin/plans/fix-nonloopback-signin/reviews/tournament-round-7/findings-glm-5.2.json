@@ -1,0 +1,40 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "low",
+      "issue": "Double redeemOAuth network call under React.StrictMode. main.tsx wraps the app in <React.StrictMode>, which mount-unmount-remounts effects synchronously in dev. The effect creates a fresh AbortController per mount (line 24) and calls completeInvitation() (line 89), which runs synchronously up to `await redeemOAuth(...)` at line 57. Mount 1 calls redeemOAuth and suspends; cleanup then aborts controller 1; mount 2 calls redeemOAuth AGAIN with a fresh controller. The AbortController.signal is never threaded into redeemOAuth or acceptInvitation (they accept no signal param), so the abort only gates post-await state updates (line 63) — it does not cancel the in-flight fetch. Both POST /v1/oauth/web/redeem requests fire with the same handoff_id/app_code/verifier. If the backend consumes the OAuth handoff on first redeem (one-time use), the second redeem fails and the user sees a 'Could not accept invitation' error in development. The first redeem's response is discarded. The Round 6 AbortController migration fixed the stuck-loading UX bug but introduced this double-network-call regression for the dev experience.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:57,63; remote-frontend/src/main.tsx:8",
+      "remediation": "Thread the AbortController.signal into the fetch layer (pass signal to redeemOAuth/acceptInvitation and forward to fetch), or guard redeemOAuth with an operation-id/ref that prevents the second mount from starting a redundant request. At minimum, document that the abort is a cancellation flag only and does not cancel in-flight network requests."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "low",
+      "issue": "Stale acceptance-evidence test counts in the decisions ledger. Lines 143-144 record '4 files and 12 tests passed' for the targeted run and '25 files and 114 tests passed' for the full suite. Re-running the exact commands now yields 31 tests across 4 files and 133 tests across 25 files. The counts drifted as error-path tests were added in rounds 2-6 without updating the evidence. This undermines the AGENTS.md 'Finish What We Start' mandatory-evidence requirement, since the ledger no longer reflects the actual gate output. (Reported in round 6 as kimi-F4; not included in the round 6 fix list, still present.)",
+      "citation": "docs/plans/fix-nonloopback-signin/decisions-ledger.md:143-144",
+      "remediation": "Re-run `cd remote-frontend && npm run test:run -- src/pkce.test.ts src/AppRouter.test.tsx src/pages/InvitationPage.test.tsx src/pages/InvitationCompletePage.test.tsx` and `cd remote-frontend && npm run test:run`, then update the counts to 31 and 133 respectively, or replace the hard-coded counts with the re-runnable command so the evidence cannot drift again."
+    },
+    {
+      "id": "glm-F3",
+      "severity": "low",
+      "issue": "No test covers the 'redeemOAuth succeeds but acceptInvitation fails' path. The catch block at lines 81-86 handles an acceptInvitation rejection (clears storage, gates setError on abort), but every test either mocks redeemOAuth to reject (line 107) or mocks both redeemOAuth and acceptInvitation to resolve (line 34). A regression that broke error rendering, storage cleanup, or abort-gating specifically in the acceptInvitation-failure branch would not be caught. (Reported in round 6 as kimi-F3; not in the round 6 fix list, still present.)",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:81-86; remote-frontend/src/pages/InvitationCompletePage.test.tsx:107-119",
+      "remediation": "Add a test: `vi.mocked(redeemOAuth).mockResolvedValue({ access_token: 'access-123', refresh_token: 'refresh-123' })` and `vi.mocked(acceptInvitation).mockRejectedValue(new Error('Accept failed'))`, then assert the error is displayed, sessionStorage oauth_verifier/invitation_token are null, and localStorage access_token is NOT set (since storage happens after acceptInvitation succeeds)."
+    },
+    {
+      "id": "glm-F4",
+      "severity": "info",
+      "issue": "The OAuth callback redeem-success test does not verify the redirect target or the isSafeReturnTo result. AppRouter.test.tsx:119-138 asserts redeem is called and storage is cleared, but does not mock window.location.assign — jsdom prints 'Not implemented: navigation to another Document' during the run — and does not assert the user is redirected to the safe return-to URL (/nodes). A regression that redirected to the wrong target, or to an unsafe cross-origin URL, would not be caught by this test. The isSafeReturnTo unit tests cover the predicate in isolation, but no integration test proves the callback page actually uses the safe value for the redirect.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:119-138; remote-frontend/src/AppRouter.tsx:148",
+      "remediation": "Mock window.location.assign (preserving origin via Object.assign(Object.create(window.location), { assign: mockAssign })) in the redeem-success test, then assert mockAssign was called with '/nodes' (or the safeReturnTo value). This both silences the jsdom warning and locks in the redirect-target contract."
+    },
+    {
+      "id": "glm-F5",
+      "severity": "info",
+      "issue": "InvitationCompletePage error-path tests do not assert sessionStorage cleanup. The oauthError test (lines 59-71), missing-verifier test (73-85), missing-token test (87-105), and missing-params test (121-133) all check the error text is displayed but none assert `sessionStorage.getItem('oauth_verifier')` or `getItem('invitation_token')` is null, even though the component clears these in every error branch (lines 30-31, 37-38, 46, 53). Only the success test (34-57) and redeem-failure test (107-119) verify storage cleanup. A regression that removed a clearVerifier/clearInvitationToken call from an error branch would not be caught. (Reported in round 6 as minimax-F4; not in the round 6 fix list, still present.)",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:59-71,73-85,87-105,121-133; remote-frontend/src/pages/InvitationCompletePage.tsx:30-31,37-38,46,53",
+      "remediation": "Add `expect(sessionStorage.getItem('oauth_verifier')).toBeNull()` and `expect(sessionStorage.getItem('invitation_token')).toBeNull()` to each of the four error-path tests."
+    }
+  ]
+}

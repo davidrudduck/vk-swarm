@@ -1,0 +1,12 @@
+{
+  "model": "gpt-5.5",
+  "findings": [
+    {
+      "id": "gpt55-F1",
+      "severity": "medium",
+      "issue": "The StrictMode fix still allows duplicate single-use OAuth redeem requests. The app root runs under React.StrictMode, but both callback effects call redeem before any abort check can prevent the network side effect; the cleanup only marks the first response stale after the POST has already been started. Since the backend only allows authorized handoffs to be redeemed once, the first StrictMode pass can consume or race the handoff and leave the second active pass showing a redeem failure, breaking dev/LAN callback completion intermittently.",
+      "citation": "remote-frontend/src/main.tsx:8; remote-frontend/src/AppRouter.tsx:143; remote-frontend/src/pages/InvitationCompletePage.tsx:57; crates/remote/src/db/oauth.rs:284",
+      "remediation": "Add an idempotence guard that survives StrictMode effect replay for each callback attempt, or plumb AbortSignal through oauthApi.redeem/redeemOAuth and suppress the first request before it is sent; add StrictMode-wrapped tests asserting each callback route calls redeem exactly once."
+    }
+  ]
+}

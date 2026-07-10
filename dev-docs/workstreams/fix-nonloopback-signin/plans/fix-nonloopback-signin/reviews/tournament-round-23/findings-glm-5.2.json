@@ -1,0 +1,47 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "low",
+      "issue": "profileApi.get() does not accept an AbortSignal parameter, unlike oauthApi.init/redeem and getInvitation/acceptInvitation which all accept signal?: AbortSignal. ProfileProvider uses a `cancelled` boolean flag to guard setState calls after unmount, but the in-flight fetch cannot be cancelled — it runs to the 30s makeRequest timeout. In React StrictMode (dev), two concurrent fetches are in flight. Additionally, on unmount during a 401 response, the `if (cancelled) return` guard at ProfileProvider.tsx:42 skips the localStorage.removeItem('access_token') call at line 45, leaving a stale 401-rejected token in localStorage until the next full remount.",
+      "citation": "remote-frontend/src/lib/api/profile.ts:7, remote-frontend/src/components/ProfileProvider.tsx:36-49",
+      "remediation": "Add `signal?: AbortSignal` to profileApi.get()'s signature, pass it to makeRequest, and create an AbortController in ProfileProvider's useEffect (same pattern as InvitationCompletePage and OAuthCallbackPage)."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "low",
+      "issue": "InvitationPage.test.tsx does not call localStorage.clear() in beforeEach or afterEach — only sessionStorage.clear(). This is inconsistent with AppRouter.test.tsx (lines 44,52) and InvitationCompletePage.test.tsx (lines 27,33) which clear both. The error-path test at line 116 asserts localStorage.getItem('access_token') is null, which passes only because the error handler clears it — but if a future test stores a value in localStorage, it would leak across tests and cause flaky failures.",
+      "citation": "remote-frontend/src/pages/InvitationPage.test.tsx:35-37,40-44",
+      "remediation": "Add localStorage.clear() to both beforeEach and afterEach in InvitationPage.test.tsx."
+    },
+    {
+      "id": "glm-F3",
+      "severity": "low",
+      "issue": "InvitationCompletePage discards a valid OAuth access_token on transient acceptInvitation failure. The flow is: redeemOAuth succeeds (consuming the handoff_id) → acceptInvitation fails (e.g., network timeout, 500) → catch block calls localStorage.removeItem('access_token') at line 90. The access_token from redeemOAuth was never stored (stored only at line 77 after acceptInvitation succeeds). The handoff_id has been consumed by the backend, so the user cannot retry redeemOAuth — they must re-authenticate with the OAuth provider from scratch. A transient acceptInvitation failure forces a full re-authentication.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:62-92",
+      "remediation": "Consider storing the access_token after redeemOAuth succeeds (before acceptInvitation), so that a transient acceptInvitation failure allows retry without re-authentication. Alternatively, store the token and show a retry button for the accept step."
+    },
+    {
+      "id": "glm-F4",
+      "severity": "info",
+      "issue": "PKCE challenge uses hex encoding (bytesToHex) instead of base64url encoding as specified by RFC 7636. The standard defines S256 challenge as BASE64URL-ENCODE(SHA256(ASCII(verifier))), producing a 43-character base64url string. The code produces a 64-character lowercase hex string. This works if the backend expects hex and re-computes using the same method, but deviates from the PKCE specification. If the backend is ever updated to enforce RFC 7636 challenge verification, sign-in would break.",
+      "citation": "remote-frontend/src/pkce.ts:11,125-131",
+      "remediation": "Replace bytesToHex(hash) with base64UrlEncode(hash) in generateChallenge to comply with RFC 7636. Coordinate with backend to ensure it expects base64url challenges."
+    },
+    {
+      "id": "glm-F5",
+      "severity": "info",
+      "issue": "makeRequest unconditionally sets Content-Type: application/json on all requests, including GET requests with no body (getInvitation at api.ts:43, profileApi.get at profile.ts:13). The Content-Type header is meaningless for GET requests and some strict servers or proxies may reject or log warnings for it.",
+      "citation": "remote-frontend/src/lib/api/utils.ts:61-63",
+      "remediation": "Only set Content-Type when the request has a body (options.body is defined), or let callers opt out."
+    },
+    {
+      "id": "glm-F6",
+      "severity": "info",
+      "issue": "OAuthCallbackPage imports and calls oauthApi.redeem directly (AppRouter.tsx:146) while InvitationCompletePage uses the redeemOAuth wrapper from api.ts (InvitationCompletePage.tsx:62). Both resolve to the same underlying call, but the inconsistent import pattern makes the codebase harder to maintain — a future change to the redeem signature would need to be applied in two places.",
+      "citation": "remote-frontend/src/AppRouter.tsx:8,146, remote-frontend/src/pages/InvitationCompletePage.tsx:3,62",
+      "remediation": "Use the redeemOAuth wrapper consistently in both pages, or inline oauthApi.redeem in both."
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "model": "deepseek-v4-pro",
+  "findings": [
+    {
+      "id": "deepseek-F1",
+      "severity": "medium",
+      "issue": "No test for acceptInvitation failure after successful redeemOAuth in InvitationCompletePage. The catch block at InvitationCompletePage.tsx:81-86 (which runs clearVerifier, clearInvitationToken, and sets the error) is never exercised by any test. The existing redeem failure test at InvitationCompletePage.test.tsx:107 only covers the case where redeemOAuth itself rejects; the path where redeemOAuth resolves and acceptInvitation subsequently throws is untested.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:81-86",
+      "remediation": "Add a test that mocks redeemOAuth to resolve and acceptInvitation to reject, then asserts the error message is displayed and both sessionStorage keys are cleared."
+    },
+    {
+      "id": "deepseek-F2",
+      "severity": "low",
+      "issue": "InvitationPage OAuth failure test at InvitationPage.test.tsx:91-110 asserts that error UI ('Sign-in failed' heading and 'OAuth init failed' body) is displayed, but does not verify that sessionStorage was cleaned up. The production code at InvitationPage.tsx:56-57 calls clearVerifier() and clearInvitationToken() in the catch block, but no test asserts oauth_verifier or invitation_token are null after the failure.",
+      "citation": "remote-frontend/src/pages/InvitationPage.test.tsx:106-110",
+      "remediation": "Add expect(sessionStorage.getItem('oauth_verifier')).toBeNull() and expect(sessionStorage.getItem('invitation_token')).toBeNull() to the initOAuth failure test."
+    },
+    {
+      "id": "deepseek-F3",
+      "severity": "info",
+      "issue": "InvitationCompletePage.test.tsx beforeEach/afterEach clears sessionStorage but not localStorage. The happy-path test at InvitationCompletePage.test.tsx:34 writes localStorage.setItem('access_token', 'access-123') via the component. Vitest's jsdom environment shares localStorage within a test file, so any future test that asserts localStorage.getItem('access_token') is null could be contaminated by leftover state from an earlier test.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:24-32",
+      "remediation": "Add localStorage.clear() to the beforeEach and afterEach blocks."
+    }
+  ]
+}

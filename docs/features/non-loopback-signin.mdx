@@ -1,0 +1,127 @@
+---
+title: "Non-Loopback Sign-In"
+description: "Sign in to Vibe Kanban from any device on your network using plain HTTP"
+sidebarTitle: "LAN Sign-In"
+audience: user
+component: remote-frontend
+sources:
+  - remote-frontend/src/pkce.ts
+  - remote-frontend/src/AppRouter.tsx
+  - remote-frontend/src/pages/InvitationPage.tsx
+  - remote-frontend/src/pages/InvitationCompletePage.tsx
+generated: 2026-07-09
+---
+
+Vibe Kanban supports sign-in from any device on your local network, not just the machine running the server. This means you can access the Hive UI from your laptop, tablet, or phone while the server runs on your desktop.
+
+## Accessing from Another Device
+
+### 1. Find Your Server's IP Address
+
+On the machine running Vibe Kanban, find its local IP address:
+
+```bash
+# Linux/macOS
+hostname -I
+
+# Windows
+ipconfig
+```
+
+Look for an address like `192.168.1.100` or `10.0.0.50`.
+
+### 2. Start the Server on All Interfaces
+
+Start Vibe Kanban with the `HOST` environment variable to allow network access:
+
+```bash
+HOST=0.0.0.0 npx vibe-kanban
+```
+
+The server will bind to all network interfaces, making it accessible from other devices.
+
+### 3. Access from Another Device
+
+Open a browser on your other device and navigate to:
+
+```
+http://<your-server-ip>:3002
+```
+
+For example: `http://192.168.1.100:3002`
+
+<Check>
+You'll see the Vibe Kanban login page, ready for sign-in.
+</Check>
+
+## Signing In
+
+### Standard Sign-In
+
+1. Navigate to `http://<your-server-ip>:3002/login`
+2. Click **Sign in with GitHub** or **Sign in with Google**
+3. Complete the OAuth flow on the provider's website
+4. You'll be redirected back to Vibe Kanban, signed in
+
+### Invitation Sign-In
+
+If someone invited you to join a Vibe Kanban instance:
+
+1. Open the invitation link (e.g., `http://<your-server-ip>:3002/invitations/abc123/accept`)
+2. Click **Sign in with GitHub** or **Sign in with Google**
+3. Complete the OAuth flow
+4. You'll be added to the organization and signed in
+
+<Note>
+Invitation links are single-use and expire after 7 days.
+</Note>
+
+## Troubleshooting
+
+### "OAuth init failed" Error
+
+**Symptoms**: Clicking sign-in shows an error message instead of redirecting to the OAuth provider.
+
+**Cause**: This usually happens when accessing over plain HTTP from a non-localhost address.
+
+**Solution**: This is now supported! Ensure you're using the latest version of Vibe Kanban. If the issue persists:
+
+1. Check that you're accessing via `http://` (not `https://`)
+2. Verify the server is running with `HOST=0.0.0.0`
+3. Check browser console for specific error messages
+
+### Sign-In Redirects to Wrong URL
+
+**Symptoms**: After signing in, you're redirected to `localhost` instead of the server's IP address.
+
+**Cause**: The OAuth callback URL was configured for localhost.
+
+**Solution**: Set the `VITE_APP_BASE_URL` environment variable:
+
+```bash
+VITE_APP_BASE_URL=http://<your-server-ip>:3002 HOST=0.0.0.0 npx vibe-kanban
+```
+
+### Invitation Token Not Found
+
+**Symptoms**: Opening an invitation link shows "Invitation not found" or "Invitation expired."
+
+**Cause**: The invitation link may have been used already or expired.
+
+**Solution**: Ask the organization admin to send a new invitation.
+
+## Security Considerations
+
+<Warning>
+Only use `HOST=0.0.0.0` on trusted networks. Consider configuring firewall rules to restrict access to specific IP addresses if needed.
+</Warning>
+
+- **Local networks only**: Don't expose Vibe Kanban to the public internet without proper security (HTTPS, authentication)
+- **Firewall**: Configure your firewall to allow traffic on port 3002 only from trusted IPs
+- **VPN**: For remote access, use a VPN instead of exposing the service directly
+
+## Related Documentation
+
+- [Network Access](/getting-started#network-access) - Basic network setup
+- [Swarm/Hive Setup](/swarm-hive-setup) - Full swarm architecture configuration
+- [Authentication Token Management](/architecture/auth-token-management) - Technical details on token handling

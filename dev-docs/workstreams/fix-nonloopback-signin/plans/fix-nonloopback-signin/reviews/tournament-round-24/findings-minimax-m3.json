@@ -1,0 +1,47 @@
+{
+  "model": "minimax-m3",
+  "findings": [
+    {
+      "id": "minimax-F1",
+      "severity": "low",
+      "issue": "OAuthCallbackPage success-path test at AppRouter.test.tsx:119-138 does not mock `window.location.assign` and does not assert that the redirect to `safeReturnTo` (`/nodes`) was issued. In production the page navigates away on success, but in the test environment jsdom's window.location.assign is a no-op so the assertion would catch a regression. The test only checks `oauthApi.redeem` was called and that the token/verifier cleanup happened. The corresponding early-return error-path tests (lines 255-310) DO mock `mockAssign` and assert the redirect — making this success-path test inconsistent with its siblings.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:119-138",
+      "remediation": "Add `const mockAssign = vi.fn(); vi.stubGlobal('location', { ...window.location, assign: mockAssign })` and assert `expect(mockAssign).toHaveBeenCalledWith('/nodes')` in the success-path test."
+    },
+    {
+      "id": "minimax-F2",
+      "severity": "low",
+      "issue": "OAuthCallbackPage error-path tests at AppRouter.test.tsx:255-331 (`oauth callback: handles oauthError param`, `...missing handoff_id/app_code`, `...missing stored verifier`, `...redeem failure`) all assert `sessionStorage.getItem('oauth_verifier')` and `localStorage.getItem('access_token')` cleanup, but NONE assert `sessionStorage.getItem('invitation_token')` is cleared. The actual cleanup code at AppRouter.tsx:121-123, 129-131, 140-141, 159-161 calls `clearInvitationToken()` on every error branch, so the test coverage is asymmetric — a future contributor who removed the `clearInvitationToken()` call from one branch would not see a test failure.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:255-331",
+      "remediation": "Add `expect(sessionStorage.getItem('invitation_token')).toBeNull()` to each of the four OAuthCallbackPage error-path tests."
+    },
+    {
+      "id": "minimax-F3",
+      "severity": "low",
+      "issue": "InvitationCompletePage success-path test at InvitationCompletePage.test.tsx:36-59 verifies `localStorage.getItem('access_token')` is set to the redeemed token and sessionStorage cleanup happened, but does NOT assert the `setSuccess(true)` state transition (the 'Invitation accepted!' text only appears via the success render branch) and does NOT verify the `setTimeout(() => window.location.assign(appBase), 2000)` was scheduled. The success path at InvitationCompletePage.tsx:75-85 runs setSuccess, then sets a 2000ms timer — a regression that skipped the setSuccess call would still leave the localStorage.setItem passing. The test does check `getByText('Invitation accepted!')` so the render is covered, but the timer is not.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:36-59",
+      "remediation": "Either use `vi.useFakeTimers()` and assert the timer was registered, or add a comment acknowledging the timer is intentionally not asserted (the only way to verify is via `getByText('Invitation accepted!')` which is already present)."
+    },
+    {
+      "id": "minimax-F4",
+      "severity": "low",
+      "issue": "oauthApi.init() test at oauth.test.ts:42-71 asserts the URL, method, and body, but does NOT assert the `Content-Type: application/json` header that makeRequest sets (utils.ts:61-63). The test does not assert the lack of `Authorization` header either (since localStorage is empty in beforeEach). If a future contributor changed the default header behavior in makeRequest, the test would still pass. Similarly the redeem test (line 73-102) and the logout test (line 104-122) do not assert Content-Type. The logout test does check Authorization, which is the only header assertion in the file.",
+      "citation": "remote-frontend/src/lib/api/oauth.test.ts:42-122",
+      "remediation": "Add header assertions to the init/redeem tests: `expect((call[1].headers as Headers).get('Content-Type')).toBe('application/json')`."
+    },
+    {
+      "id": "minimax-F5",
+      "severity": "info",
+      "issue": "isSafeReturnTo at AppRouter.tsx:97-104 has unit tests at AppRouter.test.tsx:334-360 covering relative paths, cross-origin rejection, protocol-relative rejection, javascript:, data:, and empty string, but there is NO integration test in AppRouter.test.tsx that exercises isSafeReturnTo via the OAuthCallbackPage's success path. A regression that broke the URL parsing (e.g., parsing `//evil.com` as same-origin) would not be caught by the existing OAuthCallbackPage test at line 119-138, because that test only uses `return_to=/nodes` (which is always safe).",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:119-138, 334-360",
+      "remediation": "Add a test: render `/oauth/callback?...&return_to=https://evil.com/steal` and assert `window.location.assign` was called with `/nodes` (the fallback) rather than the attacker-controlled URL."
+    },
+    {
+      "id": "minimax-F6",
+      "severity": "info",
+      "issue": "The `useEffect` at AppRouter.tsx:33-35 (`setError(searchParams.get('error'))`) is redundant with the initial state at AppRouter.tsx:31 (`useState<string | null>(searchParams.get('error'))`). The initial state already captures the error on first render; the effect only re-runs the same read on every searchParams change. The effect is needed only for the case where the user navigates between /login and /login?error=foo while the component is already mounted — but the initial state has the same value on first mount, so a single `useState` with a `useEffect` to keep it in sync would be equivalent. This is a minor code smell, not a bug.",
+      "citation": "remote-frontend/src/AppRouter.tsx:31-35",
+      "remediation": "Either drop the useEffect and rely on initial state only (loses in-mount URL changes), or keep both for clarity. Current code works correctly; no fix required."
+    }
+  ]
+}

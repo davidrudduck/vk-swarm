@@ -1,0 +1,40 @@
+{
+  "model": "minimax-m3",
+  "findings": [
+    {
+      "id": "minimax-F1",
+      "severity": "low",
+      "issue": "InvitationPage.handleOAuthLogin does not call clearVerifier() or clearInvitationToken() in its catch block. The storeVerifier() and storeInvitationToken() calls at lines 36-37 happen BEFORE initOAuth(), so if initOAuth throws, the verifier and invitation token remain in sessionStorage. Round 3 fix #5 added clearVerifier() on early returns, but this particular code path (InvitationPage) was not updated to match the same standard. While subsequent attempts overwrite the verifier, the invitation_token is only written by InvitationPage and could persist as a stale value if the user navigates to /login instead of retrying.",
+      "citation": "remote-frontend/src/pages/InvitationPage.tsx:29-49",
+      "remediation": "Add clearVerifier() and clearInvitationToken() to the catch block at line 45, matching the OAuthCallbackPage pattern from AppRouter.tsx:117-145. Add an assertion in InvitationPage.test.tsx that sessionStorage.getItem('invitation_token') is null after the initOAuth failure test."
+    },
+    {
+      "id": "minimax-F2",
+      "severity": "low",
+      "issue": "LoginPage does not read the `?error=` URL param. When OAuthCallbackPage redirects to /login?error=... (lines 118, 124, 131, 145 of AppRouter.tsx), the LoginPage renders a clean welcome screen with no error message. The user cannot see why their sign-in failed. This is pre-existing but is now made more visible by the workstream's expanded test coverage that asserts OAuthCallbackPage redirects to /login?error= on 4 distinct error paths.",
+      "citation": "remote-frontend/src/AppRouter.tsx:29-88, 117-145",
+      "remediation": "Initialize the LoginPage `error` state from searchParams.get('error') via useEffect, OR add a useState initializer that reads from useSearchParams. Add a route test that renders /login?error=access_denied and asserts the error message is displayed."
+    },
+    {
+      "id": "minimax-F3",
+      "severity": "info",
+      "issue": "Decisions-ledger acceptance evidence is stale. The ledger claims '4 files and 12 tests passed' (line 143), but the current test suite has 30 tests across the 4 files (12 in pkce+AppRouter+InvitationPage+InvitationCompletePage base + 18 added in rounds 2 and 3: 6 isSafeReturnTo cases, 4 LoginPage initOAuth rejection cases, 4 OAuthCallbackPage error paths, 4 InvitationCompletePage error paths, 2 InvitationPage error paths). The acceptance evidence should reflect the current test count.",
+      "citation": "docs/plans/fix-nonloopback-signin/decisions-ledger.md:143",
+      "remediation": "Update the acceptance evidence with the current test count (30 tests across 4 files). Verify the count by running `cd remote-frontend && npm run test:run -- src/pkce.test.ts src/AppRouter.test.tsx src/pages/InvitationPage.test.tsx src/pages/InvitationCompletePage.test.tsx`."
+    },
+    {
+      "id": "minimax-F4",
+      "severity": "info",
+      "issue": "isSafeReturnTo test coverage is missing several edge cases: (1) paths with query strings (e.g., '/nodes?foo=bar'), (2) paths with fragments (e.g., '/nodes#section'), (3) URLs with port mismatch (e.g., '//localhost:9999/path'), (4) protocol confusion variants (e.g., '\\\\\\\\evil.com\\\\path' with Windows-style backslashes). The function correctly handles these (URL parser normalizes backslashes to forward slashes), but the tests would document the intended behavior and prevent regressions.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:314-341",
+      "remediation": "Add test cases to the isSafeReturnTo describe block: paths with query strings, paths with fragments, URLs with port mismatches, and protocol-relative variants with backslashes."
+    },
+    {
+      "id": "minimax-F5",
+      "severity": "info",
+      "issue": "InvitationPage fetch error test does not assert that the OAuth buttons are not rendered. The component returns the ErrorCard early on fetchError (line 51-58), so the OAuth buttons should NOT be in the DOM. The test only asserts the error text is displayed. A regression that keeps the buttons rendered after a fetch error would not be caught.",
+      "citation": "remote-frontend/src/pages/InvitationPage.test.tsx:79-89",
+      "remediation": "Add `expect(screen.queryByRole('button', { name: 'Continue with GitHub' })).not.toBeInTheDocument()` to the fetch error test."
+    }
+  ]
+}

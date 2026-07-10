@@ -1,0 +1,33 @@
+{
+  "model": "deepseek-v4-pro",
+  "findings": [
+    {
+      "id": "deepseek-F1",
+      "severity": "medium",
+      "issue": "ProfileProvider has no test for non-401 ApiError responses from profileApi.get(). When the server returns 500/502/503 with an ApiError, the catch block at ProfileProvider.tsx:44 should NOT clear the access_token (since the error is transient, not an auth failure). The test at ProfileProvider.test.tsx:127 covers network errors (plain Error, not ApiError), but no test verifies behavior with an ApiError where err.status !== 401.",
+      "citation": "components/ProfileProvider.test.tsx:1-172",
+      "remediation": "Add a test that mocks fetch returning { ok: false, status: 500 }, asserts that localStorage.removeItem is NOT called, and the profile state shows isSignedIn: false, isLoaded: true."
+    },
+    {
+      "id": "deepseek-F2",
+      "severity": "low",
+      "issue": "isSafeReturnTo (AppRouter.tsx:97) has no test for same-origin absolute URLs. The function should return true for URLs like 'https://myapp.com/nodes' when window.location.origin matches, but this edge case is untested. The current tests cover relative paths, cross-origin URLs, protocol-relative URLs, javascript:, data:, and empty string, but not same-origin absolute URLs.",
+      "citation": "AppRouter.test.tsx:347-374",
+      "remediation": "Add a test: expect(isSafeReturnTo(window.location.origin + '/nodes')).toBe(true) to verify same-origin absolute URLs are accepted."
+    },
+    {
+      "id": "deepseek-F3",
+      "severity": "low",
+      "issue": "InvitationPage and LoginPage OAuth component-level tests (AppRouter.test.tsx:89, InvitationPage.test.tsx:48) exclusively use stubGetRandomValuesOnlyCrypto() which stubs globalThis.crypto WITHOUT a subtle property, forcing the sha256Fallback code path. The native crypto.subtle.digest happy path is never exercised at the component integration level — only in pkce.test.ts unit tests. If a regression breaks the native digest path only, component tests would still pass.",
+      "citation": "AppRouter.test.tsx:31-40, InvitationPage.test.tsx:13-22",
+      "remediation": "Add a test variant for each component that stubs crypto.subtle.digest (not just getRandomValues) and verifies the native path produces the same result."
+    },
+    {
+      "id": "deepseek-F4",
+      "severity": "info",
+      "issue": "InvitationCompletePage and OAuthCallbackPage have no abort-path tests. Both components use AbortController + AbortSignal patterns with defensive abort checks between async calls (e.g. InvitationCompletePage.tsx:69,73). No test verifies that aborting between redeemOAuth and acceptInvitation, or during acceptInvitation, correctly suppresses state updates and prevents stale state. Current tests only cover error-path (rejected Promises), not abort-path (aborted signals during in-flight operations).",
+      "citation": "InvitationCompletePage.test.tsx:1-170, AppRouter.test.tsx:119-344",
+      "remediation": "Add tests that resolve redeemOAuth but reject acceptInvitation via AbortError, and verify no success/error state is rendered. Similarly add abort-during-redeem tests for OAuthCallbackPage."
+    }
+  ]
+}

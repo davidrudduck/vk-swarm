@@ -1,0 +1,40 @@
+{
+  "model": "deepseek-v4-pro",
+  "findings": [
+    {
+      "id": "deepseek-F1",
+      "severity": "low",
+      "issue": "LoginPage error state is initialized twice per mount when navigated to with an ?error= query param. The useState initializer reads searchParams.get('error') AND the useEffect re-sets it from searchParams, causing an unnecessary intermediate render. The useEffect is needed for React correctness when search params change post-mount, but the useState initializer could safely be null.",
+      "citation": "remote-frontend/src/AppRouter.tsx:32-36",
+      "remediation": "Change useState initializer to null and let useEffect always set it: `const [error, setError] = useState<string | null>(null)`. The useEffect on line 34-36 already covers the mount case and param-changes case."
+    },
+    {
+      "id": "deepseek-F2",
+      "severity": "low",
+      "issue": "InvitationCompletePage does not clear sessionStorage verifier/token when the effect aborts after acceptInvitation resolves. The abort check at line 67 returns early without calling clearVerifier() or clearInvitationToken(), leaving stale PKCE state in sessionStorage. While extremely rare in practice (user would need to navigate away mid-accept), it violates the cleanliness contract established by all other success and error paths in the same component.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:67-70",
+      "remediation": "Move the clearVerifier() and clearInvitationToken() calls before the abort check on line 67, so they execute regardless of whether the effect was aborted. These are idempotent no-ops if already run and ensure sessionStorage is always cleaned."
+    },
+    {
+      "id": "deepseek-F3",
+      "severity": "info",
+      "issue": "sha256() in pkce.ts uses an empty catch block to silently fall back to sha256Fallback() on any crypto.subtle.digest error. While correct for the primary use case (crypto.subtle is undefined on non-secure origins), this also masks configuration errors such as CSP restrictions that block WebCrypto access or browser bugs. Developers would never see a console warning that the native path failed.",
+      "citation": "remote-frontend/src/pkce.ts:19-21",
+      "remediation": "Add a console.debug or console.warn in the catch block before falling back: `} catch (e) { console.debug('crypto.subtle.digest unavailable, using fallback SHA-256:', e); return sha256Fallback(data) }`."
+    },
+    {
+      "id": "deepseek-F4",
+      "severity": "info",
+      "issue": "PKCE sessionStorage functions (storeVerifier, retrieveVerifier, clearVerifier, storeInvitationToken, retrieveInvitationToken, clearInvitationToken) have no direct unit tests. They are tested only indirectly through route-level integration tests. A regression in storage key strings or a missing export would only be caught by higher-level tests, making debugging harder.",
+      "citation": "remote-frontend/src/pkce.ts:133-158",
+      "remediation": "Add a `describe('PKCE storage')` block to pkce.test.ts with direct tests for each of the six storage functions, verifying the round-trip of store → retrieve → clear for both verifier and invitation token keys."
+    },
+    {
+      "id": "deepseek-F5",
+      "severity": "info",
+      "issue": "acceptInvitation in api.ts uses raw fetch without an AbortSignal or timeout, unlike oauthApi methods which go through makeRequest (which has a 30s timeout and supports signal combination). If the server hangs during invitation acceptance, the InvitationCompletePage effect will wait indefinitely with no user-visible feedback beyond the loading spinner.",
+      "citation": "remote-frontend/src/api.ts:43",
+      "remediation": "Route acceptInvitation through makeRequest or add a timeout abort wrapper so that hanging requests eventually fail with a user-visible error instead of spinning forever."
+    }
+  ]
+}

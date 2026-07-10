@@ -1,0 +1,20 @@
+{
+  "leaderboard": [
+    {
+      "model": "kimi-k2.7-code",
+      "points": 18.0,
+      "rank": 1
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "points": 12.0,
+      "rank": 2
+    },
+    {
+      "model": "minimax-m3",
+      "points": 6.5,
+      "rank": 3
+    }
+  ],
+  "seed": 42
+}

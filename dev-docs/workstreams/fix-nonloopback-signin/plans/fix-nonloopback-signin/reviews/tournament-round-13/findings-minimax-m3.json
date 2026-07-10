@@ -1,0 +1,61 @@
+{
+  "model": "minimax-m3",
+  "findings": [
+    {
+      "id": "minimax-F1",
+      "severity": "medium",
+      "issue": "StrictMode double-redeem persists: the OAuthCallbackPage and InvitationCompletePage effects create an AbortController and call oauthApi.redeem/redeemOAuth, but the abort signal is not plumbed to fetch — oauthApi.redeem (AppRouter.tsx:143) and redeemOAuth (InvitationCompletePage.tsx:57) both call makeRequest without an options.signal, so the cleanup-time abortController.abort() does not cancel the in-flight POST. With main.tsx wrapping the app in <React.StrictMode>, the effect runs twice on mount in dev: both redeems are sent in parallel, the first wins the backend's atomic mark_redeemed UPDATE...WHERE status='authorized' (crates/remote/src/db/oauth.rs:261-281) and the second fails with OAuthHandoffError::AlreadyRedeemed, leaving the dev/LAN user redirected to /login?error=oauth%20redeem%20failed%3A%20400. No test wraps the callback route in StrictMode to catch it (the gpt-5.5 F1 finding from round 12 was not remediated).",
+      "citation": "remote-frontend/src/AppRouter.tsx:143; remote-frontend/src/pages/InvitationCompletePage.tsx:57; remote-frontend/src/lib/api/oauth.ts:42-64; crates/remote/src/db/oauth.rs:261-281",
+      "remediation": "Add an optional signal parameter to oauthApi.redeem (and a parallel redeemOAuth wrapper) that forwards options.signal into makeRequest; in the OAuthCallbackPage and InvitationCompletePage effects pass abortController.signal into the redeem call so the first POST is cancelled before the second one fires. Then add a StrictMode-wrapped test (render in <React.StrictMode>) asserting oauthApi.redeem/redeemOAuth is called exactly once per callback mount."
+    },
+    {
+      "id": "minimax-F2",
+      "severity": "medium",
+      "issue": "OAuth callback success-path test does not mock window.location.assign or assert the redirect target. The test 'oauth callback: redeems with the stored verifier and clears it' (AppRouter.test.tsx:119-138) calls renderWithRouter with return_to=/nodes and verifies localStorage and sessionStorage cleanup, but unlike every error-path test (lines 255-326) never stubs window.location.assign and never asserts where the redirect goes. If safeReturnTo were changed to a wrong URL (e.g., '/' or the attacker-controlled input), no test would catch the regression (the mimo-F1 finding from round 12 was not remediated).",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:119-138",
+      "remediation": "Add const mockAssign = vi.fn() and vi.stubGlobal('location', { ...window.location, assign: mockAssign }) before renderWithRouter, then assert mockAssign was called with '/nodes' for the default return_to. Add a second test that renders with return_to=/tasks and asserts the redirect goes to '/tasks'."
+    },
+    {
+      "id": "minimax-F3",
+      "severity": "medium",
+      "issue": "No test exercises a non-default return_to value flowing through to the OAuth callback success redirect. isSafeReturnTo is unit-tested in isolation (AppRouter.test.tsx:329-355) and the callback success test uses the default return_to=/nodes. A regression that ignores return_to and always redirects to '/nodes' would pass every existing test (the mimo-F2 finding from round 12 was not remediated).",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:119-138; remote-frontend/src/AppRouter.tsx:117-118",
+      "remediation": "Add a test that mocks window.location.assign, renders /oauth/callback?handoff_id=...&app_code=...&return_to=/tasks with a resolving redeem mock, and asserts the redirect goes to '/tasks'."
+    },
+    {
+      "id": "minimax-F4",
+      "severity": "low",
+      "issue": "isSafeReturnTo('') returns true (AppRouter.test.tsx:353-355 asserts this). The function is exported and is the single point of return_to sanitization, so the semantic that 'empty string is a safe relative path' is surprising and a footgun for any future caller that passes the raw searchParams.get('return_to') value without a `|| '/nodes'` fallback (the mimo-F3 finding from round 12 was not remediated).",
+      "citation": "remote-frontend/src/AppRouter.tsx:97-104",
+      "remediation": "Add an early return at the top of isSafeReturnTo: if (!url.trim()) return false."
+    },
+    {
+      "id": "minimax-F5",
+      "severity": "low",
+      "issue": "OAuth callback tests do not verify clearInvitationToken is called on any path. The oauthError (AppRouter.test.tsx:255-271), missing handoff_id/app_code (line 273-289), missing-stored-verifier (line 291-306), and redeem-failure (line 308-326) tests all assert sessionStorage.getItem('oauth_verifier') is null but never set sessionStorage.setItem('invitation_token', ...) and never assert it is null after. The implementation calls clearInvitationToken() on all four paths (AppRouter.tsx:121, 128, 137, 156). A regression that drops the clearInvitationToken() call from any of these paths would leave stale invitation_token values in sessionStorage and would not be caught.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:119-138, 255-326",
+      "remediation": "In each OAuth callback test, add sessionStorage.setItem('invitation_token', 'stored-token') before render and expect(sessionStorage.getItem('invitation_token')).toBeNull() after waitFor, to exercise the clearInvitationToken() call on every path."
+    },
+    {
+      "id": "minimax-F6",
+      "severity": "info",
+      "issue": "bytesToHex (pkce.ts:127) uses `for (let i = 0; i < bytes.length; i++)` while every other loop in pkce.ts uses `i += 1` (lines 65, 68, 75, 104, 116). Functionally identical, but breaks the file's internal loop-convention (the GLM F5 finding from round 12 was not remediated).",
+      "citation": "remote-frontend/src/pkce.ts:127",
+      "remediation": "Change `i++` to `i += 1` to match the rest of the file."
+    },
+    {
+      "id": "minimax-F7",
+      "severity": "info",
+      "issue": "The shell-cache exclusion comment in vite.config.ts says 'Exclude OAuth callback/completion URLs with query parameters' (vite.config.ts:36), but the check below is based purely on url.pathname (no query-string inspection) and matches the route itself. The comment misleads the reader into thinking the exclusion is conditional on the presence of a query string, when in fact /oauth/callback and /invitations/*/complete are excluded unconditionally.",
+      "citation": "remote-frontend/vite.config.ts:33-39",
+      "remediation": "Update the comment to: 'Exclude OAuth callback and invitation completion routes entirely — they have no cacheable shell response.'"
+    },
+    {
+      "id": "minimax-F8",
+      "severity": "info",
+      "issue": "decisions-ledger.md acceptance evidence contains stale test counts. The ledger states 'cd remote-frontend && npm run test:run -- src/pkce.test.ts src/AppRouter.test.tsx src/pages/InvitationPage.test.tsx src/pages/InvitationCompletePage.test.tsx — PASS, 4 files and 12 tests passed' and 'cd remote-frontend && npm run test:run — PASS, 25 files and 114 tests passed', but the actual test runs report 4 files and 33 tests, and 25 files and 135 tests. Stale acceptance evidence is misleading for future audits and undermines the reachability-gate claims.",
+      "citation": "docs/plans/fix-nonloopback-signin/decisions-ledger.md:143-144",
+      "remediation": "Re-run the targeted and full test commands and update the PASS lines with the current test counts (4 files / 33 tests for targeted; 25 files / 135 tests for full suite)."
+    }
+  ]
+}

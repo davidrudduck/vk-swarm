@@ -55,7 +55,7 @@ export function anySignal(signals: AbortSignal[]): AbortSignal {
  */
 export const makeRequest = async (url: string, options: RequestInit = {}) => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
 
   const headers = new Headers(options.headers ?? {});
   if (!headers.has('Content-Type')) {

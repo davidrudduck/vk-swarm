@@ -8,6 +8,8 @@ import {
 } from 'react';
 
 import type { ProfileResponse } from '@/types/shared/types';
+import { profileApi } from '@/lib/api/profile';
+import { ApiError } from '@/lib/api/utils';
 
 interface ProfileState {
   profile: ProfileResponse | null;
@@ -30,9 +32,7 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
     let cancelled = false;
 
     const fetchProfile = async () => {
-      const token = localStorage.getItem('access_token');
-
-      if (!token) {
+      if (!localStorage.getItem('access_token')) {
         if (!cancelled) {
           setProfile(null);
           setIsSignedIn(false);
@@ -40,38 +40,21 @@ export function ProfileProvider({ children }: ProfileProviderProps) {
         }
         return;
       }
-
       try {
-        const response = await fetch('/v1/profile', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
+        const data = await profileApi.get();
         if (cancelled) return;
-
-        if (response.ok) {
-          const data: ProfileResponse = await response.json();
-          setProfile(data);
-          setIsSignedIn(true);
-          setIsLoaded(true);
-        } else if (response.status === 401) {
-          localStorage.removeItem('access_token');
-          setProfile(null);
-          setIsSignedIn(false);
-          setIsLoaded(true);
-        } else {
-          setProfile(null);
-          setIsSignedIn(false);
-          setIsLoaded(true);
-        }
+        setProfile(data);
+        setIsSignedIn(true);
+        setIsLoaded(true);
       } catch (err) {
-        console.error('Failed to fetch profile:', err);
-        if (!cancelled) {
-          setProfile(null);
-          setIsSignedIn(false);
-          setIsLoaded(true);
+        if (cancelled) return;
+        // Clear stale token on 401
+        if (err instanceof ApiError && err.status === 401) {
+          localStorage.removeItem('access_token');
         }
+        setProfile(null);
+        setIsSignedIn(false);
+        setIsLoaded(true);
       }
     };
 

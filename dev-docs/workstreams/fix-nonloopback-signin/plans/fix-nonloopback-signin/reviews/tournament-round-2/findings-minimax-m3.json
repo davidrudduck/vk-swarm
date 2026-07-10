@@ -1,0 +1,33 @@
+{
+  "model": "minimax-m3",
+  "findings": [
+    {
+      "id": "minimax-F1",
+      "severity": "medium",
+      "issue": "AppRouter.test.tsx:179-198 — the /invitations/:token/accept route test is a race condition. The partial @/api mock at lines 20-23 preserves the real getInvitation, which calls fetch('http://localhost/v1/invitations/test-token'). In jsdom 27, fetch rejects with 'fetch failed' after ~34ms (verified empirically). The test's waitFor assertion completes in ~27ms — BEFORE fetch rejects — so the page is still in the loading state and the assertion passes. The 7ms margin is tight: on any system where fetch rejects faster, the page would transition to the error state and the test would fail after the 2-second timeout. The test was added in this workstream and should mock getInvitation to return a valid invitation, then assert on the rendered heading 'You've been invited'.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:179-198",
+      "remediation": "Mock getInvitation in the @/api mock for this test, then assert specifically on the rendered heading 'You've been invited' instead of the OR-fallback to loading text. Example: vi.mock('@/api', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/api')>()), initOAuth: vi.fn(), getInvitation: vi.fn().mockResolvedValue({ id: 'test', organization_slug: 'test-org', organization_name: 'Test', role: 'admin', expires_at: '2026-08-01T00:00:00Z' }) })) and replace the waitFor assertion with expect(screen.getByText(\"You've been invited\")).toBeInTheDocument()."
+    },
+    {
+      "id": "minimax-F2",
+      "severity": "low",
+      "issue": "pkce.test.ts:37-46 — the SHA-256 fallback is only tested against two short inputs ('' and 'abc', 0 and 3 bytes). The implementation has non-trivial logic for multi-block inputs: the padding calculation Math.ceil((data.length + 9) / 64) * 64, the bit-length encoding as two 32-bit big-endian words, the 64-word message schedule expansion, and the compression loop over multiple 64-byte blocks. I verified the implementation independently against Node's crypto.createHash for inputs of length 0, 3, 4, 55, 56, 63, 64, 100, and 1000 — all match. But the test suite itself does not cover any input that crosses a 64-byte block boundary. If the multi-block loop or the padding calculation regressed, the existing tests would not catch it.",
+      "citation": "remote-frontend/src/pkce.test.ts:37-46",
+      "remediation": "Add at least one test vector with length >= 56 bytes (e.g., 'a'.repeat(56) or the FIPS 180-2 'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq' vector with known hash 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1) to exercise the multi-block padding and compression loop. Add a second vector with length >= 64 to cover two full blocks."
+    },
+    {
+      "id": "minimax-F3",
+      "severity": "low",
+      "issue": "AppRouter.test.tsx:12-18 and :20-23 — the mock for @/lib/api/oauth replaces oauthApi with a fresh { init: vi.fn(), redeem: vi.fn(), logout: vi.fn() } object, and the @/api mock partially overrides initOAuth. This means the login test (line 88-116) never exercises the real oauthApi.init → fetch path; it only verifies that the re-exported initOAuth function is called with the right arguments. The actual API request to /v1/oauth/web/init is never tested at the unit level. The spec relies on manual LAN verification for end-to-end coverage, but a unit test that mocks fetch and verifies the request body shape (provider, return_to, app_challenge) would catch regressions in the OAuth payload contract independently of the PKCE fallback.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:12-18",
+      "remediation": "In the login test, additionally spy on globalThis.fetch and assert it was called with the correct URL, method, and JSON body containing the 64-char hex challenge. Or add a separate test that calls oauthApi.init directly with a mocked fetch and asserts the request payload."
+    },
+    {
+      "id": "minimax-F4",
+      "severity": "info",
+      "issue": "pkce.ts:46-104 — the SHA-256 fallback correctly produces 32-byte digests for all tested inputs (verified independently). However, the implementation is a hand-rolled SHA-256 in TypeScript with ~60 lines of bitwise arithmetic. The spec explicitly chose this over a dependency to avoid bundle and supply-chain churn, which is a reasonable trade-off. The risk is that future changes to the compression loop (e.g., the s0/s1 sigma functions at lines 65-67 or the Ch/Maj functions at lines 72-73) could silently produce incorrect digests that still pass the short-input tests. The current two test vectors ('' and 'abc') would not catch a bug in the multi-word message schedule expansion or the multi-block accumulation at lines 88-95.",
+      "citation": "remote-frontend/src/pkce.ts:46-104",
+      "remediation": "This is a risk-surface observation, not a bug. The F1/F2 remediation (add multi-block test vectors) is the actionable mitigation. Optionally, add a comment near the SHA256_K constant linking to FIPS 180-2 §4.1.2 so future maintainers know the reference."
+    }
+  ]
+}
