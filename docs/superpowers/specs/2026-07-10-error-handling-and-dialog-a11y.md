@@ -39,36 +39,37 @@ The `remote-frontend` has three quality gaps that affect every dialog and mutati
 
 ## Users / who is affected
 
-- **End-users (operators/admins):** see raw error JSON or unhelpful error messages when dialogs
+US1: **End-users (operators/admins):** see raw error JSON or unhelpful error messages when dialogs
   fail. Screen reader users get no signal that a dialog exists, is modal, or is intentionally
   uncloseable. Keyboard users cannot Escape out of dialogs.
-- **Developers:** duplicate error handling code across 6+ dialogs. No documented pattern for
+
+US2: **Developers:** duplicate error handling code across 6+ dialogs. No documented pattern for
   uncloseable dialogs. Mutation guard behavior is undocumented and untested.
 
 ## Success criteria
 
-SC1: `parseErrorMessage` lives at `src/lib/errors.ts` and handles: Error (including `ApiError`
+SC1: → US1: `parseErrorMessage` lives at `src/lib/errors.ts` and handles: Error (including `ApiError`
    with `error_data`), string, null, symbol, object with `error` key, object with `message`
    key, JSON body, circular refs, primitive JSON values. Returns a user-friendly string in
    all cases. 100% line coverage on the utility itself.
 
-SC2: All 7 dialog error call sites (SwarmLabelDialog, MergeProjectsDialog, MergeLabelsDialog,
+SC2: → US2: All 7 dialog error call sites (SwarmLabelDialog, MergeProjectsDialog, MergeLabelsDialog,
    MergeTemplatesDialog, SwarmProjectDialog, NodeTemplatesSection, NodeProjectsSection) use
    the shared `parseErrorMessage` instead of inline `instanceof Error` checks.
 
-SC3: `dialog.tsx` is rewritten to use `@radix-ui/react-dialog` (already installed at `^1.1.18`),
+SC3: → US1: `dialog.tsx` is rewritten to use `@radix-ui/react-dialog` (already installed at `^1.1.18`),
    gaining `role="dialog"`, `aria-modal="true"`, focus trapping, and Escape-to-close for free.
    The `uncloseable` prop is preserved as a first-class variant that suppresses close-on-escape
    and close-on-overlay-click while maintaining focus trap and aria-modal.
 
-SC4: `createAttemptRef` guard has at least 3 test cases: create-after-org-change,
+SC4: → US2: `createAttemptRef` guard has at least 3 test cases: create-after-org-change,
    create-after-closeDialog, revoke-after-org-change.
 
-SC5: `orgIdRef` guard on `createMutation.onError` has at least 1 test case.
+SC5: → US2: `orgIdRef` guard on `createMutation.onError` has at least 1 test case.
 
-SC6: All 28 existing NodeApiKeySection tests continue to pass. No regressions in dialog behavior.
+SC6: → US2: All 28 existing NodeApiKeySection tests continue to pass. No regressions in dialog behavior.
 
-SC7: `npm run lint`, `npx tsc --noEmit`, `npx vitest run` all pass locally.
+SC7: → US2: `npm run lint`, `npx tsc --noEmit`, `npx vitest run` all pass locally.
 
 ## Constraints
 
