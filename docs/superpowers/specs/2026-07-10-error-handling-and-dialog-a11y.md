@@ -47,22 +47,28 @@ The `remote-frontend` has three quality gaps that affect every dialog and mutati
 
 ## Success criteria
 
-1. `parseErrorMessage` lives at `src/lib/errors.ts` and handles: Error (including `ApiError`
+SC1: `parseErrorMessage` lives at `src/lib/errors.ts` and handles: Error (including `ApiError`
    with `error_data`), string, null, symbol, object with `error` key, object with `message`
    key, JSON body, circular refs, primitive JSON values. Returns a user-friendly string in
    all cases. 100% line coverage on the utility itself.
-2. All 7 dialog error call sites (SwarmLabelDialog, MergeProjectsDialog, MergeLabelsDialog,
+
+SC2: All 7 dialog error call sites (SwarmLabelDialog, MergeProjectsDialog, MergeLabelsDialog,
    MergeTemplatesDialog, SwarmProjectDialog, NodeTemplatesSection, NodeProjectsSection) use
    the shared `parseErrorMessage` instead of inline `instanceof Error` checks.
-3. `dialog.tsx` is rewritten to use `@radix-ui/react-dialog` (already installed at `^1.1.18`),
+
+SC3: `dialog.tsx` is rewritten to use `@radix-ui/react-dialog` (already installed at `^1.1.18`),
    gaining `role="dialog"`, `aria-modal="true"`, focus trapping, and Escape-to-close for free.
    The `uncloseable` prop is preserved as a first-class variant that suppresses close-on-escape
    and close-on-overlay-click while maintaining focus trap and aria-modal.
-4. `createAttemptRef` guard has at least 3 test cases: create-after-org-change,
+
+SC4: `createAttemptRef` guard has at least 3 test cases: create-after-org-change,
    create-after-closeDialog, revoke-after-org-change.
-5. `orgIdRef` guard on `createMutation.onError` has at least 1 test case.
-6. All 28 existing NodeApiKeySection tests continue to pass. No regressions in dialog behavior.
-7. `npm run lint`, `npx tsc --noEmit`, `npx vitest run` all pass locally.
+
+SC5: `orgIdRef` guard on `createMutation.onError` has at least 1 test case.
+
+SC6: All 28 existing NodeApiKeySection tests continue to pass. No regressions in dialog behavior.
+
+SC7: `npm run lint`, `npx tsc --noEmit`, `npx vitest run` all pass locally.
 
 ## Constraints
 
