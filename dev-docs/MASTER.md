@@ -10,6 +10,7 @@
 
 | Workstream | Status | Title | Rescued branches | Contradictions | Staging pointers |
 |---|---|---|---|---|---|
+| fix-nonloopback-signin | draft | fix-nonloopback-signin | - | - | 1 |
 | foundations-followup1 | shipped | foundations-followup1 | - | - | 2 |
 | hive-node-api-key-ui | shipped | Hive node API key management UI — generate/revoke/unblock keys on the Nodes page | - | - | 1 |
 | remote-docker-build-fix | shipped | Fix crates/remote Docker build — unblock remote/hive standup | - | - | 2 |
