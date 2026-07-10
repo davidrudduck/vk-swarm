@@ -15,27 +15,19 @@ allowed_change: edit
 covers_criteria: [SC3, SC6]
 ---
 ## Failing test (write first)
-Covered by: `remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx` (28 existing tests).
-Tests TS4, TS15, TS23 exercise dialog open/close/uncloseable behavior. After this task, all 28
+Covered by: `remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx` (36 existing tests).
+Tests TS4, TS15, TS23 exercise dialog open/close/uncloseable behavior. After this task, all 36
 tests must still pass — the Radix dialog preserves the same API surface.
 
 ## Change
-- **File:** remote-frontend/src/components/swarm/NodeApiKeySection.tsx
-- **Anchor:** import statement (line 16-22) and Dialog usage (lines 419-424)
-- **Before:**
-```typescript
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-```
-- **After:** (same imports — no change needed if task 201 preserves all exports)
 
-Check: verify `uncloseable` prop still works. The Dialog usage at line 424:
+Radix `DialogPrimitive.Root` does NOT accept `uncloseable` — it accepts only `open`,
+`onOpenChange`, `defaultOpen`, `modal`, `children`. The `uncloseable` prop must move from
+`<Dialog>` to `<DialogContent>` (which has it from task 201's rewrite).
+
+- **File:** remote-frontend/src/components/swarm/NodeApiKeySection.tsx
+- **Anchor:** line 419-424 (Dialog usage)
+- **Before:**
 ```tsx
 <Dialog
   open={showCreateDialog}
@@ -44,35 +36,37 @@ Check: verify `uncloseable` prop still works. The Dialog usage at line 424:
   }}
   uncloseable={!!createdSecret || createMutation.isPending}
 >
+  <DialogContent>
 ```
-This must work unchanged with the Radix implementation from task 201.
+- **After:**
+```tsx
+<Dialog
+  open={showCreateDialog}
+  onOpenChange={(open) => {
+    if (!open && !createdSecret && !createMutation.isPending) closeDialog();
+  }}
+>
+  <DialogContent uncloseable={!!createdSecret || createMutation.isPending}>
+```
 
-If the Radix `Dialog` (Root) component does NOT accept `uncloseable` as a prop (Radix Root
-accepts `open`, `onOpenChange`, `defaultOpen`, `modal`), then `uncloseable` must be moved to
-`DialogContent` instead. In that case:
-
-- **Before:** `<Dialog ... uncloseable={...}>` + `<DialogContent>`
-- **After:** `<Dialog ...>` + `<DialogContent uncloseable={...}>`
-
-This is the ONLY change expected. All other Dialog usage is unchanged.
+This is the ONLY change. `uncloseable` moves from the Root to the Content element.
 
 ## Allowed moves
-- Move `uncloseable` prop from `Dialog` to `DialogContent` if Radix Root doesn't accept it
-- No other changes to NodeApiKeySection.tsx
+- Move `uncloseable` prop from `<Dialog>` to `<DialogContent>` in NodeApiKeySection.tsx
+- No other changes
 
 ## STOP triggers
-- If any of the 28 existing tests fail after the change (fix before proceeding)
+- If any of the 36 existing tests fail after the change (fix before proceeding)
 - If the `uncloseable` behavior changes (close button hidden, Escape blocked, overlay click blocked)
 
 ## Manual verification (record in decisions-ledger)
 ```bash
 cd remote-frontend && npx vitest run src/components/swarm/NodeApiKeySection.test.tsx
-# Expected: all 28 tests pass
+# Expected: all 36 tests pass
 cd remote-frontend && npx tsc --noEmit
 # Expected: no type errors
 ```
 
 ## Done when
-- NodeApiKeySection renders correctly with Radix dialog
-- `uncloseable` prop works (close button hidden during secret reveal, Escape blocked)
-- All 28 existing tests pass (SC6)
+- `uncloseable` prop moved from `<Dialog>` to `<DialogContent>`
+- All 36 existing tests pass (SC6)

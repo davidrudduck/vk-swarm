@@ -24,7 +24,7 @@ depends on Phase 2 (dialog rewrite may affect test rendering). Phase 4 is indepe
 |----|-------|-------|------|------------|
 | 101 | Create shared parseErrorMessage in src/lib/errors.ts | 1 | dep: - | conflicts: none |
 | 102 | Create parseErrorMessage unit tests | 1 | dep: 101 | conflicts: none |
-| 103 | Update all dialog error call sites to use shared parseErrorMessage | 1 | dep: 101 | conflicts: none |
+| 103 | Update all 6 dialog error call sites to use shared parseErrorMessage | 1 | dep: 101 | conflicts: none |
 | 201 | Rewrite dialog.tsx to use @radix-ui/react-dialog | 2 | dep: - | conflicts: none |
 | 202 | Update NodeApiKeySection for Radix dialog API | 2 | dep: 201 | conflicts: none |
 | 203 | Create dialog a11y tests | 2 | dep: 201 | conflicts: none |

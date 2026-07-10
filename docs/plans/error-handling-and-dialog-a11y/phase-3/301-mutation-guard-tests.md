@@ -14,7 +14,8 @@ allowed_change: edit
 covers_criteria: [SC4, SC5]
 ---
 ## Failing test (write first)
-This task adds 4 new tests to the existing test file. Tests fail until the guards are exercised.
+These tests exercise guards that prevent stale mutation callbacks from executing. The tests
+verify the guard logic directly — not the org-change effect (which also clears state).
 
 ## Change
 - **File:** remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx
@@ -23,36 +24,7 @@ This task adds 4 new tests to the existing test file. Tests fail until the guard
 - **After:** Add these 4 tests before the closing `});`:
 
 ```typescript
-  it('createAttemptRef: onSuccess is ignored after org change (guard prevents stale secret)', async () => {
-    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
-    let resolveCreate: (v: unknown) => void;
-    const createPromise = new Promise((resolve) => { resolveCreate = resolve; });
-    vi.mocked(nodesApi.createApiKey).mockReturnValue(createPromise as ReturnType<typeof nodesApi.createApiKey>);
-    const { fireEvent } = await import('@testing-library/react');
-    const result = renderWith(<NodeApiKeySection organizationId="org-1" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
-    const nameInput = await screen.findByLabelText('Key Name');
-    fireEvent.change(nameInput, { target: { value: 'Test' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-    // Org changes before mutation resolves — createAttemptRef increments
-    result.rerender(
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
-      </QueryClientProvider>
-    );
-    resolveCreate!({
-      api_key: { id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
-        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
-        node_id: null, takeover_count: 0, takeover_window_start: null,
-        blocked_at: null, blocked_reason: null },
-      secret: 'vk_STALE_SECRET',
-    });
-    await waitFor(() => {
-      expect(screen.queryByText('vk_STALE_SECRET')).not.toBeInTheDocument();
-    });
-  });
-
-  it('createAttemptRef: onSuccess is ignored after closeDialog (guard prevents stale secret)', async () => {
+  it('createAttemptRef: onSuccess does not call setCreatedSecret when dialog was closed before resolve (SC4)', async () => {
     vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
     let resolveCreate: (v: unknown) => void;
     const createPromise = new Promise((resolve) => { resolveCreate = resolve; });
@@ -63,8 +35,11 @@ This task adds 4 new tests to the existing test file. Tests fail until the guard
     const nameInput = await screen.findByLabelText('Key Name');
     fireEvent.change(nameInput, { target: { value: 'Test' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-    // Close dialog before mutation resolves — createAttemptRef increments
+    // Close dialog BEFORE mutation resolves — createAttemptRef increments in closeDialog
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    // Verify dialog is closed (no form visible)
+    expect(screen.queryByLabelText('Key Name')).not.toBeInTheDocument();
+    // Resolve the mutation — onSuccess should be a no-op due to createAttemptRef guard
     resolveCreate!({
       api_key: { id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
         created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
@@ -72,12 +47,46 @@ This task adds 4 new tests to the existing test file. Tests fail until the guard
         blocked_at: null, blocked_reason: null },
       secret: 'vk_STALE_AFTER_CLOSE',
     });
+    // Guard prevents setCreatedSecret — secret must NOT appear
     await waitFor(() => {
       expect(screen.queryByText('vk_STALE_AFTER_CLOSE')).not.toBeInTheDocument();
     });
+    // Dialog must remain closed (guard didn't reopen it)
+    expect(screen.queryByLabelText('Key Name')).not.toBeInTheDocument();
   });
 
-  it('orgIdRef: revoke onError is ignored after org change (guard prevents stale error)', async () => {
+  it('createAttemptRef: onSuccess does not set createdSecret when org changed before resolve (SC4)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    let resolveCreate: (v: unknown) => void;
+    const createPromise = new Promise((resolve) => { resolveCreate = resolve; });
+    vi.mocked(nodesApi.createApiKey).mockReturnValue(createPromise as ReturnType<typeof nodesApi.createApiKey>);
+    const { fireEvent } = await import('@testing-library/react');
+    const result = renderWith(<NodeApiKeySection organizationId="org-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
+    fireEvent.change(nameInput, { target: { value: 'Test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    // Org changes — createAttemptRef increments in the org-change effect
+    result.rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
+      </QueryClientProvider>
+    );
+    // Resolve the mutation — onSuccess should be a no-op due to createAttemptRef guard
+    resolveCreate!({
+      api_key: { id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null },
+      secret: 'vk_STALE_AFTER_ORG_CHANGE',
+    });
+    // Guard prevents setCreatedSecret — secret must NOT appear
+    await waitFor(() => {
+      expect(screen.queryByText('vk_STALE_AFTER_ORG_CHANGE')).not.toBeInTheDocument();
+    });
+  });
+
+  it('orgIdRef: revoke onError does not call setError when org changed before reject (SC4/SC5)', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     try {
       const keys: NodeApiKey[] = [{
@@ -93,13 +102,15 @@ This task adds 4 new tests to the existing test file. Tests fail until the guard
       const result = renderWith(<NodeApiKeySection organizationId="org-1" />);
       const { fireEvent } = await import('@testing-library/react');
       fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
-      // Org changes before mutation rejects — orgIdRef guard fires
+      // Org changes — orgIdRef.current becomes "org-2"
       result.rerender(
         <QueryClientProvider client={queryClient}>
           <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
         </QueryClientProvider>
       );
+      // Reject the mutation — onError should be a no-op due to orgIdRef guard
       rejectRevoke!(new Error('revoke failed'));
+      // Guard prevents setError — no error alert should appear
       await waitFor(() => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       });
@@ -108,7 +119,7 @@ This task adds 4 new tests to the existing test file. Tests fail until the guard
     }
   });
 
-  it('orgIdRef: create onError is ignored after org change (guard prevents stale error)', async () => {
+  it('orgIdRef: create onError does not call setError when org changed before reject (SC5)', async () => {
     vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
     let rejectCreate: (v: unknown) => void;
     const createPromise = new Promise((_, reject) => { rejectCreate = reject; });
@@ -119,13 +130,15 @@ This task adds 4 new tests to the existing test file. Tests fail until the guard
     const nameInput = await screen.findByLabelText('Key Name');
     fireEvent.change(nameInput, { target: { value: 'Test' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-    // Org changes before mutation rejects — orgIdRef guard fires
+    // Org changes — orgIdRef.current becomes "org-2"
     result.rerender(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
       </QueryClientProvider>
     );
+    // Reject the mutation — onError should be a no-op due to orgIdRef guard
     rejectCreate!(new Error('create failed'));
+    // Guard prevents setError — no error alert should appear
     await waitFor(() => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
@@ -137,15 +150,15 @@ Add 4 new test cases to `NodeApiKeySection.test.tsx` before the closing `});`.
 
 ## STOP triggers
 - If any of the 4 new tests pass without the existing guards in NodeApiKeySection.tsx (hollow tests)
-- If any of the 28 existing tests break
+- If any of the 36 existing tests break
 
 ## Manual verification (record in decisions-ledger)
 ```bash
 cd remote-frontend && npx vitest run src/components/swarm/NodeApiKeySection.test.tsx
-# Expected: 32 tests pass (28 existing + 4 new)
+# Expected: 40 tests pass (36 existing + 4 new)
 ```
 
 ## Done when
 - 4 new tests added
-- All 32 tests pass (28 existing + 4 new)
-- SC4 (createAttemptRef: 3 tests) and SC5 (orgIdRef: 1 test) satisfied
+- All 40 tests pass (36 existing + 4 new)
+- SC4 (createAttemptRef: tests 1-2) and SC5 (orgIdRef: tests 3-4) satisfied

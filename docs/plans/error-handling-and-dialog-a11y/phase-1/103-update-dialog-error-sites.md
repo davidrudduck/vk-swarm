@@ -1,7 +1,7 @@
 ---
 id: "103"
 phase: 1
-title: "Update all 7 dialog error call sites to use shared parseErrorMessage"
+title: "Update all 6 dialog error call sites to use shared parseErrorMessage"
 status: ready
 depends_on: ["101"]
 parallel: false
@@ -13,17 +13,16 @@ files:
   - remote-frontend/src/components/swarm/MergeLabelsDialog.tsx
   - remote-frontend/src/components/swarm/MergeTemplatesDialog.tsx
   - remote-frontend/src/components/swarm/SwarmProjectDialog.tsx
-  - remote-frontend/src/components/swarm/NodeProjectsSection.tsx
-  - remote-frontend/src/components/swarm/NodeTemplatesSection.tsx
+  - remote-frontend/src/components/swarm/SwarmTemplateDialog.tsx
 irreversible: false
 scope_test: "remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx"
 allowed_change: edit
 covers_criteria: [SC2]
 ---
 ## Failing test (write first)
-Covered by: `remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx` (28 existing tests).
+Covered by: `remote-frontend/src/components/swarm/NodeApiKeySection.test.tsx` (36 existing tests).
 Tests TS7, TS13, TS16a-h, TS17 exercise error paths through parseErrorMessage. After this task,
-all 28 tests must still pass — the shared utility produces identical output to the local one.
+all 36 tests must still pass — the shared utility produces identical output to the local one.
 
 ## Change
 
@@ -106,17 +105,10 @@ import { parseErrorMessage } from '@/lib/errors';
 - **After:** `const message = parseErrorMessage(err);`
 - Add import: `import { parseErrorMessage } from '@/lib/errors';`
 
-### NodeProjectsSection.tsx
-- **File:** remote-frontend/src/components/swarm/NodeProjectsSection.tsx
-- **Anchor:** line 157 (catch block)
-- **Before:** `const message = err instanceof Error ? err.message : 'An error occurred';` (or similar)
-- **After:** `const message = parseErrorMessage(err);`
-- Add import: `import { parseErrorMessage } from '@/lib/errors';`
-
-### NodeTemplatesSection.tsx
-- **File:** remote-frontend/src/components/swarm/NodeTemplatesSection.tsx
-- **Anchor:** catch block with inline error check
-- **Before:** inline `instanceof Error` check (if present)
+### SwarmTemplateDialog.tsx
+- **File:** remote-frontend/src/components/swarm/SwarmTemplateDialog.tsx
+- **Anchor:** line 89
+- **Before:** `const message = err instanceof Error ? err.message : 'An error occurred';`
 - **After:** `const message = parseErrorMessage(err);`
 - Add import: `import { parseErrorMessage } from '@/lib/errors';`
 
@@ -132,12 +124,12 @@ import { parseErrorMessage } from '@/lib/errors';
 ## Manual verification (record in decisions-ledger)
 ```bash
 cd remote-frontend && npx vitest run
-# Expected: all existing tests pass (28 NodeApiKeySection + any others)
+# Expected: all existing tests pass (36 NodeApiKeySection + any others)
 cd remote-frontend && npx tsc --noEmit
 # Expected: no type errors
 ```
 
 ## Done when
-- All 7 files import from `@/lib/errors` instead of inline checks
+- All 6 files import from `@/lib/errors` instead of inline checks
 - NodeApiKeySection no longer has a local `parseErrorMessage`
 - All existing tests pass
