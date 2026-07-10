@@ -33,7 +33,6 @@ export default defineConfig({
           {
             urlPattern: ({ url }) => {
               const path = url.pathname
-              // Exclude OAuth callback/completion URLs with query parameters
               if (path === '/oauth/callback' || (path.startsWith('/invitations/') && path.endsWith('/complete'))) return false
               return ['/', '/login'].includes(path) || path.startsWith('/invitations/')
             },
@@ -76,6 +75,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/setupTests.ts'],
     globals: true,
-    exclude: ['**/node_modules/**', '**/e2e/**', '**/dist/**', 'scripts/**'],
+    restoreMocks: true,
+    exclude: ['**/node_modules/**', '**/e2e/**', '**/dist/**', '**/scripts/**'],
   },
 })

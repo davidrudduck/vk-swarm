@@ -922,7 +922,7 @@ describe('NodeApiKeySection', () => {
     });
   });
 
-  it('createAttemptRef: guard prevents stale onSuccess after closeDialog (SC4)', async () => {
+  it('createAttemptRef: onSuccess is a no-op when attemptId does not match createAttemptRef (SC4)', async () => {
     vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
     vi.mocked(nodesApi.createApiKey).mockResolvedValue({
       api_key: { id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
@@ -931,35 +931,29 @@ describe('NodeApiKeySection', () => {
         blocked_at: null, blocked_reason: null },
       secret: 'vk_SECRET_CLOSE_GUARD',
     });
-    const execCommand = vi.fn(() => true);
-    const origExecCommand = document.execCommand;
-    document.execCommand = execCommand;
-    const origClipboard = navigator.clipboard;
-    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true, writable: true });
-
-    try {
-      const { fireEvent } = await import('@testing-library/react');
-      renderWith(<NodeApiKeySection organizationId="org-1" />);
-      fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
-      const nameInput = await screen.findByLabelText('Key Name');
-      fireEvent.change(nameInput, { target: { value: 'Test' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-      await waitFor(() => {
-        expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
-      });
-      // Close dialog
-      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-      await waitFor(() => {
-        expect(screen.queryByText('vk_SECRET_CLOSE_GUARD')).not.toBeInTheDocument();
-      });
-      // Reopen
-      fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
-      expect(await screen.findByLabelText('Key Name')).toBeInTheDocument();
+    const { fireEvent } = await import('@testing-library/react');
+    renderWith(<NodeApiKeySection organizationId="org-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
+    fireEvent.change(nameInput, { target: { value: 'Test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    // Mutation resolves immediately — onSuccess fires with attemptId=0, ref=0 → passes
+    await waitFor(() => {
+      expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
+    });
+    // Close dialog — closeDialog() increments createAttemptRef to 1
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => {
       expect(screen.queryByText('vk_SECRET_CLOSE_GUARD')).not.toBeInTheDocument();
-    } finally {
-      Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true });
-      document.execCommand = origExecCommand;
-    }
+    });
+    // Reopen — the old mutation's onSuccess would have attemptId=0 but ref is now 1
+    // The guard (attemptId !== createAttemptRef.current) prevents stale callback
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    expect(await screen.findByLabelText('Key Name')).toBeInTheDocument();
+    // Verify: old secret does NOT leak into the reopened dialog
+    expect(screen.queryByText('vk_SECRET_CLOSE_GUARD')).not.toBeInTheDocument();
+    // Verify: the form is fresh (no stale name)
+    expect(screen.getByLabelText('Key Name')).toHaveValue('');
   });
 
   it('createAttemptRef: onSuccess does not set createdSecret when org changed before resolve (SC4)', async () => {
