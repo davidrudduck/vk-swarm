@@ -1,0 +1,54 @@
+{
+  "model": "minimax-m3",
+  "findings": [
+    {
+      "id": "minimax-F1",
+      "severity": "medium",
+      "issue": "OAuthCallbackPage error paths inconsistently clear invitation_token. The Round 6 fix added `clearVerifier()` AND `clearInvitationToken()` to the verifier-missing path (line 132-140) to prevent stale invitation state when the OAuth flow fails mid-invitation. However, the other error paths still only clear the verifier: the `oauthError` path (line 121-125), the missing handoff_id/app_code path (line 127-131), and the redeem-error catch (line 149-153) all call `clearVerifier()` but omit `clearInvitationToken()`. If a user is in the middle of an invitation OAuth flow and the provider returns an error, or the callback URL is malformed, or redeemOAuth throws, they get redirected to /login?error=... with the invitation_token still in sessionStorage. On retry, the new flow overwrites the token, so the leak is transient — but the inconsistency is a real maintenance hazard and contradicts the design intent established by the Round 6 fix.",
+      "citation": "remote-frontend/src/AppRouter.tsx:121-125, 127-131, 149-153",
+      "remediation": "Add `clearInvitationToken()` to the three remaining error paths in OAuthCallbackPage, mirroring the verifier-missing path's pattern. If the design intent is to NOT clear invitation_token in those paths (e.g., to survive multi-tab flows), then remove the `clearInvitationToken()` call from the verifier-missing path and document the decision in the decisions-ledger so the inconsistency doesn't spread."
+    },
+    {
+      "id": "minimax-F2",
+      "severity": "low",
+      "issue": "OAuthCallbackPage uses a `hasRun` useRef guard (line 108, 110-112) while InvitationCompletePage uses an AbortController pattern (line 24, 90-93). Round 6 explicitly replaced `hasRun` with AbortController in InvitationCompletePage to fix the StrictMode interaction bug, but the same fix was not applied to OAuthCallbackPage. The hasRun pattern has a latent defect: the useEffect depends on `[searchParams]` (line 157), so if the searchParams change while the component is still mounted (e.g., the user navigates to /oauth/callback?a=1, the effect runs and the redirect fires, but before the unmount completes the user manages to call history.push to a different /oauth/callback URL — possible with programmatic navigations), the second invocation is blocked by the hasRun guard. In practice the window.location.assign unmounts the tree, so this is edge-case-only, but the inconsistency between the two components is a code smell that will mislead future maintainers into thinking one pattern is preferred over the other.",
+      "citation": "remote-frontend/src/AppRouter.tsx:108, 110-112, 157; remote-frontend/src/pages/InvitationCompletePage.tsx:24, 90-93",
+      "remediation": "Replace the hasRun ref in OAuthCallbackPage with the same AbortController pattern used in InvitationCompletePage. Create the controller inside the useEffect, abort it in a cleanup function, and guard state setters and window.location.assign with `if (abortController.signal.aborted) return`."
+    },
+    {
+      "id": "minimax-F3",
+      "severity": "low",
+      "issue": "OAuthCallbackPage's useEffect (line 110-157) has no cleanup function. When the component unmounts during the in-flight `await oauthApi.redeem(...)` (line 142), the async work continues to completion: `localStorage.setItem('access_token', access_token)` (line 144), `clearVerifier()` (line 145), and `window.location.assign(safeReturnTo)` (line 148) all fire after unmount. The window.location.assign after unmount is the most concerning side effect — it navigates the entire browser context away from whatever the user is currently viewing. Compare with InvitationCompletePage which uses the AbortController pattern with a real cleanup return (line 90-93) that aborts the controller and clears the timer. The lack of a cleanup here is a regression that the Round 6 fix only addressed for InvitationCompletePage.",
+      "citation": "remote-frontend/src/AppRouter.tsx:110-157",
+      "remediation": "Add a cleanup function to the OAuthCallbackPage useEffect that aborts any in-flight redeem and prevents the post-await side effects (localStorage set, window.location.assign) from firing after unmount. The AbortController pattern from InvitationCompletePage is the right template."
+    },
+    {
+      "id": "minimax-F4",
+      "severity": "low",
+      "issue": "OAuthCallbackPage error redirects use relative URLs (`/login?error=...`) at lines 123, 129, 138, 152 instead of an app-base-prefixed URL. InvitationCompletePage correctly uses `import.meta.env.VITE_APP_BASE_URL || window.location.origin` (line 77-78) as a base for its redirect. If this SPA is ever deployed at a sub-path (e.g., served from /hive/ behind a reverse proxy), the OAuthCallbackPage redirects would navigate the user to the server's /login (likely 404 or wrong app) instead of /hive/login. The `vite-env.d.ts` types already declare `VITE_APP_BASE_URL`, so the dependency is available. The bug is currently latent because the deploy target is root-relative, but it contradicts the Vite `base` configuration option and would break any sub-path deploy.",
+      "citation": "remote-frontend/src/AppRouter.tsx:123, 129, 138, 152; remote-frontend/src/pages/InvitationCompletePage.tsx:77-79",
+      "remediation": "Compute `appBase = import.meta.env.VITE_APP_BASE_URL || window.location.origin` once in OAuthCallbackPage and use `${appBase}/login?error=...` in all four redirect call sites. Consider extracting a `buildLoginErrorUrl(message: string)` helper to dedupe the encodeURIComponent pattern."
+    },
+    {
+      "id": "minimax-F5",
+      "severity": "low",
+      "issue": "InvitationCompletePage's success-path redirect (line 76-80) goes to `${appBase}` (the app root / HomePage), but the success message rendered at line 110 says `Redirecting to ${orgSlug}...`. The HomePage is just a static 'Please return to the Vibe Kanban app' page (HomePage.tsx:1-22), not an org-specific destination. This is a UX bug: the user is told they will be redirected to their org, but they actually land on a generic 'return to the app' page. The orgSlug is available in scope at line 74 (`result.organization_slug`) and could be used to construct a more meaningful redirect (e.g., `${appBase}/o/${orgSlug}` if such a route existed, or at minimum a non-misleading message).",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:76-80, 110; remote-frontend/src/pages/HomePage.tsx:1-22",
+      "remediation": "Either (a) change the success message to not mention the orgSlug (e.g., 'Returning to app...'), or (b) extend the redirect to a real org-scoped route if the app has one. The current mismatch will confuse users on every successful invitation acceptance."
+    },
+    {
+      "id": "minimax-F6",
+      "severity": "low",
+      "issue": "AppRouter.test.tsx OAuth callback error-path tests (lines 255-326) do not assert that `sessionStorage.getItem('invitation_token')` is null. The four test cases — oauthError (line 255-271), missing handoff_id/app_code (line 273-289), missing verifier (line 291-306), and redeem failure (line 308-326) — all assert `expect(sessionStorage.getItem('oauth_verifier')).toBeNull()` (or equivalent) but skip the invitation_token assertion. This test gap is exactly why the inconsistency in F1 was not caught: the test suite only covers the verifier cleanup and would have continued passing even if F1's `clearInvitationToken` calls were removed from the verifier-missing path. Note: the test at line 291-306 (missing verifier) currently passes without an invitation_token assertion because no test ever sets the invitation_token in the OAuth callback flow, so the assertion would always be trivially true — but adding a `sessionStorage.setItem('invitation_token', 'some-token')` in `beforeEach` for the OAuth callback describe block, then asserting null in each error-path test, would close the gap.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:255-326",
+      "remediation": "Add a `sessionStorage.setItem('invitation_token', 'test-token')` to the beforeEach of the AppRouter describe block (or each OAuth callback test), and add `expect(sessionStorage.getItem('invitation_token')).toBeNull()` to all four OAuth callback error-path tests. This regression-tests the Round 6 fix and would catch any future regression of F1."
+    },
+    {
+      "id": "minimax-F7",
+      "severity": "low",
+      "issue": "OAuthCallbackPage's error redirects lose the original `return_to` parameter. When `oauthError`, missing handoff_id/app_code, missing verifier, or redeem failure occurs, the user is redirected to `/login?error=...` (line 123, 129, 138, 152) without preserving the `return_to` query parameter they originally specified. After they re-authenticate successfully, they land on the default '/nodes' instead of the page they originally tried to reach. The `returnTo` variable is already in scope (line 118) — it just isn't appended to the redirect URL. This is a UX bug that compounds when the user has to retry the flow: a user who clicked a deep link to `/invitations/<token>/accept`, got bounced to OAuth, came back with an error, is now at /login with no way to return to the invitation without manually re-pasting the URL.",
+      "citation": "remote-frontend/src/AppRouter.tsx:123, 129, 138, 152, 118",
+      "remediation": "Append `&return_to=${encodeURIComponent(returnTo)}` to each error redirect URL when the returnTo is safe (use isSafeReturnTo first). The LoginPage already reads `return_to` from searchParams (line 48) and threads it into the OAuth callback URL, so the preserved parameter would naturally flow through on retry."
+    }
+  ]
+}

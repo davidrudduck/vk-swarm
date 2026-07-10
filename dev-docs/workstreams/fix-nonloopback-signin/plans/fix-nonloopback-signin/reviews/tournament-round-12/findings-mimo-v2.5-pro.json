@@ -1,0 +1,26 @@
+{
+  "model": "mimo-v2.5-pro",
+  "findings": [
+    {
+      "id": "mimo-F1",
+      "severity": "medium",
+      "issue": "OAuth callback success-path test does not verify the redirect URL. The test at AppRouter.test.tsx:119-138 asserts storage cleanup and the redeem call, but unlike every error-path test (lines 255-326), it never mocks window.location.assign and never asserts the redirect destination. If the success path were changed to redirect to the wrong URL (e.g., hardcoded '/' instead of safeReturnTo), no test would catch the regression.",
+      "citation": "AppRouter.test.tsx:119-138",
+      "remediation": "Mock window.location.assign before rendering (like the error-path tests do), then assert it was called with '/nodes' (the default return_to). Optionally add a second test with return_to=/tasks to verify custom return_to flows through."
+    },
+    {
+      "id": "mimo-F2",
+      "severity": "medium",
+      "issue": "No integration test proves a non-default return_to value flows through to the success redirect. The isSafeReturnTo function is tested in isolation (AppRouter.test.tsx:329-356), and the callback success test uses the default return_to=/nodes. There is no test that sets return_to to a different safe path (e.g., /tasks) and verifies the redirect uses it. A regression that ignores return_to and always redirects to /nodes would pass all existing tests.",
+      "citation": "AppRouter.test.tsx:119-138, AppRouter.tsx:117-118",
+      "remediation": "Add a test that renders /oauth/callback?handoff_id=...&app_code=...&return_to=/tasks with a mocked window.location.assign, and assert the redirect goes to '/tasks'."
+    },
+    {
+      "id": "mimo-F3",
+      "severity": "info",
+      "issue": "isSafeReturnTo('') returns true because new URL('', window.location.origin) resolves to the origin. While current callers all use || '/nodes' to handle empty return_to, the function itself treating empty string as safe is semantically surprising and could be a footgun for a future caller that passes through the empty value without a fallback guard.",
+      "citation": "AppRouter.tsx:97-104",
+      "remediation": "Add an early return for empty/whitespace-only strings: if (!url.trim()) return false;"
+    }
+  ]
+}

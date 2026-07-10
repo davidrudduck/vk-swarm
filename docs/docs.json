@@ -62,7 +62,8 @@
           "core-features/completing-a-task",
           "core-features/mobile-experience",
           "core-features/error-resilience",
-          "core-features/task-cards"
+          "core-features/task-cards",
+          "features/non-loopback-signin"
         ]
       },
       {
@@ -82,7 +83,8 @@
           "configuration-customisation/agent-configurations",
           "configuration-customisation/creating-task-tags",
           "configuration-customisation/keyboard-shortcuts",
-          "configuration-customisation/database-performance"
+          "configuration-customisation/database-performance",
+          "configuration-customisation/network-access"
         ]
       },
       {
@@ -100,6 +102,7 @@
           "development/dev-server-lifecycle",
           "development/testing",
           "development/remote-frontend",
+          "development/pkce-implementation",
           "architecture/ui-responsive-design",
           "architecture/frontend/file-viewer-components",
           "architecture/storage-paths",

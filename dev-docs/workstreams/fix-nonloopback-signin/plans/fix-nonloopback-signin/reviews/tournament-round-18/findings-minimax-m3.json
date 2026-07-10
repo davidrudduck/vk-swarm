@@ -1,0 +1,40 @@
+{
+  "model": "minimax-m3",
+  "findings": [
+    {
+      "id": "minimax-F1",
+      "severity": "medium",
+      "issue": "InvitationCompletePage captures organization_slug from acceptInvitation response and tells the user 'Redirecting to ${orgSlug}...' in the success card body (InvitationCompletePage.tsx:111), but the setTimeout actually navigates only to `${appBase}` (the bare base URL) on line 80, completely ignoring the captured orgSlug. The UX is internally contradictory — the user is shown a destination that they will not be sent to.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:75, 80, 111",
+      "remediation": "Either navigate to `${appBase}/${orgSlug}` (with slash normalization) to match the displayed message, or drop the orgSlug state and the 'Redirecting to ${orgSlug}...' body so the message is accurate."
+    },
+    {
+      "id": "minimax-F2",
+      "severity": "low",
+      "issue": "InvitationPage.handleOAuthLogin interpolates the URL-decoded token from useParams() directly into a returnTo URL path without encodeURIComponent, while the corresponding API calls (getInvitation/acceptInvitation) defensively use encodeURIComponent(token) in api.ts:43,55. A token containing '/', '?', '#', or other reserved characters would either break the URL or produce a returnTo that the OAuth callback cannot safely round-trip back. The 'Invitation accepted!' flow depends on this same returnTo being reconstructable.",
+      "citation": "remote-frontend/src/pages/InvitationPage.tsx:50",
+      "remediation": "Wrap the token in encodeURIComponent: const returnTo = `${appBase}/invitations/${encodeURIComponent(token)}/complete` — matching the defensive encoding already in use in api.ts."
+    },
+    {
+      "id": "minimax-F3",
+      "severity": "low",
+      "issue": "anySignal adds 'abort' event listeners to every caller-supplied signal but never removes them. The combined controller is returned to makeRequest and the controller closure keeps a strong reference to the listener. The listener is only released when the original signal itself aborts (via the {once:true} option) or when both the listener and the controller are otherwise garbage-collected. In React StrictMode, OAuthCallbackPage and InvitationCompletePage each construct an AbortController per useEffect run and re-run effects, so listener closures from aborted runs can transiently pile up on the timeout signal before the timeout fires. There is no dispose hook for makeRequest callers to call.",
+      "citation": "remote-frontend/src/lib/api/utils.ts:39-51",
+      "remediation": "Track every addEventListener registration, and after fetch settles in makeRequest's finally block, removeEventListener on each input signal. Or have anySignal return a dispose function that makeRequest calls unconditionally in finally."
+    },
+    {
+      "id": "minimax-F4",
+      "severity": "low",
+      "issue": "InvitationCompletePage success path discards any 'return_to' query param and unconditionally redirects to the bare appBase after a 2s delay, while OAuthCallbackPage (the equivalent flow for non-invitation sign-in) honors 'return_to' with isSafeReturnTo validation. Users who land on /invitations/<token>/complete?return_to=%2Fprojects%2F42 from an in-app link will be dropped at the dashboard root rather than the page they intended. The qp URLSearchParams object already has the return_to value available — it is simply not read.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:77-81",
+      "remediation": "Read qp.get('return_to'), apply the same isSafeReturnTo guard used in AppRouter.tsx:117, and navigate to `${appBase}${safeReturnTo}` (or `${appBase}/${orgSlug}${safeReturnTo}` if you also adopt the orgSlug fix) instead of `${appBase}`."
+    },
+    {
+      "id": "minimax-F5",
+      "severity": "info",
+      "issue": "Multiple OAuth error-path tests do not assert that access_token is absent from localStorage after the failure. The 'oauth callback: handles redeem failure', 'oauth callback: handles oauthError param', 'oauth callback: handles missing handoff_id/app_code', and 'oauth callback: handles missing stored verifier' tests in AppRouter.test.tsx (and the corresponding 'shows error when oauthError param is present' / 'shows error when handoff_id and app_code are missing' tests in InvitationCompletePage.test.tsx) only assert sessionStorage cleanup. If a future change accidentally called localStorage.setItem('access_token', ...) on the error path, the tests would not catch it — the production code is correct today, but the gap means a regression would silently authenticate a user on the error path.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:255-326; remote-frontend/src/pages/InvitationCompletePage.test.tsx:61-77, 148-164",
+      "remediation": "Add `expect(localStorage.getItem('access_token')).toBeNull()` to each of the error-path tests that mutates the failure path."
+    }
+  ]
+}

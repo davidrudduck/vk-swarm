@@ -1,0 +1,40 @@
+{
+  "model": "kimi-k2.7-code",
+  "findings": [
+    {
+      "id": "kimi-F1",
+      "severity": "low",
+      "issue": "OAuth handoff endpoints are public, but oauthApi.init/redeem are routed through makeRequest, which auto-injects any existing localStorage access_token as an Authorization header. A stale or unrelated bearer token is therefore sent to /v1/oauth/web/init and /v1/oauth/web/redeem, coupling pre-auth requests to prior auth state and unnecessarily exposing the token in request logs.",
+      "citation": "remote-frontend/src/lib/api/utils.ts:64-68; remote-frontend/src/lib/api/oauth.ts:23,47",
+      "remediation": "Add a skip-auth option to makeRequest (e.g., { skipAuth: true }) or use raw fetch for the public OAuth init/redeem endpoints so no Authorization header is sent."
+    },
+    {
+      "id": "kimi-F2",
+      "severity": "low",
+      "issue": "InvitationPage loads the invitation via raw fetch with no timeout and no AbortSignal. The 'active' flag only suppresses state updates on unmount; it does not cancel the network request, so a hanging server leaves the user on 'Loading invitation...' indefinitely and the request continues after the user navigates away.",
+      "citation": "remote-frontend/src/api.ts:31-37; remote-frontend/src/pages/InvitationPage.tsx:25-35",
+      "remediation": "Route getInvitation through makeRequest (which has a 30s timeout) and thread an AbortSignal from the effect cleanup into the request so it is cancelled on unmount."
+    },
+    {
+      "id": "kimi-F3",
+      "severity": "low",
+      "issue": "The Round 8 fix wraps the native crypto.subtle.digest call in try/catch so a throwing native digest falls back to sha256Fallback, but pkce.test.ts never covers that branch. A regression that removed the catch or that threw before the fallback would only be caught in manual/browser testing.",
+      "citation": "remote-frontend/src/pkce.ts:14-24; remote-frontend/src/pkce.test.ts:23-50",
+      "remediation": "Add a test that stubs crypto.subtle.digest to reject/throw and asserts generateChallenge still returns the expected SHA-256 hex via sha256Fallback."
+    },
+    {
+      "id": "kimi-F4",
+      "severity": "low",
+      "issue": "AppRouter.test.tsx clears sessionStorage in beforeEach/afterEach but never clears localStorage. The callback success path writes access_token to localStorage, so leftover token state can leak into later tests if localStorage assertions are added or test ordering changes.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:42-53; remote-frontend/src/AppRouter.test.tsx:119-138",
+      "remediation": "Add localStorage.clear() to the beforeEach and afterEach hooks in AppRouter.test.tsx, matching the sessionStorage cleanup."
+    },
+    {
+      "id": "kimi-F5",
+      "severity": "low",
+      "issue": "The verifier-generation compatibility test only checks that generateVerifier() returns a base64url-allowing string; it does not assert the required 43-character length or that base64 padding was removed. A regression that shortened the random buffer or that failed to strip '=' padding would still pass.",
+      "citation": "remote-frontend/src/pkce.test.ts:52-58; remote-frontend/src/pkce.ts:1-4",
+      "remediation": "Add assertions to the compatibility test: expect(verifier).toHaveLength(43) and expect(verifier).not.toContain('=')."
+    }
+  ]
+}

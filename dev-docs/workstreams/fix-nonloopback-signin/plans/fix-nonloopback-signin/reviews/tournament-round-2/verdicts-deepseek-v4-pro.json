@@ -1,0 +1,9 @@
+{
+  "verdicts": {
+    "deepseek-v4-pro:deepseek-F1": {"valid": true, "remediation_passes": true, "reviewer": "kimi-k2.7-code"},
+    "deepseek-v4-pro:deepseek-F2": {"valid": true, "remediation_passes": true, "reviewer": "kimi-k2.7-code"},
+    "deepseek-v4-pro:deepseek-F3": {"valid": true, "remediation_passes": true, "reviewer": "kimi-k2.7-code"},
+    "deepseek-v4-pro:deepseek-F4": {"valid": true, "remediation_passes": true, "reviewer": "kimi-k2.7-code"},
+    "deepseek-v4-pro:deepseek-F5": {"valid": true, "remediation_passes": true, "reviewer": "kimi-k2.7-code"}
+  }
+}

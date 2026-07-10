@@ -1,0 +1,33 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "low",
+      "issue": "The Round 13 AbortSignal plumbing is untested at the API layer. `oauthApi.redeem` accepts an optional `signal` parameter (oauth.ts:46) and forwards it as `signal` in the makeRequest options (oauth.ts:55), but `oauth.test.ts` never passes a signal to `redeem` (the redeem test at oauth.test.ts:87 calls `oauthApi.redeem('handoff-123', 'auth-code-xyz', 'verifier-abc')` with no fourth argument) and the fetch assertion uses `expect.objectContaining({ method: 'POST', body: ... })` (oauth.test.ts:89-98) which does not verify `signal` is present in the fetch options. The caller-side tests (AppRouter.test.tsx:134, InvitationCompletePage.test.tsx:52) only assert that an `expect.any(AbortSignal)` is passed INTO `redeem`/`redeemOAuth` — they do not verify the signal reaches `fetch`. If the `signal` field were dropped from the makeRequest options object in oauth.ts:55 (e.g. a refactor removing line 55), every existing test would still pass, silently regressing the StrictMode double-redeem fix. There is also no test that an aborted signal causes `redeem` to reject.",
+      "citation": "remote-frontend/src/lib/api/oauth.test.ts:87,89-98; remote-frontend/src/lib/api/oauth.ts:46,55",
+      "remediation": "Add a test in oauth.test.ts that calls `oauthApi.redeem('h','c','v', controller.signal)` with a pre-aborted AbortController and asserts the fetch `signal` option is the combined signal (or that the call rejects), plus a test passing a live signal and asserting `expect.objectContaining({ signal: expect.any(AbortSignal) })` in the fetch options."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "low",
+      "issue": "`acceptInvitation` (api.ts:44-59) and `getInvitation` (api.ts:36-42) use raw `fetch` instead of `makeRequest`, so they bypass the shared 30-second request timeout (REQUEST_TIMEOUT_MS, utils.ts:34) and have no AbortSignal support. InvitationCompletePage deliberately threads `abortController.signal` into `redeemOAuth` (InvitationCompletePage.tsx:57-62) but then calls `acceptInvitation(token, access_token)` (InvitationCompletePage.tsx:66) with no signal — the accept call cannot be cancelled by the page's AbortController and has no timeout. A hung or slow `/v1/invitations/:token/accept` endpoint leaves the user on the 'Completing invitation...' screen indefinitely with no timeout fallback, and if the component unmounts mid-accept the fetch continues unconstrained. This is an inconsistency introduced by the workstream's own abort-handling: redeem is cancellable+timed, the immediately-following accept call is neither.",
+      "citation": "remote-frontend/src/api.ts:37,48; remote-frontend/src/pages/InvitationCompletePage.tsx:66; remote-frontend/src/lib/api/utils.ts:34",
+      "remediation": "Route `acceptInvitation` and `getInvitation` through `makeRequest`, and add an optional `signal?: AbortSignal` parameter to `acceptInvitation` forwarded into makeRequest's options; pass `abortController.signal` at InvitationCompletePage.tsx:66."
+    },
+    {
+      "id": "glm-F3",
+      "severity": "low",
+      "issue": "In InvitationCompletePage's catch block (InvitationCompletePage.tsx:82-87), `clearVerifier()` and `clearInvitationToken()` are called BEFORE the `if (abortController.signal.aborted) return` guard. This is inconsistent with OAuthCallbackPage's catch block (AppRouter.tsx:153-159), which checks `if (abortController.signal.aborted) return` FIRST and only then clears storage. In React StrictMode (main.tsx:8), the first effect run's redeem rejects with AbortError when cleanup aborts; its catch block then clears `oauth_verifier`/`invitation_token` from sessionStorage before returning. This currently works only because the second effect run captures the verifier/token into local variables (retrieveVerifier/retrieveInvitationToken at lines 43,50) synchronously before the first run's rejection microtask fires. The correctness therefore depends on subtle microtask ordering and the verifier being read before the first `await` — a refactor that moved `retrieveVerifier()` after an await would break the second run ('OAuth session lost'). The OAuthCallbackPage ordering (abort-check-first) does not have this latent fragility.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:82-87; remote-frontend/src/AppRouter.tsx:153-159",
+      "remediation": "Reorder InvitationCompletePage's catch block to check `if (abortController.signal.aborted) return` before calling `clearVerifier()`/`clearInvitationToken()`, mirroring OAuthCallbackPage."
+    },
+    {
+      "id": "glm-F4",
+      "severity": "info",
+      "issue": "`makeRequest` (utils.ts:64-68) auto-injects `Authorization: Bearer <token>` from localStorage into any request that does not already set the header. `oauthApi.init` (oauth.ts:18-40) and `oauthApi.redeem` (oauth.ts:42-66) do not set an Authorization header, so when a user has a stale `access_token` in localStorage from a previous session, that bearer token is sent on these public token-exchange endpoints. The backend mounts `web_init`/`web_redeem` on the unauthenticated `public_router` (routes/mod.rs:74-81, routes/oauth.rs:25-31) with no `require_session` layer, so the header is ignored and there is no functional break. However, sending bearer credentials on public PKCE-exchange endpoints is an unnecessary code smell and could become a problem if auth middleware were ever layered onto the public router.",
+      "citation": "remote-frontend/src/lib/api/utils.ts:64-68; remote-frontend/src/lib/api/oauth.ts:23,48; crates/remote/src/routes/mod.rs:74-81",
+      "remediation": "Have `oauthApi.init`/`oauthApi.redeem` explicitly pass `headers: { }` and set a sentinel, or extend makeRequest with an opt-out flag (e.g. `skipAuth: true`) so public OAuth endpoints do not attach a bearer token."
+    }
+  ]
+}

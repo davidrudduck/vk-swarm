@@ -1,0 +1,33 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "medium",
+      "issue": "The AbortController pattern in OAuthCallbackPage and InvitationCompletePage does not pass abortController.signal to the underlying fetch call, so the first (aborted) run's redeem POST request still executes in React StrictMode. The app uses React.StrictMode (main.tsx:8), which double-invokes useEffect on mount in development. In StrictMode: (1) first effect calls oauthApi.redeem()/redeemOAuth(), initiating a fetch; (2) cleanup aborts the AbortController but does NOT cancel the fetch (no AbortSignal passed to makeRequest); (3) second effect calls redeem again, initiating a second fetch. Both fetches reach the backend. The first redeem succeeds and calls mark_redeemed (handoff.rs:377), which atomically sets status='redeemed' via UPDATE...WHERE status='authorized' (db/oauth.rs:264-271). The second redeem's ensure_redeemable (db/oauth.rs:284-290) or mark_redeemed finds status='redeemed' and returns AlreadyRedeemed, which the route handler maps to HTTP 410 'already_redeemed' (routes/oauth.rs:288-289). The first run's result is discarded by the abort check (if (abortController.signal.aborted) return), so the access token is never stored. The second run gets the 410 error and redirects to /login?error=... (OAuthCallbackPage) or shows an error (InvitationCompletePage). This breaks OAuth sign-in and invitation acceptance in development StrictMode. makeRequest already supports AbortSignal via options.signal (utils.ts:75-77), so the fix is to thread abortController.signal through oauthApi.redeem's options to makeRequest, and similarly for redeemOAuth and acceptInvitation.",
+      "citation": "remote-frontend/src/AppRouter.tsx:143, remote-frontend/src/pages/InvitationCompletePage.tsx:57-61, remote-frontend/src/lib/api/oauth.ts:47-54, remote-frontend/src/lib/api/utils.ts:75-77, remote-frontend/src/main.tsx:8",
+      "remediation": "Add an optional signal parameter to oauthApi.redeem (and the redeemOAuth re-export) and acceptInvitation, pass it as options.signal to makeRequest/fetch. In OAuthCallbackPage and InvitationCompletePage, pass abortController.signal to the redeem call: e.g. await oauthApi.redeem(handoffId, appCode, appVerifier, { signal: abortController.signal }). When StrictMode cleanup aborts the first controller, the first fetch is cancelled (AbortError), the first run's await throws, the catch block sees signal.aborted=true and returns without side effects, and only the second run's redeem reaches the backend."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "low",
+      "issue": "In OAuthCallbackPage, the three synchronous early-return paths (oauthError at line 120, missing handoff_id/app_code at line 127, missing verifier at line 136) call window.location.assign() without checking abortController.signal.aborted first. In React StrictMode (main.tsx:8), the effect runs twice: the first run's synchronous code executes to completion (calling window.location.assign) before cleanup aborts the controller, then the second run calls window.location.assign again with the same URL. While double-assign to the same URL is harmless in a real browser (the second call just updates the pending navigation target), it is inconsistent with the async paths (lines 145, 154) which do check abortController.signal.aborted. By contrast, InvitationCompletePage's synchronous early-return paths (lines 29, 36, 45) guard setError with abortController.signal.aborted before the side-effecting call. No test covers StrictMode double-invocation for these paths because all tests render without <StrictMode>.",
+      "citation": "remote-frontend/src/AppRouter.tsx:120-141, remote-frontend/src/pages/InvitationCompletePage.tsx:29-55",
+      "remediation": "Add an abort guard before each synchronous window.location.assign in OAuthCallbackPage's early-return paths, mirroring the pattern in InvitationCompletePage: if (!abortController.signal.aborted) { window.location.assign(...) }. Note this only prevents redundant calls, not the underlying double-redeem (see glm-F1)."
+    },
+    {
+      "id": "glm-F3",
+      "severity": "info",
+      "issue": "bytesToHex uses `i++` (pkce.ts:127) while every other loop in pkce.ts uses `i += 1` (pkce.ts:65, 68, 75, 104, 116). This is a minor style inconsistency within the same file.",
+      "citation": "remote-frontend/src/pkce.ts:127",
+      "remediation": "Change `i++` to `i += 1` in bytesToHex for consistency with the rest of the file."
+    },
+    {
+      "id": "glm-F4",
+      "severity": "info",
+      "issue": "InvitationCompletePage uses `window.location.assign(`${appBase}`)` where the template literal wraps a single variable and adds nothing — it is equivalent to `window.location.assign(appBase)`. This is a minor readability nit.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:79",
+      "remediation": "Replace ``${appBase}`` with `appBase`."
+    }
+  ]
+}

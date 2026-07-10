@@ -43,7 +43,7 @@ describe('useAuth', () => {
       ],
     };
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -70,7 +70,7 @@ describe('useAuth', () => {
   it('should return signed-out state with null userId when profile fetch returns 401', async () => {
     const mockToken = 'expired-token';
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: false,
       status: 401,

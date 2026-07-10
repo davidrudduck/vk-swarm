@@ -1,0 +1,33 @@
+{
+  "model": "minimax-m3",
+  "findings": [
+    {
+      "id": "minimax-F1",
+      "severity": "low",
+      "issue": "The R18 round 16+ claim 'Error-path tests assert sessionStorage + localStorage cleanup (all pages)' is not actually true for the OAuth callback flow: the four AppRouter.test.tsx error-path tests 'oauth callback: handles oauthError param' (line 255-271), 'oauth callback: handles missing handoff_id/app_code' (line 273-289), 'oauth callback: handles missing stored verifier' (line 291-306), and 'oauth callback: handles redeem failure' (line 308-326) still only assert sessionStorage.getItem('oauth_verifier') is null. None of them assert localStorage.getItem('access_token') is null on the failure path. The R18 fix added these assertions to InvitationCompletePage.test.tsx and InvitationPage.test.tsx, but the AppRouter OAuthCallbackPage error paths were skipped, leaving a real test gap. A regression that mistakenly setItem('access_token', ...) in the OAuthCallbackPage error branch would not be caught.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:255-326",
+      "remediation": "Add expect(localStorage.getItem('access_token')).toBeNull() to all four AppRouter.test.tsx OAuth callback error-path tests, matching the pattern already established in InvitationCompletePage.test.tsx and InvitationPage.test.tsx."
+    },
+    {
+      "id": "minimax-F2",
+      "severity": "low",
+      "issue": "anySignal in remote-frontend/src/lib/api/utils.ts:39-51 adds 'abort' event listeners to every caller-supplied signal via addEventListener with {once: true}, but provides no dispose hook. If a signal never aborts (the common case for a successful request) the listener stays attached for the lifetime of the signal. The controller closure keeps a strong reference to the listener. In React StrictMode, OAuthCallbackPage and InvitationCompletePage each construct an AbortController per useEffect run and re-run effects, so listener closures from aborted runs can transiently pile up on the timeout signal before the timeout fires (or, if the timeout never fires, leak across the session). This was first raised in the R18 review and was not addressed by the R18 fix.",
+      "citation": "remote-frontend/src/lib/api/utils.ts:39-51",
+      "remediation": "Return a dispose() function from anySignal, and have makeRequest call dispose() unconditionally in its finally block (after clearTimeout). Or, more directly, track every addEventListener registration and removeEventListener on each input signal in makeRequest's finally."
+    },
+    {
+      "id": "minimax-F3",
+      "severity": "low",
+      "issue": "InvitationCompletePage.tsx:75-79 ignores the 'return_to' query parameter (qp.get('return_to')) and unconditionally navigates to `${appBase}` (the bare base URL) on success. OAuthCallbackPage (the equivalent non-invitation flow) honors return_to with isSafeReturnTo validation at AppRouter.tsx:117. A user who clicks an in-app link like /invitations/<token>/complete?return_to=%2Fprojects%2F42 will be dropped at the dashboard root rather than the page they intended. The qp object already has return_to available — it is simply not read. This was first raised in the R18 review and was not addressed by the R18 fix.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:75-79",
+      "remediation": "Read qp.get('return_to'), apply the same isSafeReturnTo guard used in AppRouter.tsx:117, and navigate to `${appBase}${safeReturnTo}` instead of `${appBase}`."
+    },
+    {
+      "id": "minimax-F4",
+      "severity": "info",
+      "issue": "InvitationPage.tsx:50 wraps the token in encodeURIComponent when building the OAuth returnTo URL, but the test 'starts invitation OAuth with fallback PKCE challenge when crypto.subtle is unavailable' only exercises this with the URL-safe token 'invite-token' (line 26 initialEntries and line 69 assertion). The encodeURIComponent call is therefore a no-op in the test, and a regression that drops the encoding (returning to the R17 behavior) would not be caught by the current test set.",
+      "citation": "remote-frontend/src/pages/InvitationPage.test.tsx:46-77",
+      "remediation": "Add a test variant that uses a token containing characters that change under encodeURIComponent (e.g. 'invite+token' or 'invite/token') and asserts the returnTo string contains the percent-encoded form (e.g. expect.stringContaining('/invitations/invite%2Btoken/complete') or '/invitations/invite%2Ftoken/complete')."
+    }
+  ]
+}

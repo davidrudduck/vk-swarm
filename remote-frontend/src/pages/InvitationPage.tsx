@@ -11,22 +11,34 @@ import {
   generateChallenge,
   storeVerifier,
   storeInvitationToken,
+  clearVerifier,
+  clearInvitationToken,
 } from '../pkce'
 
 export default function InvitationPage() {
   const { token = '' } = useParams()
   const [data, setData] = useState<Invitation | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [fetchError, setFetchError] = useState<string | null>(null)
+  const [oauthError, setOauthError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    getInvitation(token)
-      .then(setData)
-      .catch((e) => setError(e.message))
+    const abortController = new AbortController()
+    let active = true
+    getInvitation(token, abortController.signal)
+      .then((data) => {
+        if (active) setData(data)
+      })
+      .catch((e) => {
+        if (active) setFetchError(e instanceof Error ? e.message : 'Failed to load invitation')
+      })
+    return () => { active = false; abortController.abort() }
   }, [token])
 
   const handleOAuthLogin = async (provider: OAuthProvider) => {
+    if (loading) return
     setLoading(true)
+    setOauthError(null)
     try {
       const verifier = generateVerifier()
       const challenge = await generateChallenge(verifier)
@@ -35,22 +47,25 @@ export default function InvitationPage() {
       storeInvitationToken(token)
 
       const appBase =
-        import.meta.env.VITE_APP_BASE_URL || window.location.origin
-      const returnTo = `${appBase}/invitations/${token}/complete`
+        (import.meta.env.VITE_APP_BASE_URL || window.location.origin).replace(/\/+$/, '')
+      const returnTo = `${appBase}/invitations/${encodeURIComponent(token)}/complete`
 
       const result = await initOAuth(provider, returnTo, challenge)
       window.location.assign(result.authorize_url)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'OAuth init failed')
+      setOauthError(e instanceof Error ? e.message : 'OAuth init failed')
       setLoading(false)
+      clearVerifier()
+      clearInvitationToken()
+      localStorage.removeItem('access_token')
     }
   }
 
-  if (error) {
+  if (fetchError) {
     return (
       <ErrorCard
         title="Invalid or expired invitation"
-        body={error}
+        body={fetchError}
       />
     )
   }
@@ -83,6 +98,12 @@ export default function InvitationPage() {
             </span>
           </div>
         </div>
+
+        {oauthError && (
+          <div className="bg-red-50 border border-red-200 rounded p-3">
+            <p className="text-sm text-red-700">{oauthError}</p>
+          </div>
+        )}
 
         <div className="border-t border-gray-200 pt-4 space-y-3">
           <p className="text-sm text-gray-600">

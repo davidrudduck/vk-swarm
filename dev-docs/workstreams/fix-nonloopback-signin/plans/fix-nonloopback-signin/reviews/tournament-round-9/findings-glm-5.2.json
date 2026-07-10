@@ -1,0 +1,54 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "low",
+      "issue": "InvitationCompletePage places storage cleanup operations (clearVerifier, clearInvitationToken, localStorage.setItem) BETWEEN two async calls and two abort checks. After redeemOAuth resolves, the first abort check passes (line 63), then acceptInvitation is awaited (line 65), then storage is mutated (lines 67-69), and only THEN is the second abort check performed (line 71). If the effect's dependencies change during acceptInvitation (e.g., URL params change), cleanup aborts the controller, but the in-flight acceptInvitation still resolves and executes the storage operations before the second abort check catches it. This clears the verifier and invitation_token, so the re-run effect finds no verifier and shows 'OAuth session lost' even though the invitation was actually accepted and access_token was stored. The OAuthCallbackPage correctly places its abort check BEFORE storage operations (line 144 before lines 146-148), but InvitationCompletePage does not replicate this pattern for the second async boundary.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:65-71",
+      "remediation": "Add an abort check immediately after acceptInvitation resolves and before any storage operations: `const result = await acceptInvitation(token, access_token); if (abortController.signal.aborted) return; clearVerifier(); clearInvitationToken(); localStorage.setItem('access_token', access_token); setSuccess(true); ...` — matching the OAuthCallbackPage pattern where the abort check precedes all state/storage mutations."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "low",
+      "issue": "No test exercises the path where redeemOAuth succeeds but acceptInvitation rejects. The catch block at lines 81-86 handles both async failures identically, but only the redeemOAuth rejection path is tested (InvitationCompletePage.test.tsx:107-119). A regression that broke error rendering, access_token non-persistence, or storage cleanup specifically in the acceptInvitation-failure branch would not be caught. This has been reported in rounds 5-8 by multiple panelists but remains unremediated.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:107-119",
+      "remediation": "Add a test: mock redeemOAuth to resolve and acceptInvitation to reject with new Error('Accept failed'), then assert the error message is displayed, sessionStorage oauth_verifier and invitation_token are null, and localStorage access_token is NOT set (since setItem runs after acceptInvitation succeeds)."
+    },
+    {
+      "id": "glm-F3",
+      "severity": "low",
+      "issue": "The InvitationCompletePage error-path tests do not verify sessionStorage/localStorage state after errors. The 'missing verifier' test (line 73) stores invitation_token but does not assert it was cleared by clearInvitationToken(). The 'missing token' test (line 87) stores oauth_verifier but does not assert it was cleared by clearVerifier(). The oauthError test (line 59) does not verify either key is cleared. If a future change removed a clearVerifier()/clearInvitationToken() call from an error path, no test would fail.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:59-105",
+      "remediation": "Add assertions to each error-path test: `expect(sessionStorage.getItem('oauth_verifier')).toBeNull(); expect(sessionStorage.getItem('invitation_token')).toBeNull();` after the error is displayed, matching the pattern already used in the redeemOAuth-failure test (lines 117-118)."
+    },
+    {
+      "id": "glm-F4",
+      "severity": "low",
+      "issue": "The OAuthCallbackPage success-path test does not verify that clearInvitationToken() is called. Round 8 added clearInvitationToken() to the success path (AppRouter.tsx:148), but the test at line 119-138 only sets oauth_verifier in sessionStorage and asserts it is null after completion. It never sets invitation_token and never asserts it is cleared. If someone removes the clearInvitationToken() call from the success path, this test would still pass.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:119-138",
+      "remediation": "In the success-path test, add `sessionStorage.setItem('invitation_token', 'stale-token')` before rendering, then add `expect(sessionStorage.getItem('invitation_token')).toBeNull()` after the redeem assertion."
+    },
+    {
+      "id": "glm-F5",
+      "severity": "info",
+      "issue": "bytesToHex uses `i++` in its loop (line 127) while every other loop in pkce.ts uses `i += 1` (lines 65, 68, 75, 104, 116). This is a style inconsistency within the same module.",
+      "citation": "remote-frontend/src/pkce.ts:127",
+      "remediation": "Change `for (let i = 0; i < bytes.length; i++)` to `for (let i = 0; i < bytes.length; i += 1)` for consistency with the rest of the file."
+    },
+    {
+      "id": "glm-F6",
+      "severity": "info",
+      "issue": "InvitationCompletePage uses an unnecessary template literal to wrap a single variable: `window.location.assign(`${appBase}`)` is equivalent to `window.location.assign(appBase)`. Round 2 addressed unnecessary string concatenation but this template literal was not caught.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:79",
+      "remediation": "Replace `window.location.assign(`${appBase}`)` with `window.location.assign(appBase)`."
+    },
+    {
+      "id": "glm-F7",
+      "severity": "info",
+      "issue": "InvitationCompletePage displays 'Redirecting to ${orgSlug}...' on success (line 110) but the actual redirect target is `${appBase}` (the app root, line 79), not an org-specific URL. The user sees 'Redirecting to test-org...' but is taken to the app root which then redirects to /nodes. This is a misleading UX message.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:110,79",
+      "remediation": "Either redirect to an org-specific URL (e.g., `${appBase}/${orgSlug}`) or change the message to 'Redirecting...' without the org name, matching the fallback already used when orgSlug is null."
+    }
+  ]
+}
