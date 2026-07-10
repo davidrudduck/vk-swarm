@@ -307,11 +307,9 @@ wrapper.
 Escape). Radix provides all of these for free and is already a dependency. The custom
 implementation has 9 callers; all are updated to the same API surface.
 
-**Irreversibility:** This deletes the custom implementation. However, the API surface is preserved,
+**Irreversibility:** This replaces the custom implementation entirely (ADR: `dev-docs/adr/0012-replace-custom-dialog-with-radix.md`). The API surface is preserved,
 so reverting would mean restoring the custom file and removing Radix imports — straightforward but
 requires touching all 9 caller files again.
-
-**ADR:** `dev-docs/adr/0012-replace-custom-dialog-with-radix.md`
 
 ### D2: Shared parseErrorMessage uses 'Failed' as generic fallback
 
@@ -326,7 +324,7 @@ The i18n key `settings.swarm.apiKeys.error` wraps the message as `'Failed: {{mes
 the final user-visible text remains `'Failed: Failed'` for the API key component and
 `'Failed: An error occurred'` → `'Failed: Failed'` for others — a minor improvement.
 
-**Not irreversible:** Can be changed at any time by updating the fallback constant.
+**Reversible:** Can be changed at any time by updating the fallback constant.
 
 ### D3: uncloseable via Radix event prevention (not composition)
 
@@ -339,7 +337,7 @@ callbacks that can prevent default close behavior via `e.preventDefault()`. This
 idiomatic Radix pattern for controlling close behavior. The prop approach keeps the API simple:
 `<Dialog uncloseable={true}>` vs requiring callers to compose different components.
 
-**Not irreversible:** Can switch to composition pattern later without breaking callers (just
+**Reversible:** Can switch to composition pattern later. Callers are unaffected (just
 add new exports).
 
 ### D4: Update AGENTS.md with remote-frontend gates
