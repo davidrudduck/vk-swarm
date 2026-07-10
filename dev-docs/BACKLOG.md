@@ -60,3 +60,10 @@
   (`nodesApi.{listApiKeys,createApiKey,revokeApiKey,unblockApiKey}`), and the
   `NodeApiKey`/`CreateNodeApiKey*` types already exist. Next: `/wai:spec hive-node-api-key-ui`
   to add the design, then `/wai:precheck`.
+
+### 2026-07-10 — F-2026-07-06-02 shipped
+
+- **F-2026-07-06-02 → shipped (workstream `fix-nonloopback-signin`).** The finding (sign-in
+  broken on non-loopback HTTP origins due to `crypto.subtle` undefined) was resolved by
+  PR #463 (merged 2026-07-10). Pure-TS SHA-256 fallback implemented in `pkce.ts` with
+  capability detection. 137 tests, 100% line coverage on target files.
