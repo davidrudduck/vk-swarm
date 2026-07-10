@@ -1,0 +1,122 @@
+# Vibe Kanban Remote Server (Hive) — Local Dev/Test Environment
+#
+# Usage:
+#   cd crates/remote
+#   docker compose -f docker-compose.dev.yml --env-file .env.dev up --build
+#
+# What it spins up:
+#   - PostgreSQL 16 on port 5434 (with WAL level=logical for future Electric use)
+#   - Remote server (hive) on port 9000 (serves API + static hive frontend)
+#   - Automatic migrations on startup
+#   - Seed script creates test user + org + API key
+#
+# After startup:
+#   - Hive frontend: http://localhost:9000
+#   - Hive API: http://localhost:9000/v1/health
+#   - PostgreSQL: localhost:5434 (user: postgres, pass: postgres, db: vibe_remote)
+#   - Test API key: printed in seed-dev-db logs
+#
+# To test with local node frontend + backend:
+#   1. Start this compose
+#   2. In another terminal: cd frontend && pnpm run dev
+#   3. Set VK_HIVE_URL=http://localhost:9000 and VK_NODE_API_KEY=<seed output>
+
+services:
+  remote-db:
+    image: postgres:16-alpine
+    command: ["postgres", "-c", "wal_level=logical"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vibe_remote}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - remote-dev-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-vibe_remote}"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  remote-server:
+    build:
+      context: ../..
+      dockerfile: crates/remote/Dockerfile
+      args:
+        PNPM_VERSION: ${PNPM_VERSION:-10.25.0}
+        SQLX_OFFLINE: "true"
+        VK_GIT_COMMIT: ${VK_GIT_COMMIT:-dev}
+        VK_GIT_BRANCH: ${VK_GIT_BRANCH:-artful-egret}
+    depends_on:
+      remote-db:
+        condition: service_healthy
+    environment:
+      SERVER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@remote-db:5432/${POSTGRES_DB:-vibe_remote}
+      SERVER_LISTEN_ADDR: 0.0.0.0:8081
+      SERVER_ACTIVITY_CHANNEL: activity
+      SERVER_PUBLIC_BASE_URL: http://localhost:9000
+      VITE_APP_BASE_URL: http://localhost:9000
+      VITE_API_BASE_URL: http://localhost:9000
+      # Dummy OAuth (server requires at least one provider to start)
+      # These won't work for real login — use the seeded API key instead
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-dummy-github-client-id}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-dummy-github-client-secret}
+      VIBEKANBAN_REMOTE_JWT_SECRET: ${VIBEKANBAN_REMOTE_JWT_SECRET:-dGVzdC1qd3Qtc2VjcmV0LWZvci1sb2NhbC1kZXYtZW52aXJvbm1lbnQtc2VjcmV0}
+      LOOPS_EMAIL_API_KEY: ${LOOPS_EMAIL_API_KEY:-dummy}
+      VK_PG_MAX_CONNECTIONS: ${VK_PG_MAX_CONNECTIONS:-10}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "0.0.0.0:${SERVER_PORT:-9000}:8081"
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Seed script: creates test user, org, and API key after server is healthy
+  seed-db:
+    image: postgres:16-alpine
+    depends_on:
+      remote-db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-vibe_remote}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+    volumes:
+      - ./scripts/seed-dev-db.sql:/seed.sql:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for migrations to complete..."
+        # Poll until the users table exists (migrations create it)
+        for i in $$(seq 1 60); do
+          if psql -h remote-db -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c "SELECT 1 FROM users LIMIT 1" >/dev/null 2>&1; then
+            echo "Migrations complete. Seeding test data..."
+            psql -h remote-db -U $${POSTGRES_USER} -d $${POSTGRES_DB} -f /seed.sql
+            echo ""
+            echo "=== DEV ENVIRONMENT READY ==="
+            echo "Hive frontend: http://localhost:9000"
+            echo "Hive API:      http://localhost:9000/v1/health"
+            echo "PostgreSQL:    localhost:5434"
+            echo "Test API key:  vk_dev-test-key-secret-12345678"
+            echo "=============================="
+            exit 0
+          fi
+          echo "  Waiting for migrations... ($$i/60)"
+          sleep 2
+        done
+        echo "ERROR: Migrations did not complete within 120 seconds"
+        exit 1
+    restart: "no"
+
+volumes:
+  remote-dev-db-data:
