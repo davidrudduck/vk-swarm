@@ -921,4 +921,124 @@ describe('NodeApiKeySection', () => {
       secret: 'vk_DOUBLE_CLICK_TEST',
     });
   });
+
+  it('createAttemptRef: guard prevents stale onSuccess after closeDialog (SC4)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    vi.mocked(nodesApi.createApiKey).mockResolvedValue({
+      api_key: { id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null },
+      secret: 'vk_SECRET_CLOSE_GUARD',
+    });
+    const execCommand = vi.fn(() => true);
+    const origExecCommand = document.execCommand;
+    document.execCommand = execCommand;
+    const origClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true, writable: true });
+
+    try {
+      const { fireEvent } = await import('@testing-library/react');
+      renderWith(<NodeApiKeySection organizationId="org-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+      const nameInput = await screen.findByLabelText('Key Name');
+      fireEvent.change(nameInput, { target: { value: 'Test' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      await waitFor(() => {
+        expect(screen.getByText('••••••••••••••••••••')).toBeInTheDocument();
+      });
+      // Close dialog
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      await waitFor(() => {
+        expect(screen.queryByText('vk_SECRET_CLOSE_GUARD')).not.toBeInTheDocument();
+      });
+      // Reopen
+      fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+      expect(await screen.findByLabelText('Key Name')).toBeInTheDocument();
+      expect(screen.queryByText('vk_SECRET_CLOSE_GUARD')).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true });
+      document.execCommand = origExecCommand;
+    }
+  });
+
+  it('createAttemptRef: onSuccess does not set createdSecret when org changed before resolve (SC4)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    let resolveCreate: (v: unknown) => void;
+    const createPromise = new Promise((resolve) => { resolveCreate = resolve; });
+    vi.mocked(nodesApi.createApiKey).mockReturnValue(createPromise as ReturnType<typeof nodesApi.createApiKey>);
+    const { fireEvent } = await import('@testing-library/react');
+    const result = renderWith(<NodeApiKeySection organizationId="org-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
+    fireEvent.change(nameInput, { target: { value: 'Test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    result.rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
+      </QueryClientProvider>
+    );
+    resolveCreate!({
+      api_key: { id: 'newk', organization_id: 'org-1', name: 'Test', key_prefix: 'vk_new',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: null, takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null },
+      secret: 'vk_STALE_AFTER_ORG_CHANGE',
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('vk_STALE_AFTER_ORG_CHANGE')).not.toBeInTheDocument();
+    });
+  });
+
+  it('orgIdRef: revoke onError does not call setError when org changed before reject (SC4/SC5)', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      const keys: NodeApiKey[] = [{
+        id: 'k1', organization_id: 'org-1', name: 'Active', key_prefix: 'vk_a',
+        created_by: null, last_used_at: null, revoked_at: null, created_at: '2026-01-01T00:00:00Z',
+        node_id: 'n1', takeover_count: 0, takeover_window_start: null,
+        blocked_at: null, blocked_reason: null,
+      }];
+      let rejectRevoke: (v: unknown) => void;
+      const revokePromise = new Promise((_, reject) => { rejectRevoke = reject; });
+      vi.mocked(nodesApi.listApiKeys).mockResolvedValue(keys);
+      vi.mocked(nodesApi.revokeApiKey).mockReturnValue(revokePromise as ReturnType<typeof nodesApi.revokeApiKey>);
+      const result = renderWith(<NodeApiKeySection organizationId="org-1" />);
+      const { fireEvent } = await import('@testing-library/react');
+      fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
+      result.rerender(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
+        </QueryClientProvider>
+      );
+      rejectRevoke!(new Error('revoke failed'));
+      await waitFor(() => {
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      });
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it('orgIdRef: create onError does not call setError when org changed before reject (SC5)', async () => {
+    vi.mocked(nodesApi.listApiKeys).mockResolvedValue([]);
+    let rejectCreate: (v: unknown) => void;
+    const createPromise = new Promise((_, reject) => { rejectCreate = reject; });
+    vi.mocked(nodesApi.createApiKey).mockReturnValue(createPromise as ReturnType<typeof nodesApi.createApiKey>);
+    const { fireEvent } = await import('@testing-library/react');
+    const result = renderWith(<NodeApiKeySection organizationId="org-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate API Key' }));
+    const nameInput = await screen.findByLabelText('Key Name');
+    fireEvent.change(nameInput, { target: { value: 'Test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    result.rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider><NodeApiKeySection organizationId="org-2" /></TooltipProvider>
+      </QueryClientProvider>
+    );
+    rejectCreate!(new Error('create failed'));
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
 });
