@@ -335,9 +335,54 @@ idiomatic Radix pattern for controlling close behavior. The prop approach keeps 
 **Not irreversible:** Can switch to composition pattern later without breaking callers (just
 add new exports).
 
+### D4: Update AGENTS.md with remote-frontend gates
+
+**Decision:** Add `remote-frontend` lint, typecheck, and test gates to AGENTS.md's mandatory
+gate list. The updated gate block becomes:
+
+```bash
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo test --workspace
+cd frontend && npm run lint
+cd frontend && npx tsc --noEmit
+cd remote-frontend && npm run lint
+cd remote-frontend && npx tsc --noEmit
+cd remote-frontend && npx vitest run
+```
+
+**Rationale:** AGENTS.md currently only gates `frontend/` (the node UI). The hive frontend
+(`remote-frontend/`) has no mandatory gates. This is a process gap — bugs in the hive frontend
+pass through undetected because no lint/typecheck/test gate catches them. Every workstream that
+touches `remote-frontend/` must run these gates before declaring the PR ready.
+
+**Not irreversible:** Can be reverted by removing the lines from AGENTS.md.
+
+**Scope:** This is a process change, not a code change. The AGENTS.md update is committed as
+part of this workstream's PR.
+
 ---
 
 ## Test strategy
+
+### The gap: AGENTS.md gates don't cover remote-frontend
+
+AGENTS.md and CLAUDE.md specify four mandatory gates before any PR is complete:
+
+```bash
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo test --workspace
+cd frontend && npm run lint
+cd frontend && npx tsc --noEmit
+```
+
+These gates cover `frontend/` (the node UI) and the Rust workspace. They do **not** cover
+`remote-frontend/` (the hive UI). This is why bugs have crept through — the hive frontend has
+no mandatory lint, typecheck, or test gate in the development process.
+
+This workstream fixes the gap by:
+1. Running the full remote-frontend test suite as a mandatory gate before PR
+2. Adding a decision (D4) to update AGENTS.md with remote-frontend gates
+3. Making the execute phase run all gates explicitly before declaring "ready for merge"
 
 ### Unit tests for `parseErrorMessage` (`src/lib/errors.test.ts`)
 
@@ -365,19 +410,42 @@ add new exports).
 - 4 new test cases as described in the Design section above
 - All 28 existing tests continue to pass
 
-### Local testing gates (mandatory before PR)
+### Mandatory local testing gates (run BEFORE declaring PR ready)
+
+These gates run in sequence. Every gate must pass. No gate is skipped.
 
 ```bash
-cd remote-frontend && npx vitest run                    # all tests pass
-cd remote-frontend && npx tsc --noEmit                   # no type errors
-cd remote-frontend && npm run lint                        # no lint errors
-cargo clippy --all --all-targets --all-features -- -D warnings  # no Rust warnings
-cargo test --workspace                                    # all Rust tests pass
+# Gate 1: Rust workspace — clippy + tests
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo test --workspace
+
+# Gate 2: Node frontend — lint + typecheck
+cd frontend && npm run lint
+cd frontend && npx tsc --noEmit
+
+# Gate 3: Hive frontend — lint + typecheck + unit tests
+cd remote-frontend && npm run lint
+cd remote-frontend && npx tsc --noEmit
+cd remote-frontend && npx vitest run
+
+# Gate 4: Cross-check — no uncommitted changes
+git status  # must show "nothing to commit, working tree clean"
 ```
 
-### What's deferred
+**Gate 3 is the new addition.** It was missing from AGENTS.md, which is why hive frontend
+regressions were not caught. This spec mandates it for this workstream; Decision D4 mandates
+it for all future workstreams.
 
-Tests requiring a deployed host (live Docker Compose stack, real API endpoints, browser-based
-a11y audit with `@axe-core/playwright`) are deferred to a follow-up workstream after this PR
-is merged and deployed. The local unit tests cover the logic; integration/E2E validation happens
-on the deployed instance.
+### What's deferred to a post-deploy workstream
+
+Tests requiring a deployed host are NOT run locally and are NOT part of this workstream's
+definition of done. They belong in a separate follow-up workstream that runs after this PR
+is merged and deployed:
+
+- Browser-based a11y audit (`@axe-core/playwright`, WCAG AA)
+- E2E dialog behavior on real browser (Playwright against deployed instance)
+- Manual screen reader testing (NVDA/VoiceOver)
+- Lighthouse audit (performance, a11y scores)
+
+The follow-up workstream is created only after this PR merges. Its scope is validation-only —
+it does not modify code, only reports findings.
