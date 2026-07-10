@@ -1,0 +1,40 @@
+{
+  "model": "minimax-m3",
+  "findings": [
+    {
+      "id": "minimax-F1",
+      "severity": "low",
+      "issue": "hasRun ref in InvitationCompletePage prevents re-execution on URL parameter changes. The useEffect has dependencies [handoffId, appCode, oauthError, urlToken], suggesting it should re-run when these change, but the hasRun ref (line 23, 26-27) short-circuits all subsequent runs. If a user navigates from one OAuth callback URL to another (e.g., a different invitation complete URL) within the same component instance, the new handoff_id/app_code are silently ignored. The cleanup from the first run clears the timer, so the redirect is also lost. The async function from the first run continues to completion and persists access_token (per Round 5 fix #1), creating a confusing state where the user may be authenticated for the wrong flow. React Router 6+ reuses component instances across param changes, so this is a real (if edge-case) bug.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:23-94",
+      "remediation": "Remove the hasRun ref and instead use an AbortController or operation-id pattern. Cancel the in-flight request on cleanup and let the second mount start a new flow. Alternatively, reset hasRun.current in the cleanup function so that if the effect re-runs with new dependencies, it executes again. The current pattern is a known StrictMode workaround but conflates StrictMode double-invocation with URL change handling."
+    },
+    {
+      "id": "minimax-F2",
+      "severity": "low",
+      "issue": "Test setup for OAuth callback tests is fragile. The stub `vi.stubGlobal('location', { ...window.location, assign: mockAssign })` spreads window.location, but Location object properties (origin, href, protocol, etc.) are non-enumerable host-object properties. The spread produces an object missing `origin`, so `isSafeReturnTo(returnTo)` always falls through to the catch block (line 101-102 of AppRouter.tsx) which returns `url.startsWith('/')`. This coincidentally works for the current tests (which don't test returnTo with stubbed location), but if a future test adds a return_to check, the behavior would be unpredictable. The test should either preserve the Location shape or test isSafeReturnTo independently with a real location.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:262, 280, 298, 317",
+      "remediation": "Use `Object.defineProperties` or a partial mock that preserves `origin`: `vi.stubGlobal('location', Object.assign(Object.create(window.location), { assign: mockAssign }))`. Or test isSafeReturnTo behavior in isolation with real window.location, and only stub assign in the callback tests."
+    },
+    {
+      "id": "minimax-F3",
+      "severity": "info",
+      "issue": "No test wraps InvitationCompletePage in React.StrictMode to verify the Round 5 fix #1 (storage operations before the active guard) holds under double-invocation. In dev mode (StrictMode enabled at main.tsx:8), the first effect run starts completeInvitation(), cleanup sets active=false, the second run is skipped by hasRun, and when the async resolves the storage operations execute but the success state and redirect timer are skipped. The user sees the 'Completing invitation...' loading state forever in dev. The data is persisted correctly, but the UX is broken. A regression test would prevent the storage operations from being accidentally moved back inside the guard.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx (no StrictMode wrapper); remote-frontend/src/main.tsx:8",
+      "remediation": "Add a test case: render <React.StrictMode><InvitationCompletePage /></React.StrictMode> with mocked redeemOAuth that resolves after a delay, mock acceptInvitation to resolve, assert that localStorage.getItem('access_token') is set and sessionStorage oauth_verifier/invitation_token are cleared even though the success UI may not appear. This regression-tests the Round 5 fix."
+    },
+    {
+      "id": "minimax-F4",
+      "severity": "info",
+      "issue": "InvitationCompletePage error-path tests don't verify sessionStorage cleanup. Tests at lines 59-71 (oauthError), 73-85 (missing verifier), 87-105 (missing token), 121-133 (missing handoff_id/app_code) all set error states and check the error text, but none assert sessionStorage.getItem('oauth_verifier') === null or sessionStorage.getItem('invitation_token') === null. The component clears these in its error branches (lines 35-36, 42-43, 51, 58), so the tests should verify the cleanup. Only the redeem-failure test (line 107-119) and the success test (line 34-57) check storage cleanup.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:59-71, 73-85, 87-105, 121-133",
+      "remediation": "Add expect(sessionStorage.getItem('oauth_verifier')).toBeNull() and expect(sessionStorage.getItem('invitation_token')).toBeNull() to each error-path test case."
+    },
+    {
+      "id": "minimax-F5",
+      "severity": "info",
+      "issue": "InvitationPage.test.tsx error-path test for initOAuth failure (lines 91-110) doesn't verify that the loading state is reset or that sessionStorage is cleared. The component sets loading=false, clearVerifier(), and clearInvitationToken() in the catch block (lines 55-57 of InvitationPage.tsx), but the test only checks the error text is displayed.",
+      "citation": "remote-frontend/src/pages/InvitationPage.test.tsx:91-110",
+      "remediation": "Add assertions: expect(screen.getByRole('button', { name: 'Continue with GitHub' })).not.toBeDisabled() and expect(sessionStorage.getItem('oauth_verifier')).toBeNull() and expect(sessionStorage.getItem('invitation_token')).toBeNull()."
+    }
+  ]
+}

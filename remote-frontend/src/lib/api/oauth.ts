@@ -1,6 +1,6 @@
 import { makeRequest, ApiError } from './utils';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 
 export type OAuthProvider = 'github' | 'google';
 
@@ -18,7 +18,8 @@ export const oauthApi = {
   async init(
     provider: OAuthProvider,
     returnTo: string,
-    appChallenge: string
+    appChallenge: string,
+    signal?: AbortSignal
   ): Promise<HandoffInitResponse> {
     const response = await makeRequest(`${API_BASE}/v1/oauth/web/init`, {
       method: 'POST',
@@ -27,6 +28,7 @@ export const oauthApi = {
         return_to: returnTo,
         app_challenge: appChallenge,
       }),
+      signal,
     });
 
     if (!response.ok) {
@@ -42,7 +44,8 @@ export const oauthApi = {
   async redeem(
     handoffId: string,
     appCode: string,
-    appVerifier: string
+    appVerifier: string,
+    signal?: AbortSignal
   ): Promise<HandoffRedeemResponse> {
     const response = await makeRequest(`${API_BASE}/v1/oauth/web/redeem`, {
       method: 'POST',
@@ -51,6 +54,7 @@ export const oauthApi = {
         app_code: appCode,
         app_verifier: appVerifier,
       }),
+      signal,
     });
 
     if (!response.ok) {

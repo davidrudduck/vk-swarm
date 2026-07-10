@@ -1,0 +1,33 @@
+{
+  "model": "kimi-k2.7-code",
+  "findings": [
+    {
+      "id": "kimi-F1",
+      "severity": "low",
+      "issue": "OAuthCallbackPage sets `isRedirecting` to true and immediately calls `window.location.assign(safeReturnTo)`. Because `assign` starts synchronous navigation, the component is torn down before React can render the `isRedirecting` branch, making the state and its UI branch effectively dead code.",
+      "citation": "remote-frontend/src/AppRouter.tsx:154-155",
+      "remediation": "Either remove the `isRedirecting` state and the corresponding render branch, or render the redirecting UI synchronously before kicking off the async `oauthApi.redeem` call."
+    },
+    {
+      "id": "kimi-F2",
+      "severity": "low",
+      "issue": "The service worker shell-cache exclusion matches any path ending with `/complete`, not just the invitation completion route. This will silently disable offline shell caching for any future route added with that suffix (e.g., a future `/tasks/complete` page).",
+      "citation": "remote-frontend/vite.config.ts:37",
+      "remediation": "Replace the broad suffix check with an exact match such as `/^\\/invitations\/[^/]+\\/complete$/`."
+    },
+    {
+      "id": "kimi-F3",
+      "severity": "low",
+      "issue": "Several error-path tests assert that `localStorage.access_token` is cleared, but they never seed it first. Because `beforeEach` already clears storage, `expect(localStorage.getItem('access_token')).toBeNull()` is trivially true and cannot detect a missing `localStorage.removeItem('access_token')` call.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:278, remote-frontend/src/pages/InvitationCompletePage.test.tsx:75-77",
+      "remediation": "Seed `localStorage.setItem('access_token', 'stale-token')` in each error-path test before rendering the component, then assert the item was removed."
+    },
+    {
+      "id": "kimi-F4",
+      "severity": "info",
+      "issue": "ProfileProvider checks `err.status === 401` to detect an unauthorized response, but `ApiError` defines the canonical HTTP status on `statusCode`; `status` is only a convenience alias set to the same value. Relying on the alias makes the 401 detection fragile if `ApiError` is later refactored.",
+      "citation": "remote-frontend/src/components/ProfileProvider.tsx:44",
+      "remediation": "Use `err instanceof ApiError && err.statusCode === 401` for the stale-token check."
+    }
+  ]
+}

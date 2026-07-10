@@ -1,0 +1,19 @@
+{
+  "model": "deepseek-v4-pro",
+  "findings": [
+    {
+      "id": "deepseek-F1",
+      "severity": "low",
+      "issue": "OAuthCallbackPage has dead `isRedirecting` state. `setIsRedirecting(true)` at line 151 is called immediately before `window.location.assign(safeReturnTo)` at line 152, which starts synchronous navigation. The 'Redirecting...' branch (lines 166-173) is never rendered before the browser navigates away. The state variable and its render branch are dead code.",
+      "citation": "remote-frontend/src/AppRouter.tsx:108,151-152,166-173",
+      "remediation": "Remove `isRedirecting` state and the conditional render branch (lines 166-173). Keep only the 'Processing...' fallback since the redirect is synchronous and no intermediate 'Redirecting...' state is ever visible to the user."
+    },
+    {
+      "id": "deepseek-F2",
+      "severity": "low",
+      "issue": "Testing gap: InvitationCompletePage success path test does not verify the organization-slug redirect message. The `acceptInvitation` mock returns `organization_slug: 'test-org'`, so the success UI should show 'Redirecting to test-org...'. The current test only asserts 'Invitation accepted!' heading, missing verification that `result.organization_slug` flows through to the redirect status text.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:55-58",
+      "remediation": "Add assertion: `expect(screen.getByText('Redirecting to test-org...')).toBeInTheDocument()` after checking for 'Invitation accepted!'."
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "model": "deepseek-v4-pro",
+  "findings": [
+    {
+      "id": "deepseek-F1",
+      "severity": "medium",
+      "issue": "InvitationPage fetch useEffect has no abort/cleanup guard — sets state on potentially unmounted component. InvitationCompletePage received active-flag + StrictMode ref cleanup in Round 2, but InvitationPage's own fetch (getInvitation) was left without equivalent cleanup, creating an inconsistency within the same workstream.",
+      "citation": "InvitationPage.tsx:25-29",
+      "remediation": "Add an AbortController or active flag (const active = true; return () => { active = false }) mirroring the pattern applied in InvitationCompletePage.tsx:25-92."
+    },
+    {
+      "id": "deepseek-F2",
+      "severity": "low",
+      "issue": "No test covers the error path where redeemOAuth succeeds but acceptInvitation fails. The catch block at InvitationCompletePage.tsx:83-88 handles this case, and the mock for acceptInvitation exists, but the test suite only exercises the redeemOAuth rejection path (line 110-118) and success path, leaving a gap in error path coverage.",
+      "citation": "InvitationCompletePage.test.tsx (after line 119)",
+      "remediation": "Add a test case: set oauth_verifier + invitation_token in sessionStorage, mock redeemOAuth to resolve but acceptInvitation to reject, assert the error message from acceptInvitation is displayed and sessionStorage cleanup occurs."
+    },
+    {
+      "id": "deepseek-F3",
+      "severity": "info",
+      "issue": "LoginPage useEffect only pushes error state when urlError is truthy, but never clears when urlError becomes null (e.g. in-app navigation from /login?error=X to /login). Stale error persists after the URL error param is gone.",
+      "citation": "AppRouter.tsx:34-39",
+      "remediation": "Remove the conditional guard and always call setError(urlError) in the effect, or derive error directly from searchParams with useMemo and use a separate state for button-triggered errors."
+    }
+  ]
+}

@@ -14,64 +14,90 @@ export default function InvitationCompletePage() {
   const qp = useMemo(() => new URLSearchParams(search), [search])
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
-  const [orgSlug, setOrgSlug] = useState<string | null>(null)
 
   const handoffId = qp.get('handoff_id')
   const appCode = qp.get('app_code')
   const oauthError = qp.get('error')
 
   useEffect(() => {
+    const abortController = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+
     const completeInvitation = async () => {
       if (oauthError) {
-        setError(`OAuth error: ${oauthError}`)
+        if (!abortController.signal.aborted) setError(`OAuth error: ${oauthError}`)
+        clearVerifier()
+        clearInvitationToken()
+        localStorage.removeItem('access_token')
         return
       }
 
       if (!handoffId || !appCode) {
+        if (!abortController.signal.aborted) setError('Missing OAuth parameters. Please try the invitation link again.')
+        clearVerifier()
+        clearInvitationToken()
+        localStorage.removeItem('access_token')
         return
       }
 
       try {
         const verifier = retrieveVerifier()
         if (!verifier) {
-          setError('OAuth session lost. Please try again.')
+          if (!abortController.signal.aborted) setError('OAuth session lost. Please try again.')
+          clearVerifier()
+          clearInvitationToken()
+          localStorage.removeItem('access_token')
           return
         }
 
-        const token = retrieveInvitationToken() || urlToken
+        const token = urlToken || retrieveInvitationToken()
         if (!token) {
-          setError('Invitation token lost. Please try again.')
+          if (!abortController.signal.aborted) setError('Invitation token lost. Please try again.')
+          clearVerifier()
+          clearInvitationToken()
+          localStorage.removeItem('access_token')
           return
         }
 
         const { access_token } = await redeemOAuth(
           handoffId,
           appCode,
-          verifier
+          verifier,
+          abortController.signal
         )
 
-        const result = await acceptInvitation(token, access_token)
+        if (abortController.signal.aborted) return
+
+        await acceptInvitation(token, access_token, abortController.signal)
+
+        if (abortController.signal.aborted) return
 
         clearVerifier()
         clearInvitationToken()
+        localStorage.setItem('access_token', access_token)
 
         setSuccess(true)
-        setOrgSlug(result.organization_slug)
 
-        const timer = setTimeout(() => {
+        timer = setTimeout(() => {
           const appBase =
-            import.meta.env.VITE_APP_BASE_URL || window.location.origin
-          window.location.assign(`${appBase}`)
+            (import.meta.env.VITE_APP_BASE_URL || window.location.origin).replace(/\/+$/, '')
+          window.location.assign(appBase)
         }, 2000)
-        return () => clearTimeout(timer)
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to complete invitation')
+        if (abortController.signal.aborted) return
         clearVerifier()
         clearInvitationToken()
+        localStorage.removeItem('access_token')
+        const message = e instanceof Error || e instanceof DOMException ? e.message : 'Failed to complete invitation'
+        setError(message)
       }
     }
 
     completeInvitation()
+    return () => {
+      abortController.abort()
+      if (timer) clearTimeout(timer)
+    }
   }, [handoffId, appCode, oauthError, urlToken])
 
   if (error) {
@@ -88,7 +114,7 @@ export default function InvitationCompletePage() {
     return (
       <StatusCard
         title="Invitation accepted!"
-        body={orgSlug ? `Redirecting to ${orgSlug}...` : 'Redirecting...'}
+        body="Redirecting..."
         isSuccess
       />
     )

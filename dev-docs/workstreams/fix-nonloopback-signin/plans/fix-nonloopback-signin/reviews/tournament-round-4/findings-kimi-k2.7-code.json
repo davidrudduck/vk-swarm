@@ -1,0 +1,47 @@
+{
+  "model": "kimi-k2.7-code",
+  "findings": [
+    {
+      "id": "kimi-F1",
+      "severity": "medium",
+      "issue": "InvitationCompletePage redeems the OAuth handoff and accepts the invitation but never persists the access_token to localStorage. The normal-login callback (AppRouter.tsx) stores it immediately, so after an invitation acceptance the user is shown the success card but will not be authenticated when the 2-second redirect fires; RootRedirect will push them back to /login because no access_token exists.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:56-74",
+      "remediation": "After a successful acceptInvitation, store the token exactly like the normal callback: localStorage.setItem('access_token', access_token). Also assert in InvitationCompletePage.test.tsx:34-56 that localStorage.getItem('access_token') === 'access-123'."
+    },
+    {
+      "id": "kimi-F2",
+      "severity": "medium",
+      "issue": "OAuth-init failures leave stale PKCE/invitation state in sessionStorage. Both /login and /invitations/:token/accept call storeVerifier() (and the invitation page also calls storeInvitationToken()) before awaiting initOAuth(). If initOAuth rejects, the catch blocks only set an error/reset loading and never clear the stored values, leaving an oauth_verifier (and invitation_token) for a flow that never started.",
+      "citation": "remote-frontend/src/AppRouter.tsx:41-51; remote-frontend/src/pages/InvitationPage.tsx:36-47",
+      "remediation": "In the initOAuth catch paths call clearVerifier(); in InvitationPage also call clearInvitationToken(). Add rejection tests that assert the storage keys are removed."
+    },
+    {
+      "id": "kimi-F3",
+      "severity": "low",
+      "issue": "InvitationCompletePage's early-return error branches do not clean up sessionStorage secrets. The oauthError, missing-params, missing-verifier, and missing-token returns all exit without clearing oauth_verifier/invitation_token. Only the success path and the catch block clear them, so an abandoned invitation callback can leave a stale verifier and token behind.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:33-54",
+      "remediation": "Call clearVerifier() in every early-return branch and clearInvitationToken() where the token has been stored. Add assertions to the existing error-path tests that the keys are removed for oauthError and missing-params cases."
+    },
+    {
+      "id": "kimi-F4",
+      "severity": "medium",
+      "issue": "LoginPage renders callback error redirects invisible. OAuthCallbackPage redirects rejected/abandoned flows to /login?error=..., but LoginPage initializes its error state from useState(null) and never reads searchParams.get('error'). The query parameter is therefore silently ignored and the user sees a normal login form with no explanation.",
+      "citation": "remote-frontend/src/AppRouter.tsx:30-32; remote-frontend/src/AppRouter.tsx:116-145",
+      "remediation": "Initialize LoginPage's error state from searchParams.get('error') and add a route-level test that renders /login?error=access_denied and asserts the error text is shown."
+    },
+    {
+      "id": "kimi-F5",
+      "severity": "low",
+      "issue": "InvitationPage's invitation fetch effect has no cancellation/cleanup. If getInvitation is slow and the component unmounts (e.g., user navigates away), the promise continuation calls setData/setFetchError on an unmounted component. This is a latent React warning/act() leak and a small state-update-after-unmount risk.",
+      "citation": "remote-frontend/src/pages/InvitationPage.tsx:23-27",
+      "remediation": "Guard the effect with an 'active' flag returned from a cleanup function, or use an AbortController/AbortSignal passed through the fetch chain, and skip setData/setFetchError when the component is no longer mounted."
+    },
+    {
+      "id": "kimi-F6",
+      "severity": "info",
+      "issue": "The decisions-ledger acceptance evidence and reachability gate line numbers are stale relative to HEAD. The targeted four-file run now passes 30 tests, the full remote-frontend suite passes 132 tests, and the reachability trace cites pkce.ts:24-25 for sha256Fallback when it now lives at pkce.ts:46 (and the invitation entry point shifted from :31-32 to :34). Relying on stale counts/lines makes the ledger a poor audit trail.",
+      "citation": "docs/plans/fix-nonloopback-signin/decisions-ledger.md:113; docs/plans/fix-nonloopback-signin/decisions-ledger.md:143-144",
+      "remediation": "Re-run the gate commands, update the prose counts to match the current suite (30 targeted / 132 total), and refresh the call-path line numbers against the committed source. Alternatively, remove hard-coded counts and point to the re-runnable command output."
+    }
+  ]
+}

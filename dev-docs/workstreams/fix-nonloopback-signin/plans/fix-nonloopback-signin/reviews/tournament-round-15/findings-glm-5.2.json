@@ -1,0 +1,47 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "low",
+      "issue": "Invitation `token` is interpolated into the request URL without `encodeURIComponent` in both `getInvitation` and `acceptInvitation`. The token originates from `useParams()` (URL-decoded), so a crafted invitation link whose token contains `?`, `#`, `/`, or `..` is injected verbatim into the path: e.g. token `../profile` yields `.../v1/invitations/../profile` (normalised to `.../v1/profile`) and token `foo?bar` turns `bar` into a query string. This is a path-injection / URL-construction defect that can redirect the authenticated request to an unrelated endpoint. The workstream rewrote these exact lines (fetch -> makeRequest) and preserved the unencoded interpolation.",
+      "citation": "remote-frontend/src/api.ts:38",
+      "remediation": "Use `${API_BASE}/v1/invitations/${encodeURIComponent(token)}` and `${encodeURIComponent(token)}/accept` in both functions."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "medium",
+      "issue": "The new `signal?: AbortSignal` parameter on `oauthApi.init` and `oauthApi.redeem` (and the `redeemOAuth` wrapper rewrite from `.bind` to an explicit forwarding arrow) has NO test coverage. `oauth.test.ts` was not modified by this workstream: the init test calls `oauthApi.init('github', ..., 'challenge-123')` with no signal and asserts only `method`/`body`; the redeem test likewise omits the signal. No test passes an already-aborted signal, asserts the signal reaches `fetch`/`makeRequest`, or verifies abort actually cancels the in-flight request. The entire R13/R14 AbortSignal-plumbing fix (StrictMode double-redeem prevention) is therefore unguarded against regression — removing the `signal,` line from oauth.ts would leave every test green.",
+      "citation": "remote-frontend/src/lib/api/oauth.test.ts:56",
+      "remediation": "Add tests that (a) pass an AbortSignal to init/redeem and assert `fetch` was called with `expect.objectContaining({ signal })`, and (b) pass an already-aborted signal and assert the call rejects with an AbortError."
+    },
+    {
+      "id": "glm-F3",
+      "severity": "medium",
+      "issue": "`anySignal` and `makeRequest` have zero unit tests (no `utils.test.ts` exists), yet this workstream's core value depends on them: every AbortSignal is combined with the 30s timeout via `anySignal`, and every request now flows through `makeRequest`. `anySignal` has non-trivial semantics — already-aborted short-circuit + `break` (skips registering listeners on remaining signals), first-wins propagation, `signal.reason` forwarding, and `{ once: true }` listener lifecycle — any of which could silently regress. Because the workstream routes `getInvitation`/`acceptInvitation` through `makeRequest` and adds signals to init/redeem, it substantially increased reliance on this untested infrastructure.",
+      "citation": "remote-frontend/src/lib/api/utils.ts:39",
+      "remediation": "Add `src/lib/api/utils.test.ts` covering: anySignal with a pre-aborted signal, first-wins ordering, reason propagation, and duplicate/empty input; makeRequest default headers, 30s timeout abort, and caller-signal abort cancellation."
+    },
+    {
+      "id": "glm-F4",
+      "severity": "low",
+      "issue": "Routing `getInvitation` through `makeRequest` is a silent behavior change. The previous raw `fetch(`${API_BASE}/v1/invitations/${token}`)` sent no headers. `makeRequest` unconditionally injects `Content-Type: application/json` (utils.ts:61-63) AND, when `localStorage.access_token` is present, `Authorization: Bearer <token>` (utils.ts:64-68). For the typical unauthenticated invitation viewer nothing changes, but a signed-in member clicking an invitation link now sends their bearer token to a previously-unauthenticated public endpoint — a least-privilege concern, and the new `Content-Type` on a bodyless GET can be rejected by strict backends. `acceptInvitation` is unaffected (it already set these headers).",
+      "citation": "remote-frontend/src/api.ts:38",
+      "remediation": "Either explicitly opt `getInvitation` out of the auto-injected headers (e.g. a `skipAuth`/`noDefaultHeaders` flag on makeRequest for public GETs), or document that sending the bearer token to the invitation endpoint is intentional."
+    },
+    {
+      "id": "glm-F5",
+      "severity": "info",
+      "issue": "`oauthApi.logout` does not accept an `AbortSignal`, inconsistent with `init` and `redeem` which now both do. It still benefits from `makeRequest`'s 30s timeout, but has no caller-controlled cancellation — a navigating-away user cannot abort the logout round-trip.",
+      "citation": "remote-frontend/src/lib/api/oauth.ts:70",
+      "remediation": "Add an optional `signal?: AbortSignal` parameter and forward it to makeRequest, matching init/redeem."
+    },
+    {
+      "id": "glm-F6",
+      "severity": "info",
+      "issue": "`ApiError.error_data` is declared but never populated: both throw sites construct `new ApiError(msg, status, response)` without the 4th `error_data` argument, so the structured server error body is never parsed or surfaced. Callers that catch `ApiError` and read `.error_data` always get `undefined`, losing actionable error detail (e.g. which invitation field failed validation).",
+      "citation": "remote-frontend/src/lib/api/oauth.ts:33",
+      "remediation": "Parse `await response.json()` on the error path and pass the body as `error_data`, or remove the unused field."
+    }
+  ]
+}

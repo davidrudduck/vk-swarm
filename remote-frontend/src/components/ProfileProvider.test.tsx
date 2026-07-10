@@ -42,7 +42,7 @@ describe('ProfileProvider', () => {
       ],
     };
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -67,11 +67,10 @@ describe('ProfileProvider', () => {
       isLoaded: true,
     });
 
-    expect(globalThis.fetch).toHaveBeenCalledWith('/v1/profile', {
-      headers: {
-        Authorization: `Bearer ${mockToken}`,
-      },
-    });
+    // Verify fetch was called with Authorization header
+    const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(fetchCall[0]).toContain('/v1/profile');
+    expect((fetchCall[1]?.headers as Headers).get('Authorization')).toBe(`Bearer ${mockToken}`);
   });
 
   it('should not fetch when no token in localStorage (signed-out, no fetch)', async () => {
@@ -82,6 +81,10 @@ describe('ProfileProvider', () => {
     );
 
     const { result } = renderHook(() => useProfile(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoaded).toBe(true);
+    });
 
     expect(result.current).toEqual({
       profile: null,
@@ -95,7 +98,7 @@ describe('ProfileProvider', () => {
   it('should clear token from localStorage on 401 response', async () => {
     const mockToken = 'expired-token';
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: false,
       status: 401,
@@ -124,8 +127,37 @@ describe('ProfileProvider', () => {
   it('should not clear token on network error (transient failure)', async () => {
     const mockToken = 'test-token';
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error('Network error'));
+
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ProfileProvider>{children}</ProfileProvider>
+    );
+
+    const { result } = renderHook(() => useProfile(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoaded).toBe(true);
+    });
+
+    expect(result.current).toEqual({
+      profile: null,
+      isSignedIn: false,
+      isLoaded: true,
+    });
+
+    expect(vi.mocked(localStorage.removeItem)).not.toHaveBeenCalled();
+  });
+
+  it('should not clear token on non-401 server error (500)', async () => {
+    const mockToken = 'test-token';
+
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: 'Internal server error' }),
+    } as Response);
 
     const wrapper = ({ children }: { children: ReactNode }) => (
       <ProfileProvider>{children}</ProfileProvider>
@@ -149,7 +181,7 @@ describe('ProfileProvider', () => {
   it('should have isLoaded false before fetch resolves (loading state)', () => {
     const mockToken = 'test-token';
 
-    vi.mocked(localStorage.getItem).mockReturnValueOnce(mockToken);
+    vi.mocked(localStorage.getItem).mockReturnValue(mockToken);
     vi.mocked(globalThis.fetch).mockImplementationOnce(
       () => new Promise(() => {}) // Never resolves
     );

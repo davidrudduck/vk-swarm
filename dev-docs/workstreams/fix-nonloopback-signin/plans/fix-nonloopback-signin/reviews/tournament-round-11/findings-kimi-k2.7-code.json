@@ -1,0 +1,33 @@
+{
+  "model": "kimi-k2.7-code",
+  "findings": [
+    {
+      "id": "kimi-F1",
+      "severity": "low",
+      "issue": "Workbox shell-cache exclusion is overly broad. The runtimeCaching rule was meant to keep only /oauth/callback and /invitations/:token/complete out of the shell cache (Round 10), but instead it opts out every route whose pathname ends with '/complete'. This deviates from the scoped fix and will silently break offline shell caching for any future route added under that suffix.",
+      "citation": "remote-frontend/vite.config.ts:36-38",
+      "remediation": "Change the exclusion condition to path === '/oauth/callback' || (path.startsWith('/invitations/') && path.endsWith('/complete'))."
+    },
+    {
+      "id": "kimi-F2",
+      "severity": "low",
+      "issue": "InvitationCompletePage has no test for the acceptInvitation failure path. The suite covers redeemOAuth failure, missing params, OAuth errors, missing verifier, missing token, and success, but not the case where redeemOAuth succeeds and acceptInvitation then rejects. In that path the OAuth handoff has already been consumed server-side, the access_token is not persisted, both session keys are cleared, and the user sees a generic error — the worst-case invitation-completion scenario.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:36-135; remote-frontend/src/pages/InvitationCompletePage.tsx:57-86",
+      "remediation": "Add a test case that mocks redeemOAuth to resolve with an access_token and acceptInvitation to reject, then assert the error message is displayed, sessionStorage is cleared, and localStorage does NOT contain access_token."
+    },
+    {
+      "id": "kimi-F3",
+      "severity": "info",
+      "issue": "InvitationCompletePage 'invitation token lost' branch clears the verifier but not a stale invitation_token. With the parameterized route this branch is only reached when invitation_token is also absent, but the code is inconsistent with the other error/success paths and with the documented cleanup policy. A stale token could survive if the component were rendered without a route parameter or with an empty parameter while a previous token remained in sessionStorage.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:50-55",
+      "remediation": "Add clearInvitationToken() alongside clearVerifier() in the !token branch so all early-return paths clean both keys."
+    },
+    {
+      "id": "kimi-F4",
+      "severity": "info",
+      "issue": "The acceptance evidence in the decisions ledger records stale remote-frontend test counts for npm run test:run (25 files / 114 tests). The current suite reports 25 files and 133 tests passed, so the ledger no longer reflects the actual coverage that has been added during later rounds.",
+      "citation": "docs/plans/fix-nonloopback-signin/decisions-ledger.md:144-145",
+      "remediation": "Update the recorded npm run test:run result line to the current numTotalTests value (and verify the file count) so the acceptance evidence stays accurate."
+    }
+  ]
+}
