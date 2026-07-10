@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: fix-nonloopback-signin
 change_kind: bugfix
 discovered: 2026-07-06

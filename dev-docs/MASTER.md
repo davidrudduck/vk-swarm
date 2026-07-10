@@ -10,7 +10,7 @@
 
 | Workstream | Status | Title | Rescued branches | Contradictions | Staging pointers |
 |---|---|---|---|---|---|
-| fix-nonloopback-signin | draft | fix-nonloopback-signin | - | - | 1 |
+| fix-nonloopback-signin | shipped | fix-nonloopback-signin | - | - | 2 |
 | foundations-followup1 | shipped | foundations-followup1 | - | - | 2 |
 | hive-node-api-key-ui | shipped | Hive node API key management UI — generate/revoke/unblock keys on the Nodes page | - | - | 1 |
 | remote-docker-build-fix | shipped | Fix crates/remote Docker build — unblock remote/hive standup | - | - | 2 |
@@ -46,7 +46,6 @@ _None._
 | id | title | severity | status | location |
 |---|---|---|---|---|
 | F-2026-07-04-04 | crisp-river uncommitted Cargo.toml doctest edits on merged branch | medium | open | crates/remote/Cargo.toml |
-| F-2026-07-06-02 | Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined) | high | open | remote-frontend/src/pkce.ts:10 |
 
 <!-- WAI:BACKLOG:END -->
 
