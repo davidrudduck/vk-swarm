@@ -390,9 +390,8 @@ export function NodeApiKeySection({
         onOpenChange={(open) => {
           if (!open && !createdSecret && !createMutation.isPending) closeDialog();
         }}
-        uncloseable={!!createdSecret || createMutation.isPending}
       >
-        <DialogContent>
+        <DialogContent uncloseable={!!createdSecret || createMutation.isPending}>
           {!createdSecret ? (
             <form onSubmit={handleCreateSubmit}>
               <DialogHeader>
