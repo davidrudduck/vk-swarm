@@ -1,0 +1,19 @@
+{
+  "verdicts": {
+    "deepseek-v4-pro:deepseek-F1": {"valid": true, "remediation_passes": true, "reviewer": "kimi-k2.7-code"},
+    "deepseek-v4-pro:deepseek-F2": {"valid": true, "remediation_passes": true, "reviewer": "kimi-k2.7-code"},
+    "deepseek-v4-pro:deepseek-F3": {"valid": true, "remediation_passes": true, "reviewer": "minimax-m3"},
+    "deepseek-v4-pro:deepseek-F4": {"valid": true, "remediation_passes": true, "reviewer": "kimi-k2.7-code"},
+    "deepseek-v4-pro:deepseek-F5": {"valid": true, "remediation_passes": true, "reviewer": "kimi-k2.7-code"},
+    "kimi-k2.7-code:kimi-F1": {"valid": true, "remediation_passes": true, "reviewer": "deepseek-v4-pro"},
+    "kimi-k2.7-code:kimi-F2": {"valid": true, "remediation_passes": true, "reviewer": "deepseek-v4-pro"},
+    "kimi-k2.7-code:kimi-F3": {"valid": true, "remediation_passes": true, "reviewer": "deepseek-v4-pro"},
+    "kimi-k2.7-code:kimi-F4": {"valid": true, "remediation_passes": true, "reviewer": "minimax-m3"},
+    "kimi-k2.7-code:kimi-F5": {"valid": true, "remediation_passes": true, "reviewer": "deepseek-v4-pro"},
+    "kimi-k2.7-code:kimi-F6": {"valid": true, "remediation_passes": true, "reviewer": "deepseek-v4-pro"},
+    "minimax-m3:minimax-F1": {"valid": true, "remediation_passes": true, "reviewer": "deepseek-v4-pro"},
+    "minimax-m3:minimax-F2": {"valid": true, "remediation_passes": true, "reviewer": "deepseek-v4-pro"},
+    "minimax-m3:minimax-F3": {"valid": false, "remediation_passes": false, "reviewer": "deepseek-v4-pro"},
+    "minimax-m3:minimax-F4": {"valid": true, "remediation_passes": true, "reviewer": "deepseek-v4-pro"}
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "low",
+      "issue": "The OAuth redeem response carries a refresh_token (typed as required in HandoffRedeemResponse) but both redeem call sites destructure only access_token and discard refresh_token. No refresh_token is ever persisted anywhere (grep confirms zero setItem calls for it). As a result the client has no token-refresh capability: when access_token expires the user is forced into a full re-authentication instead of a silent refresh. The type contract declares refresh_token: string as a required field yet the value is fetched and thrown away on both the normal login callback and the invitation-complete callback.",
+      "citation": "remote-frontend/src/AppRouter.tsx:146 and remote-frontend/src/pages/InvitationCompletePage.tsx:60; type at remote-frontend/src/lib/api/oauth.ts:12-15",
+      "remediation": "At both redeem sites, destructure and persist the refresh token alongside the access token, e.g. const { access_token, refresh_token } = await redeemOAuth(...); ... localStorage.setItem('refresh_token', refresh_token); localStorage.setItem('access_token', access_token);. If refresh is intentionally handled server-side via cookies, document that decision and drop refresh_token from HandoffRedeemResponse to stop fetching a value that is never used."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "low",
+      "issue": "ProfileProvider detects a 401 by fragile string matching: err instanceof Error && err.message.includes('401'). profileApi.get() throws an ApiError whose message is 'profile fetch failed: <status>' and which already carries a typed numeric status field (this.status = statusCode). The string check couples the cleanup logic to the exact wording of the error message: any future change to the message format (or a status like 4010 / a body containing '401') would silently break the stale-token cleanup, leaving an expired token in localStorage and causing repeated 401s on every profile fetch.",
+      "citation": "remote-frontend/src/components/ProfileProvider.tsx:43; error construction at remote-frontend/src/lib/api/profile.ts:21-25; ApiError.status at remote-frontend/src/lib/api/utils.ts:28",
+      "remediation": "Import ApiError from '@/lib/api/utils' and replace the string test with a typed check: } else if (err instanceof ApiError && err.status === 401) { localStorage.removeItem('access_token'); }. Update the ProfileProvider.test.tsx 'should clear token on 401' case to assert on err.status rather than message wording."
+    },
+    {
+      "id": "glm-F3",
+      "severity": "info",
+      "issue": "On the invitation-complete success path, acceptInvitation is invoked only after redeemOAuth succeeds, so a transient accept failure (e.g. a network blip) after a valid access_token has already been obtained forces the catch block to discard the freshly redeemed token (localStorage.removeItem) and surface 'Accept failed', requiring the user to redo the entire OAuth handshake. The redeemed token is usable but is thrown away rather than retained for a retry of the accept step. This is defensible from a security standpoint (no lingering tokens) but degrades UX on transient accept failures.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:69-90",
+      "remediation": ""
+    }
+  ]
+}

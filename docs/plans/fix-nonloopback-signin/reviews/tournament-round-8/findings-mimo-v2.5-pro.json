@@ -1,0 +1,40 @@
+{
+  "model": "mimo-v2.5-pro",
+  "findings": [
+    {
+      "id": "mimo-F1",
+      "severity": "low",
+      "issue": "OAuthCallbackPage success path does not clear invitation_token from sessionStorage. All four error paths (oauthError, missing params, missing verifier, redeem failure) call both clearVerifier() and clearInvitationToken(), but the success path at lines 146-150 only calls clearVerifier(). If a user starts an invitation flow (storing invitation_token), abandons it, then completes a normal login, the stale invitation_token persists in sessionStorage.",
+      "citation": "remote-frontend/src/AppRouter.tsx:146-150",
+      "remediation": "Add clearInvitationToken() after clearVerifier() on the success path, matching the error paths' pattern."
+    },
+    {
+      "id": "mimo-F2",
+      "severity": "low",
+      "issue": "Missing test for acceptInvitation failure in InvitationCompletePage. The test suite covers redeemOAuth failure (line 107) but has no test for the case where redeemOAuth succeeds but acceptInvitation fails. In that scenario, the catch block at line 81 clears storage and sets an error, but this code path is untested.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx",
+      "remediation": "Add a test that mocks redeemOAuth to succeed and acceptInvitation to reject, then assert the error message is shown and storage is cleared."
+    },
+    {
+      "id": "mimo-F3",
+      "severity": "low",
+      "issue": "Missing integration test for isSafeReturnTo in OAuthCallbackPage. The isSafeReturnTo function is tested in isolation (line 329), and the OAuth callback success flow is tested (line 119), but no test verifies that a cross-origin return_to parameter is sanitized to '/nodes' before the redirect. An attacker-controlled return_to that bypasses isSafeReturnTo would be an open redirect.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:119-138",
+      "remediation": "Add a test that renders /oauth/callback?handoff_id=...&app_code=...&return_to=https://evil.com, mocks window.location.assign, and asserts the redirect goes to '/nodes' rather than 'https://evil.com'."
+    },
+    {
+      "id": "mimo-F4",
+      "severity": "info",
+      "issue": "isSafeReturnTo('') returns true because new URL('', window.location.origin) resolves to the current origin. All current callers guard against empty strings with || '/nodes' before calling isSafeReturnTo, so this is not exploitable. However, the function contract that empty string is 'safe' is surprising and could mislead future callers.",
+      "citation": "remote-frontend/src/AppRouter.tsx:96-103",
+      "remediation": "Return false for empty or whitespace-only strings as an early check: if (!url || !url.trim()) return false;"
+    },
+    {
+      "id": "mimo-F5",
+      "severity": "info",
+      "issue": "sha256 native path does not catch errors from crypto.subtle.digest. If the native API is present but throws (e.g., a browser bug or Content Security Policy blocking crypto operations), the error propagates to the caller without falling back to sha256Fallback. On a secure origin with a broken crypto.subtle, the user would see an error instead of silently falling back.",
+      "citation": "remote-frontend/src/pkce.ts:14-20",
+      "remediation": "Wrap the native digest call in try/catch and fall back to sha256Fallback on error: try { return new Uint8Array(await subtle.digest(...)); } catch { return sha256Fallback(data); }"
+    }
+  ]
+}

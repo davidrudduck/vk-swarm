@@ -1,0 +1,40 @@
+{
+  "model": "mimo-v2.5-pro",
+  "findings": [
+    {
+      "id": "mimo-F1",
+      "severity": "medium",
+      "issue": "OAuthCallbackPage missing clearInvitationToken() in verifier-missing error path. When retrieveVerifier() returns null (AppRouter.tsx:135), the code redirects to /login but does NOT call clearInvitationToken(). Compare with the oauthError path (line 122), missing-params path (line 128), and catch block (line 149) — all of which clear BOTH verifier and invitation token. In an invitation flow where the verifier was lost (e.g., browser evicted sessionStorage), the stale invitation_token persists and could be used if the user retries through a different entry point.",
+      "citation": "AppRouter.tsx:134-137",
+      "remediation": "Add clearInvitationToken() after the redirect in the verifier-missing path, matching the pattern in all other error paths."
+    },
+    {
+      "id": "mimo-F2",
+      "severity": "low",
+      "issue": "OAuthCallbackPage has no async effect cleanup, unlike InvitationCompletePage. The useEffect at AppRouter.tsx:110 uses a hasRun ref to prevent double-execution but provides no cancellation for the single async execution. If the component unmounts during await oauthApi.redeem(), the subsequent setIsRedirecting(true) fires on an unmounted component (harmless in React 18+ but a code smell), and window.location.assign() navigates regardless. By contrast, InvitationCompletePage uses an active flag with a cleanup function that cancels the timer and prevents stale setState. The inconsistency means OAuthCallbackPage has no defense against stale async work.",
+      "citation": "AppRouter.tsx:110-154",
+      "remediation": "Add an active flag and cleanup return to the OAuthCallbackPage useEffect, guarding setIsRedirecting and localStorage.setItem behind if (!active) return, consistent with InvitationCompletePage's pattern."
+    },
+    {
+      "id": "mimo-F3",
+      "severity": "low",
+      "issue": "No integration test for isSafeReturnTo behavior in OAuthCallbackPage. The isSafeReturnTo function has 6 unit tests in isolation, but there's no test verifying that the OAuthCallbackPage correctly falls back to /nodes when return_to is a malicious URL (e.g., ?return_to=https://evil.com). This is a security-relevant integration gap — the unit tests prove isSafeReturnTo works, but nothing proves the callback page actually uses it.",
+      "citation": "AppRouter.test.tsx:255-326",
+      "remediation": "Add a test case: render /oauth/callback?handoff_id=x&app_code=y&return_to=https://evil.com with a stored verifier, and assert that window.location.assign is called with '/nodes' (not the evil URL)."
+    },
+    {
+      "id": "mimo-F4",
+      "severity": "info",
+      "issue": "isSafeReturnTo('') returns true due to URL constructor behavior. new URL('', window.location.origin) returns the origin itself, which passes the same-origin check. While OAuthCallbackPage guards against this with searchParams.get('return_to') || '/nodes' (line 118), the function's own contract is misleading — an empty string is not a meaningful 'return to' URL, and external callers relying on this function for validation would get a false positive.",
+      "citation": "AppRouter.tsx:96-103",
+      "remediation": "Add an early return for empty/whitespace-only strings: if (!url || !url.trim()) return false;"
+    },
+    {
+      "id": "mimo-F5",
+      "severity": "info",
+      "issue": "OAuthCallbackPage setIsRedirecting(true) is dead code in production. On line 145, setIsRedirecting(true) is called immediately before window.location.assign(safeReturnTo) on line 146. In production, assign() triggers full page navigation, unmounting the component before React processes the state update. The user only ever sees 'Processing...' (line 170), never 'Redirecting...' (line 162). The isRedirecting state and its JSX branch are only reachable in test environments where assign() is mocked.",
+      "citation": "AppRouter.tsx:145-165",
+      "remediation": "Remove the isRedirecting state and the 'Redirecting...' branch entirely, since it's unreachable in production. If test visibility is needed, use a different mechanism (e.g., data attribute or mock assertion)."
+    }
+  ]
+}

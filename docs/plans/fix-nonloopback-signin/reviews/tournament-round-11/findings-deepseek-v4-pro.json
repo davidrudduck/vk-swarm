@@ -1,0 +1,12 @@
+{
+  "model": "deepseek-v4-pro",
+  "findings": [
+    {
+      "id": "deepseek-F1",
+      "severity": "low",
+      "issue": "Missing test coverage for acceptInvitation failure path in InvitationCompletePage. The test suite covers redeemOAuth failure, missing params, OAuth errors, missing verifier, missing token, and the success path — but never exercises the case where redeemOAuth succeeds and acceptInvitation subsequently fails. In this path (InvitationCompletePage.tsx:65-85), the access_token from the successful redeem is lost without being persisted to localStorage, the verifier and invitation token are cleared, and the user sees a generic error message. This represents the worst-case user experience (OAuth succeeds but invitation fails) and should be tested.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx (missing test), remote-frontend/src/pages/InvitationCompletePage.tsx:65-85",
+      "remediation": "Add a test case that mocks redeemOAuth to resolve successfully with an access_token and mocks acceptInvitation to reject, then asserts: (a) the error message is displayed, (b) oauth_verifier is cleared from sessionStorage, (c) invitation_token is cleared from sessionStorage, and (d) access_token is NOT in localStorage."
+    }
+  ]
+}

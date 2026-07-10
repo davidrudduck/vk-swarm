@@ -1,0 +1,19 @@
+{
+  "model": "gpt-5.5",
+  "findings": [
+    {
+      "id": "gpt55-F1",
+      "severity": "medium",
+      "issue": "The AbortController-based callback fix still allows duplicate OAuth redemption under React StrictMode. The app is mounted inside React.StrictMode, but OAuthCallbackPage starts oauthApi.redeem() before its first abort check, and oauthApi.redeem() has no AbortSignal parameter to cancel the POST. InvitationCompletePage has the same pattern through the redeemOAuth re-export. Because the backend marks handoffs redeemed and rejects already-redeemed handoffs, the first StrictMode pass can consume the one-time app_code while the remounted pass fails and sends the user to an error path.",
+      "citation": "remote-frontend/src/main.tsx:8; remote-frontend/src/AppRouter.tsx:142; remote-frontend/src/lib/api/oauth.ts:42; remote-frontend/src/pages/InvitationCompletePage.tsx:57; crates/remote/src/db/oauth.rs:261",
+      "remediation": "Make redemption single-flight across StrictMode remounts or thread an AbortSignal through oauthApi.redeem/redeemOAuth into makeRequest and prove the aborted first pass cannot reach the server. Add regression coverage that mounts each callback route under React.StrictMode and asserts only one server-visible redeem occurs and the flow succeeds."
+    },
+    {
+      "id": "gpt55-F2",
+      "severity": "low",
+      "issue": "The new callback route tests do not exercise the production StrictMode mount, so they cannot catch duplicate-effect bugs in the OAuth callback or invitation completion paths. renderWithRouter() renders RouterProvider directly, and InvitationCompletePage tests render the page under MemoryRouter only, while production wraps the entire app in React.StrictMode.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:66; remote-frontend/src/pages/InvitationCompletePage.test.tsx:14; remote-frontend/src/main.tsx:8",
+      "remediation": "Wrap the callback-focused tests in React.StrictMode, or add dedicated StrictMode regression tests for /oauth/callback and /invitations/:token/complete that assert the redeem/accept mocks are not called twice and the success path still completes."
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "model": "kimi-k2.7-code",
+  "findings": [
+    {
+      "id": "kimi-F1",
+      "severity": "medium",
+      "issue": "InvitationCompletePage's completion effect is not idempotent/cancellable. The app wraps the root in React.StrictMode (main.tsx:8), so useEffect runs twice in development. The `active` guard added in Round 1 only suppresses state updates from the first cleanup; it does not prevent the second effect instance from starting its own `redeemOAuth` + `acceptInvitation` calls. This can cause duplicate redemption/acceptance requests, a race to clear `oauth_verifier` from sessionStorage, and a user-visible error flash after a successful handshake.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:23-80",
+      "remediation": "Use a `hasRun` ref inside the effect and/or an AbortController that is signaled in the cleanup. Pass the signal into `redeemOAuth`/`acceptInvitation` (or fetch) and skip the flow on subsequent invocations."
+    },
+    {
+      "id": "kimi-F2",
+      "severity": "medium",
+      "issue": "OAuthCallbackPage has the same StrictMode double-effect problem. It runs `completeOAuth()` inside useEffect with no mounted/active guard and no cleanup. In development, StrictMode will invoke the effect twice and call `oauthApi.redeem` twice for the same handoff, which can fail the second call because the handoff has already been consumed.",
+      "citation": "remote-frontend/src/AppRouter.tsx:104-144",
+      "remediation": "Add a per-effect `active` flag and/or AbortController, return cleanup that cancels/ignores in-flight redemption, and guard against concurrent invocations of `completeOAuth`."
+    },
+    {
+      "id": "kimi-F3",
+      "severity": "medium",
+      "issue": "InvitationCompletePage silently hangs when `handoff_id` and `app_code` are missing and no `error` param is present. The early return at line 33-35 leaves `error` null, so the component renders the 'Completing invitation...' spinner forever with no recovery path or actionable message.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:33-35",
+      "remediation": "Set an error before returning: `if (active) setError('Missing OAuth parameters. Please try the invitation link again.')` before the early return."
+    },
+    {
+      "id": "kimi-F4",
+      "severity": "medium",
+      "issue": "AppRouter.test.tsx's invitation-route test is flaky. It relies on the real `getInvitation` export preserved by the partial `@/api` mock, so the component calls `fetch('/v1/invitations/test-token')` in jsdom. The assertion passes only if the page is still in the 'Loading invitation...' state when `waitFor` resolves; if the fetch rejects or completes first, the test fails because the expected heading is not rendered. This makes the test a race against network timing in the test runner.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:179-198",
+      "remediation": "Mock `getInvitation` to resolve to a valid invitation object, then assert specifically on `screen.getByText('You\\'ve been invited')` instead of the OR fallback on loading text."
+    },
+    {
+      "id": "kimi-F5",
+      "severity": "low",
+      "issue": "The SHA-256 fallback implementation is only unit-tested for the empty string and 'abc' (0 and 3 bytes). These vectors do not exercise multi-block padding, multi-block compression, or the 64-word message-schedule expansion. The implementation is correct for longer inputs (verified independently), but the existing tests would not catch a regression in the multi-block path.",
+      "citation": "remote-frontend/src/pkce.test.ts:37-46",
+      "remediation": "Add at least one multi-block test vector, e.g. the NIST/FIPS 180-2 string 'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq' whose SHA-256 is 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1, and a length-zero test is already present."
+    },
+    {
+      "id": "kimi-F6",
+      "severity": "low",
+      "issue": "InvitationCompletePage prefers the stored invitation token over the URL route token (`retrieveInvitationToken() || urlToken`). If sessionStorage happens to contain a stale token from a previous invitation flow, the page would accept the wrong organization instead of using the token in the callback URL. The URL token is the authoritative value returned by the OAuth provider redirect.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:44",
+      "remediation": "Use the URL token as the primary value and validate that it matches the stored token when a stored token exists. If no stored token is present, fall back to the URL token."
+    }
+  ]
+}

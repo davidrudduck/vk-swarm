@@ -1,0 +1,40 @@
+{
+  "model": "deepseek-v4-pro",
+  "findings": [
+    {
+      "id": "deepseek-F1",
+      "severity": "medium",
+      "issue": "InvitationCompletePage hangs forever at 'Completing invitation...' when handoff_id or app_code query params are missing and no oauthError is present. The early return at line 33-35 does not set any error state, leaving the user staring at an infinite spinner with no way to recover.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:33-35",
+      "remediation": "Add `if (active) setError('Missing OAuth parameters. Please try again.')` before the return statement at line 34."
+    },
+    {
+      "id": "deepseek-F2",
+      "severity": "low",
+      "issue": "InvitationCompletePage.test.tsx only covers the happy path. No test exists for the four error paths: oauthError param rendered as error; missing stored verifier showing session-lost error; missing invitation token showing token-lost error; and catch-block showing API failure message. The untested error paths are vulnerable to silent regression.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx",
+      "remediation": "Add test cases for each error path: (1) oauthError in query params renders error card; (2) missing stored verifier renders session-lost error; (3) missing stored token/null urlToken renders token-lost error; (4) acceptInvitation/redeemOAuth rejection renders the error message and clears both sessionStorage keys."
+    },
+    {
+      "id": "deepseek-F3",
+      "severity": "low",
+      "issue": "InvitationPage.test.tsx only covers the happy-path OAuth initiation. Neither getInvitation() failure (showing 'Invalid or expired invitation' error card) nor initOAuth() rejection (showing 'OAuth init failed' error) is tested. Both error paths affect user-visible behavior specified in the spec.",
+      "citation": "remote-frontend/src/pages/InvitationPage.test.tsx",
+      "remediation": "Add test cases: (1) mock getInvitation to reject, assert error card is rendered with the error message; (2) mock initOAuth to reject, assert the error flow shows 'OAuth init failed'."
+    },
+    {
+      "id": "deepseek-F4",
+      "severity": "info",
+      "issue": "Unnecessary string concatenation in route paths: `'/invitations/invite-token' + '/accept'` instead of `'/invitations/invite-token/accept'` and `'/invitations/:token' + '/accept'` instead of `'/invitations/:token/accept'`. Functionally identical but reads as a copy-paste artifact and obscures the actual path.",
+      "citation": "remote-frontend/src/pages/InvitationPage.test.tsx:26,28",
+      "remediation": "Replace concatenation with single string literals: `'/invitations/invite-token/accept'` and `'/invitations/:token/accept'`."
+    },
+    {
+      "id": "deepseek-F5",
+      "severity": "info",
+      "issue": "The `rotateRight` helper function does not apply `>>> 0` to its return value. In JavaScript, the bitwise OR `|` converts both operands to signed 32-bit integers, causing `rotateRight` to return negative values for inputs with the MSB set. Intermediate variables (a-h) during SHA-256 compression rounds can hold negative numbers, making debugging harder. The final hash output is correct because `>>> 0` is applied at the hash state merge, but the internal state is less readable.",
+      "citation": "remote-frontend/src/pkce.ts:106-108",
+      "remediation": "Apply `>>> 0` to the return value: `return ((value >>> bits) | (value << (32 - bits))) >>> 0`. This keeps all intermediate values unsigned consistent with the expected algorithm state."
+    }
+  ]
+}

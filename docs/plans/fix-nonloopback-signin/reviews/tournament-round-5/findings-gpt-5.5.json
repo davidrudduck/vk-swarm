@@ -1,0 +1,12 @@
+{
+  "model": "gpt-5.5",
+  "findings": [
+    {
+      "id": "gpt55-F1",
+      "severity": "medium",
+      "issue": "Invitation completion can hang under the app's React.StrictMode mount cycle. The first effect starts completeInvitation(), then StrictMode runs the cleanup, setting active=false; the second effect setup is skipped by hasRun.current, and when the first async flow finishes it returns at the inactive guard before clearVerifier(), clearInvitationToken(), localStorage.setItem('access_token', ...), and success state updates. In the Vite/LAN dev path this leaves the page on 'Completing invitation...' after the backend accept call and leaves stale session storage instead of completing sign-in.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:70 (StrictMode enabled at remote-frontend/src/main.tsx:8)",
+      "remediation": "Do not combine a persistent hasRun guard with an active flag that cancels the only StrictMode invocation. Use an abort/operation-id pattern, or allow the second StrictMode setup to own the flow while suppressing duplicate network calls elsewhere; add a StrictMode-wrapped InvitationCompletePage test that resolves redeemOAuth/acceptInvitation asynchronously and asserts success, access_token persistence, and storage cleanup."
+    }
+  ]
+}

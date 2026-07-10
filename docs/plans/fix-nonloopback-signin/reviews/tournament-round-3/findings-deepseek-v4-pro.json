@@ -1,0 +1,19 @@
+{
+  "model": "deepseek-v4-pro",
+  "findings": [
+    {
+      "id": "deepseek-F1",
+      "severity": "medium",
+      "issue": "InvitationPage conflates invitation-fetch errors with OAuth-init errors under the same misleading title 'Invalid or expired invitation'. When initOAuth fails (e.g. network error, server down), the user sees 'Invalid or expired invitation' even though the invitation itself was fetched successfully and is still valid. The component checks `if (error)` before `if (!data)`, so any error — from getInvitation or from handleOAuthLogin — renders the same ErrorCard title. This creates a confusing UX where a transient OAuth failure is presented as an irrecoverable invitation validity problem.",
+      "citation": "remote-frontend/src/pages/InvitationPage.tsx:49-56",
+      "remediation": "Track two separate error states (e.g. `fetchError` and `oauthError`) or derive the title from whether `data` is already loaded: if `data` is loaded, the error came from OAuth init, so use a title like 'Sign-in failed'; only use 'Invalid or expired invitation' when `data` is null (error came from getInvitation)."
+    },
+    {
+      "id": "deepseek-F2",
+      "severity": "low",
+      "issue": "The `expect(resolveInitOAuth).toBeTypeOf('function')` assertion is logically redundant with the preceding `expect(initOAuth).toHaveBeenCalledWith(...)` assertion. The mock's Promise executor only sets `resolveInitOAuth` when `initOAuth()` is called, which has already been proven by the `toHaveBeenCalledWith` check. This adds clutter with zero additional coverage and creates a misleading impression of independent verification. Present in two test files.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:116, remote-frontend/src/pages/InvitationPage.test.tsx:76",
+      "remediation": "Remove the redundant `expect(resolveInitOAuth).toBeTypeOf('function')` lines; they add no value beyond what the preceding `toHaveBeenCalledWith` assertions already prove."
+    }
+  ]
+}

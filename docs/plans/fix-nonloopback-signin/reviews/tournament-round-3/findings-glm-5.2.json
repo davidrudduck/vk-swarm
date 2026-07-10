@@ -1,0 +1,40 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "medium",
+      "issue": "OAuthCallbackPage (normal-login callback) error/abandonment branches have zero test coverage. AppRouter.test.tsx only exercises the success path (redeem succeeds, token stored, verifier cleared). The oauthError redirect (AppRouter.tsx:116-119), missing handoff_id/app_code redirect (121-124), missing-verifier redirect (128-131), and redeem-failure redirect (140-144) are all untested. This is asymmetric with InvitationCompletePage, which Round 2 gave comprehensive error-path coverage (4 error tests). The OAuth callback handles security-sensitive state (open-redirect guard via isSafeReturnTo, OAuth error propagation, session-loss recovery) yet none of its failure modes are asserted. A regression in any of these branches would be invisible to the suite.",
+      "citation": "remote-frontend/src/AppRouter.tsx:116",
+      "remediation": "Mirror the InvitationCompletePage.test.tsx error-path suite in AppRouter.test.tsx for /oauth/callback: assert the oauthError redirect to /login?error=..., the missing-params redirect, the missing-stored-verifier redirect, and the redeem-rejection redirect (clearing the verifier), using the same renderWithRouter + waitFor pattern already in the file."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "low",
+      "issue": "InvitationCompletePage redeems a valid access_token via redeemOAuth but never persists it to localStorage. The normal-login callback explicitly stores it (AppRouter.tsx:135 `localStorage.setItem('access_token', access_token)`), but the invitation flow uses access_token only as a Bearer for acceptInvitation (InvitationCompletePage.tsx:62) then discards it before redirecting to appBase (line 74). After the redirect, RootRedirect sees no access_token in localStorage, so the just-authenticated user is bounced to /login and must complete a second OAuth round-trip to use the app. The success test (InvitationCompletePage.test.tsx:34-56) confirms this: it asserts redeemOAuth/acceptInvitation were called and sessionStorage cleared, but never asserts localStorage.access_token is set, because the implementation never sets it. Pre-existing (the workstream's diff did not touch the redeem/accept/redirect block) but it sits in a file this workstream actively modified and degrades the invitation-acceptance UX.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:56",
+      "remediation": "After a successful acceptInvitation, persist the redeemed token the same way OAuthCallbackPage does: `localStorage.setItem('access_token', access_token)` (also consider the refresh_token) before the redirect, and add an assertion in the success test that localStorage.access_token equals 'access-123'."
+    },
+    {
+      "id": "glm-F3",
+      "severity": "low",
+      "issue": "PKCE verifier (and invitation token) are not cleared on the abandonment early-return paths. In InvitationCompletePage, the oauthError return (line 33-36), missing-params return (38-41), and missing-token return (51-54) all `return` without calling clearVerifier()/clearInvitationToken(), leaving the PKCE verifier — a secret-ish credential — lingering in sessionStorage. Only the success path (65-66) and the catch block (79-80) clear them. The same gap exists in OAuthCallbackPage: the oauthError (116-119), missing-params (121-124) returns do not call clearVerifier(), so a stale verifier survives an aborted flow until a subsequent sign-in overwrites it. The verifier lifecycle should be: clear on any exit from the callback, not only on success/exception.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:33",
+      "remediation": "Call clearVerifier() (and clearInvitationToken() in the invitation page) on every early-return branch, or move the clears into a single finally block / a cleanup that runs regardless of which branch the effect takes."
+    },
+    {
+      "id": "glm-F4",
+      "severity": "low",
+      "issue": "Task 301 acceptance evidence in the decisions-ledger is stale relative to the final committed state. The ledger records the targeted run as '4 files and 12 tests passed' (line 143) and the full suite as '25 files and 114 tests passed' (lines 144, 165), but the actual final state is 19 tests for the targeted four files and 121 tests across 25 files for the full suite. Round 2 (commit d9d891f0) added error-path and multi-block tests after the Task 301 evidence was written but never refreshed the ledger's acceptance-evidence section, so the documented gate no longer matches reality. Under the Finish-What-We-Start gate, acceptance evidence must reflect the final committed state; verify-301-evidence.sh was built to reject stale/placeholder evidence but the prose counts bypassed it.",
+      "citation": "docs/plans/fix-nonloopback-signin/decisions-ledger.md:143",
+      "remediation": "Re-run the exact gate commands and update the acceptance-evidence counts to 19 (targeted) and 121 (full suite), or replace the hard-coded counts with a pointer to the re-runnable command so the evidence cannot drift."
+    },
+    {
+      "id": "glm-F5",
+      "severity": "info",
+      "issue": "bytesToHex uses post-increment `i++` in its loop (line 123) while every other numeric loop in pkce.ts — including the new sha256Fallback and the Round-1-rewritten base64UrlEncode — uses `i += 1` (lines 61, 64, 71, 100, 112). The inconsistency predates this workstream but is now more visible because the surrounding new code is uniformly `i += 1`. Lint passes because the repo's eslint config does not enforce one form, but it is a readability smell in a file that is otherwise internally consistent.",
+      "citation": "remote-frontend/src/pkce.ts:123",
+      "remediation": "Change `for (let i = 0; i < bytes.length; i++)` to `i += 1` to match the rest of the file."
+    }
+  ]
+}

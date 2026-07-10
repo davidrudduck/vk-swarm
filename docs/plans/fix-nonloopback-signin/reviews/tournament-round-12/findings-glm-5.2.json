@@ -1,0 +1,47 @@
+{
+  "model": "glm-5.2",
+  "findings": [
+    {
+      "id": "glm-F1",
+      "severity": "medium",
+      "issue": "No test exercises the native crypto.subtle try/catch fallback added in Round 8. The sha256() function at pkce.ts:17-21 wraps subtle.digest in a try/catch that falls back to sha256Fallback on throw, but no test makes subtle.digest reject or throw. The existing native-path test (pkce.test.ts:23-35) only covers the success case. If the catch branch had a bug (e.g., wrong fallback invocation, swallowed error type), it would pass undetected.",
+      "citation": "remote-frontend/src/pkce.ts:17-21",
+      "remediation": "Add a test in pkce.test.ts that mocks subtleDigest.mockRejectedValue(new Error('quota exceeded')) or mockImplementation(() => { throw new Error(...) }), then asserts generateChallenge returns the correct fallback SHA-256 hex for a known input like 'abc'."
+    },
+    {
+      "id": "glm-F2",
+      "severity": "medium",
+      "issue": "InvitationPage OAuth errors are unrecoverable without a full page reload. When initOAuth fails, setOauthError() is called (line 54), and the render logic at line 70-77 returns a full-page ErrorCard that replaces the invitation page entirely. The OAuth buttons are no longer rendered, so the user cannot click them to retry. setOauthError(null) is only called inside handleOAuthLogin (line 39), which is unreachable once the ErrorCard is shown. This is inconsistent with LoginPage (AppRouter.tsx:69-73) which shows errors inline within the form and keeps the buttons visible for retry. A transient network error during invitation OAuth permanently blocks the user until they manually reload.",
+      "citation": "remote-frontend/src/pages/InvitationPage.tsx:70-77",
+      "remediation": "Show the oauthError inline within the invitation card (like LoginPage does) instead of returning a full-page ErrorCard, or add a 'Try again' button to the ErrorCard that calls setOauthError(null) to restore the invitation view with OAuth buttons."
+    },
+    {
+      "id": "glm-F3",
+      "severity": "low",
+      "issue": "No integration test verifies that isSafeReturnTo actually sanitizes a malicious return_to parameter in the OAuth callback success flow. isSafeReturnTo is tested in isolation (AppRouter.test.tsx:329-355), but the success-path test (AppRouter.test.tsx:119-138) does not mock window.location.assign and does not verify the redirect target. There is no test that passes return_to=https://evil.com to /oauth/callback with valid handoff_id/app_code and asserts the redirect goes to /nodes instead of the attacker URL. The open-redirect prevention is unit-tested but not integration-tested.",
+      "citation": "remote-frontend/src/AppRouter.test.tsx:119-138",
+      "remediation": "Add a test that mocks window.location.assign, renders /oauth/callback?handoff_id=...&app_code=...&return_to=https://evil.com with a resolving redeem mock, and asserts mockAssign is called with '/nodes' (the safe fallback), not 'https://evil.com'."
+    },
+    {
+      "id": "glm-F4",
+      "severity": "low",
+      "issue": "The verifier-missing test sets invitation_token in sessionStorage but does not assert it is cleared after the error. The implementation calls clearInvitationToken() on this path (InvitationCompletePage.tsx:46), but the test (InvitationCompletePage.test.tsx:75-87) never checks sessionStorage.getItem('invitation_token') after the error is shown. If the clearInvitationToken() call were accidentally removed, the test would still pass, leaving stale invitation tokens in sessionStorage.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.test.tsx:75-87",
+      "remediation": "Add expect(sessionStorage.getItem('invitation_token')).toBeNull() after the waitFor assertion in the verifier-missing test."
+    },
+    {
+      "id": "glm-F5",
+      "severity": "info",
+      "issue": "bytesToHex uses i++ (line 127) while every other loop in pkce.ts uses i += 1 (lines 65, 68, 75, 104, 116). This is a style inconsistency that suggests the function was written separately from the SHA-256 implementation. While functionally identical, it breaks the file's internal convention.",
+      "citation": "remote-frontend/src/pkce.ts:127",
+      "remediation": "Change `i++` to `i += 1` for consistency with the rest of the file."
+    },
+    {
+      "id": "glm-F6",
+      "severity": "info",
+      "issue": "InvitationCompletePage does not call clearInvitationToken() in the !token error path (line 50-55), while every other error path calls both clearVerifier() and clearInvitationToken(). If storeInvitationToken('') was called with an empty string (possible when token defaults to '' from useParams), the empty-string invitation_token remains in sessionStorage. While harmless in practice, the inconsistency means this path is less defensive than the others.",
+      "citation": "remote-frontend/src/pages/InvitationCompletePage.tsx:50-55",
+      "remediation": "Add clearInvitationToken() alongside clearVerifier() in the !token error path for consistency and defensive cleanup."
+    }
+  ]
+}
