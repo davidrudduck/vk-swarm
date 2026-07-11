@@ -15,7 +15,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_DIR="$REPO_ROOT/crates/remote"
 COMPOSE_FILE="$COMPOSE_DIR/docker-compose.dev.yml"
 ENV_FILE="$COMPOSE_DIR/.env.dev"
@@ -43,6 +43,9 @@ err() { echo -e "\033[1;31m[e2e]\033[0m $*" >&2; }
 ok()  { echo -e "\033[1;32m[e2e]\033[0m $*"; }
 
 cleanup() {
+    if [ "$SKIP_DOCKER" = true ] || [ "$SEED_ONLY" = true ]; then
+        return 0
+    fi
     if [ "$KEEP_RUNNING" = false ]; then
         log "Tearing down Docker environment..."
         cd "$COMPOSE_DIR"
@@ -81,14 +84,20 @@ seed_database() {
     # Wait for migrations to complete (users table exists)
     local max_wait=60
     local elapsed=0
+    local found=0
     while [ $elapsed -lt $max_wait ]; do
         if docker compose -f "$COMPOSE_FILE" exec -T remote-db \
             psql -U postgres -d vibe_remote -c "SELECT 1 FROM users LIMIT 1" >/dev/null 2>&1; then
+            found=1
             break
         fi
         sleep 2
         elapsed=$((elapsed + 2))
     done
+    if [ "$found" -eq 0 ]; then
+        err "Migrations did not complete within ${max_wait}s — users table not found"
+        return 1
+    fi
 
     docker compose -f "$COMPOSE_FILE" exec -T remote-db \
         psql -U postgres -d vibe_remote -f /dev/stdin < "$SEED_FILE"
@@ -105,7 +114,7 @@ cd "$REPO_ROOT"
 if [ "$SKIP_DOCKER" = false ]; then
     log "Starting Docker environment..."
     cd "$COMPOSE_DIR"
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build 2>&1 | tail -5
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build
     cd "$REPO_ROOT"
 
     # Wait for server

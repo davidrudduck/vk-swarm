@@ -62,9 +62,11 @@ describe('Dialog accessibility', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
-  it('does NOT close on overlay click when uncloseable', () => {
+  it('does NOT close on overlay click when uncloseable', async () => {
     render(<TestDialog uncloseable />);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // Radix attaches the pointerdown listener in a setTimeout(0) — flush microtasks
+    await new Promise((r) => setTimeout(r, 0));
     fireEvent.pointerDown(document.body);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });

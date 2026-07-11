@@ -95,7 +95,7 @@ describe('parseErrorMessage', () => {
     expect(parseErrorMessage(BigInt(9007199254740991))).toBe('Failed');
   });
 
-  it('returns "Failed" for JSON body that is not valid JSON and not a string/object', () => {
+  it('returns raw string for Error whose message is a JSON number (primitive, not string/object)', () => {
     expect(parseErrorMessage(new Error('42'))).toBe('42');
   });
 
@@ -103,7 +103,7 @@ describe('parseErrorMessage', () => {
     expect(parseErrorMessage(new Error(''))).toBe('Failed');
   });
 
-  it('returns "Failed" for Error whose message is just whitespace', () => {
+  it('returns raw whitespace string for Error whose message is just whitespace', () => {
     expect(parseErrorMessage(new Error('   '))).toBe('   ');
   });
 
@@ -111,7 +111,7 @@ describe('parseErrorMessage', () => {
     expect(parseErrorMessage(new Error('3.14'))).toBe('3.14');
   });
 
-  it('returns "Failed" for Error whose message is a JSON boolean false', () => {
+  it('returns raw string for Error whose message is JSON boolean false', () => {
     expect(parseErrorMessage(new Error('false'))).toBe('false');
   });
 
