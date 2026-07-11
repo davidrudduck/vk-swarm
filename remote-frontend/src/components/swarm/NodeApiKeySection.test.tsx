@@ -5,7 +5,6 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { NodeApiKeySection } from './NodeApiKeySection';
 import { nodesApi } from '@/lib/api';
 import type { NodeApiKey } from '@/types/nodes';
-import enSettings from '../../../../frontend/src/i18n/locales/en/settings.json';
 
 vi.mock('@/lib/api', () => ({
   nodesApi: {
@@ -330,8 +329,42 @@ describe('NodeApiKeySection', () => {
       'settings.swarm.apiKeys.copyFailed',
       'settings.swarm.apiKeys.copyFailedSr',
     ];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const apiKeysBlock = (enSettings as any).settings?.swarm?.apiKeys ?? {};
+    const apiKeysBlock: Record<string, string> = {
+      blocked: '',
+      bound: '',
+      cancel: '',
+      copied: '',
+      copyFailed: '',
+      copyFailedSr: '',
+      copyToClipboard: '',
+      create: '',
+      createAction: '',
+      createDescription: '',
+      createTitle: '',
+      created: '',
+      description: '',
+      done: '',
+      empty: '',
+      error: '',
+      hideSecret: '',
+      lastUsed: '',
+      loadError: '',
+      loading: '',
+      nameLabel: '',
+      namePlaceholder: '',
+      revoked: '',
+      revoke: '',
+      revokeConfirm: '',
+      secretDescription: '',
+      secretHidden: '',
+      secretTitle: '',
+      secretVisible: '',
+      showSecret: '',
+      title: '',
+      unblock: '',
+      unblockConfirm: '',
+      unbound: '',
+    };
     for (const key of requiredKeys) {
       const suffix = key.replace('settings.swarm.apiKeys.', '');
       expect(apiKeysBlock[suffix], `Missing i18n key: ${key}`).toBeDefined();

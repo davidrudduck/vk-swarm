@@ -53,4 +53,4 @@ Comprehensive documentation for Vibe Kanban's dual-database architecture.
 ## Related Documentation
 
 - [Swarm/Hive Setup Guide](../../swarm-hive-setup.mdx) - How to configure nodes to connect to a hive
-- [CLAUDE.md](/CLAUDE.md) - Development conventions and API patterns
+- [AGENTS.md](/AGENTS.md) - Development conventions and API patterns
