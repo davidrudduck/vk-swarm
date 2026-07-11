@@ -81,4 +81,58 @@ describe('parseErrorMessage', () => {
   it('returns "Failed" for object with nested non-string message', () => {
     expect(parseErrorMessage(new Error('{"message":123}'))).toBe('Failed');
   });
+
+  it('returns "Failed" for object with toJSON that throws', () => {
+    const obj = {
+      toJSON() {
+        throw new Error('serialization explosion');
+      },
+    };
+    expect(parseErrorMessage(obj)).toBe('Failed');
+  });
+
+  it('returns "Failed" for non-serializable value (BigInt)', () => {
+    expect(parseErrorMessage(BigInt(9007199254740991))).toBe('Failed');
+  });
+
+  it('returns "Failed" for JSON body that is not valid JSON and not a string/object', () => {
+    expect(parseErrorMessage(new Error('42'))).toBe('42');
+  });
+
+  it('returns "Failed" for Error whose message is empty string', () => {
+    expect(parseErrorMessage(new Error(''))).toBe('Failed');
+  });
+
+  it('returns "Failed" for Error whose message is just whitespace', () => {
+    expect(parseErrorMessage(new Error('   '))).toBe('   ');
+  });
+
+  it('returns raw when JSON.parse succeeds but result is a number primitive', () => {
+    expect(parseErrorMessage(new Error('3.14'))).toBe('3.14');
+  });
+
+  it('returns "Failed" for Error whose message is a JSON boolean false', () => {
+    expect(parseErrorMessage(new Error('false'))).toBe('false');
+  });
+
+  it('returns error from JSON body with only {error} key', () => {
+    expect(parseErrorMessage(new Error('{"error":"db connection refused"}'))).toBe('db connection refused');
+  });
+
+  it('returns "Failed" for object with {message: null} in JSON body', () => {
+    expect(parseErrorMessage(new Error('{"message":null}'))).toBe('Failed');
+  });
+
+  it('returns "Failed" for JSON array body', () => {
+    expect(parseErrorMessage(new Error('["one","two"]'))).toBe('Failed');
+  });
+
+  it('returns "Failed" for a function (JSON.stringify yields undefined)', () => {
+    expect(parseErrorMessage(() => {})).toBe('Failed');
+  });
+
+  it('returns "Failed" for a class constructor', () => {
+    class Foo {}
+    expect(parseErrorMessage(Foo)).toBe('Failed');
+  });
 });
