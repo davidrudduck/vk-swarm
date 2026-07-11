@@ -61,9 +61,9 @@ services:
       SERVER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@remote-db:5432/${POSTGRES_DB:-vibe_remote}
       SERVER_LISTEN_ADDR: 0.0.0.0:8081
       SERVER_ACTIVITY_CHANNEL: activity
-      SERVER_PUBLIC_BASE_URL: http://localhost:9000
-      VITE_APP_BASE_URL: http://localhost:9000
-      VITE_API_BASE_URL: http://localhost:9000
+      SERVER_PUBLIC_BASE_URL: ${SERVER_PUBLIC_BASE_URL:-http://localhost:9000}
+      VITE_APP_BASE_URL: ${VITE_APP_BASE_URL:-http://localhost:9000}
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:9000}
       # Dummy OAuth (server requires at least one provider to start)
       # These won't work for real login — use the seeded API key instead
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-dummy-github-client-id}

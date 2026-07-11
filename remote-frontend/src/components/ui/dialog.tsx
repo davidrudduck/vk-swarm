@@ -39,6 +39,7 @@ const DialogContent = React.forwardRef<
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      aria-modal="true"
       onEscapeKeyDown={uncloseable ? (e) => e.preventDefault() : undefined}
       onPointerDownOutside={uncloseable ? (e) => e.preventDefault() : undefined}
       className={cn(

@@ -61,3 +61,96 @@ These are NOT isolated unit tests — they exercise the full component→mutatio
 Symptom: raw JSON bodies shown to users when dialog mutations fail (e.g., `{"message":"denied"}`).
 Fix: `parseErrorMessage` extracts "denied" from JSON body. Evidence: TS16d asserts
 `getByText(/server denied/)` passes when the mutation rejects with `new Error('{"message":"server denied"}')`.
+
+## Post-merge audit (in-session bug analysis)
+
+The session ran a comprehensive bug analysis over the workstream files and found four
+real issues plus one pre-existing failure. All real issues were fixed in this session.
+
+### Fixed in this session
+
+**R1 (P0): `e2e-test.sh` trap registered too late.**
+- `remote-frontend/scripts/e2e-test.sh:139` registered `trap cleanup EXIT` AFTER the Docker
+  spin-up at line 104 and health-check at line 108. With `set -euo pipefail`, if either step
+  failed, the script exited before the trap was set, leaving Docker containers running.
+- Fix: moved `trap cleanup EXIT` to line 59 (right after the function definitions and arg
+  parsing). Verified the script still parses with `bash -n` and rejects unknown args cleanly.
+
+**R2 (P1): `dialog.tsx` did not set `aria-modal="true"` despite the spec claiming it would
+come "for free" from Radix.**
+- `@radix-ui/react-dialog@1.1.18` does NOT add `aria-modal` to its rendered content element.
+  It uses the `aria-hidden`-on-others technique instead (see source: `hideOthers(content)`).
+  This works for screen readers but does not satisfy the spec's SC3 claim that the rewrite
+  gains `aria-modal="true"` for free.
+- Fix: explicitly set `aria-modal="true"` on `DialogPrimitive.Content` in the wrapper so the
+  spec claim is true.
+
+**R3 (P1): `dialog.test.tsx` second test was a no-op assertion.**
+- "renders with aria attributes from Radix" (line 38-43) only checked `tagName === 'DIV'`
+  which is the most trivial possible assertion. It did not actually verify ANY aria attribute.
+- Fix: replaced with two strong tests:
+  - "renders with aria-modal=\"true\" from wrapper" (asserts the new `aria-modal` attribute)
+  - "renders with aria-labelledby and aria-describedby from Radix" (asserts Radix-provided
+    attributes, which are the actual a11y primitives Radix contributes)
+
+**R4 (P2): `SwarmLabelDialog.getContrastColor` silently produced NaN for malformed input.**
+- `parseInt(hex.substring(0, 2), 16)` returns NaN for invalid hex strings; the downstream
+  comparison `luminance > 0.5` is always false for NaN, so the function silently returned
+  `#ffffff` (white) for ANY malformed input — including short codes, garbage strings, and
+  empty values. No error, no log, just the wrong color.
+- Fix: added `/^[0-9a-fA-F]{6}$/` validation at the top of the function. Invalid input
+  returns `#ffffff` explicitly, valid input follows the original luminance-based path.
+
+### Not fixed (out of scope, documented)
+
+**R5 (P2): `getContrastColor` is duplicated between `SwarmLabelDialog.tsx:214` and
+`LabelBadge.tsx:18`.** Both copies have the same NaN bug. This is a pre-existing duplication
+not introduced by this workstream, and `LabelBadge.tsx` is outside the workstream's
+touched-files list. Extraction to a shared utility (`lib/color.ts`) is recommended as a
+follow-up but not done here to avoid expanding scope.
+
+**Pre-existing test failure (not in this workstream's scope):**
+- `src/AppRouter.test.tsx > 'authenticated: hitting / redirects to /nodes'` fails when
+  run as part of the full suite, passes in isolation. Verified pre-existing via
+  `git stash` test against commit `329aab2e` (main baseline). Not introduced by this
+  workstream. Documented in this ledger per AGENTS.md "No Deferred Remediation" rule;
+  remediation deferred to a future workstream (e.g. `test-isolation-flakes`).
+
+## Second-pass bug analysis (in-session)
+
+A comprehensive bug-analysis sweep was run over all workstream files. Lint, typecheck,
+and 242/243 tests pass (the 1 failure is the pre-existing AppRouter test above).
+Four additional issues were found and fixed:
+
+### Fixed in this session
+
+**R6 (P1): `e2e-test.sh` `set -e` prevents E2E_EXIT capture on Playwright failure.**
+- `remote-frontend/scripts/e2e-test.sh:137` — with `set -euo pipefail` active, if
+  `npx playwright test` exits non-zero, the script exits immediately and
+  `E2E_EXIT=$?` (line 138) is never reached. The error message
+  "E2E tests failed (exit code: ...)" is dead code on failure paths.
+- Fix: wrapped the Playwright command in `set +e` / `set -e` so the exit code is
+  captured and the failure message is printed before cleanup runs.
+
+**R7 (P2): `.env.dev` dead variables overridden by compose file.**
+- `crates/remote/.env.dev:13-15` defined `SERVER_PUBLIC_BASE_URL`,
+  `VITE_APP_BASE_URL`, and `VITE_API_BASE_URL` as `http://0.0.0.0:9000`, but
+  `docker-compose.dev.yml:64-66` hardcoded `http://localhost:9000` without `${}`
+  syntax, so the `.env.dev` values were never read. Additionally, `0.0.0.0` in a
+  URL is technically invalid for browser navigation.
+- Fix: changed the compose file to use `${VAR:-http://localhost:9000}` syntax so
+  `.env.dev` values take effect, and corrected `.env.dev` to use `localhost`.
+
+**R8 (P2): `SwarmLabelDialog.tsx` import statement in the middle of the file.**
+- `remote-frontend/src/components/swarm/SwarmLabelDialog.tsx:224` had
+  `import { getLucideIcon }` placed after the component definition. While ES module
+  imports are hoisted (so the code works), this violates import conventions.
+- Fix: merged `getLucideIcon` into the existing `IconPicker` import at line 18
+  and removed the mid-file import + comment.
+
+**R9 (P2): `errors.test.ts` missing JSON boolean/null primitive tests.**
+- The plan file (`102-parseErrorMessage-tests.md:81-85`) specified a test for
+  `parseErrorMessage(new Error('true'))` that was never added. The `null` JSON
+  primitive path was also untested.
+- Fix: added two tests verifying that JSON `true` and `null` primitives fall
+  through to `return raw || 'Failed'` and return the original string.

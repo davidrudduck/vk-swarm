@@ -54,6 +54,10 @@ cleanup() {
     fi
 }
 
+# Register cleanup EARLY so it runs on any early failure (set -e exits before
+# the late trap definition if Docker fails to start or migrations time out).
+trap cleanup EXIT
+
 wait_for_health() {
     local url="$1"
     local max_wait="${2:-60}"
@@ -129,14 +133,16 @@ cd "$REPO_ROOT/remote-frontend"
 # Set baseURL to Docker environment
 export PLAYWRIGHT_BASE_URL="http://localhost:9000"
 
-# Run Playwright with Docker config
+# Run Playwright with Docker config — temporarily disable set -e so we can
+# capture the exit code and print a meaningful failure message before cleanup.
+set +e
 npx playwright test --config=playwright.docker.config.ts --reporter=list 2>&1
 E2E_EXIT=$?
+set -e
 
 cd "$REPO_ROOT"
 
-# Step 3: Cleanup
-trap cleanup EXIT
+# (trap set at top of file — runs on any exit path)
 
 if [ $E2E_EXIT -eq 0 ]; then
     ok "All E2E tests passed!"

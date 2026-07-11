@@ -35,11 +35,17 @@ describe('Dialog accessibility', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
-  it('renders with aria attributes from Radix', () => {
+  it('renders with aria-modal="true" from wrapper', () => {
     render(<TestDialog />);
     const dialog = screen.getByRole('dialog');
-    expect(dialog).toBeInTheDocument();
-    expect(dialog.tagName).toBe('DIV');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+  });
+
+  it('renders with aria-labelledby and aria-describedby from Radix', () => {
+    render(<TestDialog />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-labelledby');
+    expect(dialog).toHaveAttribute('aria-describedby');
   });
 
   it('closes on Escape when not uncloseable', () => {
@@ -53,6 +59,13 @@ describe('Dialog accessibility', () => {
     render(<TestDialog uncloseable />);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('does NOT close on overlay click when uncloseable', () => {
+    render(<TestDialog uncloseable />);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 

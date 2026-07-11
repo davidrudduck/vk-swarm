@@ -52,6 +52,14 @@ describe('parseErrorMessage', () => {
     expect(parseErrorMessage(new Error('42'))).toBe('42');
   });
 
+  it('returns raw string for Error whose message is JSON true', () => {
+    expect(parseErrorMessage(new Error('true'))).toBe('true');
+  });
+
+  it('returns raw string for Error whose message is JSON null', () => {
+    expect(parseErrorMessage(new Error('null'))).toBe('null');
+  });
+
   it('returns "Failed" for circular reference object', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;

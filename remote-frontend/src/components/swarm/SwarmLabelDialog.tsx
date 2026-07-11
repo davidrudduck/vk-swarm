@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ColorPicker } from '@/components/labels/ColorPicker';
-import { IconPicker } from '@/components/labels/IconPicker';
+import { IconPicker, getLucideIcon } from '@/components/labels/IconPicker';
 import type { SwarmLabel } from '@/types/swarm';
 
 interface SwarmLabelDialogProps {
@@ -213,15 +213,17 @@ export function SwarmLabelDialog({
 // Helper to calculate contrasting text color
 function getContrastColor(hexColor: string): string {
   const hex = hexColor.replace('#', '');
+  // Reject anything that isn't a 6-digit hex string. Without this guard,
+  // parseInt returns NaN for malformed input, the luminance becomes NaN,
+  // and `NaN > 0.5` is false — silently falling back to white for invalid
+  // colors (e.g. short codes, garbage strings, missing values).
+  if (!/^[0-9a-fA-F]{6}$/.test(hex)) return '#ffffff';
   const r = parseInt(hex.substring(0, 2), 16);
   const g = parseInt(hex.substring(2, 4), 16);
   const b = parseInt(hex.substring(4, 6), 16);
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return luminance > 0.5 ? '#000000' : '#ffffff';
 }
-
-// Simple icon display component for preview
-import { getLucideIcon } from '@/components/labels/IconPicker';
 
 function IconDisplay({ iconName }: { iconName: string }) {
   const IconComponent = getLucideIcon(iconName);
