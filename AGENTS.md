@@ -616,16 +616,16 @@ cargo clippy --all --all-targets --all-features -- -D warnings # Clippy
 cargo test --workspace                                          # All backend tests
 
 # Frontend
-cd frontend && npm run lint                                     # ESLint
-cd frontend && npm run format:check                             # Prettier
-cd frontend && npx tsc --noEmit                                 # TypeScript
-cd frontend && npm run test:run                                 # Component tests
+(cd frontend && npm run lint)                                     # ESLint
+(cd frontend && npm run format:check)                             # Prettier
+(cd frontend && npx tsc --noEmit)                                 # TypeScript
+(cd frontend && npm run test:run)                                 # Component tests
 
 # Remote frontend (when remote-frontend/ changes)
-cd remote-frontend && npx tsc --noEmit                          # TypeScript
-cd remote-frontend && npm run lint                              # ESLint
-cd remote-frontend && npm run test:run                          # Component tests
-docker build -f crates/remote/Dockerfile .                      # Docker build smoke test
+(cd remote-frontend && npx tsc --noEmit)                          # TypeScript
+(cd remote-frontend && npm run lint)                              # ESLint
+(cd remote-frontend && npm run test:run)                          # Component tests
+docker build -f crates/remote/Dockerfile .                        # Docker build smoke test
 ```
 
 **Why the Docker check matters:** The `remote-frontend` build runs `tsc && vite build` inside a container that only has `remote-frontend/` — not `frontend/`. Cross-package imports (e.g. a test reaching into `frontend/src/`) resolve locally but break in Docker. Always verify the Docker build when touching `remote-frontend/`.
