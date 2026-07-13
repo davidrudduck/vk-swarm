@@ -1,8 +1,9 @@
 /**
  * Parse an unknown error into a user-friendly string.
  *
- * Handles: Error (including ApiError with error_data), string, null, symbol,
- * objects with {error} or {message} keys, JSON-encoded bodies, circular refs,
+ * Handles: Error (ApiError.message is used; error_data is consumed at the
+ * call-site via instanceof if needed), string, null, symbol, objects with
+ * {error} or {message} keys, JSON-encoded bodies, circular refs,
  * primitive JSON values. Returns 'Failed' as the generic fallback.
  */
 export function parseErrorMessage(err: unknown): string {
@@ -22,7 +23,7 @@ export function parseErrorMessage(err: unknown): string {
       return 'Failed';
     }
   }
-  if (!raw) return 'Failed';
+  if (!raw || !raw.trim()) return 'Failed';
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed === 'string' && parsed) return parsed;

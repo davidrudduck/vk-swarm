@@ -95,16 +95,12 @@ describe('parseErrorMessage', () => {
     expect(parseErrorMessage(BigInt(9007199254740991))).toBe('Failed');
   });
 
-  it('returns raw string for Error whose message is a JSON number (primitive, not string/object)', () => {
-    expect(parseErrorMessage(new Error('42'))).toBe('42');
-  });
-
   it('returns "Failed" for Error whose message is empty string', () => {
     expect(parseErrorMessage(new Error(''))).toBe('Failed');
   });
 
-  it('returns raw whitespace string for Error whose message is just whitespace', () => {
-    expect(parseErrorMessage(new Error('   '))).toBe('   ');
+  it('returns "Failed" for Error whose message is just whitespace', () => {
+    expect(parseErrorMessage(new Error('   '))).toBe('Failed');
   });
 
   it('returns raw when JSON.parse succeeds but result is a number primitive', () => {
