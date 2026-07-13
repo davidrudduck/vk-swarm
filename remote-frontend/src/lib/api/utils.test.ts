@@ -300,11 +300,17 @@ describe('makeRequest', () => {
 
   it('aborts request when timeout expires', async () => {
     const mockFetch = vi.mocked(g.fetch) as ReturnType<typeof vi.fn>;
-    mockFetch.mockRejectedValueOnce(new DOMException('Request timed out', 'TimeoutError'));
+    mockFetch.mockImplementationOnce((_url, init) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      if (!signal) throw new Error('Expected an abort signal');
+      return new Promise<Response>((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    });
 
     const promise = makeRequest('http://localhost/api/test');
 
-    vi.advanceTimersByTime(30_001);
+    await vi.advanceTimersByTimeAsync(30_001);
 
     await expect(promise).rejects.toThrow('Request timed out');
   });

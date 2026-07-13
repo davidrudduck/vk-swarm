@@ -212,7 +212,7 @@ export function SwarmLabelDialog({
 
 // Helper to calculate contrasting text color
 export function getContrastColor(hexColor: string): string {
-  const hex = hexColor.replace('#', '');
+  const hex = hexColor.startsWith('#') ? hexColor.slice(1) : hexColor;
   // Reject anything that isn't a 6-digit hex string. Without this guard,
   // parseInt returns NaN for malformed input, the luminance becomes NaN,
   // and `NaN > 0.5` is false — silently falling back to white for invalid

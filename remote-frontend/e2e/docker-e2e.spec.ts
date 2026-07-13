@@ -45,28 +45,28 @@ test.describe('Docker E2E — Static Assets', () => {
 
   test('CSS loads (dark theme applied)', async ({ page }) => {
     await page.goto('/login');
-    // Confirm dark theme: body background is not the browser default white
+    // Verify that the root element has non-default styling (not browser default white)
     const bgColor = await page.evaluate(() =>
-      getComputedStyle(document.body).backgroundColor,
+      getComputedStyle(document.getElementById('root')!).backgroundColor,
     );
     expect(bgColor).not.toBe('rgb(255, 255, 255)');
   });
 });
 
 test.describe('Docker E2E — Error Handling', () => {
-  test('404 page returns non-OK status for unknown routes', async ({ page }) => {
+  test('404 page renders for unknown routes', async ({ page }) => {
     const response = await page.goto('/nonexistent-page-12345');
-    // The page should not be empty (something renders, not a crash)
+    // Unknown routes should not return 200 OK
+    expect(response?.ok()).toBeFalsy();
     await expect(page.locator('body')).not.toBeEmpty();
-    // Basic sanity: the page is still functional (not a white screen)
-    await expect(page.locator('h1')).toBeAttached();
   });
 
-  test('login page renders successfully across multiple navigations', async ({ page }) => {
-    // Verify the login page is stable and doesn't crash on repeated navigation
+  test('login page renders successfully across repeated navigations', async ({ page }) => {
+    // Navigate to login, then away to root (which redirects to login),
+    // then back to login to verify no crashes across transitions
     await page.goto('/login');
     await expect(page.locator('h1')).toContainText('Welcome');
-    // Navigate away and back — verify no white-screen crash
+    await page.goto('/nonexistent-route-999');
     await page.goto('/login');
     await expect(page.locator('h1')).toContainText('Welcome');
   });
