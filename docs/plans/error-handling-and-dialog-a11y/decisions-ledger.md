@@ -30,6 +30,9 @@ Two test failures exist on the baseline (verified via `git stash` test):
 - `src/AppRouter.test.tsx > 'authenticated: hitting / redirects to /nodes'` — pre-existing
 
 These are documented but NOT fixed in this workstream (out of scope per the plan).
+Both are tracked in `dev-docs/BACKLOG.md`:
+- `scripts/no-push-invariant.test.mjs` → F-2026-07-11-02
+- `src/AppRouter.test.tsx > 'authenticated: hitting / redirects to /nodes'` → F-2026-07-11-01
 
 ## Reachability gate
 
@@ -104,10 +107,11 @@ come "for free" from Radix.**
 ### Not fixed (out of scope, documented)
 
 **R5 (P2): `getContrastColor` is duplicated between `SwarmLabelDialog.tsx:214` and
-`LabelBadge.tsx:18`.** Both copies have the same NaN bug. This is a pre-existing duplication
-not introduced by this workstream, and `LabelBadge.tsx` is outside the workstream's
-touched-files list. Extraction to a shared utility (`lib/color.ts`) is recommended as a
-follow-up but not done here to avoid expanding scope.
+`LabelBadge.tsx:18`.** The `SwarmLabelDialog.tsx` copy was fixed in R4 (regex guard
+added); the `LabelBadge.tsx` copy still has the NaN bug. This is a pre-existing
+duplication not introduced by this workstream, and `LabelBadge.tsx` is outside the
+workstream's touched-files list. Extraction to a shared utility (`lib/color.ts`) is
+recommended as a follow-up but not done here to avoid expanding scope.
 
 **Pre-existing test failure (not in this workstream's scope):**
 - `src/AppRouter.test.tsx > 'authenticated: hitting / redirects to /nodes'` fails when
@@ -164,4 +168,4 @@ All adjudicated — do not re-surface as blockers in subsequent rounds.
 |---|--------|----------|---------|-----------------------|
 | CR1-4 | dialog.tsx:24,46 | medium | Dialog z-50 vs alert-dialog z-[9999] — old dialog used z-[9999]. Regression risk if third-party code assumes dialog-layer at ~10000. | Intentional Radix/shadcn convention: z-50 for dialogs, z-[9999] for alerts. Stacking is correct. |
 | CR1-5 | api/utils.ts:39 | low | `anySignal([])` returns dead (never-aborted) signal. No current caller hits this but public export makes it reachable. | No caller passes empty array; `makeRequest` guards with truthy check. |
-| CR1-6 | api/utils.test.ts:301-316 | medium | Timeout test's signal-abort mock passes `signal.reason` through directly, but real `fetch` wraps it in `AbortError`. Test correctly verifies timeout-triggers-abort but doesn't verify real `fetch` error shape. | Standard mock-testing pattern; verifies timeout→abort path, not `fetch` internals.
+| CR1-6 | api/utils.test.ts:301-316 | medium | Timeout test's signal-abort mock passes `signal.reason` through directly, but real `fetch` wraps it in `AbortError`. Test correctly verifies timeout-triggers-abort but doesn't verify real `fetch` error shape. | Standard mock-testing pattern; verifies timeout→abort path, not `fetch` internals. |
