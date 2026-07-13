@@ -1,0 +1,164 @@
+---
+title: "Local Docker Dev Environment"
+description: "Running the remote crate (hive) locally with PostgreSQL for development and testing"
+audience: admin
+sources:
+  - crates/remote/docker-compose.dev.yml
+  - crates/remote/.env.dev
+  - crates/remote/scripts/seed-e2e-db.sql
+  - crates/remote/Dockerfile
+generated: 2026-07-10
+---
+
+The remote crate (hive) can be run locally in a Docker container alongside the local node frontend + backend. This is useful for development, testing, and demoing the full swarm/hive architecture on a single machine or across a network.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Local Machine (or accessible on network)                   │
+│                                                             │
+│  ┌──────────────┐   ┌──────────────┐   ┌────────────────┐  │
+│  │ Node         │   │ Hive         │   │ PostgreSQL 16  │  │
+│  │ Frontend     │   │ Server       │   │ (Docker)       │  │
+│  │ 0.0.0.0:3000 │   │ 0.0.0.0:9000 │   │ 0.0.0.0:5434   │  │
+│  │              │   │              │   │                │  │
+│  │  ┌────────┐  │   │ ┌──────────┐ │   │ vibe_remote    │  │
+│  │  │ Node   │◄─┼───┼►│ API +    │ │   │ database       │  │
+│  │  │ Backend│  │   │ │ Frontend │ │   │ 29 migrations  │  │
+│  │  │:3001   │  │   │ └────┬─────┘ │   │ + seed data    │  │
+│  │  └────────┘  │   │      │       │   │                │  │
+│  └──────┬───────┘   └──────┼───────┘   └───────┬────────┘  │
+│         │                  │                   │           │
+│         └──────────────────┴───────────────────┘           │
+│                  Docker bridge network                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+All services bind on `0.0.0.0` — accessible from other machines on the network.
+
+## Prerequisites
+
+- Docker + Docker Compose v2
+- pnpm
+- Node.js 24 (for the local node frontend/backend)
+- Rust toolchain (for the local node backend)
+
+## Setup
+
+### 1. Start the hive (Docker)
+
+```bash
+cd crates/remote
+docker compose -f docker-compose.dev.yml --env-file .env.dev up --build -d
+```
+
+This starts:
+- PostgreSQL 16 on `0.0.0.0:5434`
+- Hive server (with hive frontend bundled) on `0.0.0.0:9000`
+
+### 2. Seed the database
+
+```bash
+docker compose -f docker-compose.dev.yml exec -T remote-db \
+  psql -U postgres -d vibe_remote -f scripts/seed-e2e-db.sql
+```
+
+This creates:
+- 2 users (`admin@test.local`, `member@test.local`)
+- 1 org (`e2e-test-org`)
+- 3 API keys (one active, one revocable, one blocked)
+- 3 nodes (2 online, 1 offline)
+- 5 tasks (all status states)
+- 4 labels + output logs + progress events
+
+### 3. Start the local node
+
+```bash
+# From repo root
+cp .env.dev .env  # so dotenvy picks it up
+pnpm run dev:network
+```
+
+This starts:
+- Node frontend on `0.0.0.0:3000`
+- Node backend on `0.0.0.0:3001`
+
+The node will automatically connect to the hive using the API key from `.env.dev`.
+
+## Network access
+
+All services bind on `0.0.0.0` so other machines on the network can access them.
+
+To find your machine's IP:
+
+```bash
+hostname -I
+# Example: 192.168.1.100
+```
+
+Other users can then access:
+- **Hive frontend:** `http://<your-ip>:9000`
+- **Node frontend:** `http://<your-ip>:3000`
+- **Node backend:** `http://<your-ip>:3001`
+
+## Configuration
+
+### Environment variables (`.env.dev`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_DB` | `vibe_remote` | Database name |
+| `POSTGRES_USER` | `postgres` | Database user |
+| `POSTGRES_PASSWORD` | `postgres` | Database password |
+| `POSTGRES_PORT` | `5434` | External PostgreSQL port |
+| `SERVER_PORT` | `9000` | External hive server port |
+| `GITHUB_OAUTH_CLIENT_ID` | `dummy-github-client-id-for-dev` | Dummy OAuth (server won't actually auth) |
+| `GITHUB_OAUTH_CLIENT_SECRET` | `dummy-github-client-secret-for-dev` | Dummy OAuth |
+| `VIBEKANBAN_REMOTE_JWT_SECRET` | `dGVzdC1qd3Qtc2VjcmV0...` | JWT signing secret (must match node's `VK_CONNECTION_TOKEN_SECRET`) |
+| `LOOPS_EMAIL_API_KEY` | `dummy` | Email service (dummy — emails won't send) |
+| `RUST_LOG` | `info` | Server log level |
+
+### Production OAuth
+
+For real OAuth, replace the dummy values in `.env.dev`:
+1. Create a GitHub OAuth App: https://github.com/settings/developers
+2. Set callback URL to `http://<your-ip>:9000/v1/oauth/github/callback`
+3. Update `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET`
+
+## Test API keys
+
+After seeding, these keys are available:
+
+| Key | State | Use for |
+|-----|-------|---------|
+| `vk_e2e-primary-key-12345678` | Active | Primary node connection |
+| `vk_e2e-revocable-key-abcdef` | Active | Test revoke flow |
+| `vk_e2e-blocked-key-xyz` | Blocked | Test unblock flow |
+
+## Management
+
+```bash
+# View logs
+docker compose -f docker-compose.dev.yml logs -f remote-server
+docker compose -f docker-compose.dev.yml logs -f remote-db
+
+# Restart a service
+docker compose -f docker-compose.dev.yml restart remote-server
+
+# Stop everything
+docker compose -f docker-compose.dev.yml down
+
+# Stop and remove all data (reset)
+docker compose -f docker-compose.dev.yml down -v
+```
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Port 9000 already in use | `ss -tlnp \| grep 9000` to find what's using it, or change `SERVER_PORT` in `.env.dev` |
+| Migrations fail | Check `docker compose -f docker-compose.dev.yml logs remote-server` for SQL errors |
+| Seed fails (duplicate key) | Run `docker compose -f docker-compose.dev.yml down -v` to reset, then re-seed |
+| Node can't connect to hive | Verify `VK_HIVE_URL` and `VK_NODE_API_KEY` in `.env`, check that hive is healthy: `curl http://localhost:9000/v1/health` |
+| OAuth login doesn't work | You're using dummy credentials. See "Production OAuth" above to set up real OAuth. |

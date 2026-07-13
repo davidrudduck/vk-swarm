@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "claude",
+    "-p",
+    "--permission-mode",
+    "plan",
+    "--output-format",
+    "json",
+    "--model",
+    "claude-opus-4-8"
+  ],
+  "cwd": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/artful-egret",
+  "exit_code": 0,
+  "finished_at": "2026-07-10T03:51:04.308210+00:00",
+  "notes": [],
+  "prompt_file": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/artful-egret/.agents/reports/review-prompt.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/artful-egret/.agents/reports/2026-07-10-round-1-opus-execution-review.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/artful-egret/.agents/reports/2026-07-10-round-1-opus-execution-review.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-07-10T03:34:21.920586+00:00",
+  "status": "ok",
+  "task": "codebase-audit",
+  "tool": "claude",
+  "tool_version": "2.1.206 (Claude Code)"
+}

@@ -13,6 +13,7 @@ RUN corepack enable \
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY scripts/ scripts/
 COPY frontend/package.json frontend/package.json
+COPY frontend/src/i18n frontend/src/i18n
 COPY remote-frontend/package.json remote-frontend/package.json
 
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \

@@ -1,3 +1,29 @@
+---
+id: "201"
+phase: 2
+title: "Rewrite dialog.tsx to use @radix-ui/react-dialog"
+status: ready
+depends_on: []
+parallel: false
+conflicts_with: []
+files:
+  - remote-frontend/src/components/ui/dialog.tsx
+irreversible: true
+scope_test: "remote-frontend/src/components/ui/dialog.test.tsx"
+allowed_change: edit
+covers_criteria: [SC3]
+---
+## Failing test (write first)
+Covered by: `remote-frontend/src/components/ui/dialog.test.tsx` (task 203). The 7 tests in that
+file verify role="dialog", aria-modal, Escape handling, and uncloseable behavior. Task 201
+rewrites the component; task 203 creates the tests.
+
+## Change
+- **File:** remote-frontend/src/components/ui/dialog.tsx
+- **Anchor:** entire file (116 lines of custom HTML → Radix wrapper)
+- **Before:** Custom implementation using plain `<div>` elements with no role, aria-modal, focus trap, or Escape handling
+- **After:**
+```tsx
 "use client";
 
 import * as React from "react";
@@ -39,11 +65,10 @@ const DialogContent = React.forwardRef<
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
-      aria-modal="true"
       onEscapeKeyDown={uncloseable ? (e) => e.preventDefault() : undefined}
       onPointerDownOutside={uncloseable ? (e) => e.preventDefault() : undefined}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg max-h-[85vh] overflow-y-auto",
+        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
         className
       )}
       {...props}
@@ -127,3 +152,25 @@ export {
   DialogTitle,
   DialogDescription,
 };
+```
+
+## Allowed moves
+Replace entire content of `remote-frontend/src/components/ui/dialog.tsx` with the Radix-based implementation above.
+
+## STOP triggers
+- If `@radix-ui/react-dialog` is not in package.json (it IS at `^1.1.18`)
+- If any caller passes props not preserved by the new API (open, onOpenChange, uncloseable, className, children)
+
+## Manual verification (record in decisions-ledger)
+```bash
+cd remote-frontend && npx tsc --noEmit
+# Expected: no type errors (all callers use the preserved API surface)
+cd remote-frontend && npx vitest run
+# Expected: existing tests pass (some may need import updates for new exports)
+```
+
+## Done when
+- `dialog.tsx` uses `@radix-ui/react-dialog`
+- `role="dialog"` and `aria-modal="true"` are present (via Radix)
+- `uncloseable` prop suppresses Escape and overlay click via `e.preventDefault()`
+- All existing exports preserved: Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter
