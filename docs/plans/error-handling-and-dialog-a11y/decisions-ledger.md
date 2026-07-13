@@ -65,6 +65,8 @@ Symptom: raw JSON bodies shown to users when dialog mutations fail (e.g., `{"mes
 Fix: `parseErrorMessage` extracts "denied" from JSON body. Evidence: TS16d asserts
 `getByText(/server denied/)` passes when the mutation rejects with `new Error('{"message":"server denied"}')`.
 
+VERDICT: PASS
+
 ## Post-merge audit (in-session bug analysis)
 
 The session ran a comprehensive bug analysis over the workstream files and found four
