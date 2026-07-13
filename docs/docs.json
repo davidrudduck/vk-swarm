@@ -101,6 +101,8 @@
         "pages": [
           "development/dev-server-lifecycle",
           "development/testing",
+          "development/e2e-testing-docker",
+          "development/local-docker-dev",
           "development/remote-frontend",
           "development/pkce-implementation",
           "architecture/ui-responsive-design",
@@ -115,6 +117,7 @@
         "pages": [
           "swarm-hive-setup",
           "core-features/swarm-management",
+          "core-features/swarm-api-key-management",
           "core-features/project-linking",
           "architecture/swarm-sync",
           "architecture/auth-token-management",

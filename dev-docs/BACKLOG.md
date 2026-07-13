@@ -12,8 +12,10 @@
 | F-2026-07-04-02 | orphan spec reference-architecture-alignment-design unreferenced pre-fork | low | wontfix | docs/superpowers/specs/2026-04-20-reference-architecture-alignment-design.md | sweep/2026-07-04 | 2026-07-04 | — | — |
 | F-2026-07-04-03 | stale repo-root PLAN.md planning doc | low | wontfix | PLAN.md | sweep/2026-07-04 | 2026-07-04 | — | — |
 | F-2026-07-04-04 | crisp-river uncommitted Cargo.toml doctest edits on merged branch | medium | open | crates/remote/Cargo.toml | sweep/2026-07-04 | 2026-07-04 | — | — |
-| F-2026-07-06-01 | Hive UI lacks Generate API key button — node onboarding blocked | high | shipped | remote-frontend/src/pages/Nodes.tsx:7-51 | session/2026-07-06 | 2026-07-06 | hive-node-api-key-ui | docs/superpowers/specs/2026-07-07-hive-node-api-key-ui.md |
-| F-2026-07-06-02 | Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined) | high | shipped | remote-frontend/src/pkce.ts:10 | session/2026-07-06 | 2026-07-06 | fix-nonloopback-signin | docs/superpowers/specs/2026-07-08-fix-nonloopback-signin.md |
+| F-2026-07-06-01 | Hive UI lacks Generate API key button — node onboarding blocked | high | fixed | remote-frontend/src/pages/Nodes.tsx:7-51 | session/2026-07-06 | 2026-07-06 | hive-node-api-key-ui | docs/superpowers/specs/2026-07-07-hive-node-api-key-ui.md |
+| F-2026-07-06-02 | Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined) | high | fixed | remote-frontend/src/pkce.ts:10 | session/2026-07-06 | 2026-07-06 | fix-nonloopback-signin | docs/superpowers/specs/2026-07-08-fix-nonloopback-signin.md |
+| F-2026-07-11-01 | AppRouter test isolation: authenticated / → /nodes redirect fails | medium | open | remote-frontend/src/AppRouter.test.tsx | session/2026-07-11 | 2026-07-11 | — | — |
+| F-2026-07-11-02 | no-push-invariant test fails on baseline | medium | open | scripts/no-push-invariant.test.mjs | session/2026-07-11 | 2026-07-11 | — | — |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
@@ -60,3 +62,10 @@
   (`nodesApi.{listApiKeys,createApiKey,revokeApiKey,unblockApiKey}`), and the
   `NodeApiKey`/`CreateNodeApiKey*` types already exist. Next: `/wai:spec hive-node-api-key-ui`
   to add the design, then `/wai:precheck`.
+
+### 2026-07-10 — F-2026-07-06-02 shipped
+
+- **F-2026-07-06-02 → shipped (workstream `fix-nonloopback-signin`).** The finding (sign-in
+  broken on non-loopback HTTP origins due to `crypto.subtle` undefined) was resolved by
+  PR #463 (merged 2026-07-10). Pure-TS SHA-256 fallback implemented in `pkce.ts` with
+  capability detection. 137 tests, 100% line coverage on target files.

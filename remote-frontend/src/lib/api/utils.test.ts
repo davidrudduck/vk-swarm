@@ -67,6 +67,27 @@ describe('anySignal', () => {
 
     expect(combined.aborted).toBe(false);
   });
+
+  it('forwards abort reason from the triggering signal', () => {
+    const controller = new AbortController();
+    const combined = anySignal([controller.signal]);
+
+    controller.abort('custom reason');
+
+    expect(combined.aborted).toBe(true);
+    expect(combined.reason).toBe('custom reason');
+  });
+
+  it('forwards the already-aborted signal reason in a mixed list', () => {
+    const active = new AbortController();
+    const controller = new AbortController();
+    controller.abort('already-gone');
+
+    const combined = anySignal([active.signal, controller.signal]);
+
+    expect(combined.aborted).toBe(true);
+    expect(combined.reason).toBe('already-gone');
+  });
 });
 
 describe('ApiError', () => {
@@ -98,6 +119,17 @@ describe('ApiError', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(error).toBeInstanceOf(ApiError);
+  });
+
+  it('creates error with minimum arguments (message only)', () => {
+    const error = new ApiError('bare error');
+
+    expect(error.message).toBe('bare error');
+    expect(error.status).toBeUndefined();
+    expect(error.statusCode).toBeUndefined();
+    expect(error.response).toBeUndefined();
+    expect(error.error_data).toBeUndefined();
+    expect(error.name).toBe('ApiError');
   });
 });
 
@@ -264,5 +296,32 @@ describe('makeRequest', () => {
         signal: expect.anything(),
       })
     );
+  });
+
+  it('aborts request when timeout expires', async () => {
+    const mockFetch = vi.mocked(g.fetch) as ReturnType<typeof vi.fn>;
+    mockFetch.mockImplementationOnce((_url, init) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      if (!signal) throw new Error('Expected an abort signal');
+      return new Promise<Response>((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    });
+
+    const promise = makeRequest('http://localhost/api/test');
+
+    await vi.advanceTimersByTimeAsync(30_001);
+
+    await expect(promise).rejects.toThrow('Request timed out');
+  });
+
+  it('clears timeout on fetch failure (non-timeout)', async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    const mockFetch = vi.mocked(g.fetch) as ReturnType<typeof vi.fn>;
+    mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+    await expect(makeRequest('http://localhost/api/test')).rejects.toThrow('Network error');
+    expect(clearTimeoutSpy).toHaveBeenCalled();
   });
 });

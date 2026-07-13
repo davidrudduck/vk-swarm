@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, GitMerge, AlertTriangle } from 'lucide-react';
+import { parseErrorMessage } from '@/lib/errors';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -85,7 +86,7 @@ export function MergeLabelsDialog({
       setSourceId('');
       onOpenChange(false);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'An error occurred';
+      const message = parseErrorMessage(err);
       setError(message);
     }
   };

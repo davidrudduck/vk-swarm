@@ -12,7 +12,9 @@
     "test:run": "vitest run",
     "test:invariants": "node --test scripts/no-push-invariant.test.mjs",
     "test:e2e": "playwright test",
-    "test:e2e:ci": "playwright test --reporter=list"
+    "test:e2e:ci": "playwright test --reporter=list",
+    "test:e2e:docker": "./scripts/e2e-test.sh",
+    "test:e2e:docker:keep": "./scripts/e2e-test.sh --keep"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.18",

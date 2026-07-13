@@ -1,0 +1,61 @@
+---
+title: "API Key Management & Dialog Error Messages"
+description: "How the hive frontend displays API key errors, blocked/revoked key states, and dialog accessibility"
+audience: user
+sources:
+  - remote-frontend/src/lib/errors.ts
+  - remote-frontend/src/components/swarm/NodeApiKeySection.tsx
+generated: 2026-07-10
+---
+
+When you manage node API keys or interact with any swarm dialog, the hive frontend now displays clear, user-friendly error messages and uses accessible dialogs that work with screen readers and keyboards.
+
+## What you'll see
+
+### Clear error messages
+When an API operation fails (e.g., creating a key, revoking a key, unblocking a key), the hive shows a concise error message instead of a raw JSON dump. The error message is extracted from the API response in this order:
+
+1. **Plain string errors** — `"Server temporarily unavailable"` shows as-is
+2. **JSON body with `message` key** — `{"message":"denied"}` shows as `"denied"`
+3. **JSON body with `error` key** — `{"error":"not found"}` shows as `"not found"`
+4. **Generic failures** — show as `"Failed"` (with localized prefix in the dialog header)
+
+### Blocked and revoked key states
+API keys can be in one of three states:
+
+| State | Badge | Actions available |
+|-------|-------|-------------------|
+| Active | None | Revoke |
+| Blocked | 🟧 Blocked (with reason) | Unblock |
+| Revoked | ⚫ Revoked | None |
+
+When a key is blocked, you'll see the reason (e.g., "rate limit exceeded") in the list. Use **Unblock** to restore access — this opens a confirmation dialog before sending the unblock request.
+
+### Accessible dialogs
+All modal dialogs (create, revoke, unblock, merge) now support:
+
+- **Screen readers** — announced as dialogs with `role="dialog"` and `aria-modal="true"`
+- **Keyboard navigation** — Tab cycles through focusable elements within the dialog
+- **Escape to close** — press Escape to dismiss any closable dialog
+- **Uncloseable flow for secrets** — when revealing an API key secret, the close button and Escape are intentionally disabled to prevent accidental dismissal. The **Done** button is the only way to close after copying the secret.
+
+## Common error scenarios
+
+### "Failed to create API key"
+This appears when the backend rejects the create request. Common causes:
+- **Duplicate name** — choose a unique key name
+- **Org permission denied** — your user doesn't have admin role in the org
+- **Rate limit** — wait a few seconds and try again
+
+### "Failed to revoke API key"
+The key might already be revoked, or your user lacks permission.
+
+### "Failed to unblock API key"
+The key might no longer be blocked, or the unblock request was rejected.
+
+## What's new in this release
+
+- ✅ Shared error parsing across all swarm dialogs (label, merge, project, template)
+- ✅ Radix-based dialog with role/aria-modal/focus trap (accessibility)
+- ✅ Blocked key state with reason display
+- ✅ Mutation guards prevent stale API responses from leaking across org changes
