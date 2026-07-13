@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Key, Plus, Copy, Check, Eye, EyeOff, Trash2, Unlock, AlertTriangle } from 'lucide-react';
+import { parseErrorMessage } from '@/lib/errors';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -30,38 +31,6 @@ const API_KEY_NAME_MAX_LENGTH = 100;
 const QUERY_STALE_TIME_MS = 30_000;
 const COPY_FEEDBACK_DURATION_MS = 2000;
 const SECRET_MASK = '••••••••••••••••••••';
-
-function parseErrorMessage(err: unknown): string {
-  let raw: string;
-  if (err instanceof Error) {
-    raw = err.message;
-  } else if (typeof err === 'string') {
-    raw = err || 'Failed';
-  } else if (err == null) {
-    return 'Failed';
-  } else if (typeof err === 'symbol') {
-    return 'Failed';
-  } else {
-    try {
-      raw = JSON.stringify(err) ?? 'Failed';
-    } catch {
-      return 'Failed';
-    }
-  }
-  if (!raw) return 'Failed';
-  try {
-    const parsed = JSON.parse(raw);
-    if (typeof parsed === 'string' && parsed) return parsed;
-    if (parsed !== null && typeof parsed === 'object') {
-      if (typeof parsed.message === 'string' && parsed.message) return parsed.message;
-      if (typeof parsed.error === 'string' && parsed.error) return parsed.error;
-      return 'Failed';
-    }
-    return raw || 'Failed';
-  } catch {
-    return raw || 'Failed';
-  }
-}
 
 interface ApiKeyItemProps {
   apiKey: NodeApiKey;
@@ -421,9 +390,8 @@ export function NodeApiKeySection({
         onOpenChange={(open) => {
           if (!open && !createdSecret && !createMutation.isPending) closeDialog();
         }}
-        uncloseable={!!createdSecret || createMutation.isPending}
       >
-        <DialogContent>
+        <DialogContent uncloseable={!!createdSecret || createMutation.isPending}>
           {!createdSecret ? (
             <form onSubmit={handleCreateSubmit}>
               <DialogHeader>

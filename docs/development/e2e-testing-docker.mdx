@@ -1,0 +1,142 @@
+---
+title: "End-to-End Testing with Docker + Playwright"
+description: "Full-stack E2E testing against a real PostgreSQL + remote server using Playwright"
+audience: developer
+sources:
+  - remote-frontend/playwright.docker.config.ts
+  - remote-frontend/e2e/docker-e2e.spec.ts
+  - remote-frontend/scripts/e2e-test.sh
+  - crates/remote/docker-compose.dev.yml
+  - crates/remote/scripts/seed-e2e-db.sql
+generated: 2026-07-10
+---
+
+The hive frontend has full end-to-end tests that run against a real PostgreSQL + remote server (no mocks). These tests verify that the frontend, backend, and database all work together correctly.
+
+## Quick start
+
+```bash
+# One command: spin up Docker, seed DB, run Playwright, tear down
+cd remote-frontend
+./scripts/e2e-test.sh
+
+# Keep Docker running after tests (for manual testing/debugging)
+./scripts/e2e-test.sh --keep
+
+# Run Playwright only (Docker must be already running)
+./scripts/e2e-test.sh --skip-docker
+```
+
+## What gets tested
+
+The Docker E2E suite (`e2e/docker-e2e.spec.ts`) covers:
+
+1. **Health endpoint** — `/v1/health` returns 200 with version info
+2. **Frontend serving** — root URL serves the React app
+3. **Login page** — OAuth buttons render (GitHub, Google)
+4. **Database connectivity** — server doesn't 500 (migrations + seed work)
+5. **JS bundle** — React mounts on the page
+6. **CSS** — dark theme styles load (not unstyled white page)
+7. **404 handling** — unknown routes show not-found page, not white screen
+8. **API error resilience** — failed API calls don't crash the UI
+
+These run against the **real server with real database** — no mocked API responses. This catches issues that mocked tests miss (e.g., serialization bugs, CORS, actual migration failures).
+
+## Architecture
+
+```
+┌─────────────────┐
+│  Playwright     │  ← real Chromium browser
+│  (chromium)     │
+└────────┬────────┘
+         │ http://localhost:9000
+         ▼
+┌─────────────────┐
+│  Hive Server    │  ← serves API + static frontend
+│  (Docker)       │
+└────────┬────────┘
+         │ postgres://
+         ▼
+┌─────────────────┐
+│  PostgreSQL 16  │  ← 29 migrations applied automatically
+│  (Docker)       │  ← seed-e2e-db.sql provides test data
+└─────────────────┘
+```
+
+## Seed data
+
+`crates/remote/scripts/seed-e2e-db.sql` provides:
+
+- **2 users** — `admin@test.local` (admin), `member@test.local` (member)
+- **1 org** — `e2e-test-org`
+- **3 API keys** — `vk_e2e-primary-key-12345678` (active), `vk_e2e-revocable-key-abcdef`, `vk_e2e-blocked-key-xyz` (blocked)
+- **3 nodes** — alpha/beta (online), gamma (offline)
+- **5 tasks** — covering all status states (todo, in-progress, in-review, done, cancelled)
+- **4 labels** — bug, feature, docs, urgent
+- **Output logs + progress events** — for log viewer and timeline components
+
+## Writing new Docker E2E tests
+
+```typescript
+import { test, expect } from '@playwright/test';
+
+test.describe('My feature', () => {
+  test('does something useful', async ({ page }) => {
+    await page.goto('/login');
+    // Your test here
+  });
+});
+```
+
+Tests are picked up automatically from `remote-frontend/e2e/`. The Docker config (`playwright.docker.config.ts`) uses `baseURL: http://localhost:9000`.
+
+### Anti-patterns to avoid
+
+- **Don't mock the API** — use the real server. Mocked tests are in `e2e/auth.spec.ts` and `e2e/board.spec.ts` for isolated unit-level coverage.
+- **Don't assume specific data** — use the seeded data (see above) for realistic scenarios.
+- **Don't skip auth** — if your test needs auth, use the OAuth mock from `e2e/fixtures/mock-api.ts` for client-side auth, or seed a JWT directly.
+
+## Running tests manually
+
+```bash
+# Start environment
+cd crates/remote
+docker compose -f docker-compose.dev.yml --env-file .env.dev up --build -d
+
+# Wait for healthy
+until curl -sf http://localhost:9000/v1/health; do sleep 2; done
+
+# Seed (if not already seeded)
+docker compose -f docker-compose.dev.yml exec -T remote-db psql -U postgres -d vibe_remote -f scripts/seed-e2e-db.sql
+
+# Run specific test
+cd ../../remote-frontend
+PLAYWRIGHT_BASE_URL=http://localhost:9000 npx playwright test --config=playwright.docker.config.ts e2e/docker-e2e.spec.ts -g "health"
+
+# Stop environment
+cd ../crates/remote
+docker compose -f docker-compose.dev.yml --env-file .env.dev down -v
+```
+
+## CI integration
+
+Add to `.github/workflows/e2e.yml`:
+
+```yaml
+- name: E2E tests
+  run: |
+    cd remote-frontend
+    ./scripts/e2e-test.sh
+```
+
+The script handles Docker spin-up, seeding, and teardown automatically.
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Port 9000 in use | `docker compose -f docker-compose.dev.yml down -v` then retry |
+| Playwright browser not found | `npx playwright install chromium` |
+| Migrations timeout | Check PostgreSQL logs: `docker compose -f docker-compose.dev.yml logs remote-db` |
+| Seed fails (constraint violation) | Run `docker compose -f docker-compose.dev.yml down -v` to reset, then re-seed |
+| Test passes locally, fails in CI | Check `PLAYWRIGHT_BASE_URL` matches the deployed URL |
