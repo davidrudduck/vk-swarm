@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: error-handling-and-dialog-a11y
 change_kind: behaviour
 ---

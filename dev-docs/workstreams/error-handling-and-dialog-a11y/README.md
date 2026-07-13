@@ -1,12 +1,13 @@
 ---
 workstream: error-handling-and-dialog-a11y
 doc_type: readme
-status: active
+status: shipped
 title: "Shared error parsing, dialog accessibility, mutation guard tests"
-staging_pointers:
-  - docs/superpowers/specs/2026-07-10-error-handling-and-dialog-a11y.md
 depends_on: []
 adrs: []
+staging_pointers:
+  - docs/plans/error-handling-and-dialog-a11y
+  - docs/superpowers/specs/2026-07-10-error-handling-and-dialog-a11y.md
 ---
 
 # error-handling-and-dialog-a11y

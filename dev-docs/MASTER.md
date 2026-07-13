@@ -10,7 +10,7 @@
 
 | Workstream | Status | Title | Rescued branches | Contradictions | Staging pointers |
 |---|---|---|---|---|---|
-| error-handling-and-dialog-a11y | active | Shared error parsing, dialog accessibility, mutation guard tests | - | - | 1 |
+| error-handling-and-dialog-a11y | shipped | Shared error parsing, dialog accessibility, mutation guard tests | - | - | 2 |
 | fix-nonloopback-signin | shipped | fix-nonloopback-signin | - | - | 2 |
 | foundations-followup1 | shipped | foundations-followup1 | - | - | 2 |
 | hive-node-api-key-ui | shipped | Hive node API key management UI — generate/revoke/unblock keys on the Nodes page | - | - | 1 |
