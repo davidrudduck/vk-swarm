@@ -2,7 +2,7 @@
 id: "103"
 phase: 1
 title: Wire toasts + confirmation dialogs + loading states into Tasks.tsx
-status: ready
+status: done
 depends_on: ["100"]
 parallel: false
 conflicts_with: [205]

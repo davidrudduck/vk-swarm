@@ -2,7 +2,7 @@
 id: "002"
 phase: 1
 title: Add --status-* tokens, semantic aliases, --strip-width consumption
-status: ready
+status: passed
 depends_on: ["001"]
 parallel: false
 conflicts_with: ["001", "003"]

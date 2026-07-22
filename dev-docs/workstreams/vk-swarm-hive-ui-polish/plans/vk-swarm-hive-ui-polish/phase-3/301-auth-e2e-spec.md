@@ -2,7 +2,7 @@
 id: "301"
 phase: 3
 title: Write auth.spec.ts — OAuth PKCE flow E2E tests
-status: ready
+status: done
 depends_on: ["300"]
 parallel: false
 conflicts_with: []

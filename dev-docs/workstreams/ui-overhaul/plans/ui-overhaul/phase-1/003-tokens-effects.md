@@ -2,7 +2,7 @@
 id: "003"
 phase: 1
 title: Add shadow/glow tokens, the vks-pulse keyframe, and ANSI texture utility classes
-status: ready
+status: passed
 depends_on: ["002"]
 parallel: false
 conflicts_with: ["001", "002"]

@@ -2,7 +2,7 @@
 id: "012"
 phase: 2
 title: Create ThemeToggle component (ghost icon, DARK↔LIGHT)
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "204"
 phase: 2
 title: Create offline mutation queue with idb-keyval
-status: ready
+status: done
 depends_on: ["200", "203"]
 parallel: false
 conflicts_with: [203]

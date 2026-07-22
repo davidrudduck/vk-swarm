@@ -2,7 +2,7 @@
 id: "014"
 phase: 3
 title: Create StatusBadge component (8px status dot + optional label)
-status: ready
+status: passed
 depends_on: ["002"]
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "104"
 phase: 1
 title: Mount ErrorBoundary + Toaster + AuthGuard in root files
-status: ready
+status: done
 depends_on: ["100", "101", "102"]
 parallel: false
 conflicts_with: []

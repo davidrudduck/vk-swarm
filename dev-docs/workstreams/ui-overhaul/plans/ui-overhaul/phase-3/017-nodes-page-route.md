@@ -2,7 +2,7 @@
 id: "017"
 phase: 3
 title: Nodes page (NodeCard grid) + /nodes route
-status: ready
+status: passed
 depends_on: ["018"]
 parallel: false
 conflicts_with: []

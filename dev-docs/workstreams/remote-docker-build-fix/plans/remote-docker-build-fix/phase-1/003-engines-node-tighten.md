@@ -2,7 +2,7 @@
 id: "003"
 phase: 1
 title: "package.json: tighten engines.node from >=18 to >=22.13"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "303"
 phase: 3
 title: Write cross-node.spec.ts — multi-node data E2E tests
-status: ready
+status: done
 depends_on: ["300", "302"]
 parallel: false
 conflicts_with: []

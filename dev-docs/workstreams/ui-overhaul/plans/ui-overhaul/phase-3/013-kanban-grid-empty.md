@@ -2,7 +2,7 @@
 id: "013"
 phase: 3
 title: Kanban grid minmax(264px,1fr) + empty-column ANSI empty-state block
-status: ready
+status: passed
 depends_on: ["010", "003"]
 parallel: false
 conflicts_with: ["010"]

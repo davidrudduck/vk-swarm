@@ -5,8 +5,8 @@ status: shipped
 title: "Phase 2a — node correct, durable, crash-resumable (ships first)"
 adrs: [0001, 0002, 0003]
 staging_pointers:
-  - docs/plans/vk-swarm-node-foundations
-  - docs/superpowers/specs/2026-06-26-vk-swarm-node-foundations.md
+  - dev-docs/workstreams/vk-swarm-node-foundations/plans/vk-swarm-node-foundations
+  - dev-docs/workstreams/vk-swarm-node-foundations/spec/2026-06-26-vk-swarm-node-foundations.md
 ---
 
 # vk-swarm-node-foundations
