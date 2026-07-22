@@ -2,7 +2,7 @@
 id: "200"
 phase: 2
 title: Install vite-plugin-pwa + configure SW/manifest
-status: ready
+status: done
 depends_on: ["104"]
 parallel: false
 conflicts_with: []

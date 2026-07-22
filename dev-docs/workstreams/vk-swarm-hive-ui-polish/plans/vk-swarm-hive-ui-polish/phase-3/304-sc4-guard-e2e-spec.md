@@ -2,7 +2,7 @@
 id: "304"
 phase: 3
 title: Write sc4-guard.spec.ts — SC4 regression guard in globalSetup
-status: ready
+status: done
 depends_on: ["300"]
 parallel: false
 conflicts_with: []

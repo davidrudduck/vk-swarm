@@ -2,7 +2,7 @@
 id: "102"
 phase: 1
 title: Create AuthGuard + wire into AppRouter
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: []

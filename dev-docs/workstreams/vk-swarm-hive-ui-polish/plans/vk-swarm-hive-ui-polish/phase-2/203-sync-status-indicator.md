@@ -2,7 +2,7 @@
 id: "203"
 phase: 2
 title: Create sync status indicator in Navbar
-status: ready
+status: done
 depends_on: ["104"]
 parallel: false
 conflicts_with: [204]

@@ -2,7 +2,7 @@
 id: "009"
 phase: 2
 title: LabelBadge outline variant
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

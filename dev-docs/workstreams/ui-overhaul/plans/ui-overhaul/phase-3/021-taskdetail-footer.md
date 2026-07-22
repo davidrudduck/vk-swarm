@@ -2,7 +2,7 @@
 id: "021"
 phase: 3
 title: Task-detail footer — Merge filled-primary, Rebase sm, Open-in-IDE ghost (GitOperations)
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

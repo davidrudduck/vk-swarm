@@ -2,7 +2,7 @@
 id: "016"
 phase: 3
 title: "Navbar second tab row (Board/Nodes/Processes) + lastVisitedProjectId tracking"
-status: ready
+status: passed
 depends_on: ["015", "017"]
 parallel: false
 conflicts_with: ["015"]

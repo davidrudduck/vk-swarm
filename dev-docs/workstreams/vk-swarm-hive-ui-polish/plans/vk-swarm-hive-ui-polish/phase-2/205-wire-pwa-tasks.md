@@ -2,7 +2,7 @@
 id: "205"
 phase: 2
 title: Wire optimistic mutations + offline queue into Tasks.tsx
-status: ready
+status: done
 depends_on: ["103", "202", "204"]
 parallel: false
 conflicts_with: [103]

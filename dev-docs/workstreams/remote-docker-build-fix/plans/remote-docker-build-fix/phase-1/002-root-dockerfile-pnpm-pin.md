@@ -2,7 +2,7 @@
 id: "002"
 phase: 1
 title: Root Dockerfile: pin pnpm@10.25.0 + cross-file coupling comment
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: ["001", "004"]

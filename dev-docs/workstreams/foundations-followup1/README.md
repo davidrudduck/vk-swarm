@@ -4,8 +4,8 @@ doc_type: readme
 status: shipped
 title: foundations-followup1
 staging_pointers:
-  - docs/plans/foundations-followup1
-  - docs/superpowers/specs/2026-06-27-foundations-followup1.md
+  - dev-docs/workstreams/foundations-followup1/plans/foundations-followup1
+  - dev-docs/workstreams/foundations-followup1/spec/2026-06-27-foundations-followup1.md
 ---
 
 # foundations-followup1

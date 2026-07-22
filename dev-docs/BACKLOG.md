@@ -11,11 +11,12 @@
 | F-2026-07-04-01 | hive-redesign 14 task files still ready despite PR 451 merged | medium | fixed | dev-docs/workstreams/vk-swarm-hive-redesign/ | sweep/2026-07-04 | 2026-07-04 | vk-swarm-hive-redesign | — |
 | F-2026-07-04-02 | orphan spec reference-architecture-alignment-design unreferenced pre-fork | low | wontfix | docs/superpowers/specs/2026-04-20-reference-architecture-alignment-design.md | sweep/2026-07-04 | 2026-07-04 | — | — |
 | F-2026-07-04-03 | stale repo-root PLAN.md planning doc | low | wontfix | PLAN.md | sweep/2026-07-04 | 2026-07-04 | — | — |
-| F-2026-07-04-04 | crisp-river uncommitted Cargo.toml doctest edits on merged branch | medium | open | crates/remote/Cargo.toml | sweep/2026-07-04 | 2026-07-04 | — | — |
-| F-2026-07-06-01 | Hive UI lacks Generate API key button — node onboarding blocked | high | fixed | remote-frontend/src/pages/Nodes.tsx:7-51 | session/2026-07-06 | 2026-07-06 | hive-node-api-key-ui | docs/superpowers/specs/2026-07-07-hive-node-api-key-ui.md |
-| F-2026-07-06-02 | Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined) | high | fixed | remote-frontend/src/pkce.ts:10 | session/2026-07-06 | 2026-07-06 | fix-nonloopback-signin | docs/superpowers/specs/2026-07-08-fix-nonloopback-signin.md |
+| F-2026-07-04-04 | crisp-river uncommitted Cargo.toml doctest edits on merged branch | medium | fixed | crates/remote/Cargo.toml | sweep/2026-07-04 | 2026-07-04 | — | — |
+| F-2026-07-06-01 | Hive UI lacks Generate API key button — node onboarding blocked | high | fixed | remote-frontend/src/pages/Nodes.tsx:7-51 | session/2026-07-06 | 2026-07-06 | hive-node-api-key-ui | dev-docs/workstreams/hive-node-api-key-ui/spec/2026-07-07-hive-node-api-key-ui.md |
+| F-2026-07-06-02 | Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined) | high | fixed | remote-frontend/src/pkce.ts:10 | session/2026-07-06 | 2026-07-06 | fix-nonloopback-signin | dev-docs/workstreams/fix-nonloopback-signin/spec/2026-07-08-fix-nonloopback-signin.md |
 | F-2026-07-11-01 | AppRouter test isolation: authenticated / → /nodes redirect fails | medium | open | remote-frontend/src/AppRouter.test.tsx | session/2026-07-11 | 2026-07-11 | — | — |
 | F-2026-07-11-02 | no-push-invariant test fails on baseline | medium | open | scripts/no-push-invariant.test.mjs | session/2026-07-11 | 2026-07-11 | — | — |
+| F-2026-07-22-01 | NodeCard references undefined vks tokens (vks-pulse, --vks-text-dim) | low | open | remote-frontend/src/components/swarm/NodeCard.tsx:48-53 | sweep/2026-07-22 | 2026-07-22 | vk-swarm-design-system | — |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
@@ -50,6 +51,20 @@
   by any code on main, so its relevance depends on the crisp-river session's unmerged test
   changes. Per the user's instruction the crisp-river worktree is an ACTIVE session and must
   not be touched from here; the finding stays `open` and is owned by that session.
+
+### 2026-07-22 — reconciliation sweep
+
+- **F-2026-07-04-04 → fixed.** Main now carries
+  `serial_test = { version = "3", features = ["file_locks"] }` at `crates/remote/Cargo.toml:45`
+  and the file is clean in git. The offending downgrade (removing `file_locks`) exists only on
+  the unmerged `opencode/crisp-river` branch (1 commit ahead of main); main is unaffected, so
+  the finding is closed here. If crisp-river merges it must rebase past the main state.
+- **F-2026-07-22-01 → open.** `remote-frontend/src/components/swarm/NodeCard.tsx:48,53` uses
+  `vks-pulse` / `--vks-text-dim` tokens that are defined nowhere in `remote-frontend`
+  (silent styling no-op on the live Nodes page). Tokens are a Phase-1 deliverable of
+  `vk-swarm-design-system`, so tagged to that workstream — verify during its Phase 1.
+- **Link hygiene:** F-2026-07-06-01/-02 spec links repointed from deleted
+  `docs/superpowers/specs/` staging paths to the graduated `dev-docs/workstreams/*/spec/` homes.
 
 ### 2026-07-07 — F-2026-07-06-01 promoted
 

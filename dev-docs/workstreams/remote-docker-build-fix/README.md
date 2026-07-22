@@ -4,8 +4,8 @@ doc_type: readme
 status: shipped
 title: "Fix crates/remote Docker build — unblock remote/hive standup"
 staging_pointers:
-  - docs/plans/remote-docker-build-fix
-  - docs/superpowers/specs/2026-07-05-remote-docker-build-fix.md
+  - dev-docs/workstreams/remote-docker-build-fix/plans/remote-docker-build-fix
+  - dev-docs/workstreams/remote-docker-build-fix/spec/2026-07-05-remote-docker-build-fix.md
 ---
 
 # remote-docker-build-fix

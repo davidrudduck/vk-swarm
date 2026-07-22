@@ -2,7 +2,7 @@
 id: "005"
 phase: 2
 title: Create .github/workflows/remote-hive-build.yml CI job
-status: ready
+status: passed
 depends_on: ["004"]
 parallel: false
 conflicts_with: ["004", "006"]

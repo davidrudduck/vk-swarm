@@ -2,7 +2,7 @@
 id: "006"
 phase: 3
 title: "Manual E2E verification: rebuild.sh + compose up + healthcheck 200"
-status: ready
+status: passed
 depends_on: ["001", "002", "003", "005"]
 parallel: false
 conflicts_with: ["005"]

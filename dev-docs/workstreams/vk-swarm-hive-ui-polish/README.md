@@ -5,8 +5,8 @@ status: shipped
 title: "Hive UI polish — error resilience, offline-first PWA, E2E test suite"
 depends_on: [vk-swarm-hive-ui]
 staging_pointers:
-  - docs/plans/vk-swarm-hive-ui-polish
-  - docs/superpowers/specs/2026-07-05-vk-swarm-hive-ui-polish.md
+  - dev-docs/workstreams/vk-swarm-hive-ui-polish/plans/vk-swarm-hive-ui-polish
+  - dev-docs/workstreams/vk-swarm-hive-ui-polish/spec/2026-07-05-vk-swarm-hive-ui-polish.md
 ---
 
 # vk-swarm-hive-ui-polish

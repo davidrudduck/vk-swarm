@@ -4,8 +4,8 @@ doc_type: readme
 status: shipped
 title: fix-nonloopback-signin
 staging_pointers:
-  - docs/plans/fix-nonloopback-signin
-  - docs/superpowers/specs/2026-07-08-fix-nonloopback-signin.md
+  - dev-docs/workstreams/fix-nonloopback-signin/plans/fix-nonloopback-signin
+  - dev-docs/workstreams/fix-nonloopback-signin/spec/2026-07-08-fix-nonloopback-signin.md
 ---
 
 # fix-nonloopback-signin

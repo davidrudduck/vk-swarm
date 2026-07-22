@@ -2,7 +2,7 @@
 id: "005"
 phase: 2
 title: TaskCard + AllProjectsTaskCard status strips → --status-* tokens
-status: ready
+status: passed
 depends_on: ["002"]
 parallel: false
 conflicts_with: ["006"]

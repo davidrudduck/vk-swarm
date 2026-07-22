@@ -4,7 +4,8 @@ doc_type: readme
 status: shipped
 title: "Hive node API key management UI — generate/revoke/unblock keys on the Nodes page"
 staging_pointers:
-  - docs/superpowers/specs/2026-07-07-hive-node-api-key-ui.md
+  - dev-docs/workstreams/hive-node-api-key-ui/plans/hive-node-api-key-ui
+  - dev-docs/workstreams/hive-node-api-key-ui/spec/2026-07-07-hive-node-api-key-ui.md
 depends_on: []
 adrs: []
 ---

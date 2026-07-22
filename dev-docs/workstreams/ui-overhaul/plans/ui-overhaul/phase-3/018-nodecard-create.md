@@ -2,7 +2,7 @@
 id: "018"
 phase: 3
 title: Create NodeCard component (OS-glyph row, mono name, online pulse dot)
-status: ready
+status: passed
 depends_on: ["002", "003"]
 parallel: false
 conflicts_with: []
