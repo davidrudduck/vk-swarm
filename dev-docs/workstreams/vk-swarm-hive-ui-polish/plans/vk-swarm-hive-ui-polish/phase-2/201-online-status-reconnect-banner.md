@@ -2,7 +2,7 @@
 id: "201"
 phase: 2
 title: Create useOnlineStatus hook + reconnect banner in NormalLayout
-status: ready
+status: done
 depends_on: ["104"]
 parallel: false
 conflicts_with: []

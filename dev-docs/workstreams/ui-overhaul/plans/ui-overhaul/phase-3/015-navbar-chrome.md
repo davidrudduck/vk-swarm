@@ -2,7 +2,7 @@
 id: "015"
 phase: 3
 title: "Navbar chrome: Logo→VKSLogo, +Task text button, ThemeToggle placement"
-status: ready
+status: passed
 depends_on: ["011", "012"]
 parallel: false
 conflicts_with: ["016"]

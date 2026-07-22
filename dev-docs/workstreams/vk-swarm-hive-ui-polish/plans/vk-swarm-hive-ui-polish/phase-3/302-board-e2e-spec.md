@@ -2,7 +2,7 @@
 id: "302"
 phase: 3
 title: Write board.spec.ts — kanban board E2E tests
-status: ready
+status: done
 depends_on: ["300", "301"]
 parallel: false
 conflicts_with: []

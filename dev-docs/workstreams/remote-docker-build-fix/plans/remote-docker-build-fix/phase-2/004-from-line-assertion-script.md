@@ -2,7 +2,7 @@
 id: "004"
 phase: 2
 title: Create FROM-line assertion script (grep-based node version match)
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: ["001", "002", "005"]

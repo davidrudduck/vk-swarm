@@ -2,7 +2,7 @@
 id: "100"
 phase: 1
 title: Install sonner + create toast wrapper
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: []

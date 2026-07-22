@@ -2,7 +2,7 @@
 id: "020"
 phase: 3
 title: Task-detail header chrome (SC18) — labeled Tabs + StatusBadge + node/label badges
-status: ready
+status: passed
 depends_on: ["009", "014"]
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "202"
 phase: 2
 title: Create optimistic mutation helpers for Electric collections
-status: ready
+status: done
 depends_on: ["104"]
 parallel: false
 conflicts_with: []

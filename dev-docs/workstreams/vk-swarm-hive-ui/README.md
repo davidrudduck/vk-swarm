@@ -6,8 +6,8 @@ title: "Hive central-management web UI — host the cross-node console (SC1 UI h
 depends_on: [vk-swarm-hive-redesign]
 adrs: []
 staging_pointers:
-  - docs/plans/vk-swarm-hive-ui
-  - docs/superpowers/specs/2026-07-04-vk-swarm-hive-ui.md
+  - dev-docs/workstreams/vk-swarm-hive-ui/plans/vk-swarm-hive-ui
+  - dev-docs/workstreams/vk-swarm-hive-ui/spec/2026-07-04-vk-swarm-hive-ui.md
 ---
 
 # vk-swarm-hive-ui

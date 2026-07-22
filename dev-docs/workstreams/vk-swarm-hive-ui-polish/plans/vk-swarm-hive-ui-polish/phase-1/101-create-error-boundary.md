@@ -2,7 +2,7 @@
 id: "101"
 phase: 1
 title: Create ErrorBoundary component
-status: ready
+status: done
 depends_on: []
 parallel: false
 conflicts_with: []

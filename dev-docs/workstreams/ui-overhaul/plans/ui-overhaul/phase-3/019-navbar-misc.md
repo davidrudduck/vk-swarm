@@ -2,7 +2,7 @@
 id: "019"
 phase: 3
 title: "ProjectSwitcher folder icon + SearchBar fixed width"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

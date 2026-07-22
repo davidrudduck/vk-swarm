@@ -2,7 +2,7 @@
 id: "001"
 phase: 1
 title: crates/remote/Dockerfile fe-builder: node:24-alpine + ARG PNPM_VERSION + corepack prepare; +compose/rebuild plumbing
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: ["002", "004"]

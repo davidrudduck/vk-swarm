@@ -2,7 +2,7 @@
 id: "006"
 phase: 2
 title: TaskCard typography/meta fidelity + TaskCardHeader title
-status: ready
+status: passed
 depends_on: ["002", "005"]
 parallel: false
 conflicts_with: ["005"]

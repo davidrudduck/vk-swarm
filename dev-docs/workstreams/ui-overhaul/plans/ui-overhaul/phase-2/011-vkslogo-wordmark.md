@@ -2,7 +2,7 @@
 id: "011"
 phase: 2
 title: VKSLogo wordmark → font-wordmark (Chivo Mono)
-status: ready
+status: passed
 depends_on: ["004"]
 parallel: false
 conflicts_with: []
