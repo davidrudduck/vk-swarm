@@ -4,3 +4,6 @@ export * from './Card';
 export * from './Input';
 export * from './Switch';
 export * from './Checkbox';
+export * from './Tabs';
+export * from './Select';
+export * from './Loader';
