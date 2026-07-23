@@ -50,3 +50,23 @@ Task 106's embedded smoke tests set execSync timeouts (120s/120s/60s) but no vit
 timeout; vitest's 5s default would fail every test deterministically. Resolution: added the
 matching timeout as third arg to each it(). No assertion or command changed. Reviewer
 confirmed minimal-correct.
+
+## 2026-07-23 — phase 1 integrated adversarial review (round 1)
+
+Panelists: Codex + OpenCode (agy/Gemini quota-exhausted; OpenCode substituted). Reports at
+`.agents/reports/2026-07-23-round-1-{codex,opencode}-phase1-tokens.md`. Both FIX-FIRST.
+
+Fixed in-session (commit 4bf7d617):
+- F1/F2/F3 Preflight cascade — index.css restructured to Tailwind v3 @import form; built-CSS
+  byte offsets confirm base.css rules now follow Preflight. Token files stayed byte-identical.
+- F4 NodeCard hsl(hex) → var() (closes backlog F-2026-07-22-01).
+- F5/F6 base.test.ts wrong-token assertion + fragile selector check.
+
+Accepted, not fixed (rationale):
+- Google Fonts external @import (Codex/OpenCode F8): plan-frozen (spec sha cd78aed7); --font-ui
+  fallback chain degrades gracefully offline. Revisit if PWA offline fidelity becomes a criterion.
+- Nested dark-theme inheritance (Codex #3): verbatim design-source behavior; byte-identity
+  constraint governs; no nested-theme usage exists in remote-frontend.
+- F7 vks-pulse keyframe: arrives with components.css in task 201 (phase 2, this branch).
+- F9 tailwind.config theme mapping: pre-existing; phase-3 tasks 307/310 own shell integration
+  and will surface it if shadcn utilities are actually relied on.
