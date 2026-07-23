@@ -188,3 +188,91 @@ to adapt to the real, already-shipped contracts):
 - `BoardPage.test.tsx` was written with the real `TaskActivity`-wrapped mock shape (see above)
   rather than the plan's literal flat-task mock, to keep the test asserting real behavior against
   real, already-shipped API client code.
+
+## 2026-07-23 — task 310 app integration test + orphan declaration
+
+**Plan-literal integration-test shape divergence, not adopted verbatim** (same plan-drift
+precedent as the task 306/308 entries above — real, already-shipped contracts govern over the
+plan literal):
+- The plan's `app-integration.test.tsx` draft mocked `/v1/tasks/bulk` with a flat `Task[]`
+  carrying `source_node_id`/`labels`. The real `tasksApi.bulk` resolves
+  `BulkSharedTasksResponse.tasks` as `TaskActivity[]` (`{ task, user }[]`,
+  `crates/remote/src/routes/tasks.rs:60-88`), and the real `Task` has no `source_node_id`/
+  `labels` fields. The shipped test uses the real wrapped shape (`owner_name` → board `node`),
+  matching `BoardPage.test.tsx`.
+- The plan draft mocked only `/v1/profile`, `/v1/tasks/bulk`, `/v1/nodes`. The real `BoardPage`
+  fetch chain is orgs → swarm projects → bulk tasks, and `NodesPage` is orgs → nodes (+ a
+  key-management fetch); the shipped mock adds `/v1/organizations`, `/v1/swarm/projects`, and
+  `/v1/nodes/api-keys` (ordered before the `/v1/nodes` substring match) so the real chained
+  queries resolve.
+- `/v1/nodes` mock uses the real `Node` shape (`capabilities.os`, `status`, `public_url`), not
+  the plan draft's `os_info`/`hostname` (field-gap ledgered in task 309).
+- The `/nodes` assertion uses a 5s `waitFor` timeout: the seam lazy-loads `NodesPage` and runs a
+  chained orgs→nodes query before the `NodeCard` grid mounts, which exceeds the 1s default.
+
+**index.css** — no-op. The full `@import` chain (fonts → tailwind base → colors → typography →
+spacing → base → tailwind components → components.css → tailwind utilities) was already wired by
+task 208. Byte-identity of all 6 preserved CSS files vs
+`dev-docs/designs/2026-07-04-vk-swarm-design-system/design-source/tokens/` re-verified: `fonts`,
+`colors`, `typography`, `spacing`, `base`, `components` all IDENTICAL.
+
+**Orphan declaration (no-orphan scope: DECLARE, not delete).** Task 310's reachability gate is
+*forward* reachability only (call-path trace + real-seam test + incident-symptom); it carries no
+no-orphan deletion criterion, and its Allowed-moves clause states "No other file may be touched."
+Per the parent decision procedure ("if the task's criteria cover it, delete; else declare"), the
+following files — now unreachable from the production router after tasks 307–309 rewired
+`AppRouter` onto the design-system `Chrome`/`BoardPage`/`NodesPage`/`ProcessesPage` — are DECLARED
+here and intentionally left in place for a dedicated dead-code-removal unit outside this
+workstream's design-system scope. They are inert (referenced only by their own colocated tests,
+which still compile and pass — no gate is red):
+- `remote-frontend/src/pages/Nodes.tsx` (+ `Nodes.test.tsx`, `Nodes.parity.test.tsx`) — superseded
+  by `pages/NodesPage.tsx`.
+- `remote-frontend/src/pages/Tasks.tsx` (+ colocated tests) — superseded by `pages/BoardPage.tsx`.
+- `remote-frontend/src/components/layout/{NormalLayout,Navbar,BottomNav}.tsx` (+ tests) — the slim
+  `vk-swarm-hive-ui` task-104 shell, replaced by `@/ui/chrome` `Navbar`/`Chrome`. NOTE the
+  two-Navbar split: `@/ui/chrome` `Navbar` is LIVE (imported by `AppRouter`); the dead one is
+  `@/components/layout/Navbar` (imported only by the dead `NormalLayout`).
+
+**deriveViewFromLocation('/') inconsistency — resolved by declaration (harmless, unreachable).**
+`AppRouter.deriveViewFromLocation` maps `'/'` to `'board'`, while `'/'` is served by
+`RootRedirect` (redirects to `/nodes` or `/login`) and never mounts `ChromeLayout`. The `'/'`
+branch is therefore never evaluated at runtime — `deriveViewFromLocation` only runs inside
+`ChromeLayout`, which is mounted only at `/nodes`, `/tasks`, `/processes`. The inconsistency is
+latent-only and touches `AppRouter.tsx`, which task 310's Allowed-moves forbids editing; it is
+declared here rather than changed.
+
+## Reachability gate
+
+**Check kind:** behaviour (SC8 cross-node task board wiring) + SC9 parity.
+
+**(a) CALL-PATH TRACE** (production entry point → rendered rows, real file:line):
+`remote-frontend/src/main.tsx:App` → `remote-frontend/src/AppRouter.tsx:241 AppRouter` →
+`AppRouter.tsx:239 createBrowserRouter(createRoutes())` → `AppRouter.tsx:220-237 createRoutes()`
+`/tasks` route (`AppRouter.tsx:231`) inside `AuthGuard > ChromeLayout` (`AppRouter.tsx:228,106`)
+→ `<BoardPage />` (`pages/BoardPage.tsx:28`) → chained `useQuery`: `organizationsApi.list`
+(`BoardPage.tsx:31`) → `swarmProjectsApi.list(orgId)` (`BoardPage.tsx:34-38`) →
+`tasksApi.bulk(projectId)` (`BoardPage.tsx:41-45`) → `fetch('/v1/tasks/bulk', Authorization:
+Bearer <localStorage access_token>)` (`lib/api/tasks.ts` via `makeRequest`) → hive
+`crates/remote/src/routes/tasks.rs:60 bulk_shared_tasks` returning
+`crates/remote/src/routes/tasks.rs:78 Json(BulkSharedTasksResponse { tasks: TaskActivity[], .. })`
+→ `BoardPage.tsx:47,77 groupByStatus(activities)` → `Record<TaskStatus, Row[]>` →
+`<BoardView columns={..} />` (`BoardPage.tsx:51`, `@/ui/board`) → one `TaskCard` per row.
+(Divergence from the plan literal, ledgered above: the real return type is
+`BulkSharedTasksResponse { tasks: TaskActivity[] }`, not "bare JSON", and the chain routes through
+orgs→projects before `tasksApi.bulk`; `tasks.rs:36` is the route registration, `:60` the handler.)
+
+**(b) REAL-SEAM TEST:** `remote-frontend/src/app-integration.test.tsx` (this task) drives the real
+production provider tree `QueryClientProvider > ProfileProvider > RouterProvider(createRoutes())`
+with `fetch` mocked only at the network boundary (never past a changed unit). Test 1 mounts
+`/tasks`, asserts a fetched task (`Wire OAuth`) renders in `BoardView` and the `TaskDrawer` opens
+(`Merge` footer) on click; test 2 mounts `/nodes`, asserts a fetched node (`justX`) renders in a
+`NodeCard`. Both drive the live `Chrome` Navbar (`Board`/`Nodes` NavTabs). PASS (2/2).
+
+**(c) INCIDENT-SYMPTOM ASSERTION:** the symptom was "no cross-node task board" (spec Intent §1).
+The real-seam test asserts `screen.getByText('Wire OAuth')` — a task fetched over the real seam
+renders in the board — which would be absent if the `AppRouter → BoardPage → bulk` wiring were
+dead. The `/nodes` companion asserts `screen.getByText('justX')` for the node registry seam.
+
+**SC9 parity:** `git diff main...HEAD -- frontend/` is EMPTY — the node `frontend/` is untouched.
+
+VERDICT: PASS
