@@ -1,7 +1,7 @@
-import { createBrowserRouter, RouterProvider, Navigate, useSearchParams } from 'react-router-dom'
+import { createBrowserRouter, RouterProvider, Navigate, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useEffect, useState, lazy, Suspense } from 'react'
 import { useProfile } from '@/components/ProfileProvider'
-import { NormalLayout } from '@/components/layout/NormalLayout'
+import { Navbar } from '@/ui/chrome'
 import InvitationPage from './pages/InvitationPage'
 import InvitationCompletePage from './pages/InvitationCompletePage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -92,6 +92,33 @@ function LoginPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+function deriveViewFromLocation(pathname: string): 'board' | 'nodes' | 'processes' {
+  if (pathname === '/nodes') return 'nodes'
+  if (pathname === '/tasks' || pathname === '/') return 'board'
+  if (pathname === '/processes') return 'processes'
+  return 'processes'
+}
+
+function ChromeLayout() {
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  return (
+    <>
+      <Navbar
+        project="Hive"
+        view={deriveViewFromLocation(location.pathname)}
+        onView={(v) => navigate(v === 'board' ? '/tasks' : v === 'nodes' ? '/nodes' : '/processes')}
+        onNewTask={() => {}}
+        theme="dark"
+        onToggleTheme={() => {}}
+        onOpenSettings={() => {}}
+      />
+      <Outlet />
+    </>
   )
 }
 
@@ -197,7 +224,7 @@ export function createRoutes() {
     { path: '/invitations/:token/accept', element: <InvitationPage /> },
     { path: '/invitations/:token/complete', element: <InvitationCompletePage /> },
     {
-      element: <AuthGuard><NormalLayout /></AuthGuard>,
+      element: <AuthGuard><ChromeLayout /></AuthGuard>,
       children: [
         { path: '/nodes', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading nodes...</div>}><Nodes /></Suspense></ErrorBoundary> },
         { path: '/tasks', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading tasks...</div>}><TasksBoard /></Suspense></ErrorBoundary> },

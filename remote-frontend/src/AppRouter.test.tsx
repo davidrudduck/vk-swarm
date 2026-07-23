@@ -378,6 +378,57 @@ describe('AppRouter', () => {
   })
 })
 
+describe('Chrome integration (SC8)', () => {
+  function renderWithProfileProvider(initial: string) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(createRoutes(), { initialEntries: [initial] })
+    return render(
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    )
+  }
+
+  it('authed routes render the Chrome Navbar with Board/Nodes/Processes NavTabs', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: true,
+      isLoaded: true,
+      profile: {
+        user_id: 'test-id',
+        username: 'testuser',
+        email: 'test@example.com',
+        providers: [],
+      },
+    })
+
+    renderWithProfileProvider('/nodes')
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: /Board/ })).toBeTruthy()
+        expect(screen.getByRole('button', { name: /Nodes/ })).toBeTruthy()
+        expect(screen.getByRole('button', { name: /Processes/ })).toBeTruthy()
+      },
+      { timeout: 5000 }
+    )
+  }, 10000)
+
+  it('pre-auth /login does NOT render the Chrome Navbar', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: false,
+      isLoaded: true,
+      profile: null,
+    })
+
+    const { container } = renderWithProfileProvider('/login')
+
+    await waitFor(() => {
+      expect(screen.getByText('Welcome')).toBeInTheDocument()
+    })
+    expect(container.querySelector('nav')).toBeNull()
+  })
+})
+
 describe('isSafeReturnTo', () => {
   it('accepts relative paths', () => {
     expect(isSafeReturnTo('/nodes')).toBe(true)
