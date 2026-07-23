@@ -102,3 +102,14 @@ Accepted/no-change:
 - I1 vks-pulse keyframes now animate swarm/NodeCard — intended; closes round-1 F7.
 - M2 controlled onCheckedChange fires on same-value click — JSX parity.
 - Codex#3 smoke-only parity test — real assertions live in per-component test files.
+
+## 2026-07-23 — phase 3 prop-addition divergence (tasks 301/303/304)
+
+Per each task's own Change section, the ported app-UI-kit components accept data via props
+instead of the design source's internal SEED constants: BoardView `tasks`, NodesView `nodes`,
+ProcessesView `processes`, TaskDrawer `task`/`diffLines`/`logs`/`attempts` (DiffPanel `lines`,
+LogsPanel `logs`, AttemptsPanel `attempts`), all defaulting to empty. DOM/class anatomy is
+unchanged; live wiring lands in 308/309. Also: window.Icon/ICONS/useBreakpoint globals
+replaced with ES imports from `ui/chrome/icons` and `ui/chrome/useBreakpoint`; close button
+gained aria-label="Close"; AttemptsPanel 'merged' renders the success dot per task prose
+(JSX SEED never exercised that state).
