@@ -1,7 +1,7 @@
 ---
 workstream: vk-swarm-design-system
 doc_type: readme
-status: draft
+status: shipped
 title: "VK-Swarm design system — Midnight Terminal component vocabulary + hive app UI kit"
 staging_pointers:
   - docs/superpowers/specs/2026-07-04-vk-swarm-design-system.md
@@ -37,3 +37,11 @@ verbatim" plan with a purpose-built `.vks-*` component vocabulary.
 Child of `vk-swarm-refactor`. Independent of `vk-swarm-hive-redesign` (renders over already-shipped
 data plane). The node frontend (`frontend/`) is NOT modified by this workstream — it keeps its
 shadcn/Tailwind UI as a HA fallback; the design system lands in `remote-frontend/` (hive).
+
+## Shipped
+
+PR #466 (squash-merged to main as `015e800f`, 2026-07-23): Midnight Terminal token layer,
+`.vks-*` component kit (core/board/settings), and hive app shell (BoardView, Chrome, Panels,
+TaskDrawer) in `remote-frontend/`. 24/24 plan tasks passed; 3 adversarial review rounds +
+CodeRabbit round remediated. Ledger: `docs/plans/vk-swarm-design-system/decisions-ledger.md`.
+Non-blocking follow-ups ledgered there (org/project switcher, theme persistence, drawer backing APIs).
