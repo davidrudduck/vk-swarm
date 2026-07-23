@@ -70,3 +70,14 @@ Accepted, not fixed (rationale):
 - F7 vks-pulse keyframe: arrives with components.css in task 201 (phase 2, this branch).
 - F9 tailwind.config theme mapping: pre-existing; phase-3 tasks 307/310 own shell integration
   and will surface it if shadcn utilities are actually relied on.
+
+## 2026-07-23 — phase 2 execution notes
+
+- Tasks 202-208: recurring strict-TS fixes to plan-literal test snippets (querySelector null
+  handling, unused imports, TS2430 Omit<...,'title'>) — all declared, all reviewer-adjudicated
+  minimal-correct. JSX held authoritative over task prose where they disagreed (205 title <p>,
+  206 offline-pulse BEM modifier).
+- Task 208: index.css anchor prose was stale (predated the round-1 remediation restructure).
+  components.css wired after 'tailwindcss/components', before 'tailwindcss/utilities';
+  cascade property (.vks-* after Preflight) preserved and regression-tested in
+  tokens/index.test.ts (additive out-of-files-list edit, orchestrator-authorized).

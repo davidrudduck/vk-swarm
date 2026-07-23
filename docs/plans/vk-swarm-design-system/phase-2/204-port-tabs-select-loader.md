@@ -2,7 +2,7 @@
 id: "204"
 phase: 2
 title: Port Tabs + Select + Loader React components (TS)
-status: ready
+status: passed
 depends_on: ["202"]
 parallel: false
 conflicts_with: []

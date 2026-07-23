@@ -2,7 +2,7 @@
 id: "206"
 phase: 2
 title: Port NodeCard React component (TS)
-status: ready
+status: passed
 depends_on: ["205"]
 parallel: false
 conflicts_with: []
