@@ -38,6 +38,15 @@ describe('BoardView (SC7)', () => {
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 't1' }), 'todo');
   });
 
+  it('opens the drawer via keyboard (Enter) on a focused TaskCard', () => {
+    const onOpen = vi.fn();
+    render(<BoardView columns={columns} onAdd={() => {}} onOpen={onOpen} />);
+    const card = screen.getByText('First').closest('.vks-task') as HTMLElement;
+    expect(card.getAttribute('role')).toBe('button');
+    fireEvent.keyDown(card, { key: 'Enter' });
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 't1' }), 'todo');
+  });
+
   it('applies the selected ring when selectedId matches a task id', () => {
     render(<BoardView columns={columns} onAdd={() => {}} onOpen={() => {}} selectedId="t1" />);
     const card = screen.getByText('First').closest('.vks-task') as HTMLElement;

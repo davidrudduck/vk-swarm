@@ -42,7 +42,11 @@ export function NodeCard({
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="vks-node__name">{name}</span>
-          <span className={cn('vks-node__pulse', !online && 'vks-node__pulse--offline')} />
+          <span
+            className={cn('vks-node__pulse', !online && 'vks-node__pulse--offline')}
+            role="status"
+            aria-label={online ? 'Node online' : 'Node offline'}
+          />
         </div>
         {meta && (
           <div

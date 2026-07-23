@@ -21,6 +21,18 @@ describe('NodesView (SC7)', () => {
     expect(screen.getByText('linux-01')).toBeTruthy();
     expect(screen.getByText('winbox')).toBeTruthy();
   });
+
+  it('labels an online node with a zero count rather than "offline"', () => {
+    render(<NodesView nodes={[{ id: 'z', name: 'idle-node', os: 'linux', online: true, meta: 'no agents', rightCount: 0 }]} />);
+    const badge = screen.getByText('idle-node').closest('.vks-node')!.querySelector('.vks-badge')!;
+    expect(badge.textContent).toBe('0');
+  });
+
+  it('labels an offline node as "offline" regardless of rightCount', () => {
+    render(<NodesView nodes={[{ id: 'z', name: 'down-node', os: 'linux', online: false, meta: '5m ago', rightCount: 3 }]} />);
+    const badge = screen.getByText('down-node').closest('.vks-node')!.querySelector('.vks-badge')!;
+    expect(badge.textContent).toBe('offline');
+  });
 });
 
 describe('ProcessesView (SC7)', () => {

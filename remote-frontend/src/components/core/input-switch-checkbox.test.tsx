@@ -43,6 +43,24 @@ describe('Switch (SC4)', () => {
     fireEvent.click(container.querySelector('button[role="switch"]')!);
     expect(onCheckedChange).toHaveBeenCalledWith(true);
   });
+
+  it('calls the consumer onClick before toggling', () => {
+    const onClick = vi.fn();
+    const onCheckedChange = vi.fn();
+    const { container } = render(<Switch onClick={onClick} onCheckedChange={onCheckedChange} />);
+    fireEvent.click(container.querySelector('button[role="switch"]')!);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onCheckedChange).toHaveBeenCalledWith(true);
+  });
+
+  it('does not toggle when the consumer onClick calls preventDefault', () => {
+    const onCheckedChange = vi.fn();
+    const { container } = render(
+      <Switch onClick={(e) => e.preventDefault()} onCheckedChange={onCheckedChange} />
+    );
+    fireEvent.click(container.querySelector('button[role="switch"]')!);
+    expect(onCheckedChange).not.toHaveBeenCalled();
+  });
 });
 
 describe('Checkbox (SC4)', () => {
@@ -64,6 +82,24 @@ describe('Checkbox (SC4)', () => {
     const { container } = render(<Checkbox onCheckedChange={onCheckedChange} />);
     fireEvent.click(container.querySelector('button[role="checkbox"]')!);
     expect(onCheckedChange).toHaveBeenCalledWith(true);
+  });
+
+  it('calls the consumer onClick before toggling', () => {
+    const onClick = vi.fn();
+    const onCheckedChange = vi.fn();
+    const { container } = render(<Checkbox onClick={onClick} onCheckedChange={onCheckedChange} />);
+    fireEvent.click(container.querySelector('button[role="checkbox"]')!);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onCheckedChange).toHaveBeenCalledWith(true);
+  });
+
+  it('does not toggle when the consumer onClick calls preventDefault', () => {
+    const onCheckedChange = vi.fn();
+    const { container } = render(
+      <Checkbox onClick={(e) => e.preventDefault()} onCheckedChange={onCheckedChange} />
+    );
+    fireEvent.click(container.querySelector('button[role="checkbox"]')!);
+    expect(onCheckedChange).not.toHaveBeenCalled();
   });
 
   it('renders the check svg (11x11 viewBox 0 0 12 12)', () => {

@@ -19,6 +19,15 @@ describe('texture utilities (SC3)', () => {
     }
   });
 
+  it('defines the .vks-ansi-dither-dense variant in base.css', () => {
+    expect(base).toContain('.vks-ansi-dither-dense');
+  });
+
+  it('renders a div with the vks-ansi-dither-dense class', () => {
+    const { container } = render(<div className="vks-ansi-dither-dense" data-testid="tex-dense" />);
+    expect(container.firstChild).toHaveClass('vks-ansi-dither-dense');
+  });
+
   it('.vks-scanlines adds an ::after pseudo-element', () => {
     expect(base).toMatch(/\.vks-scanlines::after/);
   });

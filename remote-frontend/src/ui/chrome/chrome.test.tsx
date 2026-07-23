@@ -36,6 +36,23 @@ describe('Chrome (SC7)', () => {
     expect(onNewTask).toHaveBeenCalled();
   });
 
+  it('renders the project selector disabled with the not-wired title', () => {
+    render(<Navbar project="my-proj" view="board" onView={() => {}} onNewTask={() => {}} theme="dark" onToggleTheme={() => {}} onOpenSettings={() => {}} />);
+    const btn = screen.getByText('my-proj').closest('button') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toBe('Not yet wired to the hive API');
+  });
+
+  it('renders the Open-in-IDE button disabled with the not-wired title', () => {
+    const { container } = render(<Navbar project="p" view="board" onView={() => {}} onNewTask={() => {}} theme="dark" onToggleTheme={() => {}} onOpenSettings={() => {}} />);
+    const btn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.title.startsWith('Open in IDE')
+    ) as HTMLButtonElement;
+    expect(btn).toBeTruthy();
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toContain('Not yet wired to the hive API');
+  });
+
   it('NavIcon renders a ghost icon button', () => {
     const { container } = render(<NavIcon icon={ICONS.plus} title="Add" />);
     expect(container.querySelector('button')).toHaveClass('vks-btn--ghost');

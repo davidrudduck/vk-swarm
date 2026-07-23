@@ -26,6 +26,17 @@ describe('NodeCard (SC5)', () => {
     expect(container.querySelector('.vks-node__pulse--offline')).toBeTruthy();
   });
 
+  it('gives the pulse role="status" with an online/offline aria-label', () => {
+    const { container: on } = render(<NodeCard name="n" online />);
+    const onPulse = on.querySelector('.vks-node__pulse')!;
+    expect(onPulse.getAttribute('role')).toBe('status');
+    expect(onPulse.getAttribute('aria-label')).toBe('Node online');
+
+    const { container: off } = render(<NodeCard name="n" online={false} />);
+    const offPulse = off.querySelector('.vks-node__pulse')!;
+    expect(offPulse.getAttribute('aria-label')).toBe('Node offline');
+  });
+
   it('renders the meta + right ReactNodes when provided', () => {
     const { container } = render(<NodeCard name="n" meta={<span data-testid="m" />} right={<span data-testid="r" />} />);
     expect(container.querySelector('[data-testid="m"]')).toBeTruthy();

@@ -44,8 +44,8 @@ export function SettingsRow({
               {label}
             </label>
           )}
-          {helper && <p className="vks-field__helper">{helper}</p>}
           {error && <p className="vks-field__error">{error}</p>}
+          {helper && !error && <p className="vks-field__helper">{helper}</p>}
         </div>
       </div>
     );

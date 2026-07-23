@@ -19,6 +19,16 @@ describe('color tokens (SC2)', () => {
     }
   });
 
+  it('defines the -hsl triplet for each of the 11 vks primitives', () => {
+    for (const token of [
+      '--vks-void', '--vks-surface', '--vks-surface-bright',
+      '--vks-cyan', '--vks-amber', '--vks-emerald', '--vks-coral',
+      '--vks-violet', '--vks-text', '--vks-text-muted', '--vks-text-dim',
+    ]) {
+      expect(colors).toContain(`${token}-hsl:`);
+    }
+  });
+
   it('defines the 5 status colors', () => {
     for (const token of ['--status-todo', '--status-inprogress', '--status-inreview', '--status-done', '--status-cancelled']) {
       expect(colors).toContain(`${token}:`);

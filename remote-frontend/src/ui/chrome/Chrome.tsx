@@ -133,7 +133,12 @@ export function Navbar({
         {!mobile && (
           <div style={{ width: 1, height: 22, background: 'var(--border)', margin: '0 2px' }} />
         )}
-        <button className="vks-btn vks-btn--ghost vks-btn--sm" style={{ gap: 8, paddingLeft: 8 }}>
+        <button
+          className="vks-btn vks-btn--ghost vks-btn--sm"
+          disabled
+          title={NOT_WIRED_TITLE}
+          style={{ gap: 8, paddingLeft: 8 }}
+        >
           <span style={{ color: 'var(--text-muted)' }}>
             <Icon d={ICONS.folder} size={14} />
           </span>
@@ -174,7 +179,8 @@ export function Navbar({
         {!mobile && (
           <button
             className="vks-btn vks-btn--ghost vks-btn--icon"
-            title="Open in IDE"
+            disabled
+            title={`Open in IDE — ${NOT_WIRED_TITLE}`}
             style={{ height: 34, width: 34 }}
           >
             <Icon d={ICONS.bolt} size={16} />

@@ -26,6 +26,18 @@ describe('TaskDrawer (SC7)', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('wires the tab content wrapper as an ARIA tabpanel labelled by the active tab', () => {
+    const { container } = render(<TaskDrawer task={task} status="inprogress" onClose={() => {}} />);
+    const panel = container.querySelector('[role="tabpanel"]') as HTMLElement;
+    expect(panel).toBeTruthy();
+    expect(panel.id).toBe('vks-tabpanel-diff');
+    expect(panel.getAttribute('aria-labelledby')).toBe('vks-tab-diff');
+    fireEvent.click(screen.getByText('Logs'));
+    const panel2 = container.querySelector('[role="tabpanel"]') as HTMLElement;
+    expect(panel2.id).toBe('vks-tabpanel-logs');
+    expect(panel2.getAttribute('aria-labelledby')).toBe('vks-tab-logs');
+  });
+
   it('renders footer Merge / Rebase / Open in IDE buttons', () => {
     render(<TaskDrawer task={task} status="inprogress" onClose={() => {}} />);
     expect(screen.getByText('Merge')).toBeTruthy();

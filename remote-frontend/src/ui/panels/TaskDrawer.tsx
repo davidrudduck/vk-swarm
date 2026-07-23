@@ -35,7 +35,7 @@ const NOT_WIRED_TITLE = 'Not yet wired to the hive API';
  * SEED data removed from child panels — diffLines/logs/attempts props added (divergence recorded
  * in the decisions-ledger) so task 308 can wire real data. */
 export function TaskDrawer({ task, status, onClose, diffLines = [], logs = [], attempts = [], onMerge, onRebase, onOpenIde }: TaskDrawerProps) {
-  const [tab, setTab] = useState('diff');
+  const [tab, setTab] = useState<'diff' | 'logs' | 'attempts'>('diff');
   if (!task) return null;
   return (
     <>
@@ -96,7 +96,7 @@ export function TaskDrawer({ task, status, onClose, diffLines = [], logs = [], a
         <div style={{ padding: '14px 18px' }}>
           <Tabs
             value={tab}
-            onValueChange={setTab}
+            onValueChange={(v) => setTab(v as 'diff' | 'logs' | 'attempts')}
             tabs={[
               { value: 'diff', label: 'Diff' },
               { value: 'logs', label: 'Logs' },
@@ -104,7 +104,12 @@ export function TaskDrawer({ task, status, onClose, diffLines = [], logs = [], a
             ]}
           />
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 18px 18px' }}>
+        <div
+          role="tabpanel"
+          id={`vks-tabpanel-${tab}`}
+          aria-labelledby={`vks-tab-${tab}`}
+          style={{ flex: 1, overflowY: 'auto', padding: '0 18px 18px' }}
+        >
           {tab === 'diff' && <DiffPanel lines={diffLines} />}
           {tab === 'logs' && <LogsPanel lines={logs} />}
           {tab === 'attempts' && <AttemptsPanel attempts={attempts} />}

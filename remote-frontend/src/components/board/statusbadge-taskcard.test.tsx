@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { StatusBadge, TaskCard } from './index';
 
 describe('StatusBadge (SC5)', () => {
@@ -51,6 +51,31 @@ describe('TaskCard (SC5)', () => {
     const { container } = render(<TaskCard title="T" status="inreview" labels={['a', 'b', 'c']} days={3} />);
     const badges = container.querySelectorAll('.vks-badge');
     expect(badges.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('is keyboard-operable when onClick is provided (role=button, tabIndex=0)', () => {
+    render(<TaskCard title="T" onClick={() => {}} />);
+    const card = screen.getByText('T').closest('.vks-task') as HTMLElement;
+    expect(card.getAttribute('role')).toBe('button');
+    expect(card.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('is not made a button when onClick is absent', () => {
+    render(<TaskCard title="T" />);
+    const card = screen.getByText('T').closest('.vks-task') as HTMLElement;
+    expect(card.getAttribute('role')).toBeNull();
+    expect(card.getAttribute('tabindex')).toBeNull();
+  });
+
+  it('activates onClick on Enter and Space (Space is prevented from scrolling)', () => {
+    const onClick = vi.fn();
+    render(<TaskCard title="T" onClick={onClick} />);
+    const card = screen.getByText('T').closest('.vks-task') as HTMLElement;
+    fireEvent.keyDown(card, { key: 'Enter' });
+    expect(onClick).toHaveBeenCalledTimes(1);
+    const spaceEvent = fireEvent.keyDown(card, { key: ' ' });
+    expect(onClick).toHaveBeenCalledTimes(2);
+    expect(spaceEvent).toBe(false); // preventDefault() called → dispatchEvent returns false
   });
 
   it('renders the AttemptIndicator (running → loader, merged → svg)', () => {

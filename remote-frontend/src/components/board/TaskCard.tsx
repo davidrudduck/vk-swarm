@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactElement } from 'react';
+import type { HTMLAttributes, KeyboardEvent, MouseEvent, ReactElement } from 'react';
 import { cn } from '@/lib/utils';
 import { Badge, Loader } from '@/components/core';
 import type { TaskStatus } from './StatusBadge';
@@ -63,10 +63,29 @@ export function TaskCard({
   attempt,
   days,
   className,
+  onClick,
+  onKeyDown,
   ...props
 }: TaskCardProps): ReactElement {
+  const interactive = onClick != null;
+  const handleKeyDown = interactive
+    ? (e: KeyboardEvent<HTMLDivElement>) => {
+        onKeyDown?.(e);
+        if (e.defaultPrevented) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          if (e.key === ' ') e.preventDefault();
+          onClick?.(e as unknown as MouseEvent<HTMLDivElement>);
+        }
+      }
+    : onKeyDown;
   return (
-    <div className={cn('vks-task', `vks-task--${status}`, className)} {...props}>
+    <div
+      className={cn('vks-task', `vks-task--${status}`, className)}
+      onClick={onClick}
+      onKeyDown={handleKeyDown}
+      {...(interactive ? { role: 'button', tabIndex: 0 } : {})}
+      {...props}
+    >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <p className="vks-task__title">{title}</p>
         {attempt && <AttemptIndicator state={attempt} />}

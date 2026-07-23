@@ -57,6 +57,18 @@ describe('SettingsRow (SC6)', () => {
     expect(container.querySelector('.vks-field__helper')!.textContent).toBe('hint');
   });
 
+  it('error replaces helper in the stacked layout', () => {
+    const { container } = render(<SettingsRow label="X" helper="hint" error="bad" control={<input />} />);
+    expect(container.querySelector('.vks-field__error')!.textContent).toBe('bad');
+    expect(container.querySelector('.vks-field__helper')).toBeNull();
+  });
+
+  it('error replaces helper in the inline layout', () => {
+    const { container } = render(<SettingsRow label="X" inline helper="hint" error="bad" control={<input />} />);
+    expect(container.querySelector('.vks-field__error')!.textContent).toBe('bad');
+    expect(container.querySelector('.vks-field__helper')).toBeNull();
+  });
+
   it('composes htmlFor label with a Switch id (typed passthrough)', () => {
     const { container } = render(
       <SettingsRow label="Notify" htmlFor="notify" inline control={<Switch id="notify" aria-label="Notify" />} />

@@ -36,7 +36,7 @@ export function NodesView({ nodes }: NodesViewProps): ReactElement {
             meta={n.meta}
             right={
               <Badge variant={n.online ? 'secondary' : 'outline'} dot={n.online}>
-                {n.rightCount || 'offline'}
+                {n.online ? String(n.rightCount ?? 0) : 'offline'}
               </Badge>
             }
           />

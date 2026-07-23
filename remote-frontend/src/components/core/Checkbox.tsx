@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ButtonHTMLAttributes } from 'react';
+import type { ButtonHTMLAttributes, MouseEvent } from 'react';
 import { cn } from '@/lib/utils';
 
 export interface CheckboxProps
@@ -18,13 +18,16 @@ export function Checkbox({
   onCheckedChange,
   disabled = false,
   className,
+  onClick,
   ...props
 }: CheckboxProps) {
   const isControlled = checked !== undefined;
   const [internal, setInternal] = useState(defaultChecked);
   const on = isControlled ? checked : internal;
 
-  const toggle = () => {
+  const handleClick = (e: MouseEvent<HTMLButtonElement>) => {
+    onClick?.(e);
+    if (e.defaultPrevented) return;
     if (disabled) return;
     if (!isControlled) setInternal(!on);
     onCheckedChange?.(!on);
@@ -38,7 +41,7 @@ export function Checkbox({
       aria-checked={on}
       data-checked={on}
       disabled={disabled}
-      onClick={toggle}
+      onClick={handleClick}
       className={cn('vks-checkbox', className)}
     >
       <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">

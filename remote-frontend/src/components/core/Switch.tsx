@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ButtonHTMLAttributes } from 'react';
+import type { ButtonHTMLAttributes, MouseEvent } from 'react';
 import { cn } from '@/lib/utils';
 
 export interface SwitchProps
@@ -21,13 +21,16 @@ export function Switch({
   onCheckedChange,
   disabled = false,
   className,
+  onClick,
   ...props
 }: SwitchProps) {
   const isControlled = checked !== undefined;
   const [internal, setInternal] = useState(defaultChecked);
   const on = isControlled ? checked : internal;
 
-  const toggle = () => {
+  const handleClick = (e: MouseEvent<HTMLButtonElement>) => {
+    onClick?.(e);
+    if (e.defaultPrevented) return;
     if (disabled) return;
     if (!isControlled) setInternal(!on);
     onCheckedChange?.(!on);
@@ -41,7 +44,7 @@ export function Switch({
       aria-checked={on}
       data-checked={on}
       disabled={disabled}
-      onClick={toggle}
+      onClick={handleClick}
       className={cn('vks-switch', className)}
     >
       <span className="vks-switch__thumb" />

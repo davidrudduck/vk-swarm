@@ -70,6 +70,8 @@ export function Tabs({ tabs = [], value, defaultValue, onValueChange, className 
             }}
             type="button"
             role="tab"
+            id={`vks-tab-${t.value}`}
+            aria-controls={`vks-tabpanel-${t.value}`}
             aria-selected={isActive}
             data-active={isActive}
             tabIndex={isActive ? 0 : -1}

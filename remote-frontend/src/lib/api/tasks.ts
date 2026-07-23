@@ -3,6 +3,18 @@ import { ApiError, makeRequest } from './utils';
 const API_BASE = '/v1';
 
 /**
+ * Parse a successful JSON response or throw an {@link ApiError} carrying the
+ * response body and status. Consolidates the repeated `!response.ok` handling.
+ */
+async function parseOrThrow<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(body || 'Request failed', response.status, response);
+  }
+  return (await response.json()) as T;
+}
+
+/**
  * Hive `SharedTask` (bare-JSON shape from `crates/remote/src/db/tasks.rs`).
  */
 export interface Task {
@@ -61,20 +73,12 @@ export const tasksApi = {
     const response = await makeRequest(
       `${API_BASE}/tasks/bulk?project_id=${encodeURIComponent(projectId)}`
     );
-    if (!response.ok) {
-      const body = await response.text();
-      throw new ApiError(body || 'Request failed', response.status, response);
-    }
-    return await response.json() as BulkSharedTasksResponse;
+    return parseOrThrow<BulkSharedTasksResponse>(response);
   },
 
   get: async (taskId: string): Promise<Task> => {
     const response = await makeRequest(`${API_BASE}/tasks/${taskId}`);
-    if (!response.ok) {
-      const body = await response.text();
-      throw new ApiError(body || 'Request failed', response.status, response);
-    }
-    const result = await response.json() as { task: Task };
+    const result = await parseOrThrow<{ task: Task }>(response);
     return result.task;
   },
 
@@ -87,11 +91,7 @@ export const tasksApi = {
       method: 'POST',
       body: JSON.stringify({ new_assignee_user_id: newAssigneeUserId, version }),
     });
-    if (!response.ok) {
-      const body = await response.text();
-      throw new ApiError(body || 'Request failed', response.status, response);
-    }
-    const result = await response.json() as { task: Task };
+    const result = await parseOrThrow<{ task: Task }>(response);
     return result.task;
   },
 

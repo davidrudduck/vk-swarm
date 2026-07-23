@@ -10,6 +10,14 @@ describe('Tabs (SC4)', () => {
     expect(container.querySelectorAll('.vks-tabs__trigger')).toHaveLength(2);
   });
 
+  it('derives deterministic id + aria-controls per trigger', () => {
+    const { container } = render(<Tabs tabs={[{ value: 'diff', label: 'Diff' }, { value: 'logs', label: 'Logs' }]} />);
+    const diff = container.querySelector('#vks-tab-diff')!;
+    expect(diff.getAttribute('role')).toBe('tab');
+    expect(diff.getAttribute('aria-controls')).toBe('vks-tabpanel-diff');
+    expect(container.querySelector('#vks-tab-logs')!.getAttribute('aria-controls')).toBe('vks-tabpanel-logs');
+  });
+
   it('sets data-active=true on the selected tab', () => {
     const { container } = render(<Tabs tabs={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} value="b" />);
     const active = container.querySelector('[data-active="true"]') as HTMLButtonElement;
