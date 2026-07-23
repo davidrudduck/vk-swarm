@@ -6,6 +6,7 @@ import type { TaskStatus } from '@/components/board';
 import { tasksApi, type TaskActivity } from '@/lib/api/tasks';
 import { organizationsApi } from '@/lib/api/organizations';
 import { swarmProjectsApi } from '@/lib/api/swarmProjects';
+import { ErrorBanner } from '@/components/ui/ErrorBanner';
 
 /**
  * Row shape rendered by both `BoardView` (`node?: string`) and `TaskDrawer`
@@ -46,8 +47,15 @@ export function BoardPage() {
   const activities = tasksQ.data?.tasks ?? [];
   const columns = groupByStatus(activities);
 
+  // Gate the error banner on ANY query in the chained orgs -> projects -> tasks
+  // fetch: if an upstream query fails, the `enabled`-gated downstream query never
+  // runs (it stays *pending*, not *error*), so checking only `tasksQ` would render
+  // an authoritative empty board on an orgs/projects failure. (Codex review finding.)
+  const isError = orgsQ.isError || projectsQ.isError || tasksQ.isError;
+
   return (
     <>
+      {isError && <ErrorBanner message="Failed to load tasks. Check your connection and try again." />}
       <BoardView
         columns={columns}
         onAdd={() => {}}
@@ -74,11 +82,49 @@ export function BoardPage() {
  * `owner_node_id`; `labels` is always `[]` until the backend adds label
  * support.
  */
+const KNOWN_STATUSES: readonly TaskStatus[] = ['todo', 'inprogress', 'inreview', 'done', 'cancelled'];
+
+/**
+ * Normalizes a raw wire `task.status` string to the frontend `TaskStatus` union.
+ *
+ * The remote crate's `TaskStatus` serializes as **kebab-case**
+ * (`crates/remote/src/db/tasks.rs:22-31` — `#[serde(rename_all = "kebab-case")]`),
+ * emitting `"in-progress"` / `"in-review"` on the `/v1/tasks/bulk` wire, while the
+ * frontend `TaskStatus` union (`components/board/StatusBadge.tsx`) uses the
+ * hyphen-less `"inprogress"` / `"inreview"`. Without this bridge, `"in-progress"`
+ * / `"in-review"` tasks fail the `status in out` gate in `groupByStatus` and are
+ * silently dropped from every board column (adversarial review F1, CRITICAL).
+ *
+ * Fixed client-side (the Rust enum is authoritative and shared with other
+ * consumers, so it is intentionally left untouched). Known values pass through;
+ * an **unknown** status is dropped and logged via `console.warn` (decision: an
+ * unrecognized status is more likely a contract drift to surface loudly than a
+ * real column, and bucketing it into an arbitrary column would mislabel the task).
+ * The `console.warn` keeps the drop non-silent so a future backend status is
+ * caught in review/console rather than vanishing quietly.
+ *
+ * @returns the normalized `TaskStatus`, or `null` if the status is unknown (drop).
+ */
+export function normalizeStatus(raw: string | null | undefined): TaskStatus | null {
+  switch (raw) {
+    case 'in-progress':
+      return 'inprogress';
+    case 'in-review':
+      return 'inreview';
+  }
+  const status = raw ?? 'todo';
+  if ((KNOWN_STATUSES as readonly string[]).includes(status)) {
+    return status as TaskStatus;
+  }
+  console.warn(`[BoardPage] Unknown task status "${status}" — task dropped from board`);
+  return null;
+}
+
 function groupByStatus(activities: TaskActivity[]): Record<TaskStatus, Row[]> {
   const out: Record<TaskStatus, Row[]> = { todo: [], inprogress: [], inreview: [], done: [], cancelled: [] };
   for (const { task } of activities) {
-    const status = (task.status ?? 'todo') as TaskStatus;
-    if (status in out) {
+    const status = normalizeStatus(task.status);
+    if (status !== null) {
       out[status].push({
         id: task.id,
         title: task.title,

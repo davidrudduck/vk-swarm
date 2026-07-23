@@ -97,8 +97,11 @@ function LoginPage() {
 }
 
 function deriveViewFromLocation(pathname: string): 'board' | 'nodes' | 'processes' {
-  if (pathname === '/nodes') return 'nodes'
-  if (pathname === '/tasks' || pathname === '/') return 'board'
+  // `/` is served by `RootRedirect` (never mounts `ChromeLayout`), but map it to
+  // 'nodes' to match the redirect target rather than the unreachable 'board'
+  // (adversarial review F8).
+  if (pathname === '/nodes' || pathname === '/') return 'nodes'
+  if (pathname === '/tasks') return 'board'
   if (pathname === '/processes') return 'processes'
   return 'processes'
 }
@@ -107,16 +110,33 @@ function ChromeLayout() {
   const location = useLocation()
   const navigate = useNavigate()
 
+  // Theme is dark-first: `:root` (colors.css) is dark, `[data-theme="light"]`
+  // opts into light. Toggling to light sets the attribute; toggling back to dark
+  // removes it so the root default applies (adversarial review F4).
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  const handleToggleTheme = () => {
+    setTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark'
+      if (next === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light')
+      } else {
+        document.documentElement.removeAttribute('data-theme')
+      }
+      return next
+    })
+  }
+
   return (
     <>
+      {/* `onNewTask` / `onOpenSettings` are intentionally omitted: those controls
+          have no backing hive API yet, so Navbar renders them disabled with an
+          honest tooltip rather than as silent dead clicks (adversarial review F5). */}
       <Navbar
         project="Hive"
         view={deriveViewFromLocation(location.pathname)}
         onView={(v) => navigate(v === 'board' ? '/tasks' : v === 'nodes' ? '/nodes' : '/processes')}
-        onNewTask={() => {}}
-        theme="dark"
-        onToggleTheme={() => {}}
-        onOpenSettings={() => {}}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
       />
       <Outlet />
     </>

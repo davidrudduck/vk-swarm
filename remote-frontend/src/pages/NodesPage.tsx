@@ -5,6 +5,7 @@ import type { Node } from '@/types/nodes';
 import { organizationsApi } from '@/lib/api/organizations';
 import { NodeApiKeySection } from '@/components/swarm';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { ErrorBanner } from '@/components/ui/ErrorBanner';
 
 /**
  * Wires `NodesView` to live data (SC8).
@@ -28,15 +29,23 @@ export function NodesPage() {
   const orgsQ = useQuery({ queryKey: ['orgs'], queryFn: organizationsApi.list });
   const orgId = orgsQ.data?.[0]?.id;
 
-  const { data: nodes = [] } = useQuery({
+  const nodesQ = useQuery({
     queryKey: ['nodes', orgId],
     queryFn: () => nodesApi.list(orgId!),
     enabled: !!orgId,
   });
+  const nodes = nodesQ.data ?? [];
+
+  // Gate the error banner on EITHER query in the chained orgs -> nodes fetch: if
+  // orgs fails, the `enabled`-gated nodes query never runs (stays *pending*, not
+  // *error*), so a failed orgs fetch would otherwise render an authoritative empty
+  // node list instead of the error state (Codex review finding).
+  const isError = orgsQ.isError || nodesQ.isError;
 
   const rows = nodes.map(mapNodeToRow);
   return (
     <>
+      {isError && <ErrorBanner message="Failed to load nodes. Check your connection and try again." />}
       {orgId && (
         <ErrorBoundary fallback={null}>
           <NodeApiKeySection organizationId={orgId} />

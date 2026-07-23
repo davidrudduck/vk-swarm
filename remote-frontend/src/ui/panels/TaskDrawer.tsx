@@ -19,13 +19,22 @@ export interface TaskDrawerProps {
   diffLines?: DiffLine[];
   logs?: LogLine[];
   attempts?: AttemptRow[];
+  /** Omit to render the "Merge" action disabled (no backing hive API yet). */
+  onMerge?: () => void;
+  /** Omit to render the "Rebase" action disabled (no backing hive API yet). */
+  onRebase?: () => void;
+  /** Omit to render the "Open in IDE" action disabled (no backing hive API yet). */
+  onOpenIde?: () => void;
 }
+
+/** Tooltip shown on footer actions whose backing hive API is not implemented yet. */
+const NOT_WIRED_TITLE = 'Not yet wired to the hive API';
 
 /** Ported from design-source panels.jsx:44-91 (TaskDrawer). window.VKSwarmDesignSystem_067861
  * references replaced with direct component imports; window.Icon replaced with @/ui/chrome Icon.
  * SEED data removed from child panels — diffLines/logs/attempts props added (divergence recorded
  * in the decisions-ledger) so task 308 can wire real data. */
-export function TaskDrawer({ task, status, onClose, diffLines = [], logs = [], attempts = [] }: TaskDrawerProps) {
+export function TaskDrawer({ task, status, onClose, diffLines = [], logs = [], attempts = [], onMerge, onRebase, onOpenIde }: TaskDrawerProps) {
   const [tab, setTab] = useState('diff');
   if (!task) return null;
   return (
@@ -101,13 +110,32 @@ export function TaskDrawer({ task, status, onClose, diffLines = [], logs = [], a
           {tab === 'attempts' && <AttemptsPanel attempts={attempts} />}
         </div>
         <div style={{ padding: 16, borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
-          <Button variant="primary" size="sm" style={{ flex: 1 }}>
+          <Button
+            variant="primary"
+            size="sm"
+            style={{ flex: 1 }}
+            onClick={onMerge}
+            disabled={!onMerge}
+            title={onMerge ? undefined : NOT_WIRED_TITLE}
+          >
             Merge
           </Button>
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRebase}
+            disabled={!onRebase}
+            title={onRebase ? undefined : NOT_WIRED_TITLE}
+          >
             Rebase
           </Button>
-          <Button variant="ghost" size="sm">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenIde}
+            disabled={!onOpenIde}
+            title={onOpenIde ? undefined : NOT_WIRED_TITLE}
+          >
             Open in IDE
           </Button>
         </div>

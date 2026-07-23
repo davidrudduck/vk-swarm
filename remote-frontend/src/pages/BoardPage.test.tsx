@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BoardPage } from './BoardPage';
+import { BoardPage, normalizeStatus } from './BoardPage';
 
 // NOTE: `tasksApi.bulk` returns `BulkSharedTasksResponse.tasks` as `{ task, user }[]`
 // (`TaskActivity[]`) per the real hive response shape
@@ -47,7 +47,11 @@ const mockTasks = [
       owner_name: 'n2',
       title: 'Second',
       description: null,
-      status: 'inprogress',
+      // REAL kebab-case wire value emitted by the remote crate's `TaskStatus`
+      // (`#[serde(rename_all = "kebab-case")]`, crates/remote/src/db/tasks.rs:22-31).
+      // Proves `normalizeStatus` maps "in-progress" -> "inprogress" so the task is
+      // NOT dropped from the board (adversarial review F1).
+      status: 'in-progress',
       version: 1,
       deleted_at: null,
       shared_at: null,
@@ -92,5 +96,38 @@ describe('BoardPage (SC8)', () => {
     await waitFor(() => expect(screen.getByText('First')).toBeTruthy());
     fireEvent.click(screen.getByText('First'));
     expect(screen.getByText('Merge')).toBeTruthy();
+  });
+
+  it('renders a distinct error state (not an empty board) when the fetch fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      // The api clients call `response.text()` on a non-ok response, so return one.
+      ({ ok: false, status: 500, text: async () => 'boom' }) as Response
+    );
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><BoardPage /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByTestId('page-error-banner')).toBeTruthy());
+    expect(screen.getByText(/Failed to load tasks/i)).toBeTruthy();
+  });
+});
+
+describe('normalizeStatus (F1)', () => {
+  it('maps the kebab-case wire values to the frontend union', () => {
+    expect(normalizeStatus('in-progress')).toBe('inprogress');
+    expect(normalizeStatus('in-review')).toBe('inreview');
+  });
+
+  it('passes through known values and defaults nullish to todo', () => {
+    expect(normalizeStatus('todo')).toBe('todo');
+    expect(normalizeStatus('done')).toBe('done');
+    expect(normalizeStatus('cancelled')).toBe('cancelled');
+    expect(normalizeStatus(null)).toBe('todo');
+    expect(normalizeStatus(undefined)).toBe('todo');
+  });
+
+  it('drops an unknown status and warns (non-silent)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(normalizeStatus('archived')).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('archived'));
+    warn.mockRestore();
   });
 });

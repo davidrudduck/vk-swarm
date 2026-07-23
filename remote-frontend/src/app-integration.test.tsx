@@ -31,7 +31,10 @@ const mockTasks = [
       owner_name: 'justX',
       title: 'Wire OAuth',
       description: 'd',
-      status: 'inprogress',
+      // REAL kebab-case wire value (remote crate `TaskStatus`, kebab-case serde).
+      // Proves the full seam normalizes "in-progress" so the task renders on the
+      // board rather than being silently dropped (adversarial review F1).
+      status: 'in-progress',
       version: 1,
       deleted_at: null,
       shared_at: null,

@@ -35,16 +35,19 @@ export function NavIcon({
   icon,
   title,
   onClick,
+  disabled,
 }: {
   icon: ReactElement;
   title: string;
   onClick?: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       className="vks-btn vks-btn--ghost vks-btn--icon"
       title={title}
       onClick={onClick}
+      disabled={disabled}
       style={{ height: 34, width: 34 }}
     >
       <Icon d={icon} size={16} />
@@ -92,11 +95,16 @@ export interface NavbarProps {
   project: string;
   view: 'board' | 'nodes' | 'processes';
   onView: (v: 'board' | 'nodes' | 'processes') => void;
-  onNewTask: () => void;
+  /** Omit to render the "New Task" control disabled (no backing hive API yet). */
+  onNewTask?: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
-  onOpenSettings: () => void;
+  /** Omit to render the "Settings" control disabled (no backing hive API yet). */
+  onOpenSettings?: () => void;
 }
+
+/** Tooltip shown on controls whose backing hive API is not implemented yet. */
+const NOT_WIRED_TITLE = 'Not yet wired to the hive API';
 
 export function Navbar({
   project,
@@ -175,6 +183,8 @@ export function Navbar({
         <button
           className="vks-btn vks-btn--primary vks-btn--sm"
           onClick={onNewTask}
+          disabled={!onNewTask}
+          title={onNewTask ? undefined : NOT_WIRED_TITLE}
           style={{ gap: 6 }}
         >
           <Icon d={ICONS.plus} size={14} /> {!mobile && 'Task'}
@@ -185,7 +195,12 @@ export function Navbar({
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         {!tablet && !mobile && <NavIcon icon={ICONS.activity} title="Activity" />}
         {!mobile && (
-          <NavIcon icon={ICONS.settings} title="Settings" onClick={onOpenSettings} />
+          <NavIcon
+            icon={ICONS.settings}
+            title={onOpenSettings ? 'Settings' : `Settings — ${NOT_WIRED_TITLE}`}
+            onClick={onOpenSettings}
+            disabled={!onOpenSettings}
+          />
         )}
         <NavIcon icon={ICONS.menu} title="Menu" />
       </div>

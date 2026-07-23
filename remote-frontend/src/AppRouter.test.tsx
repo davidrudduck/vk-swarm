@@ -406,6 +406,12 @@ describe('AppRouter', () => {
 })
 
 describe('Chrome integration (SC8)', () => {
+  // `data-theme` lives on the shared jsdom `document.documentElement`; clear it
+  // after every test so a theme-toggle test can't leak 'light' into siblings.
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+  })
+
   function renderWithProfileProvider(initial: string) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const router = createMemoryRouter(createRoutes(), { initialEntries: [initial] })
@@ -438,6 +444,42 @@ describe('Chrome integration (SC8)', () => {
       },
       { timeout: 5000 }
     )
+  }, 10000)
+
+  it('theme toggle flips document data-theme between light and dark (F4)', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: true,
+      isLoaded: true,
+      profile: { user_id: 'test-id', username: 'testuser', email: 'test@example.com', providers: [] },
+    })
+
+    renderWithProfileProvider('/nodes')
+
+    const toggle = await screen.findByRole('button', { name: 'Toggle theme' }, { timeout: 5000 })
+    // Default is dark: the root has no data-theme attribute (:root is dark-first).
+    expect(document.documentElement.getAttribute('data-theme')).toBeNull()
+    fireEvent.click(toggle)
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light')
+    fireEvent.click(toggle)
+    expect(document.documentElement.getAttribute('data-theme')).toBeNull()
+  }, 10000)
+
+  it('New Task and Settings controls are honestly disabled (no backing API yet, F5)', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: true,
+      isLoaded: true,
+      profile: { user_id: 'test-id', username: 'testuser', email: 'test@example.com', providers: [] },
+    })
+
+    renderWithProfileProvider('/nodes')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Task/ })).toBeTruthy(), { timeout: 5000 })
+    const newTask = screen.getByRole('button', { name: /Task/ })
+    expect(newTask).toBeDisabled()
+    expect(newTask.getAttribute('title')).toContain('Not yet wired')
+    const settings = screen.getByRole('button', { name: /Settings/ })
+    expect(settings).toBeDisabled()
+    expect(settings.getAttribute('title')).toContain('Not yet wired')
   }, 10000)
 
   it('pre-auth /login does NOT render the Chrome Navbar', async () => {
