@@ -81,3 +81,24 @@ Accepted, not fixed (rationale):
   components.css wired after 'tailwindcss/components', before 'tailwindcss/utilities';
   cascade property (.vks-* after Preflight) preserved and regression-tested in
   tokens/index.test.ts (additive out-of-files-list edit, orchestrator-authorized).
+
+## 2026-07-23 — phase 2 integrated adversarial review (round 2)
+
+Panelists: Codex + OpenCode. Reports: `.agents/reports/2026-07-23-round-2-{codex,opencode}-phase2-components.md`. Both FIX-FIRST.
+
+Fixed in-session (commit 1913d1c3):
+- Tabs WAI-ARIA keyboard pattern (roving tabIndex, arrows/Home/End) — additive beyond
+  design-source JSX anatomy; classes/DOM unchanged; +tests.
+- Switch/Checkbox extend Omit<ButtonHTMLAttributes,...> — SettingsRow htmlFor now composes.
+- StatusBadge `?? status` fallback restored (JSX parity); Badge type-only import.
+
+False positive (documented, no change):
+- OpenCode C1 "unlayered components.css beats @layer utilities": Tailwind v3.4 emits plain
+  unlayered CSS (native @layer is v4-only). Built CSS: 0 `@layer`; utilities land after
+  .vks-badge (byte offsets 23170/26052 vs 12443) → source order lets utilities win.
+  Byte-identity of components.css preserved.
+
+Accepted/no-change:
+- I1 vks-pulse keyframes now animate swarm/NodeCard — intended; closes round-1 F7.
+- M2 controlled onCheckedChange fires on same-value click — JSX parity.
+- Codex#3 smoke-only parity test — real assertions live in per-component test files.
