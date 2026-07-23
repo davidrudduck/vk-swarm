@@ -13,4 +13,10 @@
 @import './styles/tokens/base.css';
 
 @import 'tailwindcss/components';
+
+/* Design-system component rules land after Preflight and Tailwind's own
+   components layer so they win the cascade over both, and before utilities
+   so a consumer's utility classes can still override on a per-element basis. */
+@import './styles/components.css';
+
 @import 'tailwindcss/utilities';

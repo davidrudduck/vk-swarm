@@ -40,4 +40,13 @@ describe('index.css wires the token files (SC2/SC3)', () => {
     expect(tailwindBaseIdx).toBeLessThan(baseCssIdx);
     expect(baseCssIdx).toBeLessThan(componentsIdx);
   });
+
+  it('imports styles/components.css AFTER tailwindcss/components and BEFORE tailwindcss/utilities (design-system rules win over Tailwind components, utilities can still override)', () => {
+    const tailwindComponentsIdx = indexCss.indexOf("@import 'tailwindcss/components';");
+    const designComponentsIdx = indexCss.indexOf("@import './styles/components.css';");
+    const tailwindUtilitiesIdx = indexCss.indexOf("@import 'tailwindcss/utilities';");
+    expect(designComponentsIdx).toBeGreaterThanOrEqual(0);
+    expect(tailwindComponentsIdx).toBeLessThan(designComponentsIdx);
+    expect(designComponentsIdx).toBeLessThan(tailwindUtilitiesIdx);
+  });
 });
