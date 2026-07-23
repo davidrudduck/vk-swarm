@@ -2,7 +2,7 @@
 id: "106"
 phase: 1
 title: Token + texture integration smoke (npm run build + tsc)
-status: ready
+status: passed
 depends_on: ["105"]
 parallel: false
 conflicts_with: []

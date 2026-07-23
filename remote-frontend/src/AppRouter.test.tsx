@@ -23,9 +23,48 @@ vi.mock('@/api', async (importOriginal) => ({
   getInvitation: vi.fn(),
 }))
 
+// The Nodes page (rendered via the authenticated routes below) fetches
+// organizations and nodes through these API modules. Without mocking them,
+// the queries hit the real (unmocked) `fetch`, which is slow/non-deterministic
+// in jsdom and leaves the Nodes page stuck in its loading state depending on
+// what ran earlier in the file (test isolation failure, F-2026-07-11-01).
+// Mock them the same way sibling suites (e.g. src/pages/Nodes.test.tsx) do so
+// the queries resolve deterministically and don't depend on the network.
+//
+// `NodesPage` (task 309) imports `nodesApi`/`organizationsApi` directly from
+// their submodules (`@/lib/api/nodes`, `@/lib/api/organizations`) rather than
+// through the `@/lib/api` barrel, so both the barrel and the submodules are
+// mocked here to cover every import path in play (barrel used by
+// `NodeApiKeySection`, submodules used by `NodesPage` itself).
+vi.mock('@/lib/api', () => ({
+  nodesApi: {
+    list: vi.fn().mockResolvedValue([]),
+    listApiKeys: vi.fn().mockResolvedValue([]),
+  },
+  organizationsApi: {
+    list: vi.fn().mockResolvedValue([]),
+  },
+}))
+
+vi.mock('@/lib/api/nodes', () => ({
+  nodesApi: {
+    list: vi.fn().mockResolvedValue([]),
+    listApiKeys: vi.fn().mockResolvedValue([]),
+  },
+}))
+
+vi.mock('@/lib/api/organizations', () => ({
+  organizationsApi: {
+    list: vi.fn().mockResolvedValue([]),
+  },
+}))
+
 import { useProfile } from '@/components/ProfileProvider'
 import { oauthApi } from '@/lib/api/oauth'
 import { initOAuth, getInvitation } from '@/api'
+import { nodesApi, organizationsApi } from '@/lib/api'
+import { nodesApi as nodesApiDirect } from '@/lib/api/nodes'
+import { organizationsApi as organizationsApiDirect } from '@/lib/api/organizations'
 
 describe('AppRouter', () => {
   function stubGetRandomValuesOnlyCrypto() {
@@ -41,6 +80,14 @@ describe('AppRouter', () => {
 
   beforeEach(() => {
     vi.resetAllMocks()
+    // vi.resetAllMocks() strips the default implementations configured in the
+    // vi.mock('@/lib/api', ...) factory above, so re-establish them here on
+    // every test so the Nodes page's queries keep resolving deterministically.
+    vi.mocked(nodesApi.list).mockResolvedValue([])
+    vi.mocked(organizationsApi.list).mockResolvedValue([])
+    vi.mocked(nodesApiDirect.list).mockResolvedValue([])
+    vi.mocked(nodesApiDirect.listApiKeys).mockResolvedValue([])
+    vi.mocked(organizationsApiDirect.list).mockResolvedValue([])
     localStorage.clear()
     sessionStorage.clear()
   })
@@ -156,10 +203,19 @@ describe('AppRouter', () => {
 
     renderWithRouter('/')
 
-    // The root redirect should navigate to /nodes, which renders the Nodes page (h2 "Nodes")
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 2, name: 'Nodes' })).toBeInTheDocument()
-    })
+    // The root redirect should navigate to /nodes, which renders `NodesPage`
+    // (task 309), whose `NodesView` panel heading is "Hive" (not "Nodes" --
+    // the old `pages/Nodes.tsx` heading, now superseded).
+    // This is the first test in the file to hit the /nodes route, so it pays the cost of
+    // React.lazy() compiling/importing the Nodes page chunk for the first time; under a
+    // CPU-contended parallel test run (many files/workers at once) that first-import cost
+    // can exceed the default 1000ms waitFor timeout, so give it more headroom here.
+    await waitFor(
+      () => {
+        expect(screen.getByRole('heading', { level: 2, name: 'Hive' })).toBeInTheDocument()
+      },
+      { timeout: 5000 }
+    )
   })
 
   it('authenticated: hitting /nodes renders the Nodes page with layout', async () => {
@@ -176,9 +232,9 @@ describe('AppRouter', () => {
 
     renderWithRouter('/nodes')
 
-    // Should render the Nodes page heading
+    // Should render the NodesView panel heading ("Hive")
     await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 2, name: 'Nodes' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 2, name: 'Hive' })).toBeInTheDocument()
     })
   })
 
@@ -346,6 +402,99 @@ describe('AppRouter', () => {
     expect(sessionStorage.getItem('oauth_verifier')).toBeNull()
     expect(sessionStorage.getItem('invitation_token')).toBeNull()
     expect(localStorage.getItem('access_token')).toBeNull()
+  })
+})
+
+describe('Chrome integration (SC8)', () => {
+  // `data-theme` lives on the shared jsdom `document.documentElement`; clear it
+  // after every test so a theme-toggle test can't leak 'light' into siblings.
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+  })
+
+  function renderWithProfileProvider(initial: string) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(createRoutes(), { initialEntries: [initial] })
+    return render(
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    )
+  }
+
+  it('authed routes render the Chrome Navbar with Board/Nodes/Processes NavTabs', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: true,
+      isLoaded: true,
+      profile: {
+        user_id: 'test-id',
+        username: 'testuser',
+        email: 'test@example.com',
+        providers: [],
+      },
+    })
+
+    renderWithProfileProvider('/nodes')
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: /Board/ })).toBeTruthy()
+        expect(screen.getByRole('button', { name: /Nodes/ })).toBeTruthy()
+        expect(screen.getByRole('button', { name: /Processes/ })).toBeTruthy()
+      },
+      { timeout: 5000 }
+    )
+  }, 10000)
+
+  it('theme toggle flips document data-theme between light and dark (F4)', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: true,
+      isLoaded: true,
+      profile: { user_id: 'test-id', username: 'testuser', email: 'test@example.com', providers: [] },
+    })
+
+    renderWithProfileProvider('/nodes')
+
+    const toggle = await screen.findByRole('button', { name: 'Toggle theme' }, { timeout: 5000 })
+    // Default is dark: the root has no data-theme attribute (:root is dark-first).
+    expect(document.documentElement.getAttribute('data-theme')).toBeNull()
+    fireEvent.click(toggle)
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light')
+    fireEvent.click(toggle)
+    expect(document.documentElement.getAttribute('data-theme')).toBeNull()
+  }, 10000)
+
+  it('New Task and Settings controls are honestly disabled (no backing API yet, F5)', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: true,
+      isLoaded: true,
+      profile: { user_id: 'test-id', username: 'testuser', email: 'test@example.com', providers: [] },
+    })
+
+    renderWithProfileProvider('/nodes')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Task/ })).toBeTruthy(), { timeout: 5000 })
+    const newTask = screen.getByRole('button', { name: /Task/ })
+    expect(newTask).toBeDisabled()
+    expect(newTask.getAttribute('title')).toContain('Not yet wired')
+    const settings = screen.getByRole('button', { name: /Settings/ })
+    expect(settings).toBeDisabled()
+    expect(settings.getAttribute('title')).toContain('Not yet wired')
+  }, 10000)
+
+  it('pre-auth /login does NOT render the Chrome Navbar', async () => {
+    vi.mocked(useProfile).mockReturnValue({
+      isSignedIn: false,
+      isLoaded: true,
+      profile: null,
+    })
+
+    const { container } = renderWithProfileProvider('/login')
+
+    await waitFor(() => {
+      expect(screen.getByText('Welcome')).toBeInTheDocument()
+    })
+    expect(container.querySelector('nav')).toBeNull()
   })
 })
 

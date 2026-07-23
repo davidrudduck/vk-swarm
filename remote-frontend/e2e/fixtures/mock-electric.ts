@@ -11,7 +11,7 @@ export interface MockTaskAssignment {
 export type TableData = Record<string, unknown[]>;
 
 export async function mockElectricShape(page: Page, tableData: TableData) {
-  await page.route('**/api/electric/v1/shape/*', async (route) => {
+  await page.route('**/v1/shape/*', async (route) => {
     const url = new URL(route.request().url());
     const segments = url.pathname.split('/');
     const tableName = segments[segments.length - 1];

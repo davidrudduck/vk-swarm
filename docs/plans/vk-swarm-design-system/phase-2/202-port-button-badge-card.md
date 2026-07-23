@@ -2,7 +2,7 @@
 id: "202"
 phase: 2
 title: Port Button + Badge + Card React components (TS)
-status: ready
+status: passed
 depends_on: ["201"]
 parallel: false
 conflicts_with: []

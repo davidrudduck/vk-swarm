@@ -2,7 +2,7 @@
 id: "205"
 phase: 2
 title: Port StatusBadge + TaskCard React components (TS)
-status: ready
+status: passed
 depends_on: ["201","202"]
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "310"
 phase: 3
 title: App integration smoke + reachability gate evidence
-status: ready
+status: passed
 depends_on: ["307","308","309"]
 parallel: false
 conflicts_with: []

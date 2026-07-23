@@ -2,7 +2,7 @@
 id: "208"
 phase: 2
 title: Wire components.css into index.css + per-component render parity tests
-status: ready
+status: passed
 depends_on: ["202","203","204","205","206","207"]
 parallel: false
 conflicts_with: []

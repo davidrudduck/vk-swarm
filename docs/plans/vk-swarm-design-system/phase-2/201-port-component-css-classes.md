@@ -2,7 +2,7 @@
 id: "201"
 phase: 2
 title: Port .vks-* component CSS classes into remote-frontend
-status: ready
+status: passed
 depends_on: ["105"]
 parallel: false
 conflicts_with: []

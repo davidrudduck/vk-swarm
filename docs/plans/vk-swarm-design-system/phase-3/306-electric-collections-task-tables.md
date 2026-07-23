@@ -2,7 +2,7 @@
 id: "306"
 phase: 3
 title: Electric collections for task tables (copy + 3 new collections)
-status: ready
+status: passed
 depends_on: ["106","201"]
 parallel: false
 conflicts_with: []

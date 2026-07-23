@@ -2,7 +2,7 @@
 id: "101"
 phase: 1
 title: Port color + typography tokens into remote-frontend
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

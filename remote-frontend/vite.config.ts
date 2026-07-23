@@ -15,7 +15,12 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         runtimeCaching: [
           {
-            urlPattern: ({ url }) => url.pathname.startsWith('/v1/'),
+            // Cache `/v1/` REST responses, but EXCLUDE `/v1/shape/*` (the Electric
+            // proxy base). Electric shape traffic is long-poll/streaming; letting
+            // Workbox's NetworkFirst cache it would serve stale/partial real-time
+            // data (adversarial review F3). Shape requests bypass the SW cache.
+            urlPattern: ({ url }) =>
+              url.pathname.startsWith('/v1/') && !url.pathname.startsWith('/v1/shape'),
             handler: 'NetworkFirst',
             options: {
               cacheName: 'api-cache',

@@ -2,7 +2,7 @@
 id: "105"
 phase: 1
 title: Wire tokens into remote-frontend index.css entry
-status: ready
+status: passed
 depends_on: ["101","102","103","104"]
 parallel: false
 conflicts_with: []

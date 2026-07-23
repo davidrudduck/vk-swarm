@@ -2,7 +2,7 @@
 id: "308"
 phase: 3
 title: Wire BoardView + TaskDrawer to data (REST primary, Electric enhancement)
-status: ready
+status: passed
 depends_on: ["301","304","305","306","307"]
 parallel: false
 conflicts_with: []

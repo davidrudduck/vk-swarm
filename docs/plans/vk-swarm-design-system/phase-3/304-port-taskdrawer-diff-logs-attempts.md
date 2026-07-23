@@ -2,7 +2,7 @@
 id: "304"
 phase: 3
 title: Port TaskDrawer + DiffPanel + LogsPanel + AttemptsPanel
-status: ready
+status: passed
 depends_on: ["202","204","205","302"]
 parallel: false
 conflicts_with: []

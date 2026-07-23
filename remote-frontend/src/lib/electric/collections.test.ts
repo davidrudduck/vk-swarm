@@ -40,7 +40,7 @@ describe('Electric Collections', () => {
       expect(electricCollectionOptions).toHaveBeenCalledWith(
         expect.objectContaining({
           shapeOptions: expect.objectContaining({
-            url: '/api/electric/v1/shape/nodes',
+            url: '/v1/shape/nodes',
           }),
         })
       );
@@ -64,7 +64,7 @@ describe('Electric Collections', () => {
       expect(electricCollectionOptions).toHaveBeenCalledWith(
         expect.objectContaining({
           shapeOptions: expect.objectContaining({
-            url: '/api/electric/v1/shape/projects',
+            url: '/v1/shape/projects',
           }),
         })
       );
@@ -88,7 +88,7 @@ describe('Electric Collections', () => {
       expect(electricCollectionOptions).toHaveBeenCalledWith(
         expect.objectContaining({
           shapeOptions: expect.objectContaining({
-            url: '/api/electric/v1/shape/node_projects',
+            url: '/v1/shape/node_projects',
           }),
         })
       );
@@ -114,7 +114,7 @@ describe('Electric Collections', () => {
       expect(electricCollectionOptions).toHaveBeenCalledWith(
         expect.objectContaining({
           shapeOptions: expect.objectContaining({
-            url: '/api/electric/v1/shape/node_task_assignments',
+            url: '/v1/shape/node_task_assignments',
           }),
         })
       );
@@ -138,7 +138,7 @@ describe('Electric Collections', () => {
       expect(electricCollectionOptions).toHaveBeenCalledWith(
         expect.objectContaining({
           shapeOptions: expect.objectContaining({
-            url: '/api/electric/v1/shape/node_task_output_logs',
+            url: '/v1/shape/node_task_output_logs',
           }),
         })
       );
@@ -162,7 +162,7 @@ describe('Electric Collections', () => {
       expect(electricCollectionOptions).toHaveBeenCalledWith(
         expect.objectContaining({
           shapeOptions: expect.objectContaining({
-            url: '/api/electric/v1/shape/node_task_progress_events',
+            url: '/v1/shape/node_task_progress_events',
           }),
         })
       );

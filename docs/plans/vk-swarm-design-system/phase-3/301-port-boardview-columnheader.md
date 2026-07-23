@@ -2,7 +2,7 @@
 id: "301"
 phase: 3
 title: Port BoardView + ColumnHeader into remote-frontend
-status: ready
+status: passed
 depends_on: ["205","206"]
 parallel: false
 conflicts_with: []

@@ -1,0 +1,53 @@
+import { useState } from 'react';
+import type { ButtonHTMLAttributes, MouseEvent } from 'react';
+import { cn } from '@/lib/utils';
+
+export interface SwitchProps
+  extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onChange' | 'checked' | 'defaultChecked' | 'type'> {
+  /** Controlled on/off. */
+  checked?: boolean;
+  /** Initial state when uncontrolled. @default false */
+  defaultChecked?: boolean;
+  /** Fired with the next value on toggle. */
+  onCheckedChange?: (checked: boolean) => void;
+  disabled?: boolean;
+  className?: string;
+}
+
+/** Cyan toggle switch for settings & feature flags. */
+export function Switch({
+  checked,
+  defaultChecked = false,
+  onCheckedChange,
+  disabled = false,
+  className,
+  onClick,
+  ...props
+}: SwitchProps) {
+  const isControlled = checked !== undefined;
+  const [internal, setInternal] = useState(defaultChecked);
+  const on = isControlled ? checked : internal;
+
+  const handleClick = (e: MouseEvent<HTMLButtonElement>) => {
+    onClick?.(e);
+    if (e.defaultPrevented) return;
+    if (disabled) return;
+    if (!isControlled) setInternal(!on);
+    onCheckedChange?.(!on);
+  };
+
+  return (
+    <button
+      {...props}
+      type="button"
+      role="switch"
+      aria-checked={on}
+      data-checked={on}
+      disabled={disabled}
+      onClick={handleClick}
+      className={cn('vks-switch', className)}
+    >
+      <span className="vks-switch__thumb" />
+    </button>
+  );
+}
