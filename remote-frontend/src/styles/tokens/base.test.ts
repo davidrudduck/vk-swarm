@@ -27,12 +27,12 @@ describe('base element CSS (SC2)', () => {
     expect(base).toContain('body');
     expect(base).toContain('margin: 0');
     expect(base).toContain('var(--background)');
-    expect(base).toContain('var(--foreground)');
+    expect(base).toContain('var(--text-body)');
   });
 
   it('styles anchor, code, selection', () => {
     expect(base).toContain('::selection');
     expect(base).toContain('code');
-    expect(base).toContain('a ');
+    expect(base).toMatch(/\ba\s*\{/);
   });
 });

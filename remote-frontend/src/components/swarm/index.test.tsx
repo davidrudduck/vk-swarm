@@ -207,9 +207,17 @@ describe('Swarm Components', () => {
       created_at: '2024-01-01T00:00:00Z',
       updated_at: '2024-01-01T00:00:00Z',
     };
+    let container: HTMLElement;
     expect(() => {
-      renderWithProviders(<NodeCard node={mockNode} />);
+      ({ container } = renderWithProviders(<NodeCard node={mockNode} />));
     }).not.toThrow();
+    // F4: hex-valued tokens must be plain var(...), never wrapped in hsl(...)
+    const html = container!.innerHTML;
+    expect(html).toContain('bg-[var(--surface-card)]');
+    expect(html).toContain('bg-[var(--surface-raised)]');
+    // online node → status-done pulse dot
+    expect(html).toContain('bg-[var(--status-done)]');
+    expect(html).not.toContain('hsl(var(--');
   });
 
   it('renders SwarmProjectDialog without throwing', () => {
