@@ -67,7 +67,7 @@ const mockProjects = { projects: [{ id: 'proj-1', name: 'Main', organization_id:
 
 beforeEach(() => {
   localStorage.setItem('access_token', 'test-token');
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: any) => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: RequestInfo | URL) => {
     const u = typeof url === 'string' ? url : '';
     if (u.includes('/v1/organizations')) return { ok: true, json: async () => mockOrgs } as Response;
     if (u.includes('/v1/swarm/projects')) return { ok: true, json: async () => mockProjects } as Response;
