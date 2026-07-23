@@ -43,3 +43,10 @@ Resolution: pragma removed; file falls through to the project default `jsdom`
 (`remote-frontend/vite.config.ts` line 75), which supports both `render()` and Node
 `readFileSync`. Verified empirically (2/5 tests fail under `node` env). Reviewer confirmed
 minimal-correct. No other line altered.
+
+## 2026-07-23 — task 106 test-timeout deviation
+
+Task 106's embedded smoke tests set execSync timeouts (120s/120s/60s) but no vitest per-test
+timeout; vitest's 5s default would fail every test deterministically. Resolution: added the
+matching timeout as third arg to each it(). No assertion or command changed. Reviewer
+confirmed minimal-correct.
