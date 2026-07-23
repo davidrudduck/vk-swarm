@@ -23,6 +23,64 @@ describe('Tabs (SC4)', () => {
     fireEvent.click(container.querySelector('[role="tab"]')!);
     expect(onValueChange).toHaveBeenCalledWith('a');
   });
+
+  it('applies roving tabindex (active=0, others=-1)', () => {
+    const { container } = render(
+      <Tabs tabs={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }, { value: 'c', label: 'C' }]} value="b" />
+    );
+    const tabs = container.querySelectorAll('[role="tab"]');
+    expect(tabs[0].getAttribute('tabindex')).toBe('-1');
+    expect(tabs[1].getAttribute('tabindex')).toBe('0');
+    expect(tabs[2].getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('ArrowRight moves focus/selection to the next tab and wraps', () => {
+    const onValueChange = vi.fn();
+    const { container } = render(
+      <Tabs
+        tabs={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }, { value: 'c', label: 'C' }]}
+        defaultValue="c"
+        onValueChange={onValueChange}
+      />
+    );
+    const tabs = container.querySelectorAll('[role="tab"]');
+    fireEvent.keyDown(tabs[2], { key: 'ArrowRight' });
+    expect(onValueChange).toHaveBeenCalledWith('a');
+    expect(document.activeElement).toBe(tabs[0]);
+  });
+
+  it('ArrowLeft moves focus/selection to the previous tab and wraps', () => {
+    const onValueChange = vi.fn();
+    const { container } = render(
+      <Tabs
+        tabs={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }, { value: 'c', label: 'C' }]}
+        defaultValue="a"
+        onValueChange={onValueChange}
+      />
+    );
+    const tabs = container.querySelectorAll('[role="tab"]');
+    fireEvent.keyDown(tabs[0], { key: 'ArrowLeft' });
+    expect(onValueChange).toHaveBeenCalledWith('c');
+    expect(document.activeElement).toBe(tabs[2]);
+  });
+
+  it('Home/End jump to first/last tab', () => {
+    const onValueChange = vi.fn();
+    const { container } = render(
+      <Tabs
+        tabs={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }, { value: 'c', label: 'C' }]}
+        defaultValue="b"
+        onValueChange={onValueChange}
+      />
+    );
+    const tabs = container.querySelectorAll('[role="tab"]');
+    fireEvent.keyDown(tabs[1], { key: 'End' });
+    expect(onValueChange).toHaveBeenLastCalledWith('c');
+    expect(document.activeElement).toBe(tabs[2]);
+    fireEvent.keyDown(tabs[2], { key: 'Home' });
+    expect(onValueChange).toHaveBeenLastCalledWith('a');
+    expect(document.activeElement).toBe(tabs[0]);
+  });
 });
 
 describe('Select (SC4)', () => {

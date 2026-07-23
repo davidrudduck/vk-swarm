@@ -31,7 +31,7 @@ export function StatusBadge({
   return (
     <span className={cn('vks-status', `vks-status--${status}`, className)} {...props}>
       <span className="vks-status__dot" />
-      {showLabel && <span>{label ?? LABELS[status]}</span>}
+      {showLabel && <span>{label ?? LABELS[status] ?? status}</span>}
     </span>
   );
 }

@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import type { ButtonHTMLAttributes } from 'react';
 import { cn } from '@/lib/utils';
 
-export interface CheckboxProps {
+export interface CheckboxProps
+  extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onChange' | 'checked' | 'defaultChecked' | 'type'> {
   checked?: boolean;
   defaultChecked?: boolean;
   onCheckedChange?: (checked: boolean) => void;
@@ -30,6 +32,7 @@ export function Checkbox({
 
   return (
     <button
+      {...props}
       type="button"
       role="checkbox"
       aria-checked={on}
@@ -37,7 +40,6 @@ export function Checkbox({
       disabled={disabled}
       onClick={toggle}
       className={cn('vks-checkbox', className)}
-      {...props}
     >
       <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
         <path

@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import type { ButtonHTMLAttributes } from 'react';
 import { cn } from '@/lib/utils';
 
-export interface SwitchProps {
+export interface SwitchProps
+  extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onChange' | 'checked' | 'defaultChecked' | 'type'> {
   /** Controlled on/off. */
   checked?: boolean;
   /** Initial state when uncontrolled. @default false */
@@ -33,6 +35,7 @@ export function Switch({
 
   return (
     <button
+      {...props}
       type="button"
       role="switch"
       aria-checked={on}
@@ -40,7 +43,6 @@ export function Switch({
       disabled={disabled}
       onClick={toggle}
       className={cn('vks-switch', className)}
-      {...props}
     >
       <span className="vks-switch__thumb" />
     </button>

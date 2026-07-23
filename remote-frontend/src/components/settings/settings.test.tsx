@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
 import { SettingsSection, SettingsRow } from './index';
+import { Switch, Checkbox } from '../core';
 
 describe('SettingsSection (SC6)', () => {
   it('emits vks-card with header/title/desc/content', () => {
@@ -54,5 +55,27 @@ describe('SettingsRow (SC6)', () => {
   it('renders helper when no error', () => {
     const { container } = render(<SettingsRow label="X" helper="hint" control={<input />} />);
     expect(container.querySelector('.vks-field__helper')!.textContent).toBe('hint');
+  });
+
+  it('composes htmlFor label with a Switch id (typed passthrough)', () => {
+    const { container } = render(
+      <SettingsRow label="Notify" htmlFor="notify" inline control={<Switch id="notify" aria-label="Notify" />} />
+    );
+    const label = container.querySelector('.vks-field__label') as HTMLLabelElement;
+    const control = container.querySelector('button[role="switch"]') as HTMLButtonElement;
+    expect(label.getAttribute('for')).toBe('notify');
+    expect(control.id).toBe('notify');
+    expect(control.getAttribute('aria-label')).toBe('Notify');
+  });
+
+  it('composes htmlFor label with a Checkbox id (typed passthrough)', () => {
+    const { container } = render(
+      <SettingsRow label="Agree" htmlFor="agree" inline control={<Checkbox id="agree" aria-labelledby="lbl" />} />
+    );
+    const label = container.querySelector('.vks-field__label') as HTMLLabelElement;
+    const control = container.querySelector('button[role="checkbox"]') as HTMLButtonElement;
+    expect(label.getAttribute('for')).toBe('agree');
+    expect(control.id).toBe('agree');
+    expect(control.getAttribute('aria-labelledby')).toBe('lbl');
   });
 });
