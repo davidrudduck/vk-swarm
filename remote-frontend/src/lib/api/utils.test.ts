@@ -309,10 +309,16 @@ describe('makeRequest', () => {
     });
 
     const promise = makeRequest('http://localhost/api/test');
+    // Attach the rejection assertion before advancing timers so the promise
+    // never has a tick where it's rejected with no handler attached yet
+    // (advancing fake timers synchronously triggers the abort/rejection,
+    // and attaching `expect(...).rejects` only afterwards leaves a window
+    // where Node can flag it as an unhandled rejection).
+    const assertion = expect(promise).rejects.toThrow('Request timed out');
 
     await vi.advanceTimersByTimeAsync(30_001);
 
-    await expect(promise).rejects.toThrow('Request timed out');
+    await assertion;
   });
 
   it('clears timeout on fetch failure (non-timeout)', async () => {

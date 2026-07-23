@@ -2,7 +2,7 @@
 id: "302"
 phase: 3
 title: Port Chrome (Navbar/Logo/ThemeToggle/NavIcon/NavTab/useBreakpoint)
-status: ready
+status: passed
 depends_on: ["202","207"]
 parallel: false
 conflicts_with: []

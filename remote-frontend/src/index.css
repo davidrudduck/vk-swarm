@@ -1,3 +1,22 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* External Google Fonts @import must stay first in the output bundle —
+   browsers ignore any @import that appears after other rules. */
+@import './styles/tokens/fonts.css';
+
+/* Tailwind v3 @import form: Preflight (base) is injected here, and our
+   token/base.css files are imported AFTER it so their element rules win the
+   cascade over Preflight resets (F1/F2/F3). */
+@import 'tailwindcss/base';
+
+@import './styles/tokens/colors.css';
+@import './styles/tokens/typography.css';
+@import './styles/tokens/spacing.css';
+@import './styles/tokens/base.css';
+
+@import 'tailwindcss/components';
+
+/* Design-system component rules land after Preflight and Tailwind's own
+   components layer so they win the cascade over both, and before utilities
+   so a consumer's utility classes can still override on a per-element basis. */
+@import './styles/components.css';
+
+@import 'tailwindcss/utilities';

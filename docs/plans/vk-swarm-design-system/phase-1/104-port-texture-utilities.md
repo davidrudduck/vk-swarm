@@ -2,7 +2,7 @@
 id: "104"
 phase: 1
 title: Port texture utilities DOM test
-status: ready
+status: passed
 depends_on: ["103"]
 parallel: false
 conflicts_with: []

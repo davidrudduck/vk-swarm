@@ -2,7 +2,7 @@
 id: "309"
 phase: 3
 title: Wire NodesView + ProcessesView to data (REST)
-status: ready
+status: passed
 depends_on: ["303","305","307"]
 parallel: false
 conflicts_with: []

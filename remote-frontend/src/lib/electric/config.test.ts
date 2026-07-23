@@ -10,7 +10,7 @@ describe('Electric Config', () => {
   describe('getElectricBaseUrl', () => {
     it('returns the correct base URL for Electric proxy', () => {
       const baseUrl = getElectricBaseUrl();
-      expect(baseUrl).toBe('/api/electric/v1/shape');
+      expect(baseUrl).toBe('/v1/shape');
     });
   });
 
@@ -34,17 +34,17 @@ describe('Electric Config', () => {
   describe('createShapeUrl', () => {
     it('creates URL for nodes table', () => {
       const url = createShapeUrl('nodes');
-      expect(url).toBe('/api/electric/v1/shape/nodes');
+      expect(url).toBe('/v1/shape/nodes');
     });
 
     it('creates URL for projects table', () => {
       const url = createShapeUrl('projects');
-      expect(url).toBe('/api/electric/v1/shape/projects');
+      expect(url).toBe('/v1/shape/projects');
     });
 
     it('creates URL for node_projects table', () => {
       const url = createShapeUrl('node_projects');
-      expect(url).toBe('/api/electric/v1/shape/node_projects');
+      expect(url).toBe('/v1/shape/node_projects');
     });
 
     it('throws error for invalid table name', () => {

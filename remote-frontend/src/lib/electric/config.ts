@@ -11,7 +11,7 @@
  * The proxy handles authentication and injects organization-based WHERE clauses
  * for row-level security.
  */
-export const ELECTRIC_PROXY_BASE = '/api/electric/v1/shape';
+export const ELECTRIC_PROXY_BASE = '/v1/shape';
 
 /**
  * Get the base URL for Electric shape requests.

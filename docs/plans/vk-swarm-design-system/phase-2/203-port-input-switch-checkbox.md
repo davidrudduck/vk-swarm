@@ -2,7 +2,7 @@
 id: "203"
 phase: 2
 title: Port Input + Switch + Checkbox React components (TS)
-status: ready
+status: passed
 depends_on: ["202"]
 parallel: false
 conflicts_with: []

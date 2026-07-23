@@ -1,1 +1,3 @@
 src/types/shared/types.ts
+src/styles/tokens/*.css
+src/styles/components.css

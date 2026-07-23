@@ -1,7 +1,7 @@
-import { createBrowserRouter, RouterProvider, Navigate, useSearchParams } from 'react-router-dom'
+import { createBrowserRouter, RouterProvider, Navigate, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useEffect, useState, lazy, Suspense } from 'react'
 import { useProfile } from '@/components/ProfileProvider'
-import { NormalLayout } from '@/components/layout/NormalLayout'
+import { Navbar } from '@/ui/chrome'
 import InvitationPage from './pages/InvitationPage'
 import InvitationCompletePage from './pages/InvitationCompletePage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -12,8 +12,9 @@ import { retrieveVerifier, clearVerifier, clearInvitationToken, generateVerifier
 import type { OAuthProvider } from '@/api'
 import { initOAuth } from '@/api'
 
-const Nodes = lazy(() => import('./pages/Nodes').then(m => ({ default: m.Nodes })))
-const TasksBoard = lazy(() => import('./pages/Tasks').then(m => ({ default: m.TasksBoard })))
+const NodesPage = lazy(() => import('./pages/NodesPage').then(m => ({ default: m.NodesPage })))
+const ProcessesPage = lazy(() => import('./pages/ProcessesPage').then(m => ({ default: m.ProcessesPage })))
+const BoardPage = lazy(() => import('./pages/BoardPage').then(m => ({ default: m.BoardPage })))
 
 function RootRedirect() {
   const { isSignedIn, isLoaded } = useProfile()
@@ -92,6 +93,53 @@ function LoginPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+function deriveViewFromLocation(pathname: string): 'board' | 'nodes' | 'processes' {
+  // `/` is served by `RootRedirect` (never mounts `ChromeLayout`), but map it to
+  // 'nodes' to match the redirect target rather than the unreachable 'board'
+  // (adversarial review F8).
+  if (pathname === '/nodes' || pathname === '/') return 'nodes'
+  if (pathname === '/tasks') return 'board'
+  if (pathname === '/processes') return 'processes'
+  return 'processes'
+}
+
+function ChromeLayout() {
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  // Theme is dark-first: `:root` (colors.css) is dark, `[data-theme="light"]`
+  // opts into light. Toggling to light sets the attribute; toggling back to dark
+  // removes it so the root default applies (adversarial review F4).
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  const handleToggleTheme = () => {
+    setTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark'
+      if (next === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light')
+      } else {
+        document.documentElement.removeAttribute('data-theme')
+      }
+      return next
+    })
+  }
+
+  return (
+    <>
+      {/* `onNewTask` / `onOpenSettings` are intentionally omitted: those controls
+          have no backing hive API yet, so Navbar renders them disabled with an
+          honest tooltip rather than as silent dead clicks (adversarial review F5). */}
+      <Navbar
+        project="Hive"
+        view={deriveViewFromLocation(location.pathname)}
+        onView={(v) => navigate(v === 'board' ? '/tasks' : v === 'nodes' ? '/nodes' : '/processes')}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+      />
+      <Outlet />
+    </>
   )
 }
 
@@ -197,10 +245,11 @@ export function createRoutes() {
     { path: '/invitations/:token/accept', element: <InvitationPage /> },
     { path: '/invitations/:token/complete', element: <InvitationCompletePage /> },
     {
-      element: <AuthGuard><NormalLayout /></AuthGuard>,
+      element: <AuthGuard><ChromeLayout /></AuthGuard>,
       children: [
-        { path: '/nodes', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading nodes...</div>}><Nodes /></Suspense></ErrorBoundary> },
-        { path: '/tasks', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading tasks...</div>}><TasksBoard /></Suspense></ErrorBoundary> },
+        { path: '/nodes', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading nodes...</div>}><NodesPage /></Suspense></ErrorBoundary> },
+        { path: '/tasks', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading tasks...</div>}><BoardPage /></Suspense></ErrorBoundary> },
+        { path: '/processes', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading processes...</div>}><ProcessesPage /></Suspense></ErrorBoundary> },
         { path: '*', element: <NotFoundPage /> },
       ],
     },

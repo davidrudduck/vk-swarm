@@ -32,25 +32,25 @@ export function NodeCard({ node, className }: NodeCardProps) {
   return (
     <div
       className={cn(
-        'flex items-center gap-3 rounded-md border border-border bg-[hsl(var(--surface-card))] p-3',
+        'flex items-center gap-3 rounded-md border border-border bg-[var(--surface-card)] p-3',
         className
       )}
     >
       {/* OS-glyph tile — 36x36 raised surface. (Future: OS-specific glyph from
           node.capabilities.os; sibling uses a single Monitor for all nodes.) */}
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[hsl(var(--surface-raised))]">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-raised)]">
         <Monitor className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
       </div>
 
       {/* Online/offline dot — pulse only when online (SC15 application). */}
       {isOnline ? (
         <span
-          className="h-2 w-2 shrink-0 rounded-full bg-[hsl(var(--status-done))] animate-[vks-pulse_2s_ease-in-out_infinite]"
+          className="h-2 w-2 shrink-0 rounded-full bg-[var(--status-done)] animate-[vks-pulse_2s_ease-in-out_infinite]"
           aria-hidden="true"
         />
       ) : (
         <span
-          className="h-2 w-2 shrink-0 rounded-full bg-[hsl(var(--vks-text-dim))]"
+          className="h-2 w-2 shrink-0 rounded-full bg-[var(--vks-text-dim)]"
           aria-hidden="true"
         />
       )}

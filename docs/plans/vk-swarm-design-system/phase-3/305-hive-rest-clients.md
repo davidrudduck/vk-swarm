@@ -2,7 +2,7 @@
 id: "305"
 phase: 3
 title: Hive REST clients (nodes/tasks/labels) — bare JSON, Bearer auth
-status: ready
+status: passed
 depends_on: ["102"]
 parallel: false
 conflicts_with: []

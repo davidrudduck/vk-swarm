@@ -2,7 +2,7 @@
 id: "103"
 phase: 1
 title: Port fonts @import + base element CSS into remote-frontend
-status: ready
+status: passed
 depends_on: ["101"]
 parallel: false
 conflicts_with: []
