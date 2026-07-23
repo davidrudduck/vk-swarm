@@ -154,3 +154,37 @@ requirement. Updated both files' URL assertions to `/v1/shape` in a follow-up co
 (`fix(remote-frontend): repoint companion electric tests to hive shape base`) immediately after
 the task-gated commit, so the gate's file-set check (only `files:`-declared paths) still passes
 against the primary commit.
+
+## 2026-07-23 — task 308 REST-primary wiring + shape divergences
+
+`BoardPage.tsx` fetch chain: `organizationsApi.list()` -> first org -> `swarmProjectsApi.list(orgId)`
+-> first project -> `tasksApi.bulk(projectId)` -> group into `Record<TaskStatus, Row[]>`. REST is
+the primary source; Electric collections are enhancement-only per the task 306 known-gap ledger
+entry above — not wired into `BoardPage` in this task. "First org / first project" is a deliberate
+placeholder selection until an org/project switcher exists; revisit when multi-org/multi-project
+UX lands.
+
+**Plan-literal test/code shape divergences, not adopted verbatim** (per orchestrator instruction
+to adapt to the real, already-shipped contracts):
+- `organizationsApi.list()` resolves to `Organization[]` directly (unwraps `.organizations`
+  internally), not `{ organizations: [...] }` — so `orgId = orgsQ.data?.[0]?.id`, not
+  `orgsQ.data?.organizations[0]?.id` as the plan's literal `BoardPage.tsx` draft showed.
+- `swarmProjectsApi.list(orgId)` resolves to `SwarmProjectWithNodes[]` directly (unwraps
+  `.projects` internally), not `{ projects: [...] }` — so `projectId = projectsQ.data?.[0]?.id`.
+- `tasksApi.bulk(projectId)` resolves `BulkSharedTasksResponse.tasks` as `TaskActivity[]`
+  (`{ task, user }[]`, per `crates/remote/src/routes/tasks.rs:50-64,654-659`), not a flat
+  `Task[]` as the plan's literal `BoardPage.tsx`/test draft assumed. `groupByStatus` destructures
+  `{ task }` from each activity.
+- **Field-gap (STOP trigger triggered, extended per task instructions)**: the real hive `Task`
+  interface (`remote-frontend/src/lib/api/tasks.ts`) has no `source_node_id` or `labels` fields
+  used by the plan's literal `groupByStatus`. Resolution: `node` falls back through
+  `owner_name` -> `executing_node_id` -> `owner_node_id` (whichever is non-null first, else `''`);
+  `labels` is always `[]` until the backend adds label support to `SharedTask`.
+- `TaskDrawer`'s exported `TaskRow` (`@/ui/panels`) requires `node: string` (non-optional) while
+  `BoardView`'s exported `TaskRow` (`@/ui/board`) has `node?: string` (optional) — a pre-existing
+  type-shape split between task 301 and task 304. `BoardPage` defines a local `Row` (extends the
+  board `TaskRow`, narrows `node` to required `string`) so one object satisfies both component
+  contracts without an unsafe cast.
+- `BoardPage.test.tsx` was written with the real `TaskActivity`-wrapped mock shape (see above)
+  rather than the plan's literal flat-task mock, to keep the test asserting real behavior against
+  real, already-shipped API client code.
