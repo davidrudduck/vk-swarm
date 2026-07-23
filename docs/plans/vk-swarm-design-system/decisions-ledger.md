@@ -302,3 +302,16 @@ Accepted/deferred (rationale):
 - .vks-btn:disabled pointer-events:none suppresses the disabled-button tooltips (design-source
   CSS is locked); disabled attr is the honest signal.
 - Theme not persisted across reloads — follow-up candidate.
+
+## 2026-07-23 — PR #466 CodeRabbit round (post-merge-review remediation)
+
+12 inline + 3 nitpick findings. Applied (commit cb87543f): NodeCard pulse role=status;
+TaskCard/BoardView keyboard operability; Checkbox/Switch consumer-onClick composition;
+Tabs aria-controls + TaskDrawer tabpanel ids; SettingsRow inline helper guarded by !error
+(deviates from design-source JSX which renders both — documented contract "error replaces
+helper" governs); colors.test hsl-triplet assertions; textures.test dither-dense; Chrome
+project-selector/Open-in-IDE honest disabled; NodesView online/offline label fix; smoke.test
+redundant standalone tsc removed (deviates from plan-literal test — build already runs tsc);
+tasks.ts parseOrThrow dedup; TaskDrawer tab union type.
+Declined: colors.css nested-dark-scope redeclaration (byte-identity lock, ledgered round 1);
+fonts.css stylelint import-notation (locked design-source copy; stylelint not a repo gate).
