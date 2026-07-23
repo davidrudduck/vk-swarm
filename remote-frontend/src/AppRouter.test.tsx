@@ -30,10 +30,30 @@ vi.mock('@/api', async (importOriginal) => ({
 // what ran earlier in the file (test isolation failure, F-2026-07-11-01).
 // Mock them the same way sibling suites (e.g. src/pages/Nodes.test.tsx) do so
 // the queries resolve deterministically and don't depend on the network.
+//
+// `NodesPage` (task 309) imports `nodesApi`/`organizationsApi` directly from
+// their submodules (`@/lib/api/nodes`, `@/lib/api/organizations`) rather than
+// through the `@/lib/api` barrel, so both the barrel and the submodules are
+// mocked here to cover every import path in play (barrel used by
+// `NodeApiKeySection`, submodules used by `NodesPage` itself).
 vi.mock('@/lib/api', () => ({
   nodesApi: {
     list: vi.fn().mockResolvedValue([]),
+    listApiKeys: vi.fn().mockResolvedValue([]),
   },
+  organizationsApi: {
+    list: vi.fn().mockResolvedValue([]),
+  },
+}))
+
+vi.mock('@/lib/api/nodes', () => ({
+  nodesApi: {
+    list: vi.fn().mockResolvedValue([]),
+    listApiKeys: vi.fn().mockResolvedValue([]),
+  },
+}))
+
+vi.mock('@/lib/api/organizations', () => ({
   organizationsApi: {
     list: vi.fn().mockResolvedValue([]),
   },
@@ -43,6 +63,8 @@ import { useProfile } from '@/components/ProfileProvider'
 import { oauthApi } from '@/lib/api/oauth'
 import { initOAuth, getInvitation } from '@/api'
 import { nodesApi, organizationsApi } from '@/lib/api'
+import { nodesApi as nodesApiDirect } from '@/lib/api/nodes'
+import { organizationsApi as organizationsApiDirect } from '@/lib/api/organizations'
 
 describe('AppRouter', () => {
   function stubGetRandomValuesOnlyCrypto() {
@@ -63,6 +85,9 @@ describe('AppRouter', () => {
     // every test so the Nodes page's queries keep resolving deterministically.
     vi.mocked(nodesApi.list).mockResolvedValue([])
     vi.mocked(organizationsApi.list).mockResolvedValue([])
+    vi.mocked(nodesApiDirect.list).mockResolvedValue([])
+    vi.mocked(nodesApiDirect.listApiKeys).mockResolvedValue([])
+    vi.mocked(organizationsApiDirect.list).mockResolvedValue([])
     localStorage.clear()
     sessionStorage.clear()
   })
@@ -178,14 +203,16 @@ describe('AppRouter', () => {
 
     renderWithRouter('/')
 
-    // The root redirect should navigate to /nodes, which renders the Nodes page (h2 "Nodes").
+    // The root redirect should navigate to /nodes, which renders `NodesPage`
+    // (task 309), whose `NodesView` panel heading is "Hive" (not "Nodes" --
+    // the old `pages/Nodes.tsx` heading, now superseded).
     // This is the first test in the file to hit the /nodes route, so it pays the cost of
     // React.lazy() compiling/importing the Nodes page chunk for the first time; under a
     // CPU-contended parallel test run (many files/workers at once) that first-import cost
     // can exceed the default 1000ms waitFor timeout, so give it more headroom here.
     await waitFor(
       () => {
-        expect(screen.getByRole('heading', { level: 2, name: 'Nodes' })).toBeInTheDocument()
+        expect(screen.getByRole('heading', { level: 2, name: 'Hive' })).toBeInTheDocument()
       },
       { timeout: 5000 }
     )
@@ -205,9 +232,9 @@ describe('AppRouter', () => {
 
     renderWithRouter('/nodes')
 
-    // Should render the Nodes page heading
+    // Should render the NodesView panel heading ("Hive")
     await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 2, name: 'Nodes' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 2, name: 'Hive' })).toBeInTheDocument()
     })
   })
 

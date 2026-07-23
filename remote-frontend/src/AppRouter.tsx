@@ -12,7 +12,8 @@ import { retrieveVerifier, clearVerifier, clearInvitationToken, generateVerifier
 import type { OAuthProvider } from '@/api'
 import { initOAuth } from '@/api'
 
-const Nodes = lazy(() => import('./pages/Nodes').then(m => ({ default: m.Nodes })))
+const NodesPage = lazy(() => import('./pages/NodesPage').then(m => ({ default: m.NodesPage })))
+const ProcessesPage = lazy(() => import('./pages/ProcessesPage').then(m => ({ default: m.ProcessesPage })))
 const BoardPage = lazy(() => import('./pages/BoardPage').then(m => ({ default: m.BoardPage })))
 
 function RootRedirect() {
@@ -226,8 +227,9 @@ export function createRoutes() {
     {
       element: <AuthGuard><ChromeLayout /></AuthGuard>,
       children: [
-        { path: '/nodes', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading nodes...</div>}><Nodes /></Suspense></ErrorBoundary> },
+        { path: '/nodes', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading nodes...</div>}><NodesPage /></Suspense></ErrorBoundary> },
         { path: '/tasks', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading tasks...</div>}><BoardPage /></Suspense></ErrorBoundary> },
+        { path: '/processes', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading processes...</div>}><ProcessesPage /></Suspense></ErrorBoundary> },
         { path: '*', element: <NotFoundPage /> },
       ],
     },
