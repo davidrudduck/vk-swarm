@@ -121,3 +121,36 @@ all four already existed (earlier hive-ui sessions) fully conforming to the bare
 — verified byte-identical before/after; left untouched. Only tasks.ts changed (bulk/get/assign
 + types). BulkSharedTasksResponse.tasks typed as {task,user}[] per the actual Rust response
 (crates/remote/src/routes/tasks.rs:655-659), not the task prose's flat Task[].
+
+## 2026-07-23 — task 306 stale CREATE list + type-shape drift (KNOWN GAP already flagged by task)
+
+`remote-frontend/src/lib/electric/{config,collections,index}.ts` already existed (earlier
+session) with all 6 collections/types already added — NOT a fresh CREATE as the task frontmatter
+implied. Only `ELECTRIC_PROXY_BASE` still pointed at the node proxy (`/api/electric/v1/shape`);
+repointed to `/v1/shape` per the task's mandatory repoint (point 1). `collections.ts`/`index.ts`
+left untouched — already schema-aligned and correct.
+
+**Type-shape divergence, NOT adopted verbatim**: the task's literal test object for
+`ElectricTaskAssignment`/`ElectricTaskOutputLog`/`ElectricTaskProgressEvent` (e.g.
+`{ id: 'a', assignment_id: 'x', task_id, node_id, execution_status, lease_expires_at }`) does
+not match the real, already-shipped types in `collections.ts` (`ElectricTaskAssignment` has
+`node_project_id`, `fencing_token`, etc. and is keyed by `.id`, not `.assignment_id`;
+`ElectricTaskOutputLog` has `.content`/`.timestamp`/`.execution_process_id`, not
+`.message`/`.metadata`). Those real types are consumed by
+`remote-frontend/src/pages/Tasks.tsx` (`.node_project_id`, `.content`, keys by `.id`) which is
+OUTSIDE this task's `files:` allowlist. Reshaping the types to match the plan's literal test
+would have broken `Tasks.tsx` + `Tasks.test.tsx` (out of scope). Resolution: kept the existing,
+real, already-correct types untouched; `electric.test.ts` was written to assert SC8's actual
+intent (6 tables, 6 collection factories, types extend `ElectricRow`) using object literals that
+match the REAL field shapes already shipped, not the plan's invented literals. Evidence:
+`grep -rn "createTaskAssignmentsCollection\|ElectricTaskAssignment" remote-frontend/src` shows
+`Tasks.tsx:9,147,211` as the sole non-test consumer.
+
+**Companion-test repoint (separate commit)**: `config.test.ts` and `collections.test.ts`
+(pre-existing, not in the task's `files:` list) hard-asserted the old `/api/electric/v1/shape`
+base throughout. Once `ELECTRIC_PROXY_BASE` changed, those assertions became stale/wrong — left
+red would violate CLAUDE.md's no-deferred-remediation rule and the parent's full-suite-green
+requirement. Updated both files' URL assertions to `/v1/shape` in a follow-up commit
+(`fix(remote-frontend): repoint companion electric tests to hive shape base`) immediately after
+the task-gated commit, so the gate's file-set check (only `files:`-declared paths) still passes
+against the primary commit.
