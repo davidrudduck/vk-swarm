@@ -2,7 +2,7 @@
 id: "307"
 phase: 3
 title: Integrate Chrome into AppRouter (replace slim task-104 layout)
-status: ready
+status: passed
 depends_on: ["302","105"]
 parallel: false
 conflicts_with: []

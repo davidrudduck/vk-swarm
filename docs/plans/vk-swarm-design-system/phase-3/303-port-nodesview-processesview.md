@@ -2,7 +2,7 @@
 id: "303"
 phase: 3
 title: Port NodesView + ProcessesView into remote-frontend
-status: ready
+status: passed
 depends_on: ["206","202"]
 parallel: false
 conflicts_with: []

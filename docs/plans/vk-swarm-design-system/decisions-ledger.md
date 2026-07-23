@@ -276,3 +276,29 @@ dead. The `/nodes` companion asserts `screen.getByText('justX')` for the node re
 **SC9 parity:** `git diff main...HEAD -- frontend/` is EMPTY — the node `frontend/` is untouched.
 
 VERDICT: PASS
+
+## 2026-07-23 — phase 3 integrated adversarial review (round 3)
+
+Panelists: Codex + OpenCode. Reports: `.agents/reports/2026-07-23-round-3-{codex,opencode}-phase3-appkit.md`. Both FIX-FIRST.
+
+Fixed in-session (commits c2f3c427 + 8c9598b6):
+- F1 CRITICAL status mismatch: crates/remote TaskStatus is kebab-case ("in-progress"/"in-review")
+  vs frontend hyphenless union — InProgress/InReview tasks silently vanished from the board.
+  Client-side normalizeStatus() added; fixtures now use real wire values; unknown statuses drop
+  with console.warn (decision: fail-visible in console, never mis-bucket).
+- F2 e2e mock-electric fixture repointed /api/electric → /v1/shape.
+- F3 Workbox api-cache excludes /v1/shape (Electric streams bypass the service worker).
+- F4 theme toggle wired: ChromeLayout state → data-theme on documentElement (per-mount; persistence deferred).
+- F5 unwired actions (TaskDrawer Merge/Rebase/Open-in-IDE, Navbar New Task/Settings) now
+  disabled+title instead of dead clicks; optional handler props added for future wiring.
+- F7/F10 NodesPage test mocks rebuilt to real Node shape.
+- Error states: ErrorBanner on Board/Nodes fetch failure (failure ≠ empty).
+- F8: orphaned shell files deleted (9 files); deriveViewFromLocation('/') → 'nodes' (matches RootRedirect).
+
+Accepted/deferred (rationale):
+- F6 drawer empty-tab ambiguity — no diff/log APIs exist yet; revisit when wired.
+- F9 barrel-vs-submodule import inconsistency — harmless.
+- F11 TooltipProvider div — pre-existing hive-ui artifact.
+- .vks-btn:disabled pointer-events:none suppresses the disabled-button tooltips (design-source
+  CSS is locked); disabled attr is the honest signal.
+- Theme not persisted across reloads — follow-up candidate.
