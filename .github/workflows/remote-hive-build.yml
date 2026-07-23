@@ -80,6 +80,10 @@ jobs:
 
   docker-build:
     name: Docker build (remote-server)
+    # Full --no-cache image build (~20-40 min). Manual-trigger only: run via
+    # workflow_dispatch before a deploy. Day-to-day, test docker builds locally with
+    # `docker compose --env-file .env.remote build` using .env.remote.dev settings.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: build-remote
     steps:
