@@ -19,7 +19,8 @@ beforeEach(() => {
 describe('nodesApi (SC8)', () => {
   it('list(orgId) GETs /v1/nodes?organization_id= with Bearer header', async () => {
     await nodesApi.list('org-1');
-    const [url, init] = (globalThis.fetch as any).mock.calls[0];
+    const [url, init] = (vi.mocked(globalThis.fetch) as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, RequestInit];
     expect(url).toContain('/v1/nodes?organization_id=org-1');
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer test-token');
   });
@@ -28,23 +29,26 @@ describe('nodesApi (SC8)', () => {
 describe('tasksApi (SC8)', () => {
   it('bulk(projectId) GETs /v1/tasks/bulk?project_id= with Bearer header', async () => {
     await tasksApi.bulk('proj-1');
-    const [url, init] = (globalThis.fetch as any).mock.calls[0];
+    const [url, init] = (vi.mocked(globalThis.fetch) as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, RequestInit];
     expect(url).toContain('/v1/tasks/bulk?project_id=proj-1');
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer test-token');
   });
   it('setExecutingNode(id, nodeId) PATCHes /v1/tasks/{id}/executing-node with {node_id}', async () => {
     await tasksApi.setExecutingNode('t1', 'n1');
-    const [url, init] = (globalThis.fetch as any).mock.calls[0];
+    const [url, init] = (vi.mocked(globalThis.fetch) as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, RequestInit];
     expect(url).toContain('/v1/tasks/t1/executing-node');
     expect(init.method).toBe('PATCH');
-    expect(JSON.parse(init.body)).toEqual({ node_id: 'n1' });
+    expect(JSON.parse(init.body as string)).toEqual({ node_id: 'n1' });
   });
 });
 
 describe('swarmLabelsApi (SC8)', () => {
   it('list(orgId) GETs /v1/swarm/labels?organization_id= with Bearer header', async () => {
     await swarmLabelsApi.list('org-1');
-    const [url, init] = (globalThis.fetch as any).mock.calls[0];
+    const [url, init] = (vi.mocked(globalThis.fetch) as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, RequestInit];
     expect(url).toContain('/v1/swarm/labels?organization_id=org-1');
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer test-token');
   });
