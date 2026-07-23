@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { Navbar, Logo, ThemeToggle, NavIcon, NavTab, Icon, ICONS } from './index';
+import { Navbar, Logo, ThemeToggle, NavIcon, NavTab, ICONS } from './index';
 
 describe('Chrome (SC7)', () => {
   it('Logo renders vks-wordmark with .vk and .swarm spans', () => {
