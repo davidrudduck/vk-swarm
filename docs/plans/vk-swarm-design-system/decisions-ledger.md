@@ -34,3 +34,12 @@ The `\bTODO\b` keyword in the deferral-detection regex was case-insensitive (`gr
 - Extended `remote-frontend/.prettierignore` to exclude `src/styles/tokens/*.css` and `src/styles/components.css`
 **Undictated choices**: None. Prior commit had already fixed package.json (vite@^8.0.7) and tsconfig.json (node types); current pass only required CSS copy + test files + prettier exclusions.
 **Gate result**: typecheck ✓, tests ✓, file-set ✓
+
+## 2026-07-23 — task 104 test-pragma deviation
+
+Task 104's embedded test carried `// @vitest-environment node` while also calling
+`@testing-library/react` `render()` (needs DOM). Self-contradiction in the task file.
+Resolution: pragma removed; file falls through to the project default `jsdom`
+(`remote-frontend/vite.config.ts` line 75), which supports both `render()` and Node
+`readFileSync`. Verified empirically (2/5 tests fail under `node` env). Reviewer confirmed
+minimal-correct. No other line altered.
