@@ -113,3 +113,11 @@ unchanged; live wiring lands in 308/309. Also: window.Icon/ICONS/useBreakpoint g
 replaced with ES imports from `ui/chrome/icons` and `ui/chrome/useBreakpoint`; close button
 gained aria-label="Close"; AttemptsPanel 'merged' renders the success dot per task prose
 (JSX SEED never exercised that state).
+
+## 2026-07-23 — task 305 stale CREATE list
+
+Task 305 listed nodes.ts / swarmLabels.ts / organizations.ts / swarmProjects.ts as CREATE, but
+all four already existed (earlier hive-ui sessions) fully conforming to the bare-JSON contract
+— verified byte-identical before/after; left untouched. Only tasks.ts changed (bulk/get/assign
++ types). BulkSharedTasksResponse.tasks typed as {task,user}[] per the actual Rust response
+(crates/remote/src/routes/tasks.rs:655-659), not the task prose's flat Task[].
