@@ -13,7 +13,7 @@ import type { OAuthProvider } from '@/api'
 import { initOAuth } from '@/api'
 
 const Nodes = lazy(() => import('./pages/Nodes').then(m => ({ default: m.Nodes })))
-const TasksBoard = lazy(() => import('./pages/Tasks').then(m => ({ default: m.TasksBoard })))
+const BoardPage = lazy(() => import('./pages/BoardPage').then(m => ({ default: m.BoardPage })))
 
 function RootRedirect() {
   const { isSignedIn, isLoaded } = useProfile()
@@ -227,7 +227,7 @@ export function createRoutes() {
       element: <AuthGuard><ChromeLayout /></AuthGuard>,
       children: [
         { path: '/nodes', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading nodes...</div>}><Nodes /></Suspense></ErrorBoundary> },
-        { path: '/tasks', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading tasks...</div>}><TasksBoard /></Suspense></ErrorBoundary> },
+        { path: '/tasks', element: <ErrorBoundary><Suspense fallback={<div className="p-8">Loading tasks...</div>}><BoardPage /></Suspense></ErrorBoundary> },
         { path: '*', element: <NotFoundPage /> },
       ],
     },
