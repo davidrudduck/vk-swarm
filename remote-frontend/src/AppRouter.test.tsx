@@ -23,9 +23,26 @@ vi.mock('@/api', async (importOriginal) => ({
   getInvitation: vi.fn(),
 }))
 
+// The Nodes page (rendered via the authenticated routes below) fetches
+// organizations and nodes through these API modules. Without mocking them,
+// the queries hit the real (unmocked) `fetch`, which is slow/non-deterministic
+// in jsdom and leaves the Nodes page stuck in its loading state depending on
+// what ran earlier in the file (test isolation failure, F-2026-07-11-01).
+// Mock them the same way sibling suites (e.g. src/pages/Nodes.test.tsx) do so
+// the queries resolve deterministically and don't depend on the network.
+vi.mock('@/lib/api', () => ({
+  nodesApi: {
+    list: vi.fn().mockResolvedValue([]),
+  },
+  organizationsApi: {
+    list: vi.fn().mockResolvedValue([]),
+  },
+}))
+
 import { useProfile } from '@/components/ProfileProvider'
 import { oauthApi } from '@/lib/api/oauth'
 import { initOAuth, getInvitation } from '@/api'
+import { nodesApi, organizationsApi } from '@/lib/api'
 
 describe('AppRouter', () => {
   function stubGetRandomValuesOnlyCrypto() {
@@ -41,6 +58,11 @@ describe('AppRouter', () => {
 
   beforeEach(() => {
     vi.resetAllMocks()
+    // vi.resetAllMocks() strips the default implementations configured in the
+    // vi.mock('@/lib/api', ...) factory above, so re-establish them here on
+    // every test so the Nodes page's queries keep resolving deterministically.
+    vi.mocked(nodesApi.list).mockResolvedValue([])
+    vi.mocked(organizationsApi.list).mockResolvedValue([])
     localStorage.clear()
     sessionStorage.clear()
   })
@@ -156,10 +178,17 @@ describe('AppRouter', () => {
 
     renderWithRouter('/')
 
-    // The root redirect should navigate to /nodes, which renders the Nodes page (h2 "Nodes")
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 2, name: 'Nodes' })).toBeInTheDocument()
-    })
+    // The root redirect should navigate to /nodes, which renders the Nodes page (h2 "Nodes").
+    // This is the first test in the file to hit the /nodes route, so it pays the cost of
+    // React.lazy() compiling/importing the Nodes page chunk for the first time; under a
+    // CPU-contended parallel test run (many files/workers at once) that first-import cost
+    // can exceed the default 1000ms waitFor timeout, so give it more headroom here.
+    await waitFor(
+      () => {
+        expect(screen.getByRole('heading', { level: 2, name: 'Nodes' })).toBeInTheDocument()
+      },
+      { timeout: 5000 }
+    )
   })
 
   it('authenticated: hitting /nodes renders the Nodes page with layout', async () => {
