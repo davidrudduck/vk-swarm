@@ -113,3 +113,9 @@ vks-progress.md
 .mcp.json
 .omc/
 .worktrees/
+
+# local-only env/config (purged from history 2026-07-24)
+.env.dev
+.env.swarm-node
+mcp.json.disabled
+.claude/
