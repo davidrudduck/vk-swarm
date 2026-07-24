@@ -95,7 +95,8 @@ jobs:
           set -o pipefail
           PNPM_VERSION=$(jq -re '.packageManager | sub("^pnpm@"; "")' package.json)
           export PNPM_VERSION
-          cp crates/remote/.env.remote.dev crates/remote/.env.remote
+          # .env.remote.dev is local-only (untracked); CI builds from the example template
+          cp crates/remote/.env.remote.example crates/remote/.env.remote
           echo 'LOOPS_EMAIL_API_KEY=ci-placeholder' >> crates/remote/.env.remote
           (cd crates/remote && docker compose --env-file .env.remote build --no-cache remote-server 2>&1 | tee /tmp/ci-build.log)
           ! grep -q "ERR_UNKNOWN_BUILTIN_MODULE" /tmp/ci-build.log || {

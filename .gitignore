@@ -119,3 +119,5 @@ vks-progress.md
 .env.swarm-node
 mcp.json.disabled
 .claude/
+crates/remote/.env.dev
+crates/remote/.env.remote.dev
