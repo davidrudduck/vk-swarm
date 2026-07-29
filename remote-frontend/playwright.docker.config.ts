@@ -16,6 +16,9 @@ export default defineConfig({
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:9000',
     trace: 'on-first-retry',
+    // The PWA service worker (NetworkFirst on /v1/*) serves requests that
+    // bypass page.route() mocks, turning mocked API tests flaky. Block it.
+    serviceWorkers: 'block',
   },
   projects: [
     {

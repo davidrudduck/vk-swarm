@@ -10,9 +10,9 @@
 //! `crates/remote/src/nodes/ws/connection.rs` (task 602).
 
 use remote::nodes::ws::message::{
-    AuthResultMessage, BackfillRequestMessage, BackfillType, HiveMessage, LabelSyncBroadcastMessage,
-    NodeRemovedMessage, ProjectSyncMessage, TaskAssignMessage, TaskCancelMessage, TaskDetails,
-    TaskSyncResponseMessage,
+    AuthResultMessage, BackfillRequestMessage, BackfillType, HiveMessage,
+    LabelSyncBroadcastMessage, NodeRemovedMessage, ProjectSyncMessage, TaskAssignMessage,
+    TaskCancelMessage, TaskDetails, TaskSyncResponseMessage,
 };
 
 /// How a `HiveMessage` reaches a node — the allowed delivery classes for SC1.
@@ -58,7 +58,9 @@ fn classify(msg: &HiveMessage) -> Delivery {
         // P2 lease variants (this task `depends_on: 202`, so they exist at execution time). A lease
         // grant/revoke targets the recipient's OWN assignment — control, never task-state fan-out.
         // Shapes per CONTRACT §A (struct-variants → match `{ .. }`).
-        HiveMessage::LeaseGrant { .. } | HiveMessage::LeaseRevoked { .. } => Delivery::OwnAssignment,
+        HiveMessage::LeaseGrant { .. } | HiveMessage::LeaseRevoked { .. } => {
+            Delivery::OwnAssignment
+        }
         // P5 digest result (this task `depends_on: 501`) — directs the recipient's OWN heal; control.
         HiveMessage::DigestResult { .. } => Delivery::PerNodeControl,
     }
@@ -83,8 +85,13 @@ fn one_of_each() -> Vec<HiveMessage> {
             swarm_labels: vec![],
         }),
         HiveMessage::HeartbeatAck { server_time: now },
-        HiveMessage::StatusRequest { message_id: sample_uuid() },
-        HiveMessage::Error { message_id: None, error: "x".into() },
+        HiveMessage::StatusRequest {
+            message_id: sample_uuid(),
+        },
+        HiveMessage::Error {
+            message_id: None,
+            error: "x".into(),
+        },
         HiveMessage::Close { reason: "x".into() },
         HiveMessage::TaskSyncResponse(TaskSyncResponseMessage {
             local_task_id: sample_uuid(),
@@ -136,7 +143,9 @@ fn one_of_each() -> Vec<HiveMessage> {
         }),
         // P1 task 103 variant (present because this task depends_on 103). If 103's payload shape
         // differs from CONTRACT §A `{ applied_through_seq: i64 }`, build from the actual variant.
-        HiveMessage::OpAck { applied_through_seq: 0 },
+        HiveMessage::OpAck {
+            applied_through_seq: 0,
+        },
         HiveMessage::LabelSync(LabelSyncBroadcastMessage {
             message_id: sample_uuid(),
             shared_label_id: sample_uuid(),
@@ -154,9 +163,15 @@ fn one_of_each() -> Vec<HiveMessage> {
             fencing_token: 1,
             lease_expires_at: now,
         },
-        HiveMessage::LeaseRevoked { assignment_id: sample_uuid(), reason: "x".into() },
+        HiveMessage::LeaseRevoked {
+            assignment_id: sample_uuid(),
+            reason: "x".into(),
+        },
         // P5 digest result (depends_on 501) — shape per CONTRACT §A.
-        HiveMessage::DigestResult { resend_from_seq: None, pull_entities: vec![] },
+        HiveMessage::DigestResult {
+            resend_from_seq: None,
+            pull_entities: vec![],
+        },
     ]
 }
 

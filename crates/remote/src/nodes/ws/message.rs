@@ -168,7 +168,10 @@ pub enum HiveMessage {
     LeaseRevoked { assignment_id: Uuid, reason: String },
     /// Reply to a node Digest (SC5, CONTRACT §A).
     #[serde(rename = "digest_result")]
-    DigestResult { resend_from_seq: Option<i64>, pull_entities: Vec<Uuid> },
+    DigestResult {
+        resend_from_seq: Option<i64>,
+        pull_entities: Vec<Uuid>,
+    },
 }
 
 /// Authentication message from node to hive.

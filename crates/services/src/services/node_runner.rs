@@ -1107,8 +1107,12 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                         // batch returns < RESTREAM_LIMIT rows (exhausted). The hive apply is
                         // idempotent (ON CONFLICT DO NOTHING), so the burst is safe.
                         loop {
-                            match OutboxRepository::peek_from_seq(&db.pool, from_seq, RESTREAM_LIMIT)
-                                .await
+                            match OutboxRepository::peek_from_seq(
+                                &db.pool,
+                                from_seq,
+                                RESTREAM_LIMIT,
+                            )
+                            .await
                             {
                                 Ok(rows) if !rows.is_empty() => {
                                     let batch_size = rows.len() as i64;
@@ -1862,7 +1866,11 @@ mod restream_tests {
     use super::*;
     use chrono::Utc;
 
-    fn make_row(entity_type: &str, entity_id: Uuid, fencing_token: Option<i64>) -> db::models::node_outbox::OutboxOp {
+    fn make_row(
+        entity_type: &str,
+        entity_id: Uuid,
+        fencing_token: Option<i64>,
+    ) -> db::models::node_outbox::OutboxOp {
         db::models::node_outbox::OutboxOp {
             id: Uuid::new_v4(),
             seq: 1,
@@ -1889,7 +1897,11 @@ mod restream_tests {
 
         let row = make_row("task", task_id, None);
         let op = restream_row_to_ws_op(row, &token_by_task);
-        assert_eq!(op.fencing_token, Some(7), "task op must be re-stamped from active_assignments");
+        assert_eq!(
+            op.fencing_token,
+            Some(7),
+            "task op must be re-stamped from active_assignments"
+        );
     }
 
     /// Non-task ops (e.g. log) keep their stored fencing_token as-is (no assignment mapping).
@@ -1908,7 +1920,10 @@ mod restream_tests {
         let token_by_task = HashMap::new();
         let row = make_row("task", Uuid::new_v4(), None);
         let op = restream_row_to_ws_op(row, &token_by_task);
-        assert_eq!(op.fencing_token, None, "no assignment → stored None (hive will reject as stale)");
+        assert_eq!(
+            op.fencing_token, None,
+            "no assignment → stored None (hive will reject as stale)"
+        );
     }
 }
 

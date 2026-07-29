@@ -54,11 +54,14 @@ test.describe('Docker E2E — Static Assets', () => {
 });
 
 test.describe('Docker E2E — Error Handling', () => {
-  test('404 page renders for unknown routes', async ({ page }) => {
+  test('unknown routes serve the SPA shell (client-side routing)', async ({ page }) => {
+    // The server intentionally serves index.html with 200 for unknown paths
+    // (SPA fallback — routes/mod.rs ServeDir fallback). The client router then
+    // handles the path: unauthenticated users land on /login.
     const response = await page.goto('/nonexistent-page-12345');
-    // Unknown routes should not return 200 OK
-    expect(response?.ok()).toBeFalsy();
-    await expect(page.locator('body')).not.toBeEmpty();
+    expect(response?.status()).toBe(200);
+    await page.waitForURL('**/login**');
+    await expect(page.locator('h1')).toContainText('Welcome');
   });
 
   test('login page renders successfully across repeated navigations', async ({ page }) => {

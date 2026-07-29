@@ -585,9 +585,7 @@ async fn handle_node_message(
         NodeMessage::LeaseHeartbeat { assignment_ids } => {
             handle_lease_heartbeat(node_id, assignment_ids, pool, ws_sender).await
         }
-        NodeMessage::Digest { entries } => {
-            handle_digest(node_id, entries, pool, ws_sender).await
-        }
+        NodeMessage::Digest { entries } => handle_digest(node_id, entries, pool, ws_sender).await,
     }
 }
 
@@ -1620,27 +1618,27 @@ async fn handle_task_sync(
     // An unknown wire value is a node-side serialization bug; we surface it as a `success: false`
     // response rather than `?`-propagating (which would leave the node waiting on a response).
     // This mirrors `handle_op_batch_apply`'s SKIP+ADVANCE for the identical failure class (R2/E).
-    let status = match crate::nodes::ws::status_machine::canonical_status_from_node(&task_sync.status)
-    {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(
-                node_id = %node_id,
-                local_task_id = %task_sync.local_task_id,
-                status = %task_sync.status,
-                error = %e,
-                "task_sync: rejected unknown status wire value"
-            );
-            let r = TaskSyncResponseMessage {
-                local_task_id: task_sync.local_task_id,
-                shared_task_id: Uuid::nil(),
-                success: false,
-                error: Some(format!("REJECTED: unknown status wire value: {}", e)),
-            };
-            let _ = send_message(ws_sender, &HiveMessage::TaskSyncResponse(r)).await;
-            return Ok(());
-        }
-    };
+    let status =
+        match crate::nodes::ws::status_machine::canonical_status_from_node(&task_sync.status) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    node_id = %node_id,
+                    local_task_id = %task_sync.local_task_id,
+                    status = %task_sync.status,
+                    error = %e,
+                    "task_sync: rejected unknown status wire value"
+                );
+                let r = TaskSyncResponseMessage {
+                    local_task_id: task_sync.local_task_id,
+                    shared_task_id: Uuid::nil(),
+                    success: false,
+                    error: Some(format!("REJECTED: unknown status wire value: {}", e)),
+                };
+                let _ = send_message(ws_sender, &HiveMessage::TaskSyncResponse(r)).await;
+                return Ok(());
+            }
+        };
 
     // First check if the node_local_projects record exists
     // This distinguishes between "ProjectsSync hasn't arrived" and "project not linked"
@@ -2086,15 +2084,14 @@ async fn handle_op_batch_apply(
             // skip the lease+token fence (the owner does not need a lease to write its
             // own task). Only hive-assigned tasks (owner_node_id != node_id or NULL)
             // require the fence.
-            let owner_node_id: Option<Uuid> =
-                sqlx::query_scalar::<_, Option<Uuid>>(
-                    r#"SELECT owner_node_id FROM shared_tasks WHERE id = $1 AND deleted_at IS NULL"#,
-                )
-                .bind(shared_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| HandleError::Database(e.to_string()))?
-                .flatten();
+            let owner_node_id: Option<Uuid> = sqlx::query_scalar::<_, Option<Uuid>>(
+                r#"SELECT owner_node_id FROM shared_tasks WHERE id = $1 AND deleted_at IS NULL"#,
+            )
+            .bind(shared_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| HandleError::Database(e.to_string()))?
+            .flatten();
 
             if owner_node_id == Some(node_id) {
                 // Node-owned task — bypass the fence. Proceed to status mapping + upsert.
@@ -2458,8 +2455,8 @@ async fn handle_digest_compare(
     node_id: Uuid,
     entries: &[DigestEntry],
 ) -> Result<DigestResultParts, HandleError> {
-    use std::collections::HashSet;
     use crate::db::tasks::SharedTaskRepository;
+    use std::collections::HashSet;
 
     // 1. The node's view: entity_ids of task entries (the id bridge — node local task id).
     let node_ids: HashSet<Uuid> = entries
@@ -2515,7 +2512,10 @@ async fn handle_digest_compare(
         None
     };
 
-    Ok(DigestResultParts { resend_from_seq, pull_entities })
+    Ok(DigestResultParts {
+        resend_from_seq,
+        pull_entities,
+    })
 }
 
 /// Handle a `NodeMessage::OpBatch` (SC2): apply each op idempotently to `node_op_log` +
@@ -3731,8 +3731,16 @@ mod digest_tests {
 
         // Node reports both A and B as active.
         let entries = vec![
-            DigestEntry { entity_type: "task".into(), entity_id: sid_a, version: 1 },
-            DigestEntry { entity_type: "task".into(), entity_id: sid_b, version: 1 },
+            DigestEntry {
+                entity_type: "task".into(),
+                entity_id: sid_a,
+                version: 1,
+            },
+            DigestEntry {
+                entity_type: "task".into(),
+                entity_id: sid_b,
+                version: 1,
+            },
         ];
         let result = handle_digest_compare(&pool, node_id, &entries)
             .await
@@ -5606,15 +5614,15 @@ mod extract_project_name_tests {
 
     #[test]
     fn test_windows_path_trailing_backslash() {
-        assert_eq!(
-            extract_project_name("C:\\path\\to\\project\\"),
-            "project"
-        );
+        assert_eq!(extract_project_name("C:\\path\\to\\project\\"), "project");
     }
 
     #[test]
     fn test_single_component() {
-        assert_eq!(extract_project_name("/single_component"), "single_component");
+        assert_eq!(
+            extract_project_name("/single_component"),
+            "single_component"
+        );
     }
 
     #[test]

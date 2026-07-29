@@ -60,14 +60,16 @@ async fn regenerable_node_attempt_repopulates_from_reingest() {
         .await
         .unwrap();
     let node_id = uuid::Uuid::new_v4();
-    sqlx::query("INSERT INTO nodes (id, organization_id, name, machine_id) \
-                  VALUES ($1, $2, 'n1', $3)")
-        .bind(node_id)
-        .bind(org_id)
-        .bind(uuid::Uuid::new_v4().to_string())
-        .execute(&mut *tx)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO nodes (id, organization_id, name, machine_id) \
+                  VALUES ($1, $2, 'n1', $3)",
+    )
+    .bind(node_id)
+    .bind(org_id)
+    .bind(uuid::Uuid::new_v4().to_string())
+    .execute(&mut *tx)
+    .await
+    .unwrap();
     let swarm_project_id = uuid::Uuid::new_v4();
     sqlx::query("INSERT INTO swarm_projects (id, organization_id, name) VALUES ($1, $2, 'p1')")
         .bind(swarm_project_id)
@@ -88,13 +90,12 @@ async fn regenerable_node_attempt_repopulates_from_reingest() {
     .unwrap();
 
     // The REGENERABLE table is empty for this task post-cutover (701 cleared it).
-    let before: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM node_task_attempts WHERE shared_task_id = $1",
-    )
-    .bind(shared_task_id)
-    .fetch_one(&mut *tx)
-    .await
-    .unwrap();
+    let before: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM node_task_attempts WHERE shared_task_id = $1")
+            .bind(shared_task_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
     assert_eq!(
         before, 0,
         "REGENERABLE node_task_attempts must start empty post-cutover for this task"

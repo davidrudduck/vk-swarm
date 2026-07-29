@@ -269,8 +269,11 @@ impl Task {
         // has an UNACKED outbound op, an inbound update must NOT overwrite it — the local edit travels
         // up the ordered outbox first (ADR-0008). Skip the apply and return the retained local row.
         if let Some(existing) = Task::find_by_shared_task_id(pool, shared_task_id).await?
-            && crate::models::node_outbox::OutboxRepository::has_unacked_for_entity(pool, existing.id)
-                .await?
+            && crate::models::node_outbox::OutboxRepository::has_unacked_for_entity(
+                pool,
+                existing.id,
+            )
+            .await?
         {
             return Ok(existing);
         }
@@ -471,7 +474,8 @@ impl Task {
             r#"UPDATE tasks
                SET shared_task_id = NULL, updated_at = CURRENT_TIMESTAMP
                WHERE project_id = $1
-               AND shared_task_id IS NOT NULL"#.to_string()
+               AND shared_task_id IS NOT NULL"#
+                .to_string()
         } else {
             let placeholders: Vec<String> = active_shared_task_ids
                 .iter()
@@ -895,21 +899,38 @@ mod tests {
             cleanup_script: None,
             copy_files: None,
         };
-        Project::create(&pool, &project_data, project_id).await.unwrap();
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
 
         let local_id = Uuid::new_v4();
         let shared_id = Uuid::new_v4();
-        Task::create(&pool, &CreateTask::from_title_description(project_id, "t".into(), None), local_id)
-            .await.unwrap();
-        Task::set_shared_task_id(&pool, local_id, Some(shared_id)).await.unwrap();
+        Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            local_id,
+        )
+        .await
+        .unwrap();
+        Task::set_shared_task_id(&pool, local_id, Some(shared_id))
+            .await
+            .unwrap();
 
         // Reconcile leg: hive deleted this shared task.
-        let n = Task::unlink_by_shared_task_id(&pool, shared_id).await.unwrap();
+        let n = Task::unlink_by_shared_task_id(&pool, shared_id)
+            .await
+            .unwrap();
         assert_eq!(n, 1, "one row unlinked");
 
         let still = Task::find_by_id(&pool, local_id).await.unwrap();
-        assert!(still.is_some(), "local row is RETAINED (soft-unlink, not hard-delete)");
-        assert!(still.unwrap().shared_task_id.is_none(), "shared_task_id cleared (tombstone)");
+        assert!(
+            still.is_some(),
+            "local row is RETAINED (soft-unlink, not hard-delete)"
+        );
+        assert!(
+            still.unwrap().shared_task_id.is_none(),
+            "shared_task_id cleared (tombstone)"
+        );
     }
 
     #[tokio::test]
@@ -926,29 +947,54 @@ mod tests {
             cleanup_script: None,
             copy_files: None,
         };
-        Project::create(&pool, &project_data, project_id).await.unwrap();
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
 
         let kept = Uuid::new_v4();
         let stale = Uuid::new_v4();
         let kept_shared = Uuid::new_v4();
         let stale_shared = Uuid::new_v4();
         for (lid, sid) in [(kept, kept_shared), (stale, stale_shared)] {
-            Task::create(&pool, &CreateTask::from_title_description(project_id, "t".into(), None), lid)
-                .await.unwrap();
-            Task::set_shared_task_id(&pool, lid, Some(sid)).await.unwrap();
+            Task::create(
+                &pool,
+                &CreateTask::from_title_description(project_id, "t".into(), None),
+                lid,
+            )
+            .await
+            .unwrap();
+            Task::set_shared_task_id(&pool, lid, Some(sid))
+                .await
+                .unwrap();
         }
 
         // Active set contains only `kept_shared`; `stale_shared` is no longer present on hive.
-        let n = Task::unlink_stale_shared_tasks(&pool, project_id, &[kept_shared]).await.unwrap();
+        let n = Task::unlink_stale_shared_tasks(&pool, project_id, &[kept_shared])
+            .await
+            .unwrap();
         assert_eq!(n, 1, "only the stale row is unlinked");
 
-        assert!(Task::find_by_id(&pool, stale).await.unwrap().unwrap().shared_task_id.is_none());
+        assert!(
+            Task::find_by_id(&pool, stale)
+                .await
+                .unwrap()
+                .unwrap()
+                .shared_task_id
+                .is_none()
+        );
         assert_eq!(
-            Task::find_by_id(&pool, kept).await.unwrap().unwrap().shared_task_id,
+            Task::find_by_id(&pool, kept)
+                .await
+                .unwrap()
+                .unwrap()
+                .shared_task_id,
             Some(kept_shared),
             "active task stays linked",
         );
-        assert!(Task::find_by_id(&pool, stale).await.unwrap().is_some(), "stale local row retained");
+        assert!(
+            Task::find_by_id(&pool, stale).await.unwrap().is_some(),
+            "stale local row retained"
+        );
     }
 
     #[tokio::test]
@@ -967,19 +1013,40 @@ mod tests {
             cleanup_script: None,
             copy_files: None,
         };
-        Project::create(&pool, &project_data, project_id).await.unwrap();
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
 
         let stale = Uuid::new_v4();
         let stale_shared = Uuid::new_v4();
-        Task::create(&pool, &CreateTask::from_title_description(project_id, "t".into(), None), stale)
-            .await.unwrap();
-        Task::set_shared_task_id(&pool, stale, Some(stale_shared)).await.unwrap();
+        Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            stale,
+        )
+        .await
+        .unwrap();
+        Task::set_shared_task_id(&pool, stale, Some(stale_shared))
+            .await
+            .unwrap();
 
         // Empty active set → every linked task in the project is unlinked.
-        let n = Task::unlink_stale_shared_tasks(&pool, project_id, &[]).await.unwrap();
-        assert_eq!(n, 1, "the linked row is unlinked even when the active set is empty");
-        assert!(Task::find_by_id(&pool, stale).await.unwrap().unwrap().shared_task_id.is_none(),
-            "stale link cleared on empty active set");
+        let n = Task::unlink_stale_shared_tasks(&pool, project_id, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            n, 1,
+            "the linked row is unlinked even when the active set is empty"
+        );
+        assert!(
+            Task::find_by_id(&pool, stale)
+                .await
+                .unwrap()
+                .unwrap()
+                .shared_task_id
+                .is_none(),
+            "stale link cleared on empty active set"
+        );
     }
 
     #[tokio::test]
@@ -1633,31 +1700,79 @@ mod tests {
             cleanup_script: None,
             copy_files: None,
         };
-        Project::create(&pool, &project_data, project_id).await.unwrap();
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
 
         let local_id = Uuid::new_v4();
         let shared_id = Uuid::new_v4();
         Task::upsert_remote_task(
-            &pool, local_id, project_id, shared_id, "remote-title".into(), None,
-            TaskStatus::InReview, None, None, None, 1, None, None,
-        ).await.unwrap();
-        let row = Task::find_by_shared_task_id(&pool, shared_id).await.unwrap().unwrap();
+            &pool,
+            local_id,
+            project_id,
+            shared_id,
+            "remote-title".into(),
+            None,
+            TaskStatus::InReview,
+            None,
+            None,
+            None,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let row = Task::find_by_shared_task_id(&pool, shared_id)
+            .await
+            .unwrap()
+            .unwrap();
 
-        OutboxRepository::enqueue_op(&pool, NewOutboxOp {
-            op_type: "task.upsert".into(), entity_type: "task".into(), entity_id: row.id,
-            payload: serde_json::json!({}), idempotency_key: format!("task:{}:1", row.id),
-            fencing_token: None,
-        }).await.unwrap();
+        OutboxRepository::enqueue_op(
+            &pool,
+            NewOutboxOp {
+                op_type: "task.upsert".into(),
+                entity_type: "task".into(),
+                entity_id: row.id,
+                payload: serde_json::json!({}),
+                idempotency_key: format!("task:{}:1", row.id),
+                fencing_token: None,
+            },
+        )
+        .await
+        .unwrap();
 
         let returned = Task::upsert_remote_task(
-            &pool, Uuid::new_v4(), project_id, shared_id, "HIVE-CLOBBER".into(), None,
-            TaskStatus::Done, None, None, None, 2, None, None,
-        ).await.unwrap();
+            &pool,
+            Uuid::new_v4(),
+            project_id,
+            shared_id,
+            "HIVE-CLOBBER".into(),
+            None,
+            TaskStatus::Done,
+            None,
+            None,
+            None,
+            2,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
-        let after = Task::find_by_shared_task_id(&pool, shared_id).await.unwrap().unwrap();
-        assert_eq!(after.title, "remote-title", "local edit not clobbered (apply skipped)");
+        let after = Task::find_by_shared_task_id(&pool, shared_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after.title, "remote-title",
+            "local edit not clobbered (apply skipped)"
+        );
         assert_eq!(after.remote_version, 1, "version not advanced while dirty");
-        assert_eq!(returned.title, "remote-title", "returns the retained local row");
+        assert_eq!(
+            returned.title, "remote-title",
+            "returns the retained local row"
+        );
     }
 
     #[tokio::test]
@@ -1678,12 +1793,21 @@ mod tests {
                 cleanup_script: None,
                 copy_files: None,
             };
-            Project::create(pool, &project_data, project_id).await.unwrap();
+            Project::create(pool, &project_data, project_id)
+                .await
+                .unwrap();
             let local_id = Uuid::new_v4();
             let shared_id = Uuid::new_v4();
-            Task::create(pool, &CreateTask::from_title_description(project_id, "t".into(), None), local_id)
-                .await.unwrap();
-            Task::set_shared_task_id(pool, local_id, Some(shared_id)).await.unwrap();
+            Task::create(
+                pool,
+                &CreateTask::from_title_description(project_id, "t".into(), None),
+                local_id,
+            )
+            .await
+            .unwrap();
+            Task::set_shared_task_id(pool, local_id, Some(shared_id))
+                .await
+                .unwrap();
             // TaskAttempt::create(pool, &data, attempt_id, task_id) — 4 args (see task_attempt.rs:870).
             TaskAttempt::create(
                 pool,
@@ -1695,30 +1819,46 @@ mod tests {
                 },
                 Uuid::new_v4(),
                 local_id,
-            ).await.unwrap();
+            )
+            .await
+            .unwrap();
             (local_id, shared_id)
         }
 
         // LEG A — reconcile path (&SqlitePool).
         let (pool, _t1) = setup_test_pool().await;
         let (local_a, shared_a) = linked_task_with_attempt(&pool).await;
-        let n = Task::unlink_by_shared_task_id(&pool, shared_a).await.unwrap();
+        let n = Task::unlink_by_shared_task_id(&pool, shared_a)
+            .await
+            .unwrap();
         assert_eq!(n, 1);
 
         // LEG B — WS path (&mut Transaction), SAME helper.
         let (local_b, shared_b) = linked_task_with_attempt(&pool).await;
         let mut tx = pool.begin().await.unwrap();
-        let n = Task::unlink_by_shared_task_id(tx.as_mut(), shared_b).await.unwrap();
+        let n = Task::unlink_by_shared_task_id(tx.as_mut(), shared_b)
+            .await
+            .unwrap();
         assert_eq!(n, 1);
         tx.commit().await.unwrap();
 
         // IDENTICAL outcome on both legs: row retained, shared_task_id cleared, attempt retained.
         for local_id in [local_a, local_b] {
             let task = Task::find_by_id(&pool, local_id).await.unwrap();
-            assert!(task.is_some(), "local task RETAINED (soft-unlink, not hard-delete)");
-            assert!(task.unwrap().shared_task_id.is_none(), "shared_task_id cleared (tombstone)");
+            assert!(
+                task.is_some(),
+                "local task RETAINED (soft-unlink, not hard-delete)"
+            );
+            assert!(
+                task.unwrap().shared_task_id.is_none(),
+                "shared_task_id cleared (tombstone)"
+            );
             let attempts = TaskAttempt::fetch_all(&pool, Some(local_id)).await.unwrap();
-            assert_eq!(attempts.len(), 1, "local task_attempt RETAINED — node never loses work it ran");
+            assert_eq!(
+                attempts.len(),
+                1,
+                "local task_attempt RETAINED — node never loses work it ran"
+            );
         }
     }
 
@@ -1736,19 +1876,50 @@ mod tests {
             cleanup_script: None,
             copy_files: None,
         };
-        Project::create(&pool, &project_data, project_id).await.unwrap();
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
 
         let shared_id = Uuid::new_v4();
         Task::upsert_remote_task(
-            &pool, Uuid::new_v4(), project_id, shared_id, "v1".into(), None,
-            TaskStatus::InReview, None, None, None, 1, None, None,
-        ).await.unwrap();
+            &pool,
+            Uuid::new_v4(),
+            project_id,
+            shared_id,
+            "v1".into(),
+            None,
+            TaskStatus::InReview,
+            None,
+            None,
+            None,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         Task::upsert_remote_task(
-            &pool, Uuid::new_v4(), project_id, shared_id, "v2".into(), None,
-            TaskStatus::InReview, None, None, None, 2, None, None,
-        ).await.unwrap();
+            &pool,
+            Uuid::new_v4(),
+            project_id,
+            shared_id,
+            "v2".into(),
+            None,
+            TaskStatus::InReview,
+            None,
+            None,
+            None,
+            2,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
-        let after = Task::find_by_shared_task_id(&pool, shared_id).await.unwrap().unwrap();
+        let after = Task::find_by_shared_task_id(&pool, shared_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(after.title, "v2", "clean path still applies");
         assert_eq!(after.remote_version, 2);
     }
