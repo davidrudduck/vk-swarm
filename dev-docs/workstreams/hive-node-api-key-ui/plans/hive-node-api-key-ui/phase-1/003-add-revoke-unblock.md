@@ -2,7 +2,7 @@
 id: "003"
 phase: 1
 title: Add revoke + unblock mutations with confirm() + query invalidation + TS5/TS6 tests
-status: ready
+status: passed
 depends_on: ["002"]
 parallel: false
 conflicts_with: []

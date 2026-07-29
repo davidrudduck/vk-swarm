@@ -2,7 +2,7 @@
 id: "005"
 phase: 2
 title: Export NodeApiKeySection from the swarm barrel + add barrel smoke test
-status: ready
+status: passed
 depends_on: ["001"]
 parallel: false
 conflicts_with: []

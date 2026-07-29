@@ -2,7 +2,7 @@
 id: "203"
 phase: 2
 title: "Create dialog a11y tests (role, aria-modal, focus trap, Escape)"
-status: ready
+status: passed
 depends_on: ["201"]
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "001"
 phase: 1
 title: Create NodeApiKeySection skeleton + list/loading/empty tests
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

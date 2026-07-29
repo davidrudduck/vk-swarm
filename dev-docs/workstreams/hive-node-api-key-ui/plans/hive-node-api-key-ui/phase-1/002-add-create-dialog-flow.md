@@ -2,7 +2,7 @@
 id: "002"
 phase: 1
 title: Add create-Dialog flow (name input, secret reveal, copy, show/hide) + TS4 test
-status: ready
+status: passed
 depends_on: ["001"]
 parallel: false
 conflicts_with: []

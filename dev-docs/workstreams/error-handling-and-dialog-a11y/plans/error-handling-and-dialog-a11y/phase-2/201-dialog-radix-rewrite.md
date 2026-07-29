@@ -2,7 +2,7 @@
 id: "201"
 phase: 2
 title: "Rewrite dialog.tsx to use @radix-ui/react-dialog"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

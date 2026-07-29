@@ -2,7 +2,7 @@
 id: "101"
 phase: 1
 title: "Create shared parseErrorMessage in src/lib/errors.ts"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
