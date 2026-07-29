@@ -33,6 +33,8 @@ use handlers::{
     force_resync_tasks,
     // GitHub handlers
     get_github_counts,
+    // Merged handlers
+    get_merged_projects,
     get_project,
     get_project_branches,
     // Linking handlers
@@ -141,7 +143,9 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .nest("/by-remote-id/{remote_project_id}", by_remote_id_router)
         .merge(by_remote_id_files_router);
 
-    Router::new().nest("/projects", projects_router)
+    Router::new()
+        .nest("/projects", projects_router)
+        .route("/merged-projects", get(get_merged_projects))
 }
 
 // Note: Type tests are in types.rs
