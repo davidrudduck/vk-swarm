@@ -2,7 +2,7 @@
 id: "006"
 phase: 2
 title: Compose NodeApiKeySection into Nodes.tsx above the node grid + extend Nodes.test.tsx (TS8)
-status: ready
+status: passed
 depends_on: ["002", "005"]
 parallel: false
 conflicts_with: []

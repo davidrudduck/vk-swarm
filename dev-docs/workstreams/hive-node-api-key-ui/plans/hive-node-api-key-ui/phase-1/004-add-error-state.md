@@ -2,7 +2,7 @@
 id: "004"
 phase: 1
 title: Add error-state Alert + TS7 test
-status: ready
+status: passed
 depends_on: ["002"]
 parallel: false
 conflicts_with: []

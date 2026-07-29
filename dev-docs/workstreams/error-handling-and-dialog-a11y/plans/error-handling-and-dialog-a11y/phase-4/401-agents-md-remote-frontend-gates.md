@@ -2,7 +2,7 @@
 id: "401"
 phase: 4
 title: "Update AGENTS.md with remote-frontend mandatory gates"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

@@ -2,7 +2,7 @@
 id: "008"
 phase: 3
 title: Run typecheck + full vitest suite for the workstream
-status: ready
+status: passed
 depends_on: ["006", "007"]
 parallel: false
 conflicts_with: []

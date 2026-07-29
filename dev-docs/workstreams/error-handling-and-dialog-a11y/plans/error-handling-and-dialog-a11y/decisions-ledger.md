@@ -171,3 +171,50 @@ All adjudicated — do not re-surface as blockers in subsequent rounds.
 | CR1-4 | dialog.tsx:24,46 | medium | Dialog z-50 vs alert-dialog z-[9999] — old dialog used z-[9999]. Regression risk if third-party code assumes dialog-layer at ~10000. | Intentional Radix/shadcn convention: z-50 for dialogs, z-[9999] for alerts. Stacking is correct. |
 | CR1-5 | api/utils.ts:39 | low | `anySignal([])` returns dead (never-aborted) signal. No current caller hits this but public export makes it reachable. | No caller passes empty array; `makeRequest` guards with truthy check. |
 | CR1-6 | api/utils.test.ts:301-316 | medium | Timeout test's signal-abort mock passes `signal.reason` through directly, but real `fetch` wraps it in `AbortError`. Test correctly verifies timeout-triggers-abort but doesn't verify real `fetch` error shape. | Standard mock-testing pattern; verifies timeout→abort path, not `fetch` internals. |
+
+## Task-status reconciliation (2026-07-29)
+
+`/wai:next` reported tasks 101/201/401 as ready even though the workstream README carries
+`status: shipped` and every deliverable is merged on `main`. Root cause: graduation into
+`dev-docs/workstreams/` (`/wai:close`) does not normalize task frontmatter, so all 8 task files
+were left at `status: ready`. The queue was phantom — no implementer was dispatched.
+
+Verified each task's acceptance criteria against merged code before flipping status to `passed`:
+
+- **101/102** — `remote-frontend/src/lib/errors.ts` exports `parseErrorMessage`;
+  `errors.test.ts` has 30 `it(` cases.
+- **103** — all 7 swarm dialog files import `parseErrorMessage` from `@/lib/errors`
+  (`grep -rn "from '@/lib/errors'" src/` → 7 hits); zero remaining local definitions and zero
+  remaining `'An error occurred'` inline fallbacks.
+- **201/202/203** — `dialog.tsx` is the Radix rewrite with the `uncloseable` prop;
+  `dialog.test.tsx` covers escape/overlay/close-button suppression;
+  `NodeApiKeySection.tsx:394` passes `uncloseable={!!createdSecret || createMutation.isPending}`.
+- **301** — the 4 guard tests exist at `NodeApiKeySection.test.tsx:925/959/987/1017`
+  (createAttemptRef ×2, orgIdRef ×2).
+- **401** — `AGENTS.md:15-17` lists the three remote-frontend gates.
+
+Gate evidence (`remote-frontend/`, 2026-07-29):
+
+```
+ Test Files  52 passed (52)
+      Tests  405 passed (405)
+   Duration  18.84s
+
+> remote-frontend@0.0.1 lint
+> eslint src --max-warnings 0
+(no output — clean)
+
+npx tsc --noEmit
+(no output — clean)
+```
+
+Note: the two pre-existing failures recorded earlier in this ledger
+(`scripts/no-push-invariant.test.mjs`, `AppRouter.test.tsx` redirect) no longer reproduce —
+the suite is fully green at 405/405.
+
+The same staleness affected `hive-node-api-key-ui` (README `shipped`, 8 tasks at `ready`);
+its statuses were reconciled in the same commit after verifying the barrel export, the
+`NodesPage.tsx:51` composition, the en/es/ja/ko `apiKeys` locale keys, and the TS9 test.
+
+**Follow-up:** `/wai:close` should set task frontmatter to `passed` (or the tracker should read
+the README's `status:`) — otherwise every graduated workstream re-appears in `/wai:next` forever.

@@ -2,7 +2,7 @@
 id: "007"
 phase: 2
 title: Add settings.swarm.apiKeys.* to en/es/ja/ko locale files + add TS9 test
-status: ready
+status: passed
 depends_on: ["004"]
 parallel: false
 conflicts_with: []
