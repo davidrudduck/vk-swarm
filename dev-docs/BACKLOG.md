@@ -17,6 +17,10 @@
 | F-2026-07-11-01 | AppRouter test isolation: authenticated / → /nodes redirect fails | medium | open | remote-frontend/src/AppRouter.test.tsx | session/2026-07-11 | 2026-07-11 | — | — |
 | F-2026-07-11-02 | no-push-invariant test fails on baseline | medium | open | scripts/no-push-invariant.test.mjs | session/2026-07-11 | 2026-07-11 | — | — |
 | F-2026-07-22-01 | NodeCard references undefined vks tokens (vks-pulse, --vks-text-dim) | low | open | remote-frontend/src/components/swarm/NodeCard.tsx:48-53 | sweep/2026-07-22 | 2026-07-22 | vk-swarm-design-system | — |
+| F-2026-07-29-01 | node Nodes page and swarm labels call removed /api/nodes and /api/swarm routes | medium | open | frontend/src/pages/Nodes.tsx | session/2026-07-29 | 2026-07-29 | — | — |
+| F-2026-07-29-02 | node board still consumes MergedProject via bridge endpoint, repoint to Project | medium | open | frontend/src/hooks/useMergedProjects.ts | session/2026-07-29 | 2026-07-29 | — | — |
+| F-2026-07-29-03 | hive drawer and navbar actions disabled pending hive APIs, no assign or delete E2E | medium | open | remote-frontend/src/ui/panels/TaskDrawer.tsx | session/2026-07-29 | 2026-07-29 | — | — |
+| F-2026-07-29-04 | remote-frontend vitest flaky when run concurrently with vite build in same dir | low | open | remote-frontend/ | session/2026-07-29 | 2026-07-29 | — | — |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
