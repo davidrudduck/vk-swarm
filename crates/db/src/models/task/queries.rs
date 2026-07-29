@@ -400,9 +400,7 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
     /// was REMOVED to align with the "all swarm-linked tasks" requirement: an archived task that still
     /// carries a `shared_task_id` is still part of the swarm link, and the hive must see it in the
     /// digest to detect if the hive lost it (hive-has/node-lacks divergence includes archived tasks).
-    pub async fn find_digest_entries(
-        pool: &SqlitePool,
-    ) -> Result<Vec<TaskDigestRow>, sqlx::Error> {
+    pub async fn find_digest_entries(pool: &SqlitePool) -> Result<Vec<TaskDigestRow>, sqlx::Error> {
         sqlx::query!(
             r#"SELECT id as "id!: Uuid", remote_version as "remote_version!: i64"
                FROM tasks
@@ -413,7 +411,10 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         .await
         .map(|rows| {
             rows.into_iter()
-                .map(|r| TaskDigestRow { id: r.id, remote_version: r.remote_version })
+                .map(|r| TaskDigestRow {
+                    id: r.id,
+                    remote_version: r.remote_version,
+                })
                 .collect()
         })
     }
@@ -671,10 +672,12 @@ mod outbox_enqueue_tests {
             "only the swarm-linked (shared_task_id IS NOT NULL) task is in the digest"
         );
         assert_eq!(
-            entries[0].remote_version,
-            3,
+            entries[0].remote_version, 3,
             "version is the task's remote_version"
         );
-        assert_eq!(entries[0].id, linked_id, "entity_id == the linked task's LOCAL id");
+        assert_eq!(
+            entries[0].id, linked_id,
+            "entity_id == the linked task's LOCAL id"
+        );
     }
 }

@@ -907,13 +907,11 @@ mod tests {
         let (pool, _tmp) = db::test_utils::create_test_pool().await;
         use db::models::task::{CreateTask, Task};
         let project_id = uuid::Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO projects (id, name, git_repo_path) VALUES (?, 'p', '/tmp/p')",
-        )
-        .bind(project_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (?, 'p', '/tmp/p')")
+            .bind(project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let linked_id = uuid::Uuid::new_v4();
         let linked = Task::create(

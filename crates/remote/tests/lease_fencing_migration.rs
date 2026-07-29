@@ -42,7 +42,9 @@ async fn lease_columns_and_token_sequence_exist() {
     .fetch_one(&pool)
     .await
     .expect("fencing_token column info");
-    let default_value = column_default.0.expect("fencing_token should have a default");
+    let default_value = column_default
+        .0
+        .expect("fencing_token should have a default");
     assert!(
         default_value.trim_start_matches('(').trim_end_matches(')') == "0",
         "fencing_token default should be 0: {default_value}"

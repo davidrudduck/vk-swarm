@@ -236,7 +236,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            OutboxRepository::peek_unacked(&pool, 10).await.unwrap().len(),
+            OutboxRepository::peek_unacked(&pool, 10)
+                .await
+                .unwrap()
+                .len(),
             1,
             "unacked sees only c"
         );

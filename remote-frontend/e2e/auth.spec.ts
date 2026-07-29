@@ -52,7 +52,7 @@ test.describe('OAuth PKCE auth flow (SC12)', () => {
     });
     await page.goto('/oauth/callback?handoff_id=abc&app_code=xyz');
 
-    await page.waitForURL('**/nodes');
+    await page.waitForURL(/\/nodes(\?|$)/);
     const token = await page.evaluate(() =>
       localStorage.getItem('access_token'),
     );
@@ -65,7 +65,7 @@ test.describe('OAuth PKCE auth flow (SC12)', () => {
       sessionStorage.setItem('oauth_verifier', 'test-verifier');
     });
     await page.goto('/oauth/callback?handoff_id=abc&app_code=xyz');
-    await page.waitForURL('**/nodes');
+    await page.waitForURL(/\/nodes(\?|$)/);
     await expect(page).toHaveURL(/\/nodes/);
   });
 
@@ -75,7 +75,7 @@ test.describe('OAuth PKCE auth flow (SC12)', () => {
       sessionStorage.setItem('oauth_verifier', 'test-verifier');
     });
     await page.goto('/oauth/callback?handoff_id=abc&app_code=xyz');
-    await page.waitForURL('**/nodes');
+    await page.waitForURL(/\/nodes(\?|$)/);
 
     await page.route('**/v1/oauth/logout', async (route) => {
       await route.fulfill({ status: 204 });

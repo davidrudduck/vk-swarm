@@ -137,6 +137,13 @@ function ChromeLayout() {
         onView={(v) => navigate(v === 'board' ? '/tasks' : v === 'nodes' ? '/nodes' : '/processes')}
         theme={theme}
         onToggleTheme={handleToggleTheme}
+        onLogout={() => {
+          // oauthApi.logout clears the stored token even if the server call fails;
+          // a full navigation resets ProfileProvider's signed-in state.
+          void oauthApi.logout().finally(() => {
+            window.location.assign('/login')
+          })
+        }}
       />
       <Outlet />
     </>

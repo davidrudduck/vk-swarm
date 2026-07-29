@@ -208,7 +208,8 @@ mod tests {
 
     #[test]
     fn to_sse_event_json_patch() {
-        let patch: json_patch::Patch = serde_json::from_str(r#"[{"op":"add","path":"/foo","value":1}]"#).unwrap();
+        let patch: json_patch::Patch =
+            serde_json::from_str(r#"[{"op":"add","path":"/foo","value":1}]"#).unwrap();
         let msg = LogMsg::JsonPatch(patch);
         let event = msg.to_sse_event();
         let debug = format!("{event:?}");

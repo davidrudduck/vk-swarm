@@ -423,7 +423,10 @@ impl<'a> SharedTaskRepository<'a> {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|r| NodeSourceTaskVersion { source_task_id: r.source_task_id, version: r.version })
+            .map(|r| NodeSourceTaskVersion {
+                source_task_id: r.source_task_id,
+                version: r.version,
+            })
             .collect())
     }
 

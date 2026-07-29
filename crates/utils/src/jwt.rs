@@ -37,8 +37,7 @@ mod tests {
             exp: usize,
         }
 
-        let exp = (Utc::now() + chrono::Duration::seconds(exp_delta_secs))
-            .timestamp() as usize;
+        let exp = (Utc::now() + chrono::Duration::seconds(exp_delta_secs)).timestamp() as usize;
         let claims = Claims { exp };
         jsonwebtoken::encode(
             &Header::default(),
@@ -90,9 +89,7 @@ mod tests {
             sub: String,
         }
 
-        let claims = NoExpClaims {
-            sub: "user".into(),
-        };
+        let claims = NoExpClaims { sub: "user".into() };
         let token = jsonwebtoken::encode(
             &Header::default(),
             &claims,

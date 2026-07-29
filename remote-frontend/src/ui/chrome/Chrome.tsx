@@ -36,16 +36,19 @@ export function NavIcon({
   title,
   onClick,
   disabled,
+  ariaLabel,
 }: {
   icon: ReactElement;
   title: string;
   onClick?: () => void;
   disabled?: boolean;
+  ariaLabel?: string;
 }) {
   return (
     <button
       className="vks-btn vks-btn--ghost vks-btn--icon"
       title={title}
+      aria-label={ariaLabel}
       onClick={onClick}
       disabled={disabled}
       style={{ height: 34, width: 34 }}
@@ -101,6 +104,8 @@ export interface NavbarProps {
   onToggleTheme: () => void;
   /** Omit to render the "Settings" control disabled (no backing hive API yet). */
   onOpenSettings?: () => void;
+  /** Sign the user out (clears the session and returns to /login). */
+  onLogout?: () => void;
 }
 
 /** Tooltip shown on controls whose backing hive API is not implemented yet. */
@@ -114,6 +119,7 @@ export function Navbar({
   theme,
   onToggleTheme,
   onOpenSettings,
+  onLogout,
 }: NavbarProps) {
   const bp = useBreakpoint();
   const mobile = bp === 'mobile';
@@ -207,6 +213,9 @@ export function Navbar({
             onClick={onOpenSettings}
             disabled={!onOpenSettings}
           />
+        )}
+        {onLogout && (
+          <NavIcon icon={ICONS.logout} title="Logout" ariaLabel="Logout" onClick={onLogout} />
         )}
         <NavIcon icon={ICONS.menu} title="Menu" />
       </div>

@@ -175,7 +175,10 @@ pub enum HiveMessage {
     /// op-log from that seq (node-has/hive-lacks heal); `pull_entities` lists shared-task ids the hive
     /// has that the node lacks (hive-has/node-lacks heal via the bulk-snapshot reconcile leg).
     #[serde(rename = "digest_result")]
-    DigestResult { resend_from_seq: Option<i64>, pull_entities: Vec<Uuid> },
+    DigestResult {
+        resend_from_seq: Option<i64>,
+        pull_entities: Vec<Uuid>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
