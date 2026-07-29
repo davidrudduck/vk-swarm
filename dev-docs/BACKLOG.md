@@ -14,11 +14,11 @@
 | F-2026-07-04-04 | crisp-river uncommitted Cargo.toml doctest edits on merged branch | medium | fixed | crates/remote/Cargo.toml | sweep/2026-07-04 | 2026-07-04 | — | — |
 | F-2026-07-06-01 | Hive UI lacks Generate API key button — node onboarding blocked | high | fixed | remote-frontend/src/pages/Nodes.tsx:7-51 | session/2026-07-06 | 2026-07-06 | hive-node-api-key-ui | dev-docs/workstreams/hive-node-api-key-ui/spec/2026-07-07-hive-node-api-key-ui.md |
 | F-2026-07-06-02 | Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined) | high | fixed | remote-frontend/src/pkce.ts:10 | session/2026-07-06 | 2026-07-06 | fix-nonloopback-signin | dev-docs/workstreams/fix-nonloopback-signin/spec/2026-07-08-fix-nonloopback-signin.md |
-| F-2026-07-11-01 | AppRouter test isolation: authenticated / → /nodes redirect fails | medium | open | remote-frontend/src/AppRouter.test.tsx | session/2026-07-11 | 2026-07-11 | — | — |
-| F-2026-07-11-02 | no-push-invariant test fails on baseline | medium | open | scripts/no-push-invariant.test.mjs | session/2026-07-11 | 2026-07-11 | — | — |
+| F-2026-07-11-01 | AppRouter test isolation: authenticated / → /nodes redirect fails | medium | fixed | remote-frontend/src/AppRouter.test.tsx | session/2026-07-11 | 2026-07-11 | — | — |
+| F-2026-07-11-02 | no-push-invariant test fails on baseline | medium | fixed | remote-frontend/scripts/no-push-invariant.test.mjs | session/2026-07-11 | 2026-07-11 | — | — |
 | F-2026-07-22-01 | NodeCard references undefined vks tokens (vks-pulse, --vks-text-dim) | low | open | remote-frontend/src/components/swarm/NodeCard.tsx:48-53 | sweep/2026-07-22 | 2026-07-22 | vk-swarm-design-system | — |
-| F-2026-07-29-01 | node Nodes page and swarm labels call removed /api/nodes and /api/swarm routes | medium | open | frontend/src/pages/Nodes.tsx | session/2026-07-29 | 2026-07-29 | — | — |
-| F-2026-07-29-02 | node board still consumes MergedProject via bridge endpoint, repoint to Project | medium | open | frontend/src/hooks/useMergedProjects.ts | session/2026-07-29 | 2026-07-29 | — | — |
+| F-2026-07-29-01 | node Nodes page and swarm labels call removed /api/nodes and /api/swarm routes | high | open | frontend/src/pages/Nodes.tsx | session/2026-07-29 | 2026-07-29 | vk-swarm-node-ui-localize | — |
+| F-2026-07-29-02 | node board still consumes MergedProject via bridge endpoint, repoint to Project | medium | open | frontend/src/hooks/useMergedProjects.ts | session/2026-07-29 | 2026-07-29 | vk-swarm-node-ui-localize | — |
 | F-2026-07-29-03 | hive drawer and navbar actions disabled pending hive APIs, no assign or delete E2E | medium | open | remote-frontend/src/ui/panels/TaskDrawer.tsx | session/2026-07-29 | 2026-07-29 | — | — |
 | F-2026-07-29-04 | remote-frontend vitest flaky when run concurrently with vite build in same dir | low | open | remote-frontend/ | session/2026-07-29 | 2026-07-29 | — | — |
 <!-- WAI:BACKLOG:END -->
@@ -88,3 +88,38 @@
   broken on non-loopback HTTP origins due to `crypto.subtle` undefined) was resolved by
   PR #463 (merged 2026-07-10). Pure-TS SHA-256 fallback implemented in `pkce.ts` with
   capability detection. 137 tests, 100% line coverage on target files.
+
+### 2026-07-29 — backlog triage
+
+- **F-2026-07-11-01 → fixed.** No longer reproduces. `npx vitest run src/AppRouter.test.tsx`
+  → `Test Files 1 passed (1) / Tests 23 passed (23)`, and the full suite is green
+  (`Test Files 52 passed (52) / Tests 405 passed (405)`), so the isolation failure that only
+  appeared in the full run is gone.
+- **F-2026-07-11-02 → fixed.** Location corrected: the test is at
+  `remote-frontend/scripts/no-push-invariant.test.mjs`, not repo-root `scripts/`.
+  `node --test scripts/no-push-invariant.test.mjs` (from `remote-frontend/`) →
+  `✔ no new push channels (WebSocket/EventSource/SSE) in the hive frontend source` · `pass 1 / fail 0`.
+
+- **F-2026-07-29-01 → severity raised medium → high; workstream `vk-swarm-node-ui-localize`.**
+  Both call sites are on LIVE routes, so this is user-visible 404s, not dead code:
+  - `frontend/src/App.tsx:153` routes `/nodes` → `pages/Nodes.tsx` → `nodesApi` → `/api/nodes`
+  - `frontend/src/App.tsx:189` routes `/settings/swarm` → `SwarmSettings.tsx:163` →
+    `NodeProjectsSection` → `nodesApi.list(orgId)` / `nodesApi.listProjects(nodeId)`
+    (also reachable via `MobileSettingsAccordion.tsx:60`)
+  Neither `nodes` nor `swarm` is merged into the node server's router
+  (`crates/server/src/routes/mod.rs:44-71` registers no such module), so every one of these
+  requests 404s.
+- **F-2026-07-29-02 → workstream `vk-swarm-node-ui-localize`.** Unchanged severity; this is the
+  typed `useMergedProjects → useProjects` refactor the workstream already owns.
+
+**Spec defect recorded against `vk-swarm-node-ui-localize`.** Its README's "Keep (do NOT remove —
+live non-Nodes consumers)" list justifies keeping `nodesApi` and `NodeProjectsSection` on the basis
+that the Nodes feature was deleted by node-foundations. It was not: `pages/Nodes.tsx` is still
+routed at `App.tsx:153`. The entanglement map must be re-verified against merged code during
+`/wai:prd-new` + `/wai:spec` rather than trusted as written.
+
+Not actioned this session (correctly parked, no work needed now):
+- **F-2026-07-22-01** — owned by `vk-swarm-design-system`; belongs to that workstream's token pass.
+- **F-2026-07-29-03** — blocked on the hive APIs it names; nothing to build against yet.
+- **F-2026-07-29-04** — low-severity local flake (concurrent vitest + vite build in one dir);
+  no product impact.
