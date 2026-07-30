@@ -14,9 +14,13 @@ const PROJECT_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 ///
 /// The directory is created automatically if it does not exist.
 pub fn asset_dir() -> std::path::PathBuf {
+    // Trim BEFORE use, not just before the emptiness test: a value like " /tmp/foo "
+    // is otherwise a RELATIVE path, and create_dir_all below would make a directory
+    // literally named " " under the process CWD.
     let override_dir = std::env::var("VK_ASSET_DIR")
         .ok()
-        .filter(|s| !s.trim().is_empty());
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let path = if let Some(dir) = override_dir {
         crate::path::expand_tilde(&dir)
@@ -242,5 +246,23 @@ mod tests {
         // A blank override must be ignored, NOT resolved relative to the CWD.
         assert_eq!(dir, default_dir);
         assert!(dir.is_absolute());
+    }
+
+    #[test]
+    #[serial]
+    fn test_asset_dir_env_override_is_trimmed() {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        let custom = tmp.path().join("assets");
+        let padded = format!("  {}  ", custom.display());
+        // SAFETY: Tests run serially via #[serial] attribute
+        unsafe { env::set_var("VK_ASSET_DIR", &padded) };
+        let dir = asset_dir();
+        unsafe { env::remove_var("VK_ASSET_DIR") };
+        // Surrounding whitespace must not make the path relative.
+        assert_eq!(dir, custom);
+        assert!(
+            dir.is_absolute(),
+            "padded override must stay absolute, got {dir:?}"
+        );
     }
 }
