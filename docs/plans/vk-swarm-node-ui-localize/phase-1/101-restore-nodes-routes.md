@@ -2,7 +2,7 @@
 id: "101"
 phase: 1
 title: "Restore crates/server/src/routes/nodes.rs (without the API-key routes) and register it"
-status: ready
+status: passed
 depends_on: ["100"]
 parallel: false
 conflicts_with: ["102","103","104"]

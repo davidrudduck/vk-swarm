@@ -362,3 +362,45 @@ Amendment A.2 forbids `.up_to_n_times(...)`.
 **Process note:** these task-file corrections were written once, lost to a subagent's
 "restore the working tree" cleanup (`git checkout` over uncommitted `docs/plans/` edits), and
 rewritten. Commit plan-doc edits promptly rather than batching them behind a task's code commit.
+
+## Task 101
+
+Implemented clean at `c01e18cc` (empty implementer ledger, Stage-1 CONFORMS). Orchestrator
+verification: removing `.merge(nodes::router())` makes BOTH tests in
+`crates/server/tests/nodes_routes.rs` fail with
+`route is NOT registered: request fell through to the SPA catch-all (status 200, content-type
+Some("text/html"))` — the registration primitive genuinely catches this workstream's bug.
+Panel independently confirmed the configured-hive test is not hollow (removing the
+`/v1/nodes` mock → `left: 404 right: 200`).
+
+Panel verified as verbatim: `diff` against `35b378a5^:crates/server/src/routes/nodes.rs` contains
+ONLY the dictated API-key deletions (3 structs, 3 handlers, 2 router lines) and the dictated import
+fix. Zero other hunks. `delete_node` survives and is reachable via
+`get(get_node).delete(delete_node)`. No api-key residue. Frontend contract for the three restored
+routes matches field-by-field (`frontend/src/types/nodes.ts:18-42` vs
+`crates/remote/src/nodes/domain.rs:102-152`).
+
+- [Task 101 orchestrator] **Sibling divergences from `organizations.rs`, recorded here because the
+  task required it and the implementer filed none.** All three are inherited verbatim from the
+  pre-deletion original, so none is new drift: (a) `nodes.rs` handlers are `pub async fn`, the
+  sibling's are private; (b) `nodes.rs` chains methods on one `.route()`
+  (`get(get_node).delete(delete_node)`), the sibling uses one `.route()` per method; (c) —
+  the substantive one — `nodes.rs` imports wire types from the `remote` crate
+  (`use remote::nodes::{Node, NodeLocalProjectInfo};`) whereas `organizations.rs` uses the shared
+  `utils::api::*` contract types. (c) couples the server route layer to `crates/remote` domain
+  types; accepted for a verbatim restore, flagged as a candidate for a later unwind.
+- [Task 101 orchestrator] `pub mod nodes;` landed at `routes/mod.rs:29` (after `organizations`)
+  rather than the dictated anchor before `pub mod projects;`. The block is otherwise alphabetical,
+  so `nodes` belongs between `message_queue` and `oauth`. Functionally identical; task 102 is
+  directed to correct the ordering while it edits the same file.
+- [Task 101 orchestrator] **Task 105's D3 assertion corrected as a consequence of 101.** Now that
+  `/nodes/{node_id}` (`Path<Uuid>`) is registered, the literal path `/api/nodes/api-keys` MATCHES
+  it and fails UUID parsing. Empirically: `/api/nodes/api-keys?organization_id=...` → **400
+  text/plain** `"Invalid URL: Cannot parse 'node_id' with value 'api-keys'"`, while
+  `/api/nodes/api-keys/x/unblock` → 200 text/html. The previous "expect text/html" assertion would
+  have FAILED. 105 now uses `git grep` over `crates/server/src/routes/` as the primary D3 proof and
+  records the HTTP behaviour accurately.
+- [Task 101 orchestrator] Frontend still calls the removed API-key endpoints
+  (`frontend/src/lib/api/nodes.ts:40-66`) plus `mergeNodes` (`:80`), which never existed even at
+  `35b378a5^`. Correctly out of scope for 101 — task **202** removes them. This branch must not
+  merge with 101 alone.

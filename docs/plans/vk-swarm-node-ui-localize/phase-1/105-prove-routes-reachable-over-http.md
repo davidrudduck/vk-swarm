@@ -80,11 +80,22 @@ done
 #           still unregistered, whatever its status code says.
 
 # 3. D3 assertion — the API-key surface must NOT be reachable (SC3)
-curl -s -o /dev/null -w '%{http_code} %{content_type}\n' \
+# 3a. SOURCE-LEVEL proof (this is the PRIMARY evidence for D3/SC3):
+git grep -n 'api-keys\|api_key' -- crates/server/src/routes/ || echo "NO api-key surface in routes"
+# Expected: "NO api-key surface in routes"
+
+# 3b. HTTP behaviour, recorded for completeness. Do NOT expect text/html here:
+#     since task 101 restored `/nodes/{node_id}` (Path<Uuid>), the literal path
+#     `/api/nodes/api-keys` now MATCHES that route and fails UUID parsing, so it
+#     returns 400 text/plain, not the SPA fallback. Verified empirically:
+#       /api/nodes/api-keys?organization_id=...  => 400 text/plain
+#            "Invalid URL: Cannot parse `node_id` with value `api-keys`"
+#       /api/nodes/api-keys/x/unblock            => 200 text/html (SPA fallback)
+#     Either way there is NO api-key handler. What must NOT appear is a JSON
+#     success payload listing keys.
+curl -s -w '\n-> %{http_code} %{content_type}\n' \
   "http://127.0.0.1:${PORT}/api/nodes/api-keys?organization_id=00000000-0000-0000-0000-000000000000"
-# Expected: text/html — the SPA fallback, proving the route is NOT registered.
-# NOTE: this is NOT a 404. A deleted/absent route falls through to the catch-all,
-# which answers 200 + index.html. Asserting 404 here would FAIL.
+# Expected: 400 text/plain with a `node_id` parse error — NOT a JSON key list.
 ```
 
 Paste all three blocks' real output into the evidence file and into the decisions-ledger.
@@ -93,5 +104,6 @@ Paste all three blocks' real output into the evidence file and into the decision
 
 - `reviews/105-reachability-evidence.md` exists and contains verbatim output showing six
   responses whose content-type is `application/json`.
-- The API-key path returns `text/html` (the SPA fallback), confirming D3 held.
+- `git grep 'api-keys\|api_key' -- crates/server/src/routes/` is empty, and the HTTP probe returns
+  a `node_id` parse error rather than any JSON key listing — confirming D3 held.
 - No source file was modified by this task.
