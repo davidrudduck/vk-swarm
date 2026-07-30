@@ -2,8 +2,9 @@
 workstream: vk-swarm-node-ui-localize
 doc_type: readme
 status: draft
-title: "Localize the node frontend — repoint dual-purpose remote-display hooks to local-only"
-staging_pointers: []
+title: "Localize the node frontend — proxy swarm management to the hive, make the board local-only"
+staging_pointers:
+  - docs/superpowers/specs/2026-07-30-vk-swarm-node-ui-localize.md
 depends_on: [vk-swarm-node-foundations]
 adrs: []
 ---
@@ -68,3 +69,20 @@ Two contradictions found against `main`:
 So the open question the spec must answer is **repoint vs delete** — the "Keep" rationale assumed
 these had healthy local consumers, and they do not. Tracked as F-2026-07-29-01 (high) and
 F-2026-07-29-02 in `dev-docs/BACKLOG.md`.
+
+## Intent captured (2026-07-30)
+
+`/wai:prd-new` ran; intent doc at
+`docs/superpowers/specs/2026-07-30-vk-swarm-node-ui-localize.md`. It **supersedes the "Scope" and
+"Keep" sections above** — treat those as historical.
+
+User decisions taken at capture:
+1. **Repoint, don't delete.** The node keeps its swarm/nodes UI; the node server regains thin
+   `RemoteClient` proxy routes mirroring `routes/organizations.rs`. Tractable because
+   node-foundations deleted only the HTTP layer — `RemoteClient` retains every needed method.
+2. **Full entanglement list in scope** — remote card badges and all four remote stream/diff hooks,
+   not just the two findings.
+3. **Board is local-only** — `useMergedProjects` → `useProjects`, `MergedProject` retired.
+
+Blocking before `/wai:decompose`: an **ADR for restoring the node-surface proxies** (constraint C2)
+— it partially reverses ADR-0002 / node-foundations.
