@@ -51,7 +51,7 @@ Start the dev server and record the observed HTTP status of every restored path.
 - If you are tempted to add a Rust unit test calling a handler function directly to "cover" this
   task — STOP and re-read the Failing test section.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 # 1. Start the node server (a hive need NOT be configured for this check)

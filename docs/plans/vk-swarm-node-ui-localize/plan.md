@@ -43,8 +43,12 @@ warnings). These conventions are dictated here instead of left to judgement:
 - **Restored route modules are byte-verbatim from `35b378a5^`** except where a task says
   otherwise. Do not "improve" them — divergence is what the ledger is for.
 - **Route registration goes in `crates/server/src/routes/mod.rs` inside the existing
-  `base_routes` builder**, appended after `.merge(organizations::router())`, matching the style of
-  the surrounding `.merge(...)` chain.
+  `base_routes` builder**, appended after `.merge(organizations::router())` (line 60), matching the
+  style of the surrounding `.merge(...)` chain.
+- **The decisions-ledger is ORCHESTRATOR-owned.** Only task 501 lists it in `files:`. Every other
+  task's `## Manual verification` section says "emit verbatim; the ORCHESTRATOR records it" — the
+  constrained implementer runs the commands and returns the output, and must NOT edit
+  `decisions-ledger.md`, which is outside its `files:` allowlist and would be rejected by the gate.
 
 ## Phases
 
@@ -63,7 +67,7 @@ warnings). These conventions are dictated here instead of left to judgement:
  └──▶ 201 ──▶ 202 ──▶ 203 ──────────────┤
 301 ──▶ 302 ──▶ 303 ───────────────────┼──▶ 501
 401 ──▶ 402 (also needs 104) ──────────┤
- └──▶ 403 ─────────────────────────────┘
+ └──▶ 402 ──▶ 403 ─────────────────────┘
 ```
 
 | Task | Depends | Conflicts |
@@ -77,11 +81,11 @@ warnings). These conventions are dictated here instead of left to judgement:
 | 202 | dep: 201 | conflicts:  |
 | 203 | dep: 202 | conflicts:  |
 | 301 | dep:  | conflicts: 303 |
-| 302 | dep: 301 | conflicts:  |
-| 303 | dep: 302 | conflicts: 301 |
+| 302 | dep: 301 | conflicts: 303 |
+| 303 | dep: 302 | conflicts: 301 302 |
 | 401 | dep:  | conflicts:  |
 | 402 | dep: 104 401 | conflicts:  |
-| 403 | dep: 401 | conflicts:  |
+| 403 | dep: 401 402 | conflicts:  |
 | 501 | dep: 105 202 203 303 402 403 | conflicts:  |
 
 101–104 conflict because each edits `crates/server/src/routes/mod.rs`; they are ordered, never

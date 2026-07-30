@@ -89,14 +89,20 @@ section exports.
 
 ### 3. Wire the five sections and the Nodes page
 
-For each of `SwarmProjectsSection`, `NodeProjectsSection`, `SwarmLabelsSection`,
-`SwarmTemplatesSection`, `NodeTemplatesSection`, and `frontend/src/pages/Nodes.tsx`:
+The six targets do NOT share one shape. Decomposition checked each; use the exact variable named
+below — do not assume `error` is in scope.
 
-- **Anchor:** the existing `) : error ? (` branch (or that file's equivalent error branch)
-- **Change:** branch FIRST on `isHiveNotConfigured(error)` and render `<HiveNotConnected />`;
-  keep the existing generic error branch as the `else`.
+| File | Error value in scope | Insert the new branch |
+|---|---|---|
+| `SwarmProjectsSection.tsx` | `error` (destructured) | before `) : error ? (` |
+| `SwarmLabelsSection.tsx` | `error` (destructured) | before `) : error ? (` |
+| `SwarmTemplatesSection.tsx` | `error` (destructured) | before `) : error ? (` |
+| `NodeTemplatesSection.tsx` | **`swarmTemplatesError` — must be added** (see below) | before `) : error ? (` at line 156 |
+| `NodeProjectsSection.tsx` | **`nodesError`** (aliased at line 104: `error: nodesError,`) | before its error branch at line 282 |
+| `pages/Nodes.tsx` | **none — only `isError`** (boolean) | see below |
 
-Sketch (adapt to each file's actual JSX shape — do not restructure the component):
+For the first five, branch FIRST on the hive case and keep the existing generic error branch as
+the `else` (adapt to each file's JSX; do not restructure the component):
 
 ```tsx
 ) : isHiveNotConfigured(error) ? (
@@ -105,20 +111,79 @@ Sketch (adapt to each file's actual JSX shape — do not restructure the compone
   /* ...existing generic error UI, unchanged... */
 ```
 
+**`NodeTemplatesSection.tsx` is a trap — do NOT use its `error`.** That value belongs to the
+LOCAL templates query (`templatesApi.list()`, lines 51-60), which SUCCEEDS on a hive-less node. The
+hive-facing query is `useSwarmTemplates` at lines 63-66, whose error is not currently destructured.
+Wiring the local error would leave the section rendering local templates and never showing the
+disconnected state — silently failing SC4. Required change:
+
+- **Anchor:** lines 63-66
+- **Before:**
+```tsx
+  const { data: swarmTemplates = [] } = useSwarmTemplates({
+```
+- **After:**
+```tsx
+  const { data: swarmTemplates = [], error: swarmTemplatesError } = useSwarmTemplates({
+```
+- Then insert `) : isHiveNotConfigured(swarmTemplatesError) ? (<HiveNotConnected />` BEFORE the
+  existing `) : error ? (` branch at line 156. Leave that branch and its "Failed to load local
+  templates" copy exactly as they are — it still handles a genuine local failure.
+
+For `pages/Nodes.tsx` the query destructure must gain `error` first:
+
+- **Anchor:** lines 14-18
+- **Before:**
+```tsx
+  const {
+    data: nodes = [],
+    isLoading: nodesLoading,
+    isError,
+  } = useQuery({
+```
+- **After:**
+```tsx
+  const {
+    data: nodes = [],
+    isLoading: nodesLoading,
+    isError,
+    error,
+  } = useQuery({
+```
+
+- **Anchor:** line 38, the `) : isError ? (` branch
+- **Before:**
+```tsx
+      ) : isError ? (
+        <p className="text-muted-foreground">Failed to load nodes.</p>
+```
+- **After:**
+```tsx
+      ) : isHiveNotConfigured(error) ? (
+        <HiveNotConnected />
+      ) : isError ? (
+        <p className="text-muted-foreground">Failed to load nodes.</p>
+```
+
+Leave the existing `!orgId` branch ("Nodes are a swarm feature. Connect a hive server to get
+started.") alone — it fires earlier and covers a different case (no organizations at all).
+
 ## Allowed moves
 
 - Only the files in `files:`. Do not change any query hook's `retry`/`staleTime` behaviour.
 
 ## STOP triggers
 
-- If a section has no `error` value in scope from its query hook — STOP and report which one;
-  do not add a new query.
+- If a section's error value is named something other than the table above says — STOP and
+  report; do not guess. In particular, never wire a LOCAL query's error to `HiveNotConnected`:
+  a local query succeeds on a hive-less node, so the disconnected state would never render. (Adding `error` to the `Nodes.tsx` destructure IS authorised above; adding
+  a NEW query anywhere is not.)
 - If a section's error branch is shared with a different error presentation you would have to
   restructure — STOP rather than refactoring the component.
 - Do NOT touch `remote-frontend/` — the hive is always "connected" to itself and must be
   unchanged (SC7).
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cd frontend && npx vitest run src/components/swarm

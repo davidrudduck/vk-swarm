@@ -69,7 +69,7 @@ import { NodeApiKeySection } from '@/components/org/NodeApiKeySection';
   `remote-frontend/src/components/swarm/NodeApiKeySection.tsx`, which is the hive's copy and must
   survive (SC7). This task's `files:` list is the whole permitted blast radius.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cd frontend && npx vitest run

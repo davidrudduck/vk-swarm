@@ -5,7 +5,7 @@ title: "Delete MergedProject, NodeLocation, and the /api/merged-projects endpoin
 status: ready
 depends_on: ["302"]
 parallel: false
-conflicts_with: ["301"]
+conflicts_with: ["301","302"]
 files:
   - crates/server/src/routes/projects/handlers/merged.rs
   - crates/server/src/routes/projects/handlers/mod.rs
@@ -72,13 +72,17 @@ Also remove `get_merged_projects` from the handler import list, and `MergedProje
 
 ### 3. Delete the types — `crates/server/src/routes/projects/types.rs`
 
-- Delete `pub struct MergedProject` (~line 113-146) with its doc comment.
-- Delete `pub struct MergedProjectsResponse` (~line 176-179) with its doc comment.
-- Delete `pub struct NodeLocation` (~line 148-161) with its doc comment — decomposition verified
+- Delete `pub struct MergedProject` (line 113-146, doc comment on 112) .
+- Delete `pub struct NodeLocation` (line 150-164, doc comment on 149) — decomposition verified
   its only references are `MergedProject.nodes`, the `generate_types.rs` decl, and the
   `projects/mod.rs` re-export, all removed by this task.
-- If a `impl From<...> for NodeLocation` block exists (around line 90-110), delete it too, and
-  check whether that leaves its source type unused — if it does, STOP rather than widening.
+- Delete `pub struct MergedProjectsResponse` (line 176-179, doc comment on 175).
+
+> **There is NO `impl From<...> for NodeLocation`.** The `impl From<Project> for
+> RemoteNodeProject` block at lines 88-110 looks adjacent and constructs `node_name` /
+> `node_status` / `node_public_url` fields with the same names — it is a DIFFERENT type that
+> must SURVIVE (`RemoteNodeProject` backs `UnifiedProject::Remote`). Do not touch lines 88-110.
+> Likewise leave `TaskCounts` (line ~168) alone: task 301's `ProjectWithStats` uses it.
 
 ### 4. Deregister the ts-rs exports — `crates/server/src/bin/generate_types.rs`
 
@@ -114,9 +118,11 @@ npm run generate-types
   file NOT listed in `files:` — STOP and report the file. Do not edit it.
 - If `TaskCounts` becomes unused — it should NOT, because task 301's `ProjectWithStats` uses it.
   If it does, task 301 is incomplete; STOP.
+- If you are about to delete anything between lines 88 and 110 of `types.rs` — STOP. That is
+  `impl From<Project> for RemoteNodeProject`, which survives.
 - If task 302 is not `passed`, do not run this task — the board would break.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cargo clippy -p server --all-targets --all-features -- -D warnings
@@ -125,7 +131,7 @@ cargo clippy -p server --all-targets --all-features -- -D warnings
 npm run generate-types:check
 # Expected: passes
 
-git grep -n 'MergedProject\|merged-projects' -- crates frontend shared
+git grep -n 'MergedProject\|MergedProjectsResponse\|NodeLocation\|merged-projects' -- crates frontend shared
 # Expected: NO output
 # (docs/ and dev-docs/ legitimately retain the term — see the note above)
 

@@ -3,7 +3,7 @@ id: "403"
 phase: 4
 title: "Harden the four remote stream hooks for a node with no hive"
 status: ready
-depends_on: ["401"]
+depends_on: ["401", "402"]
 parallel: false
 conflicts_with: []
 files:
@@ -76,18 +76,31 @@ For each of the four hooks, make the hive-absent path a normal, quiet outcome:
 1. **`useAvailableNodes.ts`** — treat a `isHiveNotConfigured(error)` failure as "no nodes
    available" and expose an empty list plus a boolean the dialog can read, rather than an error
    the caller must handle. `CreateAttemptDialog` must still render its local-attempt path.
-2. **`useNodeLogStream.ts`** — when no hive is configured, do not open or retry a stream; return
-   the existing empty-logs shape with no error set, so `ProcessLogsViewer` shows local logs.
+2. **`useNodeLogStream.ts` — STOP AND REPORT; do not attempt this one.** Decomposition found it
+   does not fit the mechanical rule and the plan will not guess:
+   - It bypasses the API client entirely, calling `fetch('/v1/nodes/assignments/${id}/connection-info')`
+     directly (lines 77-85) and throwing a plain `new Error(...)`. `isHiveNotConfigured` only
+     matches `ApiError`, so it would be **always false** here.
+   - `/v1/...` is a HIVE path. On a node with no hive that request reaches the NODE server, which
+     has no `/v1` route, so it 404s — it never produces the 503 this workstream introduces.
+   - Switching it to `tasksApi.streamConnectionInfo` is not a literal edit either: that helper
+     takes a **task id**, and this hook is given an **assignment id**.
+
+   Resolving this means either threading a task id from `ProcessLogsViewer` (a file NOT in
+   `files:`) or deciding what a node-local log stream should do — a design decision above an
+   implementer's pay grade. **Report this to the orchestrator and leave the file untouched.**
 3. **`useDiffStream.ts`** — same: no stream, no retry loop, empty diffs, no error. `DiffsPanel`
    and `useDiffSummary` must render local diffs.
-4. **`useRemoteConnectionStatus.ts`** — ensure the not-configured case resolves to a definite
+3b. **`useRemoteConnectionStatus.ts`** — ensure the not-configured case resolves to a definite
    disconnected status rather than an indefinite pending one, so `AttemptHeaderActions` renders.
 
 Use `isHiveNotConfigured` from `@/lib/api/utils` (added in task 402) for the detection.
 
 ## Allowed moves
 
-- Only the four hooks and the new test file. Do **not** modify `ProcessLogsViewer`,
+- Only `useAvailableNodes.ts`, `useDiffStream.ts`, `useRemoteConnectionStatus.ts`, and the new
+  test file. `useNodeLogStream.ts` stays in `files:` only so a STOP report can cite it — do not
+  edit it (see item 2). Do **not** modify `ProcessLogsViewer`,
   `DiffsPanel`, `AttemptHeaderActions`, or `CreateAttemptDialog` — if a consumer genuinely cannot
   render without a change, STOP and report; that is a plan gap, not an implementer decision.
 
@@ -98,7 +111,7 @@ Use `isHiveNotConfigured` from `@/lib/api/utils` (added in task 402) for the det
   IS configured — STOP; the hive-configured path must be untouched.
 - If `isHiveNotConfigured` does not exist, task 402 has not run — STOP.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cd frontend && npx vitest run src/hooks
@@ -119,7 +132,9 @@ Record the console observation verbatim.
 
 ## Done when
 
-- All four hooks return a clean, settled, empty result when no hive is configured.
+- Three hooks (`useAvailableNodes`, `useDiffStream`, `useRemoteConnectionStatus`) return a clean,
+  settled, empty result when no hive is configured.
+- `useNodeLogStream` is reported back unmodified with the reason from item 2.
 - The four consumer components render on a hive-less node with no console errors.
 - No behaviour changes when a hive IS configured.
 - vitest, `tsc --noEmit`, and lint are clean.

@@ -91,6 +91,8 @@ Copy `merged.rs` and drop the three dead fields. The file:
 
 ```rust
 use axum::{extract::State, response::Json as ResponseJson};
+use db::models::project::Project;
+use deployment::Deployment;
 use utils::response::ApiResponse;
 
 use crate::{
@@ -142,8 +144,9 @@ pub async fn get_projects_with_stats(
 }
 ```
 
-Copy the `use` lines for `Project` (and anything else) from `merged.rs` verbatim — it is the
-authority on the exact import paths.
+These imports are copied from `merged.rs:8-11` verbatim — `db::models::project::Project` provides
+`find_local_projects_with_stats`, and the `deployment::Deployment` trait provides `.db()`. Without
+both, the snippet does not compile.
 
 ### 3. Export the handler — `crates/server/src/routes/projects/handlers/mod.rs`
 
@@ -201,7 +204,7 @@ Never hand-edit `shared/types.ts` (constraint C5).
 - If `npm run generate-types` produces a diff in `shared/types.ts` touching any type other than
   the two new ones — STOP and report the unexpected drift.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cargo clippy -p server --all-targets --all-features -- -D warnings

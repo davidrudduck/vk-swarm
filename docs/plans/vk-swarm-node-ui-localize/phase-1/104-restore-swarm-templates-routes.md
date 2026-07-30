@@ -66,7 +66,7 @@ Do **not** reformat, rename, or "improve" anything in the recovered file. Every 
 - If any import in the recovered file fails to resolve — do NOT substitute a different type; STOP.
 - If making it compile would require editing a file not listed in `files:`.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cargo check -p server

@@ -77,7 +77,7 @@ import type { Node, NodeProject } from '@/types/nodes';
 - Do NOT delete the type declarations in `frontend/src/types/nodes.ts`; they are shared and out
   of this task's `files:` list.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cd frontend && npx tsc --noEmit

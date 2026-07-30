@@ -116,7 +116,7 @@ pub mod nodes;
 pub mod projects;
 ```
 
-- **Anchor:** the `base_routes` builder, line 59
+- **Anchor:** the `base_routes` builder, line 60
 - **Before:** `        .merge(organizations::router())`
 - **After:**
 ```rust
@@ -138,7 +138,7 @@ pub mod projects;
   do NOT invent a replacement type; STOP.
 - If `cargo check` reports an error you would have to fix by changing a file not in `files:`.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cargo check -p server

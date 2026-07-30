@@ -5,7 +5,7 @@ title: "Repoint the board onto ProjectWithStats and delete LocationBadges"
 status: ready
 depends_on: ["301"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["303"]
 files:
   - frontend/src/hooks/useProjectsWithStats.ts
   - frontend/src/hooks/useMergedProjects.ts
@@ -15,6 +15,7 @@ files:
   - frontend/src/components/projects/LocationBadges.tsx
   - frontend/src/components/layout/ProjectSwitcher.tsx
   - frontend/src/components/projects/ProjectList.test.tsx
+  - frontend/src/components/projects/ProjectTypeFilter.tsx
 siblings:
   - frontend/src/hooks/useMergedProjects.ts
 irreversible: true
@@ -86,10 +87,34 @@ describe('ProjectList on ProjectWithStats', () => {
 });
 ```
 
-Adapt the import of `ProjectList` and the count assertion to how the component actually renders
-counts (read the component first). If `ProjectList` requires props or additional providers,
-supply them — but do NOT weaken the assertion to "renders without crashing": a test that does not
-assert a task count does not guard the regression this task exists to prevent.
+**Providers are NOT optional and NOT your decision.** Decomposition checked: `ProjectList.tsx:2`
+imports `useNavigate` from `react-router-dom` (used at line 72) and `useTranslation` from
+`react-i18next` (line 73). The render must therefore be wrapped in a `MemoryRouter` as well as the
+`QueryClientProvider`:
+
+```tsx
+import { MemoryRouter } from 'react-router-dom';
+...
+render(
+  <MemoryRouter>
+    <QueryClientProvider client={client}>
+      <ProjectList />
+    </QueryClientProvider>
+  </MemoryRouter>
+);
+```
+
+If `react-i18next` is not already globally initialised by the vitest setup file, follow whatever
+pattern the existing tests under `frontend/src/__tests__/` use — read one first; do not invent a
+new i18n bootstrap.
+
+**The count assertion:** counts are rendered by `<TaskCountPills counts={project.task_counts} … />`
+(`UnifiedProjectCard.tsx:332`), and only when at least one count is non-zero
+(`hasTaskCounts`, lines 172-175). Read `TaskCountPills` and assert against how it actually renders
+the `todo: 3` value. Do NOT weaken the assertion to "renders without crashing" — a test that does
+not assert a task count does not guard the regression this task exists to prevent. If
+`TaskCountPills` renders counts in a way you cannot assert on text alone, add a `data-testid` to
+`TaskCountPills` — and if that file is not in `files:`, STOP and report rather than editing it.
 
 ## Change
 
@@ -132,17 +157,50 @@ export function useProjectsWithStats() {
 ```
 
 Delete `frontend/src/hooks/useMergedProjects.ts` once its two consumers are repointed (steps 3
-and 5). If `frontend/src/hooks/index.ts` exports it, that file must be added to `files:` — if it
-does, STOP and report rather than editing an unlisted file.
+and 5). Decomposition verified `frontend/src/hooks/index.ts` does NOT re-export it
+(`grep -n 'useMergedProjects' frontend/src/hooks/index.ts` → no output), so no barrel edit is
+needed. If that grep now returns a hit, STOP — `index.ts` is not in `files:`.
 
-### 3. `ProjectList.tsx` — retype
+### The dropped-field rewrite rule (read before steps 3-5)
 
-- Replace the `MergedProject` type import with `ProjectWithStats`.
-- Replace `useMergedProjects` with `useProjectsWithStats`.
-- Replace every `MergedProject` annotation (lines ~23, 25, 57, 59, 126) with `ProjectWithStats`.
-- Remove any filtering/branching on `has_local` or `nodes`: with the merge fields gone every
-  entry is a local project. Where the component branched on `p.has_local`, keep the local branch
-  and delete the other.
+`ProjectWithStats` drops `has_local`, `local_project_id`, and `nodes`, and the three consumers
+reference them **20 times**. Retyping alone will NOT compile. Apply this rule mechanically —
+it is derived from what the handler has actually been returning since node-foundations
+(`merged.rs`: `has_local: true`, `local_project_id: Some(project.id)`, `nodes: Vec::new()`):
+
+| Expression | Always evaluated to | Rewrite |
+|---|---|---|
+| `project.has_local` | `true` | drop the condition, keep the guarded branch |
+| `!project.has_local` | `false` | the branch is dead — delete it |
+| `project.local_project_id` | `Some(project.id)` | `project.id` |
+| `project.nodes` | `[]` | any filter/count over it is 0 — delete the branch |
+
+### 3. `ProjectList.tsx` — retype and drop the dead filter
+
+- Replace the `MergedProject` type import with `ProjectWithStats`, and `useMergedProjects` with
+  `useProjectsWithStats` (rename `mergedData` → `projectsData`, `refetchMerged` → `refetchProjects`).
+- Replace every `MergedProject` annotation (lines 23, 25, 57, 59, 126) with `ProjectWithStats`.
+- **Line 127-128** — before:
+```typescript
+      if (project.has_local && project.local_project_id) {
+        navigate(`/settings/projects?projectId=${project.local_project_id}`);
+```
+  after:
+```typescript
+      navigate(`/settings/projects?projectId=${project.id}`);
+```
+  (keep the surrounding function body; only the guard and the id change)
+- **Delete `filterProjects` entirely** (lines 56-69). Its `local` case is now every project and
+  its `swarm` case is always empty. At line 107 replace
+  `const filtered = filterProjects(projects, typeFilter);` with `const filtered = projects;`
+  and drop `typeFilter` from that `useMemo`'s dependency array.
+- **Delete the `counts` `useMemo`** (lines 85-93) and the `nodeCount` `useMemo` (lines 96-104) —
+  both exist only to count `has_local` / `nodes`.
+- **Delete the type-filter UI:** the `typeFilter`/`setTypeFilter` state (line 76), the
+  `ProjectTypeFilterTabs` import (lines 16-18), and the `<ProjectTypeFilterTabs … />` block
+  (lines 172-176). Keep `<ProjectSortControls …>` and the `{hasProjects && (…)}` wrapper around it.
+- **Delete the node-count subtitle** (lines 155-160, the `{nodeCount > 0 && (…)}` span). Keep
+  `{t('subtitle')}`.
 
 ### 4. `UnifiedProjectCard.tsx` — retype and drop the badges
 
@@ -150,19 +208,35 @@ does, STOP and report rather than editing an unlisted file.
   with `ProjectWithStats`.
 - **Anchor:** line 36 — delete `import { LocationBadges } from './LocationBadges';`
 - **Anchor:** line 310 — delete `<LocationBadges project={project} />`
+- Apply the rewrite rule to all eleven dropped-field references:
+  - **lines 75, 100, 145** — `if (!project.has_local || !project.local_project_id) return;` →
+    delete the guard line entirely
+  - **lines 85, 103, 116, 149** — `project.local_project_id` → `project.id`
+  - **line 132** — `if (!project.has_local || !project.git_repo_path) return;` →
+    `if (!project.git_repo_path) return;`
+  - **lines 216, 251, 316** — `project.has_local && ` → delete just that conjunct, keep the rest
+    of the condition and the JSX
+  - **line 279** — `{!project.has_local && project.remote_project_id && (…)}` → the whole block
+    is dead (`!has_local` is always false); delete it
 
 ### 5. `ProjectSwitcher.tsx` — retype
 
-- Replace `useMergedProjects` with `useProjectsWithStats` and rename the destructured
-  `mergedData` to `projectsData`.
-- **Anchor:** the `allProjects` `useMemo` (~line 50-70). It branches on `p.has_local` to decide
-  local-vs-remote presentation. Every entry is now local: keep the `has_local === true` branch
-  body, delete the `else` branch, and delete the `if (p.has_local)` condition itself.
+- Replace `useMergedProjects` with `useProjectsWithStats`, and `mergedData` → `projectsData`.
+- **Anchor:** the `allProjects` `useMemo`, lines 56-70. Before it branches
+  `if (p.has_local) { …local… } else if (p.nodes.length > 0) { …remote… }`. After: keep the
+  `has_local` branch body unconditionally and delete the `else if (p.nodes.length > 0)` branch
+  and everything in it (including the `firstNode` lookup).
 
 ### 6. Delete `frontend/src/components/projects/LocationBadges.tsx`
 
 Its only consumer was `UnifiedProjectCard` (removed in step 4), and it renders `project.nodes`,
 which the handler has hardcoded to `[]` since node-foundations — it has been rendering nothing.
+
+### 7. Delete `frontend/src/components/projects/ProjectTypeFilter.tsx`
+
+Decomposition verified `ProjectList.tsx` is its only consumer
+(`git grep -n 'ProjectTypeFilter' -- frontend/src` → hits only in `ProjectList.tsx` and its own
+file). With the local/swarm distinction gone it has nothing to filter.
 
 ## Allowed moves
 
@@ -171,15 +245,16 @@ which the handler has hardcoded to `[]` since node-foundations — it has been r
 
 ## STOP triggers
 
-- If `ProjectList` or `ProjectSwitcher` uses `has_local` or `nodes` for anything other than the
-  local/remote branch described above (e.g. a count, a sort key, a badge) — STOP and report; that
-  is behaviour the plan did not anticipate.
+- If you find a `has_local`, `local_project_id`, or `nodes` reference NOT listed in the tables
+  above — STOP and report it. Do not apply the rewrite rule by analogy to an unlisted site.
+- If deleting the type-filter UI leaves `hasProjects` or `ProjectSortControls` unused — STOP;
+  they are meant to survive.
 - If `frontend/src/hooks/index.ts` re-exports `useMergedProjects` — STOP (that file is not in
-  `files:`).
+  `files:`; decomposition verified it does not, so a hit means something changed).
 - If any file outside `files:` imports `LocationBadges` — STOP.
 - If the new test passes without step 1-5 applied, it is hollow — STOP and strengthen it.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cd frontend && npx vitest run src/components/projects
@@ -191,13 +266,18 @@ cd frontend && npx tsc --noEmit
 cd frontend && npm run lint
 # Expected: clean
 
-grep -rn 'useMergedProjects\|LocationBadges' frontend/src
+grep -rn 'useMergedProjects\|LocationBadges\|ProjectTypeFilter' frontend/src
 # Expected: NO output
+
+grep -rn 'has_local\|local_project_id' frontend/src
+# Expected: NO output (all three dropped fields are gone from the frontend)
 ```
 
 ## Done when
 
 - The board and the project switcher render from `/api/projects/with-stats`.
-- `useMergedProjects.ts` and `LocationBadges.tsx` are deleted, with no surviving references.
+- `useMergedProjects.ts`, `LocationBadges.tsx`, and `ProjectTypeFilter.tsx` are deleted, with no
+  surviving references.
+- No `has_local`, `local_project_id`, or `nodes` reference survives in `frontend/src`.
 - The new test asserts a task count renders (the `a85f7d63` regression guard).
 - vitest, `tsc --noEmit`, and lint are clean.

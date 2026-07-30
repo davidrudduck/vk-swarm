@@ -38,9 +38,13 @@ Four "Used By" citations point at the node's route module. Repoint each to the h
 | 108 | `- ``routes/nodes.rs`` - Key management` | `- ``crates/remote/src/routes/nodes.rs`` - Key management` |
 | 141 | `- ``routes/nodes.rs`` - GET /api/nodes/api-keys` | `- ``crates/remote/src/routes/nodes.rs`` - GET /v1/nodes/api-keys` |
 | 171 | `- ``routes/nodes.rs`` - DELETE /api/nodes/api-keys/:id` | `- ``crates/remote/src/routes/nodes.rs`` - DELETE /v1/nodes/api-keys/:id` |
+| 189 | `- ``routes/nodes.rs`` - Hard delete option` | `- ``crates/remote/src/routes/nodes.rs`` - Hard delete option` |
+| 329 | `- ``routes/nodes.rs`` - POST /api/nodes/api-keys/:id/unblock` | `- ``crates/remote/src/routes/nodes.rs`` - POST /v1/nodes/api-keys/:id/unblock` |
 
-If a citation for `POST /api/nodes/api-keys/:id/unblock` is also present, repoint it the same
-way to `POST /v1/nodes/api-keys/:id/unblock`.
+All six were enumerated at decomposition with
+`grep -n 'routes/nodes.rs' docs/architecture/db/functions/postgresql-node-api-keys.mdx`; there is
+no seventh. Line 189's "Hard delete option" is easy to miss because it names no URL — it still
+cites the node module that no longer has these routes.
 
 Then add this note under the document's first heading:
 
@@ -61,18 +65,22 @@ Then add this note under the document's first heading:
   STOP and report.
 - Do NOT edit any other doc under `docs/architecture/`.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 grep -n '/api/nodes/api-keys' docs/architecture/db/functions/postgresql-node-api-keys.mdx
 # Expected: NO output
 
 grep -c 'crates/remote/src/routes/nodes.rs' docs/architecture/db/functions/postgresql-node-api-keys.mdx
-# Expected: 4 (or 5 if the unblock citation was present)
+# Expected: exactly 6
+
+grep -n 'routes/nodes.rs' docs/architecture/db/functions/postgresql-node-api-keys.mdx | grep -v 'crates/remote'
+# Expected: NO output (no bare `routes/nodes.rs` citation survives)
 ```
 
 ## Done when
 
 - No `/api/nodes/api-keys` reference survives in the file.
-- Every "Used By" citation points at the hive's route module with a `/v1/` path.
+- All six "Used By" citations point at `crates/remote/src/routes/nodes.rs`, and the five that
+  name a URL use a `/v1/` path.
 - The ADR-0013 note is present.

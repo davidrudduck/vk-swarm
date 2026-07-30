@@ -100,7 +100,7 @@ impl From<RemoteClientNotConfigured> for ApiError {
 - If the `match` is non-exhaustive after adding the variant, you have put the arm in the wrong
   block — STOP rather than adding a catch-all `_ =>`.
 
-## Manual verification (record in decisions-ledger)
+## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
 cargo clippy -p server --all-targets --all-features -- -D warnings
