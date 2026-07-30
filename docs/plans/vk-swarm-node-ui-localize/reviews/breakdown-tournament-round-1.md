@@ -208,3 +208,69 @@ remediated plus a focused re-check. Re-check after remediation:
 $ bash "$WAI_ROOT/scripts/wai-plan-lint.sh" vk-swarm-node-ui-localize
 PLAN-LINT PASS: vk-swarm-node-ui-localize — plan/frontmatter consistent, verification + SC-coverage complete
 ```
+
+---
+
+# Round 1 addendum — codex seat
+
+Codex completed after this file's first write. **17 findings: 8 blocker, 7 major, 2 minor.** It
+independently confirmed T2 and T4 (found by opencode/orchestrator) and added the following.
+
+## Applied (verified against the repo before applying)
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| F1 | blocker | Task 301's handler snippet omitted `db::models::project::Project` and `deployment::Deployment` — `Project::…` and `.db()` would not resolve. Evidence: `merged.rs:8-11` carries both. | imports corrected in the snippet |
+| F2 | blocker | Task 403 used `isHiveNotConfigured` (created by 402) but declared `depends_on: ["401"]`, so the declared order deterministically hit 403's own STOP trigger. | `depends_on: ["401","402"]`, plan graph + row updated |
+| F3 | blocker | Task 402 wired `NodeTemplatesSection`'s `error` — but that is the **local** `templatesApi.list()` query, which SUCCEEDS on a hive-less node. The hive query is `useSwarmTemplates` (lines 63-66), error not destructured. SC4 would silently never render. | task now dictates adding `error: swarmTemplatesError` and branching on it, leaving the local error branch intact |
+| F4 | blocker | Task 403 item 2 was not mechanical: `useNodeLogStream` bypasses the API client with raw `fetch('/v1/nodes/assignments/…')` and throws plain `Error`, so `isHiveNotConfigured` is **always false**; and `/v1` is a hive path that 404s on a node. Repointing to `tasksApi.streamConnectionInfo` is not literal either (task id vs assignment id). | item 2 converted to STOP-and-report with the full reasoning; the other three hooks stay mechanical |
+| F14 | major | Task 203 rewrote 4 of **6** stale citations — missed line 189 ("Hard delete option", names no URL) and left the unblock line conditional. | exhaustive 6-row table; verification count fixed to exactly 6 plus a no-bare-citation grep |
+| F15 | blocker | Every task said "record in decisions-ledger", but only 501 lists the ledger in `files:` — the gate rejects edits to unlisted files, so every task would fail its own evidence step. | ledger declared **orchestrator-owned**; all 14 other tasks now read "emit verbatim; the ORCHESTRATOR records it"; policy stated in plan.md |
+| F16 | minor | 302 and 303 both edit `frontend/src/lib/api/projects.ts` without declaring a conflict, inconsistent with how 101-104 and 301/303 declare theirs. | `conflicts_with` set both ways; plan table updated |
+| F17 | minor | Task 303's verification grep omitted `NodeLocation`, one of its own mandatory deletions. | grep now covers all four terms |
+
+## Escalated, NOT silently resolved — frozen-spec test strategy (F5, F8)
+
+Codex is correct and this is the one finding the orchestrator will not decide alone.
+
+The frozen spec's `## Test strategy` requires:
+
+> Per-module route tests for each restored proxy: hive-configured returns `200` + `success: true`
+> (against a mocked `RemoteClient`), and hive-absent returns the not-configured variant rather
+> than a 500.
+
+> `ProjectWithStats` handler test asserting the enrichment survives: … correct `task_counts`, a
+> non-null `last_attempt_at`, and name-sorted ordering.
+
+Tasks 101-104 and 301 instead say "N/A — no unit-test seam" and lean on task 105's HTTP evidence
+and task 302's frontend test. That is a **decomposition that quietly drops a frozen-spec
+requirement**, which ADR-0001 forbids resolving by editing the spec.
+
+Why the seam is genuinely missing (verified, not assumed):
+
+- Every restored handler takes `State<DeploymentImpl>`; there is no way to reach one without a
+  real deployment.
+- `DeploymentImpl` is built by `Deployment::new()` (`crates/local-deployment/src/lib.rs:101`),
+  which takes no arguments and reads `VK_SHARED_API_BASE` / `VK_NODE_API_KEY` from the environment
+  while constructing the DB and services. There is no injection point and no test constructor.
+- The raw material for a real test DOES exist: `wiremock = "0.6"` is a dev-dependency of
+  `crates/services`, `RemoteClient::new_with_api_key(base_url, key)` accepts an arbitrary base URL,
+  `crates/server` already dev-depends on `db` with `features = ["test-utils"]` and on
+  `serial_test` (for env-var serialisation). What is missing is a seam that lets a test hand a
+  `DeploymentImpl` a `RemoteClient` pointed at a wiremock server.
+
+So the options are (a) add a prerequisite task building that seam — real work, and it touches
+production types — or (b) amend the spec's Test strategy to accept HTTP-level evidence and re-run
+`/wai:precheck` to re-freeze. Both are the user's call, not the run's.
+
+**Status: this decompose is complete and lint-clean, but phase 1 and task 301 carry a known
+divergence from the frozen spec's test strategy until that decision is made.**
+
+## Remaining codex findings, adjudicated
+
+| # | Sev | Disposition |
+|---|---|---|
+| F6, F7 | major | Task 105's "a handler test would be hollow" claim is narrower than stated, and 105 does not fully prove SC1/SC2 (it runs hive-less, so it shows non-404 but not `200 + success:true`). **Folded into the F5 escalation** — both dissolve if a test seam is built. |
+| F9, F10, F11 | major | Board/switcher local-only behaviour and test coverage. **Already fixed** by the T2/T3/T5 remediations above (site-by-site rewrite table, `ProjectSwitcher` remote branch deletion, `MemoryRouter` + count assertion). |
+| F12 | major | Task 402 tests the shared alert but not the six integrations. Accepted: the six wirings are verified by the browser check recorded verbatim in the ledger. Revisit if that proves unreliable. |
+| F13 | blocker per codex | Task 403's test uses an unverified `result.current.nodes` shape and covers 1 of 4 hooks. Partially addressed (the task already tells the implementer to adapt the shape and forbids weakening the assertion); the coverage half is **folded into the F5 escalation**, since 403 now only touches three hooks. |
