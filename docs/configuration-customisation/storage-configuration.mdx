@@ -36,13 +36,14 @@ Production locations use platform-specific data directories. On macOS, this is
   `profiles.json`, and the default locations for the database and backups. The
   directory is created automatically if it doesn't exist. The more specific
   overrides below take precedence over it.
+  Worktrees are not stored here — set `VK_WORKTREE_DIR` as well to isolate a second instance.
 </ParamField>
 
 ```bash
 # Example: keep all state under one directory
 VK_ASSET_DIR=~/vibe-kanban
 
-# Example: run a second, fully isolated instance
+# Example: give a second instance its own config, credentials and database
 VK_ASSET_DIR=/data/vibe-kanban-staging
 ```
 

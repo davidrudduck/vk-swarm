@@ -14,7 +14,11 @@ const PROJECT_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 ///
 /// The directory is created automatically if it does not exist.
 pub fn asset_dir() -> std::path::PathBuf {
-    let path = if let Ok(dir) = std::env::var("VK_ASSET_DIR") {
+    let override_dir = std::env::var("VK_ASSET_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+
+    let path = if let Some(dir) = override_dir {
         crate::path::expand_tilde(&dir)
     } else if cfg!(debug_assertions) {
         std::path::PathBuf::from(PROJECT_ROOT).join("../../dev_assets")
@@ -208,6 +212,10 @@ mod tests {
         unsafe { env::remove_var("VK_ASSET_DIR") };
         assert!(!dir.to_string_lossy().contains('~'));
         assert!(dir.is_absolute());
+        assert!(
+            dir.ends_with("vibe-kanban-assets-test"),
+            "tilde expansion must resolve the VK_ASSET_DIR value, got {dir:?}"
+        );
     }
 
     #[test]
@@ -220,5 +228,19 @@ mod tests {
         // Either way it must be absolute and must exist after the call.
         assert!(dir.is_absolute());
         assert!(dir.exists());
+    }
+
+    #[test]
+    #[serial]
+    fn test_asset_dir_empty_env_falls_back_to_default() {
+        // SAFETY: Tests run serially via #[serial] attribute
+        unsafe { env::remove_var("VK_ASSET_DIR") };
+        let default_dir = asset_dir();
+        unsafe { env::set_var("VK_ASSET_DIR", "   ") };
+        let dir = asset_dir();
+        unsafe { env::remove_var("VK_ASSET_DIR") };
+        // A blank override must be ignored, NOT resolved relative to the CWD.
+        assert_eq!(dir, default_dir);
+        assert!(dir.is_absolute());
     }
 }

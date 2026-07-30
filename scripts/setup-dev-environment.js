@@ -310,6 +310,9 @@ if (require.main === module) {
         // These vars are inherited from parent processes and must be explicitly unset.
         const productionOnlyVars = [
           // Storage paths - dev uses local dev_assets/
+          // VK_ASSET_DIR is the ROOT the others default off — it must be unset first,
+          // or a production asset dir becomes the dev server's default database.
+          'VK_ASSET_DIR',
           'VK_DATABASE_PATH',
           'VK_LOG_DIR',
           'VK_BACKUP_DIR',
