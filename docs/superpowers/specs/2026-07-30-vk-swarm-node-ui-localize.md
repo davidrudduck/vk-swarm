@@ -1,9 +1,9 @@
 ---
 doc_type: spec
-status: draft
+status: active
 workstream: vk-swarm-node-ui-localize
 change_kind: bugfix
-verify_cmd: "curl -fsS http://127.0.0.1:${BACKEND_PORT:-3001}/api/nodes?organization_id=$VK_ORG_ID | grep -q '\"success\":true'"
+verify_cmd: "curl -fsS http://127.0.0.1:${BACKEND_PORT:-3001}/api/projects/with-stats | grep -q 'success.:true'"
 ---
 
 # vk-swarm-node-ui-localize — Intent
@@ -151,18 +151,166 @@ Runtime-observable. No criterion is "test X passes".
 - **F-2026-07-29-02** (medium) — node board consumes `MergedProject` via the bridge endpoint;
   repoint to `Project`.
 
-## Open questions for `/wai:spec`
+## Approach
 
-1. Proxy route shape: restore the original `routes/nodes.rs` + `routes/swarm.rs` paths verbatim
-   (frontend untouched), or introduce a namespaced prefix? Verbatim keeps the frontend diff at
-   zero for part 1.
-2. Does the API-key surface belong on the node at all, given `hive-node-api-key-ui` shipped it on
-   the hive? Restoring `/api/nodes/api-keys` recreates the pre-fork duplication.
-3. `MergedProject` retirement: delete the `#[ts(export)]` struct and `/api/merged-projects`
-   outright, or keep the endpoint local-only (restored in `a85f7d63`) and only stop the frontend
-   calling it? Deleting is cleaner; keeping is lower-risk if anything else consumes it.
-4. Exact fate of the four remote stream hooks under C4 — `useNodeLogStream`, `useDiffStream`,
-   `useRemoteConnectionStatus`, `useAvailableNodes`: proxy them like the rest, or make them
-   no-op cleanly when hive-absent?
-5. `verify_cmd` above assumes a hive-connected node with `VK_ORG_ID` exported. Confirm or replace
-   with a check that works on the standard dev deploy.
+Three independent tracks. Track A is mostly a `git show` restore; Track B is the typed refactor;
+Track C is hardening. A and B do not touch the same files and can run in parallel.
+
+**Track A — restore the proxy route layer (backend).** Recover the four route modules deleted by
+`35b378a5` verbatim:
+
+```bash
+git show 35b378a5^:crates/server/src/routes/nodes.rs
+git show 35b378a5^:crates/server/src/routes/swarm_projects.rs
+git show 35b378a5^:crates/server/src/routes/swarm_labels.rs
+git show 35b378a5^:crates/server/src/routes/swarm_templates.rs
+```
+
+Re-register them in `routes/mod.rs` alongside `organizations::router()`. Restoring the paths
+verbatim means **zero frontend diff** for this track — `lib/api/{nodes,swarmProjects,swarmLabels,
+swarmTemplates}.ts` already target exactly these URLs. The restored surface:
+
+| Module | Routes |
+|---|---|
+| `nodes.rs` | `/nodes`, `/nodes/{node_id}`, `/nodes/{node_id}/projects` |
+| `swarm_projects.rs` | `/swarm/projects`, `/{project_id}`, `/{project_id}/merge`, `/{project_id}/nodes`, `/{project_id}/nodes/{node_id}` |
+| `swarm_labels.rs` | `/swarm/labels`, `/{label_id}`, `/{label_id}/merge`, `/swarm/labels/promote` |
+| `swarm_templates.rs` | `/swarm/templates`, `/{template_id}`, `/{template_id}/merge` |
+
+Deliberately **not** restored: `/nodes/api-keys*` — see Decision D3.
+
+**Track B — retire `MergedProject` (full-stack typed refactor).** Add `ProjectWithStats` +
+`/api/projects/with-stats`, delete `MergedProject` / `MergedProjectsResponse` /
+`/api/merged-projects`, regenerate types, retype the four consumers. Per
+[ADR-0014](../../../dev-docs/adr/0014-retire-mergedproject-for-projectwithstats.md).
+
+**Track C — hive-absent hardening.** Make `RemoteClientNotConfigured` a first-class UI state
+across every proxied surface, and settle the four remote stream hooks.
+
+Ordering: A and B in parallel; C after A (it needs the restored routes to have a disconnected
+state to render).
+
+## Design / architecture
+
+### Proxy handler shape
+
+Every restored handler is an extract → call → wrap pass-through with no business logic, exactly
+as `routes/organizations.rs:list_organizations` already does on `main`:
+
+```rust
+async fn list_nodes(
+    State(deployment): State<DeploymentImpl>,
+    Query(params): Query<ListNodesQuery>,
+) -> Result<ResponseJson<ApiResponse<Vec<Node>>>, ApiError> {
+    let client = deployment.remote_client()?;
+    let nodes = client.list_nodes(params.organization_id).await?;
+    Ok(ResponseJson(ApiResponse::success(nodes)))
+}
+```
+
+`deployment.remote_client()` returns `Result<RemoteClient, RemoteClientNotConfigured>`; the `?`
+carries the hive-absent case into `ApiError` uniformly, so the disconnected state is one error
+variant the frontend can branch on rather than a per-endpoint special case.
+
+No new `RemoteClient` methods are needed — every call the restored routes make already exists in
+`crates/services/src/services/remote_client.rs`. (The two methods that would have been needed,
+`unblock_node_api_key` and node merge, belong to the API-key surface that D3 deletes.)
+
+### `ProjectWithStats`
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ProjectWithStats {
+    // Project row
+    pub id: Uuid, pub name: String, pub git_repo_path: String,
+    #[ts(type = "Date")] pub created_at: DateTime<Utc>,
+    pub remote_project_id: Option<Uuid>,
+    // enrichment
+    pub task_counts: TaskCounts,
+    #[ts(type = "Date | null")] pub last_attempt_at: Option<DateTime<Utc>>,
+    pub github_enabled: bool, pub github_owner: Option<String>, pub github_repo: Option<String>,
+    pub github_open_issues: Option<i64>, pub github_open_prs: Option<i64>,
+    #[ts(type = "Date | null")] pub github_last_synced_at: Option<DateTime<Utc>>,
+}
+```
+
+Identical to today's `MergedProject` minus `nodes`, `has_local`, and `local_project_id` — the
+three fields the handler hardcodes. The query (`Project::find_local_projects_with_stats`) and the
+name-sort are reused unchanged, so the payload the board renders is byte-equivalent apart from the
+dropped constants. `remote_project_id` survives, which is what keeps hive-bound projects
+identifiable and manageable from the node.
+
+Frontend: `useMergedProjects` → `useProjectsWithStats`; `ProjectList`, `ProjectSwitcher`,
+`UnifiedProjectCard` retyped; `LocationBadges` deleted (it renders `nodes`, which is always empty).
+
+### Hive-absent state
+
+`ApiError` gains (or reuses) a discriminable not-configured variant so the frontend can render
+"not connected to a hive" rather than a raw error body. One shared presentational component is
+used by all five swarm sections and `/nodes`, so the state is consistent and testable in one place.
+
+### Remote stream hooks
+
+`useNodeLogStream`, `useDiffStream`, `useRemoteConnectionStatus`, and `useAvailableNodes` stay —
+they serve cross-node viewing, which survives under the repoint decision. They are hardened, not
+removed: each must return a clean empty/disabled result when no hive is configured, so
+`ProcessLogsViewer`, `DiffsPanel`, `AttemptHeaderActions`, and `CreateAttemptDialog` render local
+state without erroring (SC6). `useRemoteConnectionStatus` already branches on
+`connectionInfo.direct_url`; that branch is the model for the others.
+
+## Decisions
+
+| # | Decision | Irreversible? | ADR |
+|---|---|---|---|
+| D1 | Restore node-surface routes as thin `RemoteClient` proxies, verbatim paths, mirroring `organizations.rs` | **Yes** — reverses part of node-foundations | [ADR-0013](../../../dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md) |
+| D2 | Proxy through the node server rather than browser→hive direct | **Yes** — sets the auth boundary | [ADR-0013](../../../dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md) |
+| D3 | Do **not** restore `/nodes/api-keys*`; delete `components/org/NodeApiKeySection.tsx` and its `OrganizationSettings.tsx:380` mount. The hive owns key management | **Yes** — deletes a live user-facing surface | [ADR-0013](../../../dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md) |
+| D4 | Replace `MergedProject` with `ProjectWithStats` at `/api/projects/with-stats`; delete `/api/merged-projects` | **Yes** — deletes a `#[ts(export)]` type, changes wire format | [ADR-0014](../../../dev-docs/adr/0014-retire-mergedproject-for-projectwithstats.md) |
+| D5 | Delete `LocationBadges` and the `nodes` / `has_local` / `local_project_id` fields | **Yes** — deletes a component | [ADR-0014](../../../dev-docs/adr/0014-retire-mergedproject-for-projectwithstats.md) |
+| D6 | Keep the four remote stream hooks; harden for hive-absent instead of removing | No | — |
+| D7 | Keep `frontend/` and `remote-frontend/` swarm trees separate; hive tree is authoritative | No | — |
+
+## Test strategy
+
+Rust:
+
+- Per-module route tests for each restored proxy: hive-configured returns `200` + `success: true`
+  (against a mocked `RemoteClient`), and hive-absent returns the not-configured variant rather
+  than a 500. This is the SC1/SC4 signal.
+- `ProjectWithStats` handler test asserting the enrichment survives: a project with tasks in each
+  status returns correct `task_counts`, a non-null `last_attempt_at`, and name-sorted ordering —
+  i.e. the regression `a85f7d63` was fixing cannot come back.
+- Assert `/api/merged-projects` is gone (404) once D4 lands.
+- `npm run generate-types:check` in CI to catch a stale `shared/types.ts`.
+
+Frontend (`frontend/`):
+
+- `ProjectList` / `ProjectSwitcher` render from `ProjectWithStats` fixtures; task counts and
+  last-attempt ordering asserted.
+- Each swarm section renders the disconnected state when the API returns not-configured.
+- `ProcessLogsViewer`, `DiffsPanel`, `AttemptHeaderActions`, `CreateAttemptDialog` render without
+  error when their remote hook returns the hive-absent result (SC6).
+
+Reachability (per `/wai:execute`'s close gate — `change_kind: bugfix`):
+
+- The real-seam test must drive the **HTTP route**, not the handler function. A test calling
+  `list_nodes()` directly proves the proxy works, never that `/api/nodes` is *registered* — and
+  an unregistered route is the entire bug. At least one test must exercise the mounted router.
+- Incident-symptom assertion: a request to each URL in the Intent table returns non-404.
+
+Regression:
+
+- `remote-frontend` suite unchanged and green (SC7) — the hive UI must not move.
+- Full gates per C6.
+
+## Resolved open questions
+
+1. **Route shape** → verbatim restore from `35b378a5^`. Zero frontend diff for Track A.
+2. **API keys on the node** → deleted (D3). The hive owns them; the node's copy is removed rather
+   than reconnected.
+3. **`MergedProject`** → deleted and replaced by `ProjectWithStats` (D4). The endpoint was not
+   merging anything; the board's real dependency is the enrichment, which is preserved.
+4. **Stream hooks** → kept and hardened (D6).
+5. **`verify_cmd`** → now targets `/api/projects/with-stats`, which works on a standard dev
+   deploy with no hive and no `VK_ORG_ID`. Hive-connected checks are covered by SC1's route
+   sweep during deploy verification.
