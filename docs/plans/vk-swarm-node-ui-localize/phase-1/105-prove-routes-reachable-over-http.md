@@ -1,0 +1,88 @@
+---
+id: "105"
+phase: 1
+title: "Prove every restored route is reachable over HTTP against a running server"
+status: ready
+depends_on: ["104"]
+parallel: false
+conflicts_with: []
+files:
+  - docs/plans/vk-swarm-node-ui-localize/reviews/105-reachability-evidence.md
+irreversible: false
+scope_test: "N/A"
+allowed_change: create
+covers_criteria: [SC1, SC2]
+---
+
+## Failing test (write first)
+
+N/A by design — and the reason matters, so read it before substituting a unit test.
+
+The bug this workstream fixes is that the routes are **not registered**. A test that calls
+`list_nodes()` (or any restored handler) directly would pass on `main` today, before any of
+tasks 101–104 exist, because the handler function was never the broken part. Such a test proves
+the proxy works and proves **nothing** about reachability — it is hollow, and this plan refuses
+it (see plan.md, "Known limitation").
+
+No test in this repo constructs `routes::router(deployment)`: it requires a live
+`DeploymentImpl` (database, config, remote client) and no test-deployment helper exists. The
+realest seam actually available is an HTTP request to a running server, which is what this task
+uses. It is a stronger reachability signal than an in-process unit test would have been.
+
+## Change
+
+Start the dev server and record the observed HTTP status of every restored path.
+
+- **File:** `docs/plans/vk-swarm-node-ui-localize/reviews/105-reachability-evidence.md`
+- **Before:** (does not exist)
+- **After:** a file containing the verbatim command output from the Manual verification block
+  below — no paraphrase, no summary. Fenced code blocks only.
+
+## Allowed moves
+
+- Create the evidence file. This task changes NO source code.
+
+## STOP triggers
+
+- If any path returns `404`, the registration in tasks 101–104 is incomplete. STOP and report
+  which path — do not "fix" it from this task; the fix belongs in the owning task's file.
+- If the server will not start, STOP and report the startup error. Do not record partial
+  evidence as a pass.
+- If you are tempted to add a Rust unit test calling a handler function directly to "cover" this
+  task — STOP and re-read the Failing test section.
+
+## Manual verification (record in decisions-ledger)
+
+```bash
+# 1. Start the node server (a hive need NOT be configured for this check)
+pnpm run dev    # note the BACKEND_PORT it reports; export it as PORT below
+
+# 2. Every restored path must answer NON-404. With no hive configured the expected
+#    answer is the not-configured error (400 today, 503 after task 401) — that is a
+#    PASS for this task. Only 404 is a failure: 404 means the route is not registered.
+for p in \
+  "/api/nodes?organization_id=00000000-0000-0000-0000-000000000000" \
+  "/api/nodes/00000000-0000-0000-0000-000000000000" \
+  "/api/nodes/00000000-0000-0000-0000-000000000000/projects" \
+  "/api/swarm/projects?organization_id=00000000-0000-0000-0000-000000000000" \
+  "/api/swarm/labels?organization_id=00000000-0000-0000-0000-000000000000" \
+  "/api/swarm/templates?organization_id=00000000-0000-0000-0000-000000000000" ; do
+  printf '%s -> ' "$p"
+  curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${PORT}${p}"
+done
+# Expected: six lines, NONE of them 404.
+
+# 3. D3 assertion — the API-key surface must NOT be reachable (SC3)
+curl -s -o /dev/null -w '%{http_code}\n' \
+  "http://127.0.0.1:${PORT}/api/nodes/api-keys?organization_id=00000000-0000-0000-0000-000000000000"
+# Expected: 404
+```
+
+Paste all three blocks' real output into the evidence file and into the decisions-ledger.
+
+## Done when
+
+- `reviews/105-reachability-evidence.md` exists and contains verbatim output showing six
+  non-404 responses.
+- The API-key path returns `404`, confirming D3 held.
+- No source file was modified by this task.
