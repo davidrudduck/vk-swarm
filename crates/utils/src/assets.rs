@@ -3,8 +3,20 @@ use rust_embed::RustEmbed;
 
 const PROJECT_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
+/// Get the root directory for all Vibe Kanban assets (config, credentials, profiles,
+/// and the default database/backup locations).
+///
+/// Respects the `VK_ASSET_DIR` environment variable for custom locations.
+/// Supports tilde expansion (e.g., `~/vibe-kanban`).
+///
+/// Default: `<project_root>/dev_assets` in debug builds, the platform data directory
+/// in release builds.
+///
+/// The directory is created automatically if it does not exist.
 pub fn asset_dir() -> std::path::PathBuf {
-    let path = if cfg!(debug_assertions) {
+    let path = if let Ok(dir) = std::env::var("VK_ASSET_DIR") {
+        crate::path::expand_tilde(&dir)
+    } else if cfg!(debug_assertions) {
         std::path::PathBuf::from(PROJECT_ROOT).join("../../dev_assets")
     } else {
         ProjectDirs::from("ai", "bloop", "vibe-kanban")
@@ -157,5 +169,56 @@ mod tests {
         unsafe { env::remove_var("VK_BACKUP_DIR") };
         assert!(!dir.to_string_lossy().contains('~'));
         assert!(dir.is_absolute());
+    }
+
+    #[test]
+    #[serial]
+    fn test_asset_dir_env_override() {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        let custom = tmp.path().join("assets");
+        // SAFETY: Tests run serially via #[serial] attribute
+        unsafe { env::set_var("VK_ASSET_DIR", &custom) };
+        let dir = asset_dir();
+        unsafe { env::remove_var("VK_ASSET_DIR") };
+        assert_eq!(dir, custom);
+        assert!(custom.exists(), "asset_dir() must create the directory");
+    }
+
+    #[test]
+    #[serial]
+    fn test_asset_dir_env_override_reaches_derived_paths() {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        let custom = tmp.path().join("assets");
+        // SAFETY: Tests run serially via #[serial] attribute
+        unsafe { env::set_var("VK_ASSET_DIR", &custom) };
+        let creds = credentials_path();
+        let config = config_path();
+        unsafe { env::remove_var("VK_ASSET_DIR") };
+        // This is the whole point: the derived leaves must follow the root.
+        assert_eq!(creds, custom.join("credentials.json"));
+        assert_eq!(config, custom.join("config.json"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_asset_dir_tilde_expansion() {
+        // SAFETY: Tests run serially via #[serial] attribute
+        unsafe { env::set_var("VK_ASSET_DIR", "~/vibe-kanban-assets-test") };
+        let dir = asset_dir();
+        unsafe { env::remove_var("VK_ASSET_DIR") };
+        assert!(!dir.to_string_lossy().contains('~'));
+        assert!(dir.is_absolute());
+    }
+
+    #[test]
+    #[serial]
+    fn test_asset_dir_default_unchanged_when_unset() {
+        // SAFETY: Tests run serially via #[serial] attribute
+        unsafe { env::remove_var("VK_ASSET_DIR") };
+        let dir = asset_dir();
+        // Debug builds resolve to the repo's dev_assets/; release to the platform data dir.
+        // Either way it must be absolute and must exist after the call.
+        assert!(dir.is_absolute());
+        assert!(dir.exists());
     }
 }

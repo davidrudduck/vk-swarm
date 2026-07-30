@@ -29,6 +29,23 @@ Production locations use platform-specific data directories. On macOS, this is
 
 ## Configuration Options
 
+### Asset Root Directory
+
+<ParamField path="VK_ASSET_DIR" type="string">
+  Root directory for all Vibe Kanban state: `config.json`, `credentials.json`,
+  `profiles.json`, and the default locations for the database and backups. The
+  directory is created automatically if it doesn't exist. The more specific
+  overrides below take precedence over it.
+</ParamField>
+
+```bash
+# Example: keep all state under one directory
+VK_ASSET_DIR=~/vibe-kanban
+
+# Example: run a second, fully isolated instance
+VK_ASSET_DIR=/data/vibe-kanban-staging
+```
+
 ### Database Location
 
 <ParamField path="VK_DATABASE_PATH" type="string">
