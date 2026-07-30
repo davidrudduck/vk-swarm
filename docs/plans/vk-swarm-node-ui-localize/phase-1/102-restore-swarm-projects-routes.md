@@ -31,7 +31,7 @@ mod common;
 #[serial_test::serial]
 async fn configured_hive_returns_success() {
     let h = common::HiveHarness::configured().await;
-    h.mock_json("GET", "/v1/swarm/projects", 200, serde_json::json!([])).await;
+    h.mock_json("GET", "/v1/swarm/projects", 200, serde_json::json!({"projects": []})).await;
     let res = h.get("/api/swarm/projects?organization_id=00000000-0000-0000-0000-000000000000").await;
     res.assert_registered();
     assert_eq!(res.status, 200, "body: {}", res.body);
@@ -53,7 +53,6 @@ requests and deserialises — read the method in
 `crates/services/src/services/remote_client.rs` first. If the mocked body does not deserialise,
 the configured-hive test fails loudly; do NOT weaken it to only assert a status code.
 
-
 > [!WARNING]
 > **Registration is NOT proved by a non-404 status in this codebase.** The outer router ends in a
 > catch-all `.route("/{*path}", get(frontend::serve_frontend))`
@@ -62,6 +61,29 @@ the configured-hive test fails loudly; do NOT weaken it to only assert a status 
 > `/api/...` GET therefore returns **200 + SPA HTML**, never 404 — verified empirically. Use
 > `Resp::assert_registered()` (task 100, Amendment C.1), which fails when the response is the SPA
 > fallback. Never assert `assert_ne!(status, 404)` to mean "registered".
+
+## Amendments (ORCHESTRATOR, pre-dispatch — these are DICTATED, not choices)
+
+**D1 — mocked body shape.** The original draft mocked `serde_json::json!([])`. That does NOT
+deserialise: `list_swarm_projects` returns `ListSwarmProjectsResponse`, which is a struct with a
+`projects` field (`crates/remote/src/routes/swarm_projects.rs:90-92`), not a bare array. The test
+block above has been corrected to `json!({"projects": []})`. Use it as written.
+
+**D2 — mocked hive path is correct as written.** `RemoteClient::list_swarm_projects`
+(`crates/services/src/services/remote_client.rs:1008-1019`) selects the path by auth mode. The
+harness seeds OAuth credentials, so the `AuthMode::OAuth` arm runs and the request path is
+`/v1/swarm/projects?organization_id=...`. `wiremock::matchers::path` matches the path only and
+ignores the query string (`crates/server/tests/common/mod.rs:170-176`), so mocking
+`"/v1/swarm/projects"` matches. Do NOT add the query string to the mock.
+
+**D3 — fix the `pub mod nodes;` ordering while you are in this file.** Task 101 inserted
+`pub mod nodes;` AFTER `pub mod organizations;`, which breaks the alphabetical block. Since this
+task already edits the same declaration block, move `pub mod nodes;` to its alphabetical position
+(between `pub mod message_queue;` and `pub mod oauth;`) as part of this change, then add
+`pub mod swarm_projects;` in ITS alphabetical position (between `pub mod processes;`... — i.e.
+after `pub mod projects;` and before `pub mod task_attempts;`). This is a dictated cleanup; it is
+NOT a ledger-worthy choice. The `.merge(...)` chain ordering is unaffected — `.merge(swarm_projects::router())`
+still goes immediately after `.merge(nodes::router())` per step 2 below.
 
 ## Sibling alignment (required reading before you write)
 
