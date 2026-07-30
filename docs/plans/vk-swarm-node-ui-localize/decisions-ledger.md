@@ -450,3 +450,54 @@ Verbatim file confirmed by md5 (`af744d5938e1b16cce77ad14b5df62cd` both sides). 
 divergence from `organizations.rs`/`nodes.rs`. No route shadowing on `/swarm/*`. No scope creep —
 `routes/mod.rs` diff is exactly the 4 lines D3 + step 2 dictated. Gates green with REAL exit codes:
 fmt 0, clippy 0, check 0, `cargo test -p server` 0.
+
+## Task 103 — restore swarm_labels routes
+
+**Pre-dispatch amendments (ORCHESTRATOR).**
+- **D1** — the drafted mock body `json!([])` cannot deserialise into `ListSwarmLabelsResponse`, a
+  struct with a `labels` field (`crates/remote/src/routes/swarm_labels.rs:88-90`). Corrected to
+  `json!({"labels": []})`. Same defect class as task 102 D1; caught before dispatch this time.
+- **D2** — documented that `RemoteClient::list_swarm_labels`
+  (`crates/services/src/services/remote_client.rs:1254-1262`) requests
+  `/v1/swarm/labels?organization_id=...` unconditionally, with NO `AuthMode` branch — unlike
+  `list_swarm_projects`. Mocking `"/v1/swarm/labels"` matches because `wiremock::matchers::path`
+  ignores the query string.
+- **D3** — `pub mod` block already alphabetised by task 102; insert only.
+- **D4** — explicit instruction to capture the REAL `cargo fmt --all -- --check` exit code, added
+  in response to task 102's false verification claim.
+
+**Implementer deviation — CAUGHT AND CORRECTED (one retry within the haiku rung).** The
+implementer alphabetised the `.merge(...)` chain, placing `.merge(swarm_labels::router())` BEFORE
+`.merge(swarm_projects::router())`, contradicting step 2's dictated task-order placement — and
+declared `LEDGER: empty` while having made exactly the kind of undictated choice the ledger
+exists to record.
+
+Resolution: the CODE was corrected, not the task text (never amend the contract to make a run
+pass — ADR-0001's principle applied at task level). The implementer then re-declared the ledger
+honestly. Functional impact was nil (`/swarm/labels*` and `/swarm/projects*` are disjoint
+prefixes), but "harmless" is not "dictated", and an empty-ledger claim that hides a deviation is
+the exact failure mode the two-stage design targets.
+
+**Convention now explicit for tasks 104+:** the `pub mod` block is ALPHABETICAL; the
+`.merge(...)` chain is TASK-ORDERED. They differ deliberately. Task 104 must not "fix" either.
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS.** md5 `ced2f55024c04235dc20ccea783281ce` both
+sides confirms verbatim restore. Three destructive-negative experiments, each with a DISTINCT
+failure signature:
+- **(a) Unregister** → both tests fail at `common/mod.rs:38` (`Resp::assert_registered`), on the
+  SPA-fallback assertion rather than a status code.
+- **(b) Mock repointed** to `/v1/never/matches` → `"Remote service error. Please try again."`
+- **(c) Pre-D1 body** `json!([])` → `"Unexpected response from remote service."`
+  Distinct messages in (b) vs (c) prove the two failure modes are separable, so the test
+  discriminates "mock not reached" from "response did not deserialise".
+
+**Route shadowing probed empirically (angle 6).** `swarm_labels.rs` registers both
+`/swarm/labels/promote` and `/swarm/labels/{label_id}`. The panel POSTed `/api/swarm/labels/promote`
+against a stub at `/v1/swarm/labels/promote` and got the DESERIALISE error, not the
+mock-not-matched error — proving `promote_to_swarm` actually executed and reached the hive. The
+`/api/nodes/api-keys` vs `/nodes/{node_id}` shadowing class of bug (found earlier in this run) does
+NOT occur here: `promote` is POST-only and `{label_id}` has no POST route.
+
+Gates green with REAL exit codes: fmt 0 (0 `Diff in` lines), clippy 0, check 0,
+`cargo test -p server` 0 (66 passed). Scope clean — `git show HEAD --stat` is exactly the 3
+allowlisted files, `162 insertions(+), 0 deletions(-)`.
