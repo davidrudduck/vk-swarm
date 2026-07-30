@@ -31,7 +31,7 @@ mod common;
 #[serial_test::serial]
 async fn configured_hive_returns_success() {
     let h = common::HiveHarness::configured().await;
-    h.mock_json("GET", "/v1/swarm/templates", 200, serde_json::json!([])).await;
+    h.mock_json("GET", "/v1/swarm/templates", 200, serde_json::json!({"templates": []})).await;
     let res = h.get("/api/swarm/templates?organization_id=00000000-0000-0000-0000-000000000000").await;
     res.assert_registered();
     assert_eq!(res.status, 200, "body: {}", res.body);
@@ -53,7 +53,6 @@ requests and deserialises — read the method in
 `crates/services/src/services/remote_client.rs` first. If the mocked body does not deserialise,
 the configured-hive test fails loudly; do NOT weaken it to only assert a status code.
 
-
 > [!WARNING]
 > **Registration is NOT proved by a non-404 status in this codebase.** The outer router ends in a
 > catch-all `.route("/{*path}", get(frontend::serve_frontend))`
@@ -62,6 +61,42 @@ the configured-hive test fails loudly; do NOT weaken it to only assert a status 
 > `/api/...` GET therefore returns **200 + SPA HTML**, never 404 — verified empirically. Use
 > `Resp::assert_registered()` (task 100, Amendment C.1), which fails when the response is the SPA
 > fallback. Never assert `assert_ne!(status, 404)` to mean "registered".
+
+## Amendments (ORCHESTRATOR, pre-dispatch — these are DICTATED, not choices)
+
+**D1 — mocked body shape.** The original draft mocked `serde_json::json!([])`. That does NOT
+deserialise: `list_swarm_templates` returns `ListSwarmTemplatesResponse`, a struct with a
+`templates` field (`crates/remote/src/routes/swarm_templates.rs:82-84`), not a bare array. The test
+block above has been corrected to `json!({"templates": []})`. Use it as written. Tasks 102 and 103
+hit the identical defect; both panels proved by revert experiment that the wrong body yields
+`400 "Unexpected response from remote service."`, so this correction is load-bearing.
+
+**D2 — mocked hive path is correct as written.** `RemoteClient::list_swarm_templates`
+(`crates/services/src/services/remote_client.rs:1327-1335`) requests
+`/v1/swarm/templates?organization_id=...` unconditionally, with no `AuthMode` branch.
+`wiremock::matchers::path` ignores the query string (`crates/server/tests/common/mod.rs:170-176`),
+so mocking `"/v1/swarm/templates"` matches. Do NOT add the query string to the mock.
+
+**D3 — TWO DIFFERENT ORDERINGS, do not "fix" either.** This is the deviation task 103's
+implementer made and had to correct:
+- the `pub mod` block is **ALPHABETICAL** → `pub mod swarm_templates;` goes AFTER
+  `pub mod swarm_projects;` (labels, projects, templates — alphabetical).
+- the `.merge(...)` chain is **TASK-ORDERED**, NOT alphabetical → append
+  `.merge(swarm_templates::router())` immediately AFTER `.merge(swarm_labels::router())`, so the
+  chain reads `nodes → swarm_projects → swarm_labels → swarm_templates`.
+
+Do not alphabetise the merge chain. Do not reorder anything else in either block.
+
+**D4 — run `cargo fmt --all` before reporting**, then confirm the recovered module is STILL
+byte-identical. Report the REAL exit code of `cargo fmt --all -- --check` captured as
+`cargo fmt --all -- --check > /tmp/f.txt 2>&1; echo $?` — NOT `$?` after a pipe to `tail`, which
+reports tail's status. The `Warning: can't set group_imports/imports_granularity` lines are
+pre-existing nightly noise; only `Diff in` lines are failures.
+
+**D5 — the LEDGER is not "empty by default".** Before declaring it empty, diff your own change
+against the task text line by line. Task 103's implementer declared `empty` while having
+alphabetised the merge chain. An empty ledger is the win condition ONLY when you actually followed
+the text; an empty ledger that hides a deviation is the failure this whole process exists to catch.
 
 ## Sibling alignment (required reading before you write)
 
