@@ -6,7 +6,9 @@ title: "Localize the node frontend — proxy swarm management to the hive, make 
 staging_pointers:
   - docs/superpowers/specs/2026-07-30-vk-swarm-node-ui-localize.md
 depends_on: [vk-swarm-node-foundations]
-adrs: []
+adrs:
+  - dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md
+  - dev-docs/adr/0014-retire-mergedproject-for-projectwithstats.md
 ---
 
 # vk-swarm-node-ui-localize
@@ -86,3 +88,20 @@ User decisions taken at capture:
 
 Blocking before `/wai:decompose`: an **ADR for restoring the node-surface proxies** (constraint C2)
 — it partially reverses ADR-0002 / node-foundations.
+
+## Design settled (2026-07-30)
+
+`/wai:spec` ran; the spec is now `status: active`. Two ADRs authored:
+
+- **[ADR-0013](../../adr/0013-restore-node-surface-hive-proxy-routes.md)** — restore the four
+  node-surface route modules verbatim from `35b378a5^` as thin `RemoteClient` proxies (zero
+  frontend diff); keep the node's API-key surface **deleted** (the hive owns it).
+- **[ADR-0014](../../adr/0014-retire-mergedproject-for-projectwithstats.md)** — `/api/merged-projects`
+  no longer merges anything (`nodes: Vec::new()`, `has_local: true` hardcoded). Replace it with
+  `ProjectWithStats` at `/api/projects/with-stats`, preserving the enrichment the board actually
+  depends on.
+
+Three tracks: A (restore routes, backend-only), B (`MergedProject` retirement, full-stack typed),
+C (hive-absent hardening, after A). A and B are file-disjoint and parallel.
+
+Next: `/wai:precheck vk-swarm-node-ui-localize`.
