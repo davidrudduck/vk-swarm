@@ -137,3 +137,15 @@ All nine anchors were verified by hand against `main` instead:
 Worth fixing upstream in the `wai` plugin (anchor the regex to a path boundary).
 
 Next: `/wai:decompose vk-swarm-node-ui-localize`.
+
+## Deferred to a follow-up workstream (user-directed, 2026-07-30)
+
+**F-2026-07-30-03 (high) — orphan worktree sweep deletes uncommitted work.**
+`crates/local-deployment/src/container.rs:319-383` calls `remove_dir_all` on orphaned
+worktrees with **no dirty-file guard**, unlike `cleanup_expired_attempt` in the same file.
+Discovered by this run's adversarial panel; **out of scope** for this workstream (frozen
+spec, ADR-0001 — no task file covers it).
+
+The user has explicitly directed that it be fixed immediately **after** this workstream
+ships. At `/wai:ship`, promote it: `/wai:finding-promote F-2026-07-30-03`. Mirror the
+existing guard in `cleanup_expired_attempt` rather than inventing a new check.
