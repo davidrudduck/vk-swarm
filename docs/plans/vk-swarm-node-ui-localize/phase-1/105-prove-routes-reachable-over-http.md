@@ -24,10 +24,11 @@ tasks 101–104 exist, because the handler function was never the broken part. S
 the proxy works and proves **nothing** about reachability — it is hollow, and this plan refuses
 it (see plan.md, "Known limitation").
 
-No test in this repo constructs `routes::router(deployment)`: it requires a live
-`DeploymentImpl` (database, config, remote client) and no test-deployment helper exists. The
-realest seam actually available is an HTTP request to a running server, which is what this task
-uses. It is a stronger reachability signal than an in-process unit test would have been.
+Tasks 101-104 now carry in-process router tests via task 100's harness, which cover registration
+and the configured/absent-hive contract. This task is **not** redundant with them: it is the
+end-to-end check against a really-running server — the same evidence the run-close reachability
+gate and `wai-evidence.sh` require — and it is what proves the binary a user actually starts
+serves these paths.
 
 ## Change
 

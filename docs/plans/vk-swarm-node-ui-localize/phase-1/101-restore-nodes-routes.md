@@ -3,11 +3,12 @@ id: "101"
 phase: 1
 title: "Restore crates/server/src/routes/nodes.rs (without the API-key routes) and register it"
 status: ready
-depends_on: []
+depends_on: ["100"]
 parallel: false
 conflicts_with: ["102","103","104"]
 files:
   - crates/server/src/routes/nodes.rs
+  - crates/server/tests/nodes_routes.rs
   - crates/server/src/routes/mod.rs
 siblings:
   - crates/server/src/routes/organizations.rs
@@ -19,8 +20,37 @@ covers_criteria: [SC1, SC3]
 
 ## Failing test (write first)
 
-N/A — Rust route module with no unit-test seam; reachability is proven over HTTP in task 105.
-See `## Manual verification` below, which the orchestrator runs and records.
+Create `crates/server/tests/nodes_routes.rs`, using the harness from task 100. This is the frozen
+spec's required per-module proxy test — hive-configured returns 200 + `success: true`, hive-absent
+returns the not-configured variant rather than a 500, and **both drive the mounted router**:
+
+```rust
+mod common;
+
+#[tokio::test]
+#[serial_test::serial]
+async fn configured_hive_returns_success() {
+    let h = common::HiveHarness::configured().await;
+    h.mock_json("GET", "/v1/nodes", 200, serde_json::json!([])).await;
+    let res = h.get("/api/nodes?organization_id=00000000-0000-0000-0000-000000000000").await;
+    assert_eq!(res.status, 200, "body: {}", res.body);
+    assert!(res.body.contains("\"success\":true"), "body: {}", res.body);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn absent_hive_is_not_a_500_and_not_a_404() {
+    let h = common::HiveHarness::hive_absent().await;
+    let res = h.get("/api/nodes?organization_id=00000000-0000-0000-0000-000000000000").await;
+    assert_ne!(res.status, 404, "route must be registered");
+    assert_ne!(res.status, 500, "absent hive is a client-visible state, not a server error");
+}
+```
+
+Adapt the mocked hive path and JSON body to what this module's `RemoteClient` method actually
+requests and deserialises — read the method in
+`crates/services/src/services/remote_client.rs` first. If the mocked body does not deserialise,
+the configured-hive test fails loudly; do NOT weaken it to only assert a status code.
 
 ## Sibling alignment (required reading before you write)
 

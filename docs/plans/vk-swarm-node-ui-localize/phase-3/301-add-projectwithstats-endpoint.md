@@ -3,11 +3,13 @@ id: "301"
 phase: 3
 title: "Add ProjectWithStats and GET /api/projects/with-stats (additive — MergedProject untouched)"
 status: ready
-depends_on: []
+depends_on: ["100"]
 parallel: false
 conflicts_with: ["303"]
 files:
   - crates/server/src/routes/projects/handlers/with_stats.rs
+  - crates/server/tests/projects_with_stats.rs
+  - crates/server/tests/common/mod.rs
   - crates/server/src/routes/projects/types.rs
   - crates/server/src/routes/projects/handlers/mod.rs
   - crates/server/src/routes/projects/mod.rs
@@ -23,9 +25,56 @@ covers_criteria: [SC5]
 
 ## Failing test (write first)
 
-N/A at this step — additive Rust endpoint, no unit-test seam in this crate. The behavioural
-assertion (enrichment survives, ordering preserved) is made in task 302 against the rendered
-board, and over HTTP in Manual verification below.
+Create `crates/server/tests/projects_with_stats.rs`, using task 100's harness. This is the frozen
+spec's required enrichment test. It must derive the stats from the database, not accept them from
+a fixture — task 302's frontend test mocks the finished payload, so a broken
+database-to-response mapping would sail past it:
+
+```rust
+mod common;
+
+#[tokio::test]
+#[serial_test::serial]
+async fn with_stats_returns_sorted_projects_with_derived_counts() {
+    let h = common::HiveHarness::hive_absent().await;   // no hive needed — this is local data
+
+    // Insert TWO projects whose names arrive out of alphabetical order, so ordering is proven
+    // rather than assumed, plus tasks spanning every status and at least one attempt.
+    h.seed_project("zeta", &[/* todo x3, in_progress x1, done x2 */]).await;
+    h.seed_project("alpha", &[/* todo x1 */]).await;
+
+    let res = h.get("/api/projects/with-stats").await;
+    assert_eq!(res.status, 200, "body: {}", res.body);
+
+    let v: serde_json::Value = serde_json::from_str(&res.body).unwrap();
+    let projects = v["data"]["projects"].as_array().unwrap();
+
+    // name-sorted (alpha before zeta), NOT insertion order
+    assert_eq!(projects[0]["name"], "alpha");
+    assert_eq!(projects[1]["name"], "zeta");
+
+    // counts derived from the seeded tasks
+    assert_eq!(projects[1]["task_counts"]["todo"], 3);
+    assert_eq!(projects[1]["task_counts"]["done"], 2);
+
+    // the attempt timestamp survives the mapping
+    assert!(!projects[1]["last_attempt_at"].is_null());
+
+    // the three dead fields are GONE (ADR-0014)
+    assert!(projects[0].get("nodes").is_none());
+    assert!(projects[0].get("has_local").is_none());
+    assert!(projects[0].get("local_project_id").is_none());
+}
+```
+
+`seed_project` is not part of task 100's dictated surface — add it to
+`crates/server/tests/common/mod.rs` here, inserting through the deployment's own pool
+(`deployment.db().pool`). **`crates/server/tests/common/mod.rs` is therefore in this task's
+`files:`.** Never hand-write `CREATE TABLE` (CLAUDE.md); the harness's database already has
+migrations applied.
+
+Adapt the response JSON path (`v["data"]["projects"]`) to the real `ApiResponse` shape if it
+differs — read `utils::response::ApiResponse` first.
 
 ## Sibling alignment (required reading before you write)
 
@@ -195,6 +244,7 @@ Never hand-edit `shared/types.ts` (constraint C5).
 
 ## STOP triggers
 
+- If task 100 reported that the harness could not be built, this task cannot run — STOP.
 - If `Project::find_local_projects_with_stats` does not exist at
   `crates/db/src/models/project/stats.rs` — STOP.
 - If `/with-stats` shadows or is shadowed by the `.nest("/{id}", project_id_router)` route (a
@@ -229,5 +279,7 @@ curl -s "http://127.0.0.1:${PORT}/api/merged-projects" | head -c 200
 
 - `GET /api/projects/with-stats` returns the enriched, name-sorted local project list.
 - `ProjectWithStats` and `ProjectsWithStatsResponse` appear in `shared/types.ts` via codegen.
+- `cargo test -p server --test projects_with_stats` passes, proving ordering, derived counts,
+  a non-null `last_attempt_at`, and the absence of the three dead fields.
 - `/api/merged-projects` still works (deletion is task 303's job).
 - Clippy and `generate-types:check` are clean.

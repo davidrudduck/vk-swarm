@@ -49,3 +49,22 @@ the real sibling in every case is already listed in the task's `siblings:` field
 | 302 | `frontend/src/components/projects/CloneProgress.tsx` | **Not a sibling.** Unrelated component; the new file is a test for `ProjectList`. |
 | 402 | `frontend/src/components/swarm/MergeLabelsDialog.tsx` | **Not a sibling.** A dialog, not a status/empty state. The real sibling is `frontend/src/components/ui/alert.tsx` plus the existing error branch in `SwarmProjectsSection.tsx`, both named in the task with a required read step. |
 | 403 | `frontend/src/hooks/index.ts` | **Not a sibling** (barrel file). The pattern sibling is `useRemoteConnectionStatus.ts`, listed in `siblings:` with a required read step. |
+
+## Frozen-spec test divergence — resolved by user decision (2026-07-30)
+
+The codex seat of the breakdown tournament found that tasks 101-104 and 301 had replaced the
+frozen spec's required tests ("per-module route tests … against a mocked `RemoteClient`" and the
+`ProjectWithStats` enrichment test) with manual curl evidence, because no test in this repo can
+build a `DeploymentImpl`. Per ADR-0001 the run did not amend the spec; the contradiction was
+escalated.
+
+**User decision: build the seam.** New task **100** creates
+`crates/server/tests/common/mod.rs` (`HiveHarness`) from material that already exists —
+`wiremock` in `crates/services`' dev-deps, `serial_test` and `db` test-utils already in
+`crates/server`'s, and the `VK_SHARED_API_BASE` / `VK_DATABASE_PATH` env overrides — **without
+touching production code**. Tasks 101-104 and 301 now depend on it and carry the tests the spec
+asks for; task 105 remains as the end-to-end complement (and the deploy evidence).
+
+Task 100 STOPs rather than refactoring `LocalDeployment` if `Deployment::new()` cannot be driven
+from a test. The fallback (a `test-utils` feature on `crates/local-deployment` exposing a minimal
+constructor) changes production types and would be authored as its own reviewed task.

@@ -54,7 +54,7 @@ warnings). These conventions are dictated here instead of left to judgement:
 
 | Phase | File | Tasks | Ships |
 |---|---|---|---|
-| 1 | `phase-1-restore-proxy-routes.md` | 101–105 | `/api/nodes` + `/api/swarm/*` answer instead of 404 |
+| 1 | `phase-1-restore-proxy-routes.md` | 100–105 | `/api/nodes` + `/api/swarm/*` answer instead of 404 |
 | 2 | `phase-2-remove-node-api-key-surface.md` | 201–203 | node UI has no API-key management (D3) |
 | 3 | `phase-3-projectwithstats.md` | 301–303 | board runs on `ProjectWithStats`; `MergedProject` gone |
 | 4 | `phase-4-hive-absent-state.md` | 401–403 | "not connected to a hive" is a real state |
@@ -63,7 +63,8 @@ warnings). These conventions are dictated here instead of left to judgement:
 ## Task dependency graph
 
 ```text
-101 ──▶ 102 ──▶ 103 ──▶ 104 ──▶ 105 ──┐
+100 ──▶ 101 ──▶ 102 ──▶ 103 ──▶ 104 ──▶ 105 ──┐
+ └──▶ 301
  └──▶ 201 ──▶ 202 ──▶ 203 ──────────────┤
 301 ──▶ 302 ──▶ 303 ───────────────────┼──▶ 501
 401 ──▶ 402 (also needs 104) ──────────┤
@@ -72,15 +73,16 @@ warnings). These conventions are dictated here instead of left to judgement:
 
 | Task | Depends | Conflicts |
 |---|---|---|
-| 101 | dep:  | conflicts: 102 103 104 |
-| 102 | dep: 101 | conflicts: 101 103 104 |
-| 103 | dep: 102 | conflicts: 101 102 104 |
-| 104 | dep: 103 | conflicts: 101 102 103 |
+| 100 | dep:  | conflicts:  |
+| 101 | dep: 100 | conflicts: 102 103 104 |
+| 102 | dep: 101 100 | conflicts: 101 103 104 |
+| 103 | dep: 102 100 | conflicts: 101 102 104 |
+| 104 | dep: 103 100 | conflicts: 101 102 103 |
 | 105 | dep: 104 | conflicts:  |
 | 201 | dep: 101 | conflicts:  |
 | 202 | dep: 201 | conflicts:  |
 | 203 | dep: 202 | conflicts:  |
-| 301 | dep:  | conflicts: 303 |
+| 301 | dep: 100 | conflicts: 303 |
 | 302 | dep: 301 | conflicts: 303 |
 | 303 | dep: 302 | conflicts: 301 302 |
 | 401 | dep:  | conflicts:  |
@@ -95,15 +97,29 @@ parallel. 301 and 303 conflict on `crates/server/src/routes/projects/mod.rs` and
 
 | SC | Claimed by |
 |---|---|
-| SC1 | 101, 102, 103, 104, 105 |
+| SC1 | 100, 101, 102, 103, 104, 105 |
 | SC2 | 105, 402 |
 | SC3 | 101, 201, 202, 203 |
-| SC4 | 401, 402 |
+| SC4 | 100, 401, 402 |
 | SC5 | 301, 302, 303 |
 | SC6 | 403 |
 | SC7 | 501 |
 
-## Known limitation — the real-seam test (read before task 105)
+## The test seam (task 100)
+
+The frozen spec's Test strategy requires per-module proxy tests against a mocked `RemoteClient`
+and a `ProjectWithStats` enrichment test. Nothing in this repo could build a `DeploymentImpl` in a
+test, so the first decompose substituted manual curl evidence — a silent drop of a frozen-spec
+requirement, caught by the codex seat of the breakdown tournament and escalated to the user, who
+chose to build the seam.
+
+Task 100 builds it from material that already exists (`wiremock` in services' dev-deps,
+`serial_test` + `db` test-utils already in `crates/server`'s, `VK_SHARED_API_BASE` and
+`VK_DATABASE_PATH` env overrides), **without touching production code**. If that proves
+impossible it STOPs rather than refactoring `LocalDeployment`; the fallback (a `test-utils`
+feature exposing a minimal constructor) would be a separate, separately-reviewed task.
+
+## Known limitation — end-to-end vs in-process (read before task 105)
 
 The reachability gate wants a test that drives the real entry point. No test in this repo
 constructs the full `router(deployment)` — it needs a live `DeploymentImpl` (DB, config, remote
@@ -111,7 +127,7 @@ client), and no test-deployment helper exists. A unit test that calls `list_node
 would prove the handler works and **prove nothing about registration**, which is the entire bug —
 that is a hollow test and this plan refuses it.
 
-Task 105 therefore uses the realest seam actually available: **HTTP requests against a running
-server**, asserting each restored path answers non-404. That is a stronger reachability signal
-than any in-process unit test would have been, and it doubles as the deploy evidence
-`wai-evidence.sh` demands at close.
+Task 105 is the end-to-end complement to those in-process tests: **HTTP requests against a really
+running server**, asserting each restored path answers non-404. It is what proves the binary a
+user actually starts serves these paths, and it doubles as the deploy evidence `wai-evidence.sh`
+demands at close.
