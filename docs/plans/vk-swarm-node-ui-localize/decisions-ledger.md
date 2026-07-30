@@ -404,3 +404,49 @@ routes matches field-by-field (`frontend/src/types/nodes.ts:18-42` vs
   (`frontend/src/lib/api/nodes.ts:40-66`) plus `mergeNodes` (`:80`), which never existed even at
   `35b378a5^`. Correctly out of scope for 101 — task **202** removes them. This branch must not
   merge with 101 alone.
+
+## Task 102 — restore swarm_projects routes
+
+**Implementer ledger: empty.** No undictated choices.
+
+**Pre-dispatch amendments (ORCHESTRATOR).** Three defects in MY task text, fixed before dispatch:
+- **D1** — the drafted mock body `json!([])` cannot deserialise into `ListSwarmProjectsResponse`,
+  which is a struct with a `projects` field (`crates/remote/src/routes/swarm_projects.rs:90-92`).
+  Corrected to `json!({"projects": []})`. The panel's revert experiment C confirms this was
+  load-bearing: with the old body the endpoint returns `400 "Unexpected response from remote
+  service."`, not 200.
+- **D2** — documented (not changed) that mocking `/v1/swarm/projects` is correct: the harness seeds
+  OAuth credentials so `RemoteClient::list_swarm_projects` takes the `AuthMode::OAuth` arm
+  (`crates/services/src/services/remote_client.rs:1014-1017`), and `wiremock::matchers::path`
+  ignores the query string (`crates/server/tests/common/mod.rs:170-176`).
+- **D3** — dictated the `pub mod nodes;` alphabetical correction that task 101's panel flagged, since
+  this task already edits the same declaration block. Not a ledger-worthy implementer choice.
+
+**Implementer verification claim was FALSE — process lesson.** The implementer reported
+`cargo fmt --all -- --check` as "(nightly config warnings only — no actual formatting errors)".
+The real exit code was **1**. The paraphrase hid it; the earlier session had also been reading
+`$?` after a `| tail`, which reports *tail's* status, never cargo's. Two files had drift:
+`crates/server/tests/swarm_projects_routes.rs` (this task) and
+`crates/server/tests/nodes_routes.rs` (**task 101, already committed red**).
+
+Both fixed in-session per CLAUDE.md "No Deferred Remediation"; 101's fix committed separately as
+`98bff5be` so task 102's Stage-1 file-set gate stayed clean.
+
+**Standing correction for the remainder of this run:** implementer verification output is a
+CLAIM, not evidence. The orchestrator re-runs every check itself before gating, and captures real
+exit codes (`cmd > file 2>&1; echo $?`), never `cmd | tail` followed by `$?`.
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS.** Three destructive-negative experiments, all
+confirming the tests are load-bearing rather than hollow:
+- **A. Unregister** — removing `.merge(swarm_projects::router())` fails BOTH tests with
+  `route is NOT registered: request fell through to the SPA catch-all (status 200, content-type
+  Some("text/html"))`.
+- **B. Mock never matches** — repointing the mock to `/v1/never/matches` yields `left: 404`,
+  proving the mock is actually exercised.
+- **C. Deserialisation** — the pre-D1 `json!([])` body yields `left: 400`, proving the test
+  exercises real `ListSwarmProjectsResponse` deserialisation, not just a status code.
+
+Verbatim file confirmed by md5 (`af744d5938e1b16cce77ad14b5df62cd` both sides). No sibling
+divergence from `organizations.rs`/`nodes.rs`. No route shadowing on `/swarm/*`. No scope creep —
+`routes/mod.rs` diff is exactly the 4 lines D3 + step 2 dictated. Gates green with REAL exit codes:
+fmt 0, clippy 0, check 0, `cargo test -p server` 0.

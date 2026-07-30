@@ -2,7 +2,7 @@
 id: "102"
 phase: 1
 title: "Restore crates/server/src/routes/swarm_projects.rs verbatim and register it"
-status: ready
+status: passed
 depends_on: ["101","100"]
 parallel: false
 conflicts_with: ["101","103","104"]
