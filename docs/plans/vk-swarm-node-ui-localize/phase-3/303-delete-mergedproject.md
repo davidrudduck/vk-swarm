@@ -24,7 +24,7 @@ covers_criteria: [SC5]
 ## Failing test (write first)
 
 N/A — deletion. The proof is `cargo clippy -D warnings` + `tsc --noEmit` staying green with the
-type gone, the scoped `git grep` over `crates/ frontend/ shared/`, and the 404 assertion in
+type gone, the scoped `git grep` over `crates/ frontend/ shared/`, and the SPA-fallback assertion in
 Manual verification.
 
 **`forbid_after: ["merged-projects"]` is deliberately NOT set.** It greps every tracked file, and
@@ -139,15 +139,19 @@ cd frontend && npx tsc --noEmit && npm run lint && npx vitest run
 # Expected: all clean/green
 
 # With the dev server running:
-curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${PORT}/api/merged-projects"
-# Expected: 404
-curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${PORT}/api/projects/with-stats"
-# Expected: 200
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' "http://127.0.0.1:${PORT}/api/merged-projects"
+# Expected: text/html — the SPA fallback, proving the route is GONE.
+# NOT 404: the outer catch-all `.route("/{*path}", ...)` (crates/server/src/routes/mod.rs:76)
+# serves index.html with StatusCode::OK (frontend.rs:40-43) for any unmatched /api path.
+# Asserting 404 here would FAIL even though the deletion succeeded.
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' "http://127.0.0.1:${PORT}/api/projects/with-stats"
+# Expected: 200 application/json
 ```
 
 ## Done when
 
-- `/api/merged-projects` returns 404; `/api/projects/with-stats` returns 200.
+- `/api/merged-projects` returns the SPA fallback (`text/html`), proving it is gone;
+  `/api/projects/with-stats` returns `200 application/json`.
 - No `MergedProject`, `MergedProjectsResponse`, `NodeLocation`, or `merged-projects` reference
   survives in `crates/`, `frontend/`, or `shared/types.ts`.
 - Rust clippy, `generate-types:check`, and the full frontend gates are green.

@@ -302,3 +302,63 @@ Task 099 status → passed. Three attempts, every rejection traceable to the TAS
 the implementer (empty ledger on all three attempts) — the decompose-time breakdown review cannot
 see these because they are properties of the surrounding system (a deny-list in a build script, a
 compile-time `option_env!` fallback, a JWT decode on a mocked value), not of the task's own prose.
+
+### Task 100 — Stage 2 REJECT at attempt 1 (`f9eacc29`), PASS at attempt 2 (`abf94dde`)
+
+The most consequential finding of the run. The harness was built faithfully — construction
+sequence exactly as dictated, anti-fake greps clean, real `server::routes::router()`, no
+production code touched, and the `200` genuinely real (removing the `/v1/organizations` wiremock
+stub makes the test fail; `received_requests()` shows `POST /v1/tokens/refresh` +
+`GET /v1/organizations` actually traversed, proving the task-099 credential seam works). But it
+could not do the one thing it exists for.
+
+**Decisive experiment (throwaway probe through the harness):**
+
+```text
+PROBE /api/nodes?organization_id=000...   => 200 :: <!DOCTYPE html>
+PROBE /api/swarm/projects                 => 200 :: <!DOCTYPE html>
+PROBE /api/definitely-not-a-route         => 200 :: <!DOCTYPE html>
+PROBE /api/organizations                  => 200 :: {"success":true,...}
+```
+
+**Root cause:** the outer router ends in `.route("/{*path}", get(frontend::serve_frontend))`
+(`crates/server/src/routes/mod.rs:76`), and `serve_frontend` returns `StatusCode::OK` with
+`index.html` for unknown routes (`crates/server/src/routes/frontend.rs:40-43`, commented "For SPA
+routing, serve index.html for unknown routes").
+
+**So `assert_ne!(status, 404)` proves NOTHING about registration** — it passes on `main` today for
+routes that do not exist. That was the assertion pattern in tasks 101, 102, 103, 104, 105, 303 and
+501: essentially every registration check in the workstream would have been a false green on
+exactly the bug being fixed.
+
+**Corrections applied across seven task files:**
+- Task 100 Amendment C: `Resp::content_type`, `Resp::is_spa_fallback()`,
+  `Resp::assert_registered()`, plus a third smoke test `harness_detects_an_unregistered_route`
+  that asserts `/api/health` is NOT the fallback and `/api/definitely-not-a-route` IS — the
+  meta-test that keeps the primitive honest for the rest of the workstream.
+- Tasks 101-104: `assert_ne!(404)` → `res.assert_registered()`, on BOTH the configured and
+  absent-hive tests, each with a warning banner explaining why.
+- Task 105: the curl sweep now discriminates on **content-type** (`application/json` = registered,
+  `text/html` = SPA fallback), not status code.
+- Tasks 303 and 501: their `/api/merged-projects` → **404** expectation was not merely weak but
+  WRONG — after deletion that path falls to the catch-all and returns 200 + `text/html`, so the
+  assertion would have FAILED a correct implementation.
+
+**Spec imprecision recorded (no spec edit — ADR-0001).** The spec describes the symptom as "404".
+At HTTP level it is 200 + `text/html`; the user-visible failure is the node UI receiving HTML where
+it expects JSON. The spec's "returns non-404" is *insufficient* rather than contradicted, so the
+tasks satisfy its letter while asserting something stronger — additive, not an amendment, so no
+re-`/wai:precheck` is required. Task 501 records the correction. Recommend fixing the spec wording
+at `/wai:close`.
+
+Also fixed at attempt 2: `cargo fmt --all -- --check` was RED at attempt 1
+(`common/mod.rs:73`, `:128`, `harness_smoke.rs:4`) — a C6 gate left failing.
+
+Noted, not blocking: one `/api/organizations` call produces THREE upstream `GET /v1/organizations`
+requests plus the refresh. Not retry logic (`should_retry`, `remote_client.rs:82-88`, only retries
+transport/5xx). Matters only if a later task mounts a call-count-bounded mock — none do, since
+Amendment A.2 forbids `.up_to_n_times(...)`.
+
+**Process note:** these task-file corrections were written once, lost to a subagent's
+"restore the working tree" cleanup (`git checkout` over uncommitted `docs/plans/` edits), and
+rewritten. Commit plan-doc edits promptly rather than batching them behind a task's code commit.

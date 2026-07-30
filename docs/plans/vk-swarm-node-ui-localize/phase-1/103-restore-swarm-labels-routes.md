@@ -33,16 +33,17 @@ async fn configured_hive_returns_success() {
     let h = common::HiveHarness::configured().await;
     h.mock_json("GET", "/v1/swarm/labels", 200, serde_json::json!([])).await;
     let res = h.get("/api/swarm/labels?organization_id=00000000-0000-0000-0000-000000000000").await;
+    res.assert_registered();
     assert_eq!(res.status, 200, "body: {}", res.body);
     assert!(res.body.contains("\"success\":true"), "body: {}", res.body);
 }
 
 #[tokio::test]
 #[serial_test::serial]
-async fn absent_hive_is_not_a_500_and_not_a_404() {
+async fn absent_hive_is_registered_and_not_a_500() {
     let h = common::HiveHarness::hive_absent().await;
     let res = h.get("/api/swarm/labels?organization_id=00000000-0000-0000-0000-000000000000").await;
-    assert_ne!(res.status, 404, "route must be registered");
+    res.assert_registered();
     assert_ne!(res.status, 500, "absent hive is a client-visible state, not a server error");
 }
 ```
@@ -51,6 +52,16 @@ Adapt the mocked hive path and JSON body to what this module's `RemoteClient` me
 requests and deserialises — read the method in
 `crates/services/src/services/remote_client.rs` first. If the mocked body does not deserialise,
 the configured-hive test fails loudly; do NOT weaken it to only assert a status code.
+
+
+> [!WARNING]
+> **Registration is NOT proved by a non-404 status in this codebase.** The outer router ends in a
+> catch-all `.route("/{*path}", get(frontend::serve_frontend))`
+> (`crates/server/src/routes/mod.rs:76`), and `serve_frontend` returns `StatusCode::OK` with
+> `index.html` for unknown routes (`crates/server/src/routes/frontend.rs:40-43`). An UNREGISTERED
+> `/api/...` GET therefore returns **200 + SPA HTML**, never 404 — verified empirically. Use
+> `Resp::assert_registered()` (task 100, Amendment C.1), which fails when the response is the SPA
+> fallback. Never assert `assert_ne!(status, 404)` to mean "registered".
 
 ## Sibling alignment (required reading before you write)
 

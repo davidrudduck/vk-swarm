@@ -63,8 +63,13 @@ npm run generate-types:check
   the merged tree, not from this plan.
 - **(b) Real-seam test** — task 105's HTTP evidence file, quoted. Note explicitly that no
   handler-level unit test is offered in its place and why (see 105's Failing test section).
-- **(c) Incident-symptom assertion** — the symptom was 404s on live routes. Quote the six
-  non-404 status lines and the `/api/merged-projects` → 404 line.
+- **(c) Incident-symptom assertion** — the symptom was that the node's Nodes/swarm surfaces got
+  the SPA's `index.html` instead of JSON, because their routes were unregistered. (The spec and
+  the findings describe this as "404"; at HTTP level it is **200 + text/html**, because the outer
+  catch-all `.route("/{*path}", ...)` at `crates/server/src/routes/mod.rs:76` serves index.html
+  with `StatusCode::OK` — see `frontend.rs:40-43`. Record this correction.) Quote the six
+  `application/json` content-type lines from task 105 and the `/api/merged-projects` →
+  `text/html` line.
 
 ### Deploy verification evidence to record
 

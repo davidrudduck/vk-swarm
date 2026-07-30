@@ -2,7 +2,7 @@
 id: "100"
 phase: 1
 title: "Build the hive-proxy test harness the frozen spec's Test strategy requires"
-status: ready
+status: passed
 depends_on: ["099"]
 parallel: false
 conflicts_with: []
@@ -21,6 +21,12 @@ covers_criteria: [SC1, SC4]
 ---
 
 ## Failing test (write first)
+
+> [!CAUTION]
+> **The code block immediately below is SUPERSEDED by Amendments C.2 and C.3 and must NOT be
+> copied as-is.** Its `assert_ne!(res.status, 404)` line is wrong: an unregistered route in this
+> codebase returns `200` + SPA HTML, never `404`. Scroll to Amendment C, write the THREE tests it
+> specifies using `assert_registered()`, and treat the block below only as background.
 
 `crates/server/tests/harness_smoke.rs` — the harness proving itself before anything depends on it:
 
@@ -434,6 +440,103 @@ It sets `VK_ASSET_DIR` to its own `TempDir` (for config isolation) but writes no
 `credentials.json`. Its assertions are about the not-configured path, which is reached before any
 auth check, so seeding would only obscure what is being tested.
 
+## Amendment C (orchestrator, 2026-07-30) — the harness cannot yet prove registration
+
+**This is the defect that matters most in this whole workstream. Read it before touching anything.**
+
+The adversarial panel ran the decisive experiment against the attempt-1 harness (`f9eacc29`) and
+found that requesting routes which do NOT exist returns **200 + SPA HTML**, never 404:
+
+```text
+PROBE /api/nodes?organization_id=000...   => 200 :: <!DOCTYPE html>
+PROBE /api/swarm/projects                 => 200 :: <!DOCTYPE html>
+PROBE /api/definitely-not-a-route         => 200 :: <!DOCTYPE html>
+PROBE /api/organizations                  => 200 :: {"success":true,...}
+```
+
+Cause: the outer router ends with a catch-all that serves the SPA for anything the nested `/api`
+router does not match — `.route("/{*path}", get(frontend::serve_frontend))`
+(`crates/server/src/routes/mod.rs:76`) — and `serve_frontend` explicitly returns `StatusCode::OK`
+with `index.html` for unknown routes (`crates/server/src/routes/frontend.rs:40-43`, commented
+*"For SPA routing, serve index.html for unknown routes"*).
+
+**Consequence:** `assert_ne!(res.status, 404, "route must be registered")` is VACUOUS. It passes
+on `main` today, for routes that do not exist. Every registration assertion in tasks 101-104 and
+301 written that way would be a false green on precisely the bug this workstream exists to fix.
+
+### C.1 — give `Resp` a registration-proving primitive
+
+```rust
+pub struct Resp {
+    pub status: u16,
+    pub body: String,
+    pub content_type: Option<String>,
+}
+
+impl Resp {
+    /// True when this is the SPA `index.html` that the catch-all `/{*path}` route
+    /// (crates/server/src/routes/mod.rs:76 -> frontend.rs:40-43) serves with 200 OK
+    /// for ANY unmatched GET. A response that is the SPA fallback did NOT reach a
+    /// registered API route, whatever its status code says.
+    pub fn is_spa_fallback(&self) -> bool {
+        self.content_type
+            .as_deref()
+            .is_some_and(|c| c.starts_with("text/html"))
+            || self.body.trim_start().starts_with("<!DOCTYPE html")
+    }
+
+    /// Assert the request reached a REGISTERED API route rather than the SPA fallback.
+    /// This — NOT a 404 check — is what proves route registration in this codebase.
+    pub fn assert_registered(&self) {
+        assert!(
+            !self.is_spa_fallback(),
+            "route is NOT registered: request fell through to the SPA catch-all \
+             (status {}, content-type {:?}). A non-404 status proves nothing here.",
+            self.status,
+            self.content_type
+        );
+    }
+}
+```
+
+Populate `content_type` from the response's `content-type` header before consuming the body.
+
+### C.2 — the smoke test must prove the primitive DETECTS an unregistered route
+
+This is the meta-test. It locks in the harness's ability to tell registered from unregistered and
+must keep passing for the whole workstream.
+
+```rust
+#[tokio::test]
+#[serial_test::serial]
+async fn harness_detects_an_unregistered_route() {
+    let h = common::HiveHarness::hive_absent().await;
+
+    let ok = h.get("/api/health").await;
+    assert!(!ok.is_spa_fallback(), "/api/health must be a real route, got {:?}", ok.content_type);
+
+    // NOT registered. Returns 200 + SPA HTML, NOT 404 — which is exactly why
+    // assert_ne!(404) cannot prove registration in this codebase.
+    let missing = h.get("/api/definitely-not-a-route").await;
+    assert!(
+        missing.is_spa_fallback(),
+        "expected the SPA fallback for an unregistered route, got status {} body {:.80}",
+        missing.status, missing.body
+    );
+}
+```
+
+### C.3 — strengthen the two existing smoke tests
+
+- `harness_serves_a_configured_hive`: add `res.assert_registered();` before the status assertion.
+- `harness_serves_an_absent_hive`: REPLACE the `assert_ne!(res.status, 404, ...)` line with
+  `res.assert_registered();`, KEEP `assert_ne!(res.status, 500, ...)`. Dropping the 404 line
+  matters — leaving it in would teach the vacuous pattern to tasks 101-104.
+
+### C.4 — `cargo fmt` was RED at attempt 1; fix it
+
+`cargo fmt --all -- --check` must exit 0. It is one of C6's required gates.
+
 ## Allowed moves
 
 - Only the four files in `files:`. If `Deployment::new()` needs another env var to run in a test
@@ -459,7 +562,10 @@ auth check, so seeding would only obscure what is being tested.
 
 ```bash
 cargo test -p server --test harness_smoke
-# Expected: 2 passed
+# Expected: 3 passed (including harness_detects_an_unregistered_route, Amendment C.2)
+
+cargo fmt --all -- --check
+# Expected: NO output (C.4 — this gate was RED at attempt 1)
 
 cargo clippy -p server --all-targets --all-features -- -D warnings
 # Expected: clean
@@ -479,7 +585,10 @@ git status --porcelain dev_assets/
 
 - `HiveHarness::configured()` and `::hive_absent()` both build a real `DeploymentImpl` and expose
   the mounted router.
-- `harness_smoke.rs` passes both tests against `/api/organizations`, including the **`200` +
+- `harness_smoke.rs` passes all THREE tests, including `harness_detects_an_unregistered_route`
+  (Amendment C.2), which proves the harness can tell a registered route from the SPA fallback.
+- `Resp::assert_registered()` exists and is what tasks 101-104/301 use to prove registration.
+- `harness_smoke.rs` passes its tests against `/api/organizations`, including the **`200` +
   `success: true`** assertion — the frozen spec's SC1/SC4 signal, reachable only because
   Amendment B seeds credentials and mocks `/v1/tokens/refresh`.
 - A test run leaves `dev_assets/` untouched.

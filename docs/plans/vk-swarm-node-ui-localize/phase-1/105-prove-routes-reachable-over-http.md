@@ -45,7 +45,7 @@ Start the dev server and record the observed HTTP status of every restored path.
 
 ## STOP triggers
 
-- If any path returns `404`, the registration in tasks 101–104 is incomplete. STOP and report
+- If any path returns `text/html`, the registration in tasks 101–104 is incomplete. STOP and report
   which path — do not "fix" it from this task; the fix belongs in the owning task's file.
 - If the server will not start, STOP and report the startup error. Do not record partial
   evidence as a pass.
@@ -58,9 +58,14 @@ Start the dev server and record the observed HTTP status of every restored path.
 # 1. Start the node server (a hive need NOT be configured for this check)
 pnpm run dev    # note the BACKEND_PORT it reports; export it as PORT below
 
-# 2. Every restored path must answer NON-404. With no hive configured the expected
-#    answer is the not-configured error (400 today, 503 after task 401) — that is a
-#    PASS for this task. Only 404 is a failure: 404 means the route is not registered.
+# 2. Every restored path must be REGISTERED. Do NOT use the status code for this:
+#    an UNREGISTERED /api path returns 200 + text/html, because the outer router's
+#    catch-all `.route("/{*path}", ...)` (crates/server/src/routes/mod.rs:76) serves
+#    index.html with StatusCode::OK (crates/server/src/routes/frontend.rs:40-43).
+#    The discriminator is CONTENT-TYPE:
+#      application/json -> registered (the not-configured error, 400 today / 503 after
+#                          task 401, is a PASS for this task)
+#      text/html        -> NOT registered; the request fell through to the SPA.
 for p in \
   "/api/nodes?organization_id=00000000-0000-0000-0000-000000000000" \
   "/api/nodes/00000000-0000-0000-0000-000000000000" \
@@ -69,14 +74,17 @@ for p in \
   "/api/swarm/labels?organization_id=00000000-0000-0000-0000-000000000000" \
   "/api/swarm/templates?organization_id=00000000-0000-0000-0000-000000000000" ; do
   printf '%s -> ' "$p"
-  curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${PORT}${p}"
+  curl -s -o /dev/null -w '%{http_code} %{content_type}\n' "http://127.0.0.1:${PORT}${p}"
 done
-# Expected: six lines, NONE of them 404.
+# Expected: six lines, EVERY one application/json. Any text/html means that route is
+#           still unregistered, whatever its status code says.
 
 # 3. D3 assertion — the API-key surface must NOT be reachable (SC3)
-curl -s -o /dev/null -w '%{http_code}\n' \
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' \
   "http://127.0.0.1:${PORT}/api/nodes/api-keys?organization_id=00000000-0000-0000-0000-000000000000"
-# Expected: 404
+# Expected: text/html — the SPA fallback, proving the route is NOT registered.
+# NOTE: this is NOT a 404. A deleted/absent route falls through to the catch-all,
+# which answers 200 + index.html. Asserting 404 here would FAIL.
 ```
 
 Paste all three blocks' real output into the evidence file and into the decisions-ledger.
@@ -84,6 +92,6 @@ Paste all three blocks' real output into the evidence file and into the decision
 ## Done when
 
 - `reviews/105-reachability-evidence.md` exists and contains verbatim output showing six
-  non-404 responses.
-- The API-key path returns `404`, confirming D3 held.
+  responses whose content-type is `application/json`.
+- The API-key path returns `text/html` (the SPA fallback), confirming D3 held.
 - No source file was modified by this task.
