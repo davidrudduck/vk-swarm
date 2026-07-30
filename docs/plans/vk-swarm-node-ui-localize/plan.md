@@ -54,7 +54,7 @@ warnings). These conventions are dictated here instead of left to judgement:
 
 | Phase | File | Tasks | Ships |
 |---|---|---|---|
-| 1 | `phase-1-restore-proxy-routes.md` | 100–105 | `/api/nodes` + `/api/swarm/*` answer instead of 404 |
+| 1 | `phase-1-restore-proxy-routes.md` | 099–105 | `/api/nodes` + `/api/swarm/*` answer instead of 404 |
 | 2 | `phase-2-remove-node-api-key-surface.md` | 201–203 | node UI has no API-key management (D3) |
 | 3 | `phase-3-projectwithstats.md` | 301–303 | board runs on `ProjectWithStats`; `MergedProject` gone |
 | 4 | `phase-4-hive-absent-state.md` | 401–403 | "not connected to a hive" is a real state |
@@ -63,9 +63,9 @@ warnings). These conventions are dictated here instead of left to judgement:
 ## Task dependency graph
 
 ```text
-100 ──▶ 101 ──▶ 102 ──▶ 103 ──▶ 104 ──▶ 105 ──┐
- └──▶ 301
- └──▶ 201 ──▶ 202 ──▶ 203 ──────────────┤
+099 ──▶ 100 ──▶ 101 ──▶ 102 ──▶ 103 ──▶ 104 ──▶ 105 ──┐
+         └──▶ 301                                     │
+         └──▶ 201 ──▶ 202 ──▶ 203 ────────────────────┤
 301 ──▶ 302 ──▶ 303 ───────────────────┼──▶ 501
 401 ──▶ 402 (also needs 104) ──────────┤
  └──▶ 402 ──▶ 403 ─────────────────────┘
@@ -73,7 +73,8 @@ warnings). These conventions are dictated here instead of left to judgement:
 
 | Task | Depends | Conflicts |
 |---|---|---|
-| 100 | dep:  | conflicts:  |
+| 099 | dep:  | conflicts:  |
+| 100 | dep: 099 | conflicts:  |
 | 101 | dep: 100 | conflicts: 102 103 104 |
 | 102 | dep: 101 100 | conflicts: 101 103 104 |
 | 103 | dep: 102 100 | conflicts: 101 102 104 |
@@ -97,15 +98,15 @@ parallel. 301 and 303 conflict on `crates/server/src/routes/projects/mod.rs` and
 
 | SC | Claimed by |
 |---|---|
-| SC1 | 100, 101, 102, 103, 104, 105 |
+| SC1 | 099, 100, 101, 102, 103, 104, 105 |
 | SC2 | 105, 402 |
 | SC3 | 101, 201, 202, 203 |
-| SC4 | 100, 401, 402 |
+| SC4 | 099, 100, 401, 402 |
 | SC5 | 301, 302, 303 |
 | SC6 | 403 |
 | SC7 | 501 |
 
-## The test seam (task 100)
+## The test seam (tasks 099 + 100)
 
 The frozen spec's Test strategy requires per-module proxy tests against a mocked `RemoteClient`
 and a `ProjectWithStats` enrichment test. Nothing in this repo could build a `DeploymentImpl` in a
@@ -115,9 +116,30 @@ chose to build the seam.
 
 Task 100 builds it from material that already exists (`wiremock` in services' dev-deps,
 `serial_test` + `db` test-utils already in `crates/server`'s, `VK_SHARED_API_BASE` and
-`VK_DATABASE_PATH` env overrides), **without touching production code**. If that proves
-impossible it STOPs rather than refactoring `LocalDeployment`; the fallback (a `test-utils`
-feature exposing a minimal constructor) would be a separate, separately-reviewed task.
+`VK_DATABASE_PATH` env overrides). If `Deployment::new()` proves undrivable from a test it STOPs
+rather than refactoring `LocalDeployment`; the fallback (a `test-utils` feature exposing a minimal
+constructor) would be a separate, separately-reviewed task.
+
+**Task 099 is the one production change the seam needs, and it was not free.** The expedited
+review of task 100's first amendment found that the spec's `200` + `success: true` assertion is
+unreachable by env-var mocking alone: every proxy goes through `get_authed` →
+`require_oauth_token` → `credentials_path()` = `asset_dir()/credentials.json`, and `asset_dir()`
+(`crates/utils/src/assets.rs:6-14`) is the ONLY path root in the codebase with no environment
+override — `VK_DATABASE_PATH`, `VK_BACKUP_DIR`, `VK_WORKTREE_DIR`, and `VK_LOG_DIR` all exist.
+Tests would observe `401`, never `200`.
+
+Task 099 adds `VK_ASSET_DIR`, completing that established pattern. This was a user decision taken
+over three alternatives (seeding the real `dev_assets/credentials.json`; weakening the spec's
+assertion and re-freezing; trait-ifying `RemoteClient`) — see the decisions-ledger. It also
+retires two real defects: `Deployment::new()` unconditionally rewriting the developer's
+`config.json` (`crates/local-deployment/src/lib.rs:133`) on every test run, and two release-mode
+instances being unable to hold separate state.
+
+Mocking at the HTTP boundary with `wiremock` — rather than the spec's literal "mocked
+`RemoteClient`", which has no seam since `RemoteClient` is a concrete struct
+(`crates/services/src/services/remote_client.rs:155`) — is a deliberate mechanism substitution
+that keeps URL construction, serialization, auth-header handling and error mapping under test.
+The spec's *assertion* is met exactly; only its parenthetical mechanism differs.
 
 ## Known limitation — end-to-end vs in-process (read before task 105)
 

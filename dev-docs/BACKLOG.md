@@ -21,6 +21,11 @@
 | F-2026-07-29-02 | node board still consumes MergedProject via bridge endpoint, repoint to Project | medium | open | frontend/src/hooks/useMergedProjects.ts | session/2026-07-29 | 2026-07-29 | vk-swarm-node-ui-localize | — |
 | F-2026-07-29-03 | hive drawer and navbar actions disabled pending hive APIs, no assign or delete E2E | medium | open | remote-frontend/src/ui/panels/TaskDrawer.tsx | session/2026-07-29 | 2026-07-29 | — | — |
 | F-2026-07-29-04 | remote-frontend vitest flaky when run concurrently with vite build in same dir | low | open | remote-frontend/ | session/2026-07-29 | 2026-07-29 | — | — |
+| F-2026-07-30-01 | `cargo test -p db` fails to compile: integration test needs the test-utils feature | medium | open | crates/db/tests/task_visibility_discriminator.rs:9 | session/2026-07-30 | 2026-07-30 | — | — |
+| F-2026-07-30-02 | Empty VK_DATABASE_PATH silently relocates the database to CWD | low | open | crates/utils/src/assets.rs:61 | session/2026-07-30 | 2026-07-30 | — | — |
+| F-2026-07-30-03 | Orphan worktree cleanup deletes worktrees with uncommitted changes (no dirty guard) | high | open | crates/local-deployment/src/container.rs:319-383 | session/2026-07-30 | 2026-07-30 | — | — |
+| F-2026-07-30-04 | WAL diagnostics hardcode asset_dir()/db.sqlite, ignoring VK_DATABASE_PATH | low | open | crates/server/src/routes/diagnostics.rs:109 | session/2026-07-30 | 2026-07-30 | — | — |
+| F-2026-07-30-05 | Instance registry keyed on project_root only; two instances collide | low | open | crates/utils/src/port_file.rs:123-141 | session/2026-07-30 | 2026-07-30 | — | — |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
