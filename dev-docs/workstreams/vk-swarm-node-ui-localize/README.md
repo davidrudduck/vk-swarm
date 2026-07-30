@@ -105,3 +105,35 @@ Three tracks: A (restore routes, backend-only), B (`MergedProject` retirement, f
 C (hive-absent hardening, after A). A and B are file-disjoint and parallel.
 
 Next: `/wai:precheck vk-swarm-node-ui-localize`.
+
+## Precheck passed (2026-07-30)
+
+`/wai:precheck` LOCAL PASS → committed here as DURABLE COMPLETE. Token:
+`docs/plans/vk-swarm-node-ui-localize/.precheck.passed`, `spec_sha=6946be63…`. **The spec is now
+frozen (ADR-0001)** — decompose/execute halt on drift; changing it means re-running precheck to
+re-freeze, never editing it to make a run pass.
+
+Three spec defects the gate caught and this session fixed:
+1. Success criteria lacked colon-anchored `SC<N>:` ids.
+2. No `## User stories`, so no `→ US<N>:` parent for any criterion (added US1–US7).
+3. **A real contradiction:** SC1/SC3 still asserted the `/api/nodes/api-keys` surface that
+   decision D3 deletes. The spec would have shipped an SC the design contradicts.
+
+**Known false positive — anchor check skipped (`--no-anchor-check`).** `wai-precheck.sh:240`
+extracts anchors with `(src|extensions|ui|packages|apps)/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+`, which
+matches the *substring* `src/routes/organizations.rs` inside
+`crates/server/src/routes/organizations.rs` and then fails `git cat-file -e main:src/...`. This
+misfires on **every** Rust path in this repo (`crates/*/src/…`) — it is not specific to this spec.
+All nine anchors were verified by hand against `main` instead:
+
+```
+✓ crates/server/src/routes/organizations.rs        ✓ frontend/src/App.tsx
+✓ crates/server/src/routes/mod.rs                  ✓ frontend/src/components/org/NodeApiKeySection.tsx
+✓ crates/server/src/routes/projects/mod.rs         ✓ frontend/src/components/projects/LocationBadges.tsx
+✓ crates/server/src/routes/projects/handlers/merged.rs  ✓ frontend/src/hooks/useMergedProjects.ts
+✓ crates/services/src/services/remote_client.rs
+```
+
+Worth fixing upstream in the `wai` plugin (anchor the regex to a path boundary).
+
+Next: `/wai:decompose vk-swarm-node-ui-localize`.

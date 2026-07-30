@@ -43,9 +43,9 @@ mirroring the pattern already live in `crates/server/src/routes/organizations.rs
 tractable because node-foundations deleted only the HTTP layer — `RemoteClient`
 (`crates/services/src/services/remote_client.rs`) still carries every method needed:
 `list_nodes`, `get_node`, `delete_node`, `list_node_projects`, `list_linked_node_projects`,
-`list_node_api_keys`, `create_node_api_key`, `revoke_node_api_key`, `get_node_statuses`, and the
-full `*_swarm_project` / `*_swarm_label` / `*_swarm_template` sets including the merge and
-`promote_label_to_swarm` operations.
+`get_node_statuses`, and the full `*_swarm_project` / `*_swarm_label` / `*_swarm_template` sets
+including the merge and `promote_label_to_swarm` operations. (It also retains the node API-key
+methods, which this workstream deliberately leaves unused — see D3.)
 
 **2. The task board still renders through the remote-merge types.** `useMergedProjects` →
 `projectsApi.getMerged()` → `/api/merged-projects`, and `ProjectList` / `ProjectSwitcher` are
@@ -61,8 +61,8 @@ halves of the split.
 
 - **Node operators** managing swarm projects, labels, templates, and node-project links from a
   node's own UI. Today every one of those screens is silently empty.
-- **Node operators pairing a node to a hive** via `/nodes` and the API-key surface — currently
-  a dead page.
+- **Node operators pairing a node to a hive** via `/nodes` — currently a dead page. Key minting
+  moves to the hive UI (D3), so their onboarding path changes.
 - **Anyone using the node task board**, who is served through a merge path the node no longer
   needs.
 - **Future maintainers:** `frontend/src/components/swarm/` and
@@ -70,29 +70,53 @@ halves of the split.
   does not merge them, but the spec must say which is authoritative so the duplication is a
   known cost rather than an accident.
 
+## User stories
+
+- **US1:** As a node operator whose node is paired to a hive, when I open `/settings/swarm`, I
+  expect swarm projects, labels, templates, and node-project links to load and be manageable from
+  the node I am already looking at.
+- **US2:** As a node operator, when I open `/nodes`, I expect to see my organization's nodes with
+  their live status.
+- **US3:** As the operator of a standalone node with no hive configured, when I open any swarm
+  screen, I expect a clear "not connected to a hive" message instead of an empty list, an endless
+  spinner, or a raw error body.
+- **US4:** As a node operator, when I use the task board, I expect my projects — hive-bound and
+  local-only alike — with their task counts and recent activity, and full CRUD over the tasks
+  created and executed on this node.
+- **US5:** As the operator of a standalone node, when I view attempt logs, diffs, connection
+  status, or pick a node in the attempt dialog, I expect local state to render without errors from
+  absent remote data.
+- **US6:** As a hive user, when this workstream ships, I expect the hive's own UI to be entirely
+  unchanged.
+- **US7:** As an operator minting or revoking a node API key, I expect exactly one place to do it
+  — the hive UI — rather than two admin-gated paths to the same privileged operation.
+
 ## Success criteria
 
-Runtime-observable. No criterion is "test X passes".
+Runtime-observable. No criterion is "test X passes". Each derives from a user story above.
 
-- **SC1** — With a hive configured, `GET /api/nodes?organization_id=<org>` on a running node
+- **SC1:** With a hive configured, `GET /api/nodes?organization_id=<org>` on a running node
   returns `200` with `success: true`, and the same for `/api/nodes/{id}`,
-  `/api/nodes/{id}/projects`, `/api/nodes/api-keys`, `/api/swarm/projects`, `/api/swarm/labels`,
-  `/api/swarm/templates`. Zero `404`s across the surface listed in the Intent table.
-- **SC2** — Loading `/settings/swarm` in a browser against a hive-connected node renders real
-  swarm projects, labels, and templates from the hive; the browser network log shows no `404`.
-- **SC3** — Loading `/nodes` lists the organization's nodes with live status, and the API-key
-  actions (create / revoke / unblock) round-trip against the hive.
-- **SC4** — With **no** hive configured, every one of those screens renders an explicit
+  `/api/nodes/{id}/projects`, `/api/swarm/projects`, `/api/swarm/labels`,
+  `/api/swarm/templates`. Zero `404`s across the surface listed in the Intent table. → US1
+- **SC2:** Loading `/settings/swarm` in a browser against a hive-connected node renders real
+  swarm projects, labels, and templates from the hive; the browser network log shows no `404`. → US1
+- **SC3:** Loading `/nodes` lists the organization's nodes with live status. No API-key
+  management appears anywhere in the node UI: `/api/nodes/api-keys*` returns `404`, and
+  `OrganizationSettings` renders no key section (per D3 — the hive owns key management).
+  → US2, → US7
+- **SC4:** With **no** hive configured, every one of those screens renders an explicit
   "not connected to a hive" state. No unhandled rejection, no infinite spinner, no raw error
   body. (`RemoteClient` construction fails with `RemoteClientNotConfigured`; the UI must handle
-  it as a first-class state.)
-- **SC5** — The task board renders projects from `/api/projects`. `/api/merged-projects` receives
+  it as a first-class state.) → US3
+- **SC5:** The task board renders projects from `/api/projects`. `/api/merged-projects` receives
   zero requests from the frontend during a full board session (observable in the network log).
-- **SC6** — Attempt logs, diffs, connection status, and node selection in the attempt UI behave
+  → US4
+- **SC6:** Attempt logs, diffs, connection status, and node selection in the attempt UI behave
   correctly on a node with no hive: `ProcessLogsViewer`, `DiffsPanel`, `AttemptHeaderActions`,
-  and `CreateAttemptDialog` render local state without erroring on absent remote data.
-- **SC7** — `remote-frontend` behaviour is unchanged: the hive's own swarm UI still works
-  end-to-end (its E2E suite is the regression signal).
+  and `CreateAttemptDialog` render local state without erroring on absent remote data. → US5
+- **SC7:** `remote-frontend` behaviour is unchanged: the hive's own swarm UI still works
+  end-to-end (its E2E suite is the regression signal). → US6
 
 ## Constraints
 
@@ -166,7 +190,7 @@ git show 35b378a5^:crates/server/src/routes/swarm_labels.rs
 git show 35b378a5^:crates/server/src/routes/swarm_templates.rs
 ```
 
-Re-register them in `routes/mod.rs` alongside `organizations::router()`. Restoring the paths
+Re-register them in `crates/server/src/routes/mod.rs` alongside `organizations::router()`. Restoring the paths
 verbatim means **zero frontend diff** for this track — `lib/api/{nodes,swarmProjects,swarmLabels,
 swarmTemplates}.ts` already target exactly these URLs. The restored surface:
 
@@ -195,7 +219,7 @@ state to render).
 ### Proxy handler shape
 
 Every restored handler is an extract → call → wrap pass-through with no business logic, exactly
-as `routes/organizations.rs:list_organizations` already does on `main`:
+as `crates/server/src/routes/organizations.rs` (`list_organizations`) already does on `main`:
 
 ```rust
 async fn list_nodes(
