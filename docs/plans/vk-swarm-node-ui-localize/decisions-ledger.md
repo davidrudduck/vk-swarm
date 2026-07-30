@@ -501,3 +501,56 @@ NOT occur here: `promote` is POST-only and `{label_id}` has no POST route.
 Gates green with REAL exit codes: fmt 0 (0 `Diff in` lines), clippy 0, check 0,
 `cargo test -p server` 0 (66 passed). Scope clean — `git show HEAD --stat` is exactly the 3
 allowlisted files, `162 insertions(+), 0 deletions(-)`.
+
+## Task 104 — restore swarm_templates routes (phase 1 route restores COMPLETE)
+
+**Implementer ledger: empty — and verified genuinely empty** (unlike task 103's false empty).
+Both dictated orderings were followed on the first attempt.
+
+**Pre-dispatch amendments (ORCHESTRATOR).**
+- **D1** — `json!([])` → `json!({"templates": []})`; `ListSwarmTemplatesResponse` has a `templates`
+  field (`crates/remote/src/routes/swarm_templates.rs:82-84`). THIRD consecutive task with this
+  defect in my drafted text — see the process note below.
+- **D2** — `RemoteClient::list_swarm_templates`
+  (`crates/services/src/services/remote_client.rs:1327-1335`) requests
+  `/v1/swarm/templates?organization_id=...` unconditionally; no `AuthMode` branch.
+- **D3** — stated the two-orderings rule explicitly (alphabetical `pub mod`, task-ordered
+  `.merge(...)`) because that is precisely what task 103's implementer got wrong. It worked: 104
+  got both right without a retry.
+- **D4** — REAL `cargo fmt` exit code required.
+- **D5** — NEW: "the ledger is not empty by default". Instructs the implementer to diff its own
+  change against the task text before declaring empty. Added in response to 103's false claim.
+
+**Process note — a decompose-time defect I made three times.** Tasks 102, 103 and 104 all drafted
+`json!([])` as the mocked hive response. Every one was wrong, because each `list_*` method returns a
+single-field wrapper struct, not a bare array. The decomposer cannot see this without opening
+`crates/remote/src/routes/*.rs` for each module — it is exactly the class of defect the frozen spec
+and the task rubric cannot catch, and it was caught only by pre-dispatch verification. **Convention
+for any future proxy-test task: read the `RemoteClient` method AND its return type's struct
+definition before drafting the mock body.**
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS.** md5 `d9390286823cb814f6f5da8ad1ba3e35` both
+sides, byte counts equal (3958) so no EOF normalisation. Three revert experiments, (b) and (c)
+yielding DISTINCT messages, proving the test separates unreached-mock from failed-deserialisation.
+
+**Integrated review of all four restored modules (the panel's angle 6):**
+- Full registered path set has no exact duplicates and no collision with pre-existing routes. The
+  only near-neighbours, `projects/mod.rs:94 "/unlink-swarm"` and `tasks/mod.rs:51
+  "/available-nodes"`, sit under different nest prefixes.
+- A matchit path conflict panics at router construction; every harness test builds the FULL router
+  and all pass, empirically ruling out that class of bug.
+- Static-vs-dynamic: the only such sibling pair is `/swarm/labels/promote` (POST, swarm_labels.rs:125)
+  vs `/swarm/labels/{label_id}` (get/patch/delete only, :119) — no POST on the dynamic route, so
+  `promote` is reachable on method grounds in addition to matchit's static-over-dynamic priority.
+  The `/api/nodes/api-keys` vs `/nodes/{node_id}` bug found earlier cannot recur: that path no
+  longer exists in `nodes.rs` (D3 of the spec deletes the node API-key surface).
+- All four modules obtain the client via `deployment.remote_client()?` and return
+  `Ok(ResponseJson(ApiResponse::success(..)))`, matching sibling `organizations.rs`. No divergence.
+- All four test files are structurally identical; only the mocked body differs, correctly per
+  response type: nodes `json!([])`, labels `{"labels":[]}`, projects `{"projects":[]}`,
+  templates `{"templates":[]}`.
+
+**Whole-workspace gates green with REAL exit codes:** `cargo fmt --all -- --check` 0,
+`cargo clippy --all --all-targets --all-features -- -D warnings` 0, `cargo test --workspace` 0
+(server lib 217 passed; all four route suites 2 passed each). Scope clean: 3 files,
+151 insertions(+), 0 deletions.
