@@ -2,7 +2,7 @@
 id: "105"
 phase: 1
 title: "Prove every restored route is reachable over HTTP against a running server"
-status: ready
+status: passed
 depends_on: ["104"]
 parallel: false
 conflicts_with: []

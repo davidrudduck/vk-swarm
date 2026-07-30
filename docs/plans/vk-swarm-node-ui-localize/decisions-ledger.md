@@ -554,3 +554,55 @@ yielding DISTINCT messages, proving the test separates unreached-mock from faile
 `cargo clippy --all --all-targets --all-features -- -D warnings` 0, `cargo test --workspace` 0
 (server lib 217 passed; all four route suites 2 passed each). Scope clean: 3 files,
 151 insertions(+), 0 deletions.
+
+## Task 105 — end-to-end reachability evidence (PHASE 1 COMPLETE)
+
+**Executed by the ORCHESTRATOR, not a constrained implementer.** The task changes no source; its
+deliverable is evidence gathered from a really-running server, which requires judgement about
+process safety (a foreign instance was running) that the constrained implementer role forbids.
+
+**ORCHESTRATOR addition beyond the task text — the NEGATIVE CONTROL.** The task asked only for six
+paths to return `application/json`. That is insufficient on its own: six JSON responses are equally
+consistent with "this binary returns JSON for everything under /api". I added a control request to
+`/api/definitely-not-a-route`, which returned `200 text/html`, proving the SPA fallback is live on
+this binary and the content-type discrimination is real rather than an artefact. Recorded in the
+evidence file under "Negative control".
+
+**Process safety.** A vibe-kanban instance from a DIFFERENT checkout
+(`/home/david/Tools/vk-swarm`, PID 1117432, backend port 9002) was running throughout. The probe
+used port 9412 and an isolated `VK_ASSET_DIR` under the session scratchpad, was stopped by exact
+PID, and the foreign instance was verified still alive afterwards. No `pkill`/`killall` was used
+(CLAUDE.md §10.11). **Task 099's `VK_ASSET_DIR` override is what made this isolation possible** —
+the seam built for the test harness paid off a second time here.
+
+**Results.** Six restored paths, six `application/json` (`400 "Remote client not configured"`, the
+expected no-hive state; task 401 later changes this to 503). Control path `200 text/html`.
+`git grep 'api-keys\|api_key' -- crates/server/src/routes/` → `NO api-key surface in routes`.
+`/api/nodes/api-keys` returns a `node_id` UUID parse error (`400 text/plain`), never a key listing.
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS**, and this panel INDEPENDENTLY REPRODUCED the
+whole sweep rather than merely reading the file — the right standard for evidence the orchestrator
+produced itself:
+- Rebuilt the binary, ran on a different port (9413) with its own isolated asset dir. All six
+  content-types matched the evidence file exactly, including the byte-exact UUID parse-error string.
+- **Strengthened the negative control from one path to six**, including real-shaped siblings and
+  prefix extensions: `/api/swarm/nonexistent`, `/api/swarm/templates/extra/segments`,
+  `/api/nodes/{uuid}/bogus`, `/api/nodesx`, `/api/swarm/labelsz`. ALL returned `200 text/html`,
+  ruling out any blanket JSON middleware on `/api`.
+- **Disproved the alternative-match hypothesis** (angle 2): `/nodes` is defined in exactly one
+  place (`crates/server/src/routes/nodes.rs:63-65`); the only other repo-wide `/nodes` hit is
+  `swarm_projects.rs:157`'s `/swarm/projects/{project_id}/nodes/{node_id}`, a different prefix that
+  cannot match. The `"Remote client not configured"` body is handler-emitted, not an error-layer
+  artefact — an error layer would also have fired on `/api/nodesx`, which instead falls through to
+  HTML.
+- **Widened the D3/SC3 grep** beyond the task's `routes/` path: `git grep -ln 'api-keys\|api_key'
+  -- crates/server/src/` returns NOTHING — no api-key surface anywhere in the node server crate,
+  so the recorded claim is if anything understated.
+- Provenance verified: the evidence commit `9dce4156` has parent `690ffab0` (task 104), matching
+  the commit-under-test recorded in the file. Scope: 1 file, 102 insertions, no source smuggled in.
+- Panel cleanup was equally disciplined: killed only its own PID, verified the foreign instance
+  alive, removed its temp dirs, left `git status --porcelain` empty.
+
+**Phase 1 (tasks 099–105) is COMPLETE.** SC1 and SC2 have end-to-end evidence: the four hive-proxy
+route modules are restored, registered, covered by in-process registration tests that fail when
+unregistered, and proven reachable on the real binary a user starts.
