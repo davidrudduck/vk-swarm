@@ -2,7 +2,7 @@
 id: "401"
 phase: 4
 title: "Give RemoteClientNotConfigured a discriminable ApiError variant and status"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

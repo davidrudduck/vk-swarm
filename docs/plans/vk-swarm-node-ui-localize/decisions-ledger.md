@@ -978,3 +978,73 @@ structs and constructs same-named fields — the easiest thing in this task to c
   written by `generate_types.rs` (which writes only `shared/`), and no `remote-frontend` source
   references the names. Filed as medium — a hand-maintained duplicate of a generated file is a
   standing drift hazard.
+
+## Task 401 — HiveNotConfigured error variant (hive-absent is now 503, not 400)
+
+**Implementer ledger: empty — verified genuinely empty** by the panel (diff is exactly the three
+dictated edits; the only divergence from the contract's literal snippet is that rustfmt collapsed a
+braced match arm to one line, which `cargo fmt --check` exit 0 confirms is canonical).
+
+**The risk in this task was never the diff — it was RETRY BEHAVIOUR.** Changing 400 → 503 is one
+line, but 5xx is the classic "retry me" signal: if anything in the frontend retried on 5xx, a quiet
+hive-absent state would become a retry storm against an endpoint that can never succeed. That
+regression passes every gate and surfaces only as mysterious load.
+
+I analysed this MYSELF before the panel reported, and the panel reached the same conclusion
+independently — deliberate corroboration rather than a single point of failure:
+- `handleApiResponse` (`frontend/src/lib/api/utils.ts:125-148`) treats ALL non-2xx identically: it
+  parses the body, lifts `errorData.message`, and throws `ApiError(message, status, response)`. There
+  is no `>= 500` short-circuit, so the 503 body reaches callers intact and `ApiError.status === 503`
+  is available as task 402's discriminator.
+- The global `QueryClient` (`frontend/src/main.tsx:10-17`) sets only `staleTime` and
+  `refetchOnWindowFocus` — **no `retry` override**. TanStack Query's default (`retry: 3`) retries on
+  ANY thrown error without inspecting status, so the hive-proxy queries were ALREADY retried 3× under
+  400.
+- Every per-hook `retry:` override in the codebase is a plain number
+  (`useTaskRelationships.ts:32,52`, `useBranchStatus.ts:12`, `useAuthStatus.ts:14`) — **zero
+  status-predicate retry functions anywhere in `frontend/src`**.
+
+**Conclusion: retry count per hive-proxy request is UNCHANGED at 3 under both 400 and 503.** No
+regression. (Standing observation for task 403: a hive-absent node still retries every hive-proxy
+query three times before settling — pre-existing, not introduced here.)
+
+The panel additionally found the ONE 503 branch in the frontend — `ConfigProvider.tsx:128`
+(`errorStatus === 503` inside `isProxyError`, which retries with backoff) — and proved it
+UNREACHABLE from this change: it wraps `configApi.getConfig()` → `/api/config` only, and
+`grep 'remote_client' crates/server/src/routes/config.rs` returns nothing, so that path can never
+emit `HiveNotConfigured`.
+
+**Blast radius is the declared one.** `RemoteClientNotConfigured` is constructed at exactly three
+sites (`local-deployment/src/lib.rs:201,206`, `container.rs:181`) and reaches `ApiError` through the
+single `From` impl. Every `?`-propagating caller moves 400 → 503, which the contract names
+explicitly (including `/api/organizations*`). Non-`?` sites (`oauth.rs:177` `if let Ok`,
+`labels.rs:70` `.ok()`, `.inspect_err`/`.map_err` sites) are unaffected by construction. Nothing in
+`crates/` or the frontend matches the old literal `"Remote client not configured"` outside its two
+`thiserror` definitions.
+
+**No codegen impact — disproved rather than assumed.** `error.rs:30-31` carries
+`#[derive(ts_rs::TS)]` with `#[ts(type = "string")]`, which collapses the entire enum to `string` in
+TypeScript, so adding a unit variant CANNOT change generated output. Confirmed by
+`generate-types:check` exit 0 and `grep 'HiveNotConfigured' shared/ frontend/src` returning nothing.
+
+**Runtime proof (panel, isolated port 9477, `env -u` on the hive vars to defeat the `option_env!`
+bake-in trap):** all four hive-proxy paths return `503 application/json` with
+`"HiveNotConfigured: This node is not connected to a hive"`; `/api/projects/with-stats` and
+`/api/health` stay 200; `/api/definitely-not-a-route` still returns the `text/html` catch-all. The
+health endpoint reported `git_commit: b269b420`, proving the binary under test was HEAD.
+
+**Task 105's evidence is NOT stale — checked, not assumed.** `reviews/105-reachability-evidence.md`
+records 400s, but line 32 states the discriminator is CONTENT-TYPE, not status, and lines 37-38
+explicitly anticipate "task 401 later changes it to 503". Every assertion it makes survives the
+change. Self-superseding; left unedited.
+
+**ORCHESTRATOR follow-up — corrected four now-misleading assertion messages.** The hive-absent tests
+from tasks 101-104 asserted `assert_ne!(res.status, 500)` with the message *"absent hive is a
+client-visible state, not a server error"*. That prose was written when the response was 400; 503 IS
+formally in the 5xx server-error class, so on failure the message would now contradict the very
+contract task 401 establishes. The assertion is still correct — what it guards against is an
+UNHANDLED 500 — so I updated the message to say so:
+`"hive-absent must be the specific HiveNotConfigured 503 (task 401), never an unhandled 500"`.
+Comment-only, zero behavioural change, `cargo test -p server` green. This is the same
+documentation-drift class tasks 203 and 303 existed to remove; leaving it would have been a small
+instance of exactly what this workstream is about.

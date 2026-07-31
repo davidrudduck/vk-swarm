@@ -24,6 +24,6 @@ async fn absent_hive_is_registered_and_not_a_500() {
     res.assert_registered();
     assert_ne!(
         res.status, 500,
-        "absent hive is a client-visible state, not a server error"
+        "hive-absent must be the specific HiveNotConfigured 503 (task 401), never an unhandled 500"
     );
 }
