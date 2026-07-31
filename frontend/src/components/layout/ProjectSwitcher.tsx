@@ -17,7 +17,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import { useMergedProjects } from '@/hooks/useMergedProjects';
+import { useProjectsWithStats } from '@/hooks/useProjectsWithStats';
 import { useProject } from '@/contexts/ProjectContext';
 
 /**
@@ -44,39 +44,27 @@ export function ProjectSwitcher({ className }: ProjectSwitcherProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { projectId, project } = useProject();
-  const { data: mergedData, isLoading } = useMergedProjects();
+  const { data: projectsData, isLoading } = useProjectsWithStats();
 
-  // Transform merged projects to flat list with node info
+  // Transform projects to flat list
   const allProjects = useMemo<ProjectItem[]>(() => {
-    if (!mergedData?.projects) return [];
+    if (!projectsData?.projects) return [];
 
     const items: ProjectItem[] = [];
 
-    mergedData.projects.forEach((p) => {
-      if (p.has_local) {
-        // Local project - show as local
-        items.push({
-          id: p.id,
-          name: p.name,
-          type: 'local',
-        });
-      } else if (p.nodes.length > 0) {
-        // Remote-only project - use first node's info for display
-        const firstNode = p.nodes[0];
-        items.push({
-          id: p.id,
-          name: p.name,
-          type: 'remote',
-          nodeName: firstNode.node_name,
-        });
-      }
+    projectsData.projects.forEach((p) => {
+      items.push({
+        id: p.id,
+        name: p.name,
+        type: 'local',
+      });
     });
 
     // Sort alphabetically by name (case-insensitive)
     return items.sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
     );
-  }, [mergedData]);
+  }, [projectsData]);
 
   const handleSelect = (value: string) => {
     setOpen(false);
