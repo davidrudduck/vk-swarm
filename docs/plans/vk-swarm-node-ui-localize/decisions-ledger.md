@@ -845,3 +845,75 @@ stage — the frozen spec's required enrichment test is satisfied.
 
 Whole-workspace gates green with REAL exit codes: `clippy --all` 0, `cargo test --workspace` 0,
 `fmt` 0, `generate-types:check` up to date.
+
+## Task 302 — repoint the board onto ProjectWithStats (IRREVERSIBLE, human-approved)
+
+**Human gate.** Approved for 302 ONLY; the offered combined 302+303 approval was DECLINED, so 303
+returns to the gate separately. Token `reviews/302.approved` records that explicitly.
+
+**Implementer ledger: FIVE declared items, all verified by the panel as correct and necessary.**
+Item 2 (`hasProjects` rewritten from `counts.total > 0` to `(projectsData?.projects.length ?? 0) > 0`)
+was the one worth checking hardest — the panel read HEAD^ and confirmed `counts.total` was the
+UNFILTERED array length, not a local-only subset, so the predicate is unchanged. Item 4 (removing
+`Link2`/`LinkToLocalFolderDialog` imports) was confirmed genuinely orphaned: both were used ONLY
+inside the `{!project.has_local && ...}` block, provably dead since `has_local: true` is hardcoded.
+
+**Pre-dispatch amendments (ORCHESTRATOR).** F1 corrected an IMPOSSIBLE assertion: the task demanded
+`grep 'local_project_id' frontend/src` return nothing, but that field legitimately exists on
+`NodeProject` (`types/nodes.ts:36`), the swarm types, the task API type and the electric schema — it
+would have failed on a perfect implementation. Same class as 201/202's vacuous `scope_test`. F2-F4
+pre-verified the blast radius (`has_local` in exactly the 4 allowlisted files; `MergedProject` in
+exactly 6, all allowlisted).
+
+**ORCHESTRATOR error — I REPEATED the task-201 partial-commit mistake.** `git add` on an already
+`git rm`'d path fails and aborts the ENTIRE add, so my first commit captured only the three
+deletions, leaving the board mid-migration and broken in isolation. Caught by reading
+`git show HEAD --stat`; amended before push. **The lesson was already in the ledger from 201 — the
+failure was not knowing it, but not applying it.** Standing rule: after ANY commit involving a
+deletion, read `git show HEAD --stat` and confirm every expected path is listed.
+
+**Stage-1 gate fixed properly rather than disabled.** `scope_test: "frontend/src/components/projects"`
+failed with `sh: 1: vitest: not found` (exit 127) because the gate runs the test command from the
+REPO ROOT, where vitest is not installed. That is a harness path issue, not a code failure. Supplying
+`WAI_TEST_CMD='(s={scope}; cd frontend && npx vitest run "${s#frontend/}")'` makes the gate pass on a
+REAL test execution. Recorded as a plan convention for tasks 402/403. This also confirms 201/202/204
+were right to use `N/A`: their scopes contained baseline-red files no command could fix.
+
+**ORCHESTRATOR false alarm, self-corrected.** My first blank-board experiment appeared to PASS,
+suggesting the regression guard was hollow. It was my own error: a single-line `sed` silently
+no-opped against the two-line `projects: fixture,` mock. Re-run with a correct mutation, the test
+fails as it should. I warned the panel about the trap; it hit the same two-line form and mutated
+correctly via python.
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS**, on an 11-row rewrite-by-rewrite audit:
+- Every dropped-field site rewritten with the DICTATED semantics — no condition inverted, no branch
+  lost. Notably `UnifiedProjectCard.tsx:132` correctly KEPT the `!project.git_repo_path` guard while
+  dropping only the `!has_local` conjunct, and the three `has_local && ` sites unwrapped their JSX
+  without losing any menu item (openInIDE, openTerminal, github.settings, Edit, Delete all retained).
+- **Endpoint URL verified against the ROUTER, not just the type system** — the a85f7d63 failure class
+  that mocked tests structurally cannot catch. `routes/mod.rs:83 .nest("/api")` +
+  `projects/mod.rs:149 .nest("/projects")` + `:136 .route("/with-stats")` = `/api/projects/with-stats`,
+  byte-matching the literal in `lib/api/projects.ts:112`. Hyphen, not underscore.
+- **Payload parity proven at the projection level:** `with_stats.rs` and `merged.rs` run the same
+  query, map the same 12 shared fields with no hardcoding or zeroing, apply the identical sort, and
+  neither adds a LIMIT or filter. No project and no field silently disappears from the board.
+- Mutation matrix: zeroed `task_counts` KILLS the test; `projects: []` (the blank board) KILLS it.
+  The a85f7d63 regression guard is real.
+
+**PANEL-SURFACED ORPHAN — escalated to the user, NOT auto-deleted (F-2026-07-31-04).**
+`frontend/src/components/dialogs/projects/LinkToLocalFolderDialog.tsx` now has ZERO consumers, since
+its only mount point was the dead `!has_local` block. This is the same shape as task 202's discovery
+that produced task 204 — but the disposition differs, deliberately:
+
+204's orphans were dead TYPE declarations with no behavioural meaning, so deleting them was pure
+cleanup. This dialog is a FEATURE with a live backing stack: `projectsApi.linkLocalFolder`
+(`lib/api/projects.ts:117`), `useProjectMutations.linkLocalFolder`
+(`hooks/useProjectMutations.ts:70,161`), and the server route `/api/projects/link-local`
+(`crates/server/src/routes/projects/mod.rs`). Deleting it removes the ability to link a local folder
+to a remote project — a PRODUCT decision outside this workstream's frozen spec (which covers
+hive-proxy routes, the API-key surface, `ProjectWithStats`, and the hive-absent state).
+
+It was already unreachable before this run (the `!has_local` guard has been permanently false since
+node-foundations), so 302 did not remove working functionality — it removed the last reference to
+something already dead. Filed as F-2026-07-31-04 and put to the user at the 303 gate rather than
+resolved unilaterally.

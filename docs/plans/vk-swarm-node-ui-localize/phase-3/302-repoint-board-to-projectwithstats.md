@@ -2,7 +2,7 @@
 id: "302"
 phase: 3
 title: "Repoint the board onto ProjectWithStats and delete LocationBadges"
-status: ready
+status: passed
 depends_on: ["301"]
 parallel: false
 conflicts_with: ["303"]

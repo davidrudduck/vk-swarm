@@ -29,6 +29,7 @@
 | F-2026-07-31-01 | SettingsMobile.test.tsx asserts 6 accordion sections but component renders 8 (stale test) | medium | open | frontend/src/pages/settings/__tests__/SettingsMobile.test.tsx:85,185,217,245 | session/2026-07-31 | 2026-07-31 | — | — |
 | F-2026-07-31-02 | SystemSettings.test.tsx suite fails to load: vi.mock factory closes over hoisted import | medium | open | frontend/src/pages/settings/__tests__/SystemSettings.test.tsx:40 | session/2026-07-31 | 2026-07-31 | — | — |
 | F-2026-07-31-03 | frontend vitest red at baseline: 8 files / 15 tests failing, unrelated to any active workstream | medium | open | frontend/ (BottomNav, MessageQueuePanel, ConversationFocusMode, taskSorting, DesignSystem, MobileIntegration) | session/2026-07-31 | 2026-07-31 | — | — |
+| F-2026-07-31-04 | LinkToLocalFolderDialog orphaned by task 302; its API client, hook and server route are still live | medium | open | frontend/src/components/dialogs/projects/LinkToLocalFolderDialog.tsx | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes

@@ -45,6 +45,21 @@ warnings). These conventions are dictated here instead of left to judgement:
 - **Route registration goes in `crates/server/src/routes/mod.rs` inside the existing
   `base_routes` builder**, appended after `.merge(organizations::router())` (line 60), matching the
   style of the surrounding `.merge(...)` chain.
+- **Frontend `scope_test` needs `WAI_TEST_CMD` (discovered at task 302).** The Stage-1 gate runs the
+  test command from the REPO ROOT, where `vitest` is not installed — a bare frontend `scope_test`
+  fails with `sh: 1: vitest: not found` (exit 127), which the gate reports as "tests failed". That is
+  a harness path issue, NOT a code failure. Run the gate for any frontend-scoped task as:
+
+  ```bash
+  WAI_TEST_CMD='(s={scope}; cd frontend && npx vitest run "${s#frontend/}")' \
+    bash "$WAI_ROOT/scripts/task-gate.sh" <topic> <id>
+  ```
+
+  Use this INSTEAD of setting `scope_test: "N/A"` whenever the scope contains tests that (a) cover the
+  change and (b) pass. Tasks 201/202/204 legitimately use `N/A` because their scopes contained
+  baseline-red files (F-2026-07-31-01..03) that no test command could make pass, and no test in them
+  covered the change.
+
 - **The decisions-ledger is ORCHESTRATOR-owned.** Only task 501 lists it in `files:`. Every other
   task's `## Manual verification` section says "emit verbatim; the ORCHESTRATOR records it" — the
   constrained implementer runs the commands and returns the output, and must NOT edit
