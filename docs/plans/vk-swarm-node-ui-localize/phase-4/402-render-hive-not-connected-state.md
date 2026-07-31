@@ -2,7 +2,7 @@
 id: "402"
 phase: 4
 title: "Render an explicit not-connected-to-a-hive state across the swarm surfaces"
-status: ready
+status: passed
 depends_on: ["401", "104"]
 parallel: false
 conflicts_with: []

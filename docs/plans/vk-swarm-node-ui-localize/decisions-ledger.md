@@ -1048,3 +1048,61 @@ UNHANDLED 500 — so I updated the message to say so:
 Comment-only, zero behavioural change, `cargo test -p server` green. This is the same
 documentation-drift class tasks 203 and 303 existed to remove; leaving it would have been a small
 instance of exactly what this workstream is about.
+
+## Task 402 — render an explicit not-connected-to-a-hive state
+
+**Implementer ledger: ONE item — the user-facing copy**, which the task deliberately left open. It
+followed the sibling `Alert`/`AlertDescription` wrapper and the `t(key, default)` convention rather
+than inventing a pattern. Correct, and correctly declared.
+
+**Pre-dispatch amendments (ORCHESTRATOR).** H1 resolved a genuine coin-flip: `ApiError` carries BOTH
+`.status` and `.statusCode` (`utils.ts:10-24`, `status` assigned FROM `statusCode`), so either would
+have passed the unit test while only one matches the file's convention — dictated `.status`. H5
+forbade matching on the message string, since
+`"HiveNotConfigured: This node is not connected to a hive"` is a rendering detail, not a contract.
+
+**The real risk was BRANCH ORDERING, which no test catches.** The hive-absent branch must sit AFTER
+the loading branch (else a pending request flashes "not connected to a hive") and BEFORE the generic
+error branch (else a hive-absent node still shows a destructive alert and the task's purpose is
+defeated at that surface). I asked the panel for a per-file table across all six surfaces rather than
+a spot check. Result — correct everywhere:
+
+| Surface | loading | hive-absent | generic error |
+|---|---|---|---|
+| SwarmProjectsSection | :210 | :214 | :216 |
+| SwarmLabelsSection | :206 | :210 | :212 |
+| SwarmTemplatesSection | :193 | :197 | :199 |
+| NodeTemplatesSection | :155 | :159 | :161 |
+| NodeProjectsSection | :280 | :283 | :285 |
+| pages/Nodes.tsx | :34 (+ `!orgId` :38) | :42 | :44 |
+
+**No conflict with the other 503 handler.** `ConfigProvider.tsx:126-130` treats `errorStatus === 503`
+as a retryable proxy error, but it is a self-contained `catch` doing structural duck-typing
+(`'status' in err`) on `/api/config`, never calls `isHiveNotConfigured`, and is untouched here. Task
+401's panel had already proven `/api/config` cannot emit `HiveNotConfigured`; this task did not widen
+that surface.
+
+**`NodeTemplatesSection.tsx`'s larger diff (13 lines vs 4) explained and verified:** it destructures a
+previously-unused `error: swarmTemplatesError` at `:65`. The LOCAL query's `isLoading`/`error`
+(`:55-56`) are unchanged and still drive the local "Failed to load local templates" branch — nothing
+shadowed or dropped. The extra lines are prettier re-wrapping plus imports.
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS**, with mutations A (component returns `null`) and
+B (detector always true) both correctly failing the test.
+
+**ORCHESTRATOR follow-up — closed a REAL coverage gap the panel found (its mutation D).** Widening
+the detector to `(err.status ?? 0) >= 500` **survived the test suite**: nothing pinned the match to
+exactly 503, so a 500 or 502 from any hive-proxy route would have rendered "not connected to a hive"
+— a wrong, user-visible diagnosis that every gate would have passed. I added three assertions to
+`HiveNotConnected.test.tsx` (500, 502, 504 → false) and **re-ran the panel's exact mutation to prove
+the gap is closed**: it now fails with `AssertionError: expected true to be false` where it
+previously passed, and the detector restores byte-identical.
+
+(The panel's mutation C — keying on `.statusCode` instead of `.status` — survives and is correctly
+NOT a finding: the constructor populates both, so the two are interchangeable at runtime. H1's
+dictate was about consistency, not correctness.)
+
+**Known gap, filed not fixed: F-2026-07-31-08.** The i18n key `settings.swarm.hiveNotConnected` is
+undefined in all four locales, so ja/ko/es fall back to the English default. Sibling keys such as
+`settings.swarm.projects.title` ARE defined, so this is a genuine gap — but the locale files were
+outside this task's `files:`, making `t(key, default)` the correct in-scope behaviour.
