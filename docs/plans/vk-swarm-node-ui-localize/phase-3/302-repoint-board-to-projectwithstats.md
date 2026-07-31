@@ -116,6 +116,50 @@ not assert a task count does not guard the regression this task exists to preven
 `TaskCountPills` renders counts in a way you cannot assert on text alone, add a `data-testid` to
 `TaskCountPills` — and if that file is not in `files:`, STOP and report rather than editing it.
 
+## Amendments (ORCHESTRATOR, pre-dispatch — DICTATED)
+
+**F1 — the `Done when` / verification grep for `local_project_id` was IMPOSSIBLE; corrected.** The
+original asserted `grep -rn 'has_local\|local_project_id' frontend/src` returns NO output. But
+`local_project_id` is a legitimate field on FOUR unrelated types that must survive:
+
+| File | What it is |
+|---|---|
+| `frontend/src/types/nodes.ts:36` | `NodeProject.local_project_id` |
+| `frontend/src/types/swarm.ts:47,73` | swarm project types |
+| `frontend/src/lib/api/tasks.ts:25` | task API type |
+| `frontend/src/lib/electric/collections.ts:56` | electric collection schema |
+
+plus live consumers in `components/swarm/NodeProjectsSection.tsx` and `SwarmProjectRow.tsx`. The
+unscoped grep would report failure even on a PERFECT implementation. Same defect class as tasks
+201/202's vacuous `scope_test`. Corrected below: `has_local` (which exists ONLY on `MergedProject`)
+stays unscoped; `local_project_id` is scoped to the three consumer directories.
+
+**F2 — blast radius VERIFIED before dispatch; the STOP trigger should not fire.**
+`has_local` appears in EXACTLY the four files in `files:` — `ProjectSwitcher.tsx` (1),
+`LocationBadges.tsx` (2), `ProjectList.tsx` (3), `UnifiedProjectCard.tsx` (8). `MergedProject`
+itself is referenced by exactly six files, all in `files:` (the four above plus
+`hooks/useMergedProjects.ts` and `lib/api/projects.ts`). **No dropped-field reference exists outside
+your allowlist.** If you find one, the STOP trigger is real — report it.
+
+**F3 — `.nodes` hits in `CreateAttemptDialog.tsx` and `SwarmProjectRow.tsx` are NOT yours.**
+`CreateAttemptDialog.tsx:73` is `availableNodesData?.nodes` (that file does not reference
+`MergedProject` at all) and `SwarmProjectRow.tsx` uses swarm node types. Do not touch either.
+
+**F4 — the STOP triggers verified clear:** `frontend/src/hooks/index.ts` does NOT re-export
+`useMergedProjects`; `LocationBadges` is imported only by `UnifiedProjectCard.tsx`;
+`ProjectTypeFilter` is imported only by `ProjectList.tsx`.
+
+**F5 — `scope_test: "frontend/src/components/projects"` currently has NO test files.** It will have
+exactly one after you create `ProjectList.test.tsx`, so the gate becomes meaningful only because of
+your test. That makes the "if the new test passes without steps 1-5 applied, it is hollow" STOP
+trigger the real check — take it seriously.
+
+**F6 — the rest of the frontend vitest suite is RED AT BASELINE** (8 files / 15 tests:
+F-2026-07-31-01..03). Your new test must PASS, and the pre-existing failing set must remain
+byte-identical. Do NOT fix the baseline failures. Note `ProjectList.test.tsx` is NEW, so the counts
+will change by exactly your added test — report the new totals and confirm no PREVIOUSLY-passing
+test broke.
+
 ## Change
 
 ### 1. Add the API client method — `frontend/src/lib/api/projects.ts`
@@ -269,8 +313,16 @@ cd frontend && npm run lint
 grep -rn 'useMergedProjects\|LocationBadges\|ProjectTypeFilter' frontend/src
 # Expected: NO output
 
-grep -rn 'has_local\|local_project_id' frontend/src
-# Expected: NO output (all three dropped fields are gone from the frontend)
+# F1 (see Amendments): this grep MUST be scoped. `local_project_id` and `.nodes` are legitimate
+# field names on UNRELATED types that must survive — NodeProject (frontend/src/types/nodes.ts:36),
+# the swarm types (types/swarm.ts:47,73), the task API type (lib/api/tasks.ts:25) and the electric
+# collection (lib/electric/collections.ts:56). An unscoped grep reports failure even on a perfect
+# implementation.
+grep -rn 'has_local' frontend/src
+# Expected: NO output — has_local exists ONLY on MergedProject
+
+grep -rn 'local_project_id' frontend/src/components/projects frontend/src/components/layout frontend/src/hooks
+# Expected: NO output (the MergedProject-typed sites only)
 ```
 
 ## Done when
