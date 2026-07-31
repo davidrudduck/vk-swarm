@@ -33,6 +33,7 @@
 | F-2026-07-31-05 | Stale query key ['mergedProjects'] invalidated in linkLocalFolder onSuccess is now a no-op | low | open | frontend/src/hooks/useProjectMutations.ts:79 | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
 | F-2026-07-31-06 | Stale doc comment references the removed merged projects view | low | open | crates/db/src/models/project/mod.rs:106 | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
 | F-2026-07-31-07 | remote-frontend/src/types/shared/types.ts is a hand-copied duplicate that has drifted from generated shared/types.ts | medium | open | remote-frontend/src/types/shared/types.ts | session/2026-07-31 | 2026-07-31 | — | — |
+| F-2026-07-31-08 | i18n key settings.swarm.hiveNotConnected undefined in all locales; ja/ko/es fall back to English | low | open | frontend/src/i18n/locales/*/settings.json | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
