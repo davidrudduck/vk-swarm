@@ -2,7 +2,7 @@
 id: "201"
 phase: 2
 title: "Delete the node's NodeApiKeySection component and its OrganizationSettings mount"
-status: ready
+status: passed
 depends_on: ["101"]
 parallel: false
 conflicts_with: []

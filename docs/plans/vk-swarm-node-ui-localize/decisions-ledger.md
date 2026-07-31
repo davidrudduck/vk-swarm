@@ -606,3 +606,78 @@ produced itself:
 **Phase 1 (tasks 099–105) is COMPLETE.** SC1 and SC2 have end-to-end evidence: the four hive-proxy
 route modules are restored, registered, covered by in-process registration tests that fail when
 unregistered, and proven reachable on the real binary a user starts.
+
+## Task 201 — delete the node's NodeApiKeySection UI (IRREVERSIBLE, human-approved)
+
+**Human gate.** Surfaced to the user with the component size (451 lines), its single consumer, the
+surviving hive copy, the D3/ADR-0013 rationale, and the known 201→202 dead-client transient. The
+user chose "Approve — delete it". Token: `reviews/201.approved` (committed before dispatch).
+
+**Implementer ledger: empty — verified genuinely empty.** The diff is exactly the two dictated
+removals.
+
+**Pre-dispatch amendments (ORCHESTRATOR).**
+- **A1 — `scope_test` corrected from `frontend/src/pages/settings` to `N/A`.** The declared gate
+  was both VACUOUS and IMPOSSIBLE. Vacuous: the only test in that directory referencing
+  `OrganizationSettings` is `SettingsMobile.test.tsx:26`, which does
+  `vi.mock('../OrganizationSettings', ...)` — it STUBS the component and never renders the real
+  one, so deleting a child could not change its result. Impossible: the gate was already red before
+  this task changed anything. Corrected the TASK TEXT here, which is the D1 class (a decompose-time
+  defect of mine), explicitly NOT the task-103 class (contract right, code deviated → fix the code).
+  The discriminator: at 103 the named gate was correct and passable; here it could never pass and
+  did not cover the change.
+- **A2 — baseline-delta discipline.** See the frontend test-debt section below.
+- **A3 — proved the `isAdmin` STOP trigger would stay quiet BEFORE dispatch.**
+  `frontend/tsconfig.json:16-17` sets `noUnusedLocals`/`noUnusedParameters: true`, so an orphaned
+  variable is a HARD `tsc` error, not a warning. `isAdmin` is read at lines 82, 293, 341, 366, 383,
+  all outside the deleted block. This is the deletion-task equivalent of the mock-shape pre-checks
+  that caught D1 three times.
+
+**Pre-existing frontend test debt — NAMED SCOPE SPLIT (CLAUDE.md "No Deferred Remediation").**
+Discovered at this task's gate, on a clean tree, caused by nothing in this workstream (phase 1 was
+Rust + docs only): `Test Files 8 failed | 26 passed (34)`, `Tests 15 failed | 408 passed (423)`.
+Filed as **F-2026-07-31-01** (SettingsMobile asserts 6 accordion sections, component renders 8),
+**F-2026-07-31-02** (`SystemSettings.test.tsx:40` — `vi.mock` factory closes over a hoisted import,
+suite fails to LOAD), **F-2026-07-31-03** (the other six files), with a rationale section in the
+workstream README. Sanctioned because it is out-of-scope pre-existing debt, tracked with evidence,
+and NOT among CLAUDE.md's required PR gates — those are clippy, `cargo test --workspace`, frontend
+lint + `tsc`, and remote-frontend lint + `tsc` + vitest. **`frontend`'s `tsc --noEmit` is GREEN
+(exit 0) and stays load-bearing.** Every frontend task in this run asserts the DELTA (the failing
+set must remain byte-identical), so redness cannot hide a regression.
+
+**ORCHESTRATOR error caught and fixed before push — PARTIAL COMMIT.** My `git add` of the
+already-`git rm`'d path errored, and the first commit captured ONLY the 451-line deletion, leaving
+`OrganizationSettings.tsx` still importing a now-missing file. That commit was broken in isolation
+(bisect-hostile) even though the working tree was fine. Caught by reading `git show HEAD --stat`
+rather than trusting the commit succeeded; fixed with `--amend` (nothing had been pushed) and
+re-verified `tsc` exit 0 at the amended HEAD. **Lesson: after any commit involving a deletion,
+verify `git show HEAD --stat` lists EVERY expected path — a failed `git add` in a multi-path
+command does not abort the commit.**
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS**, on the harshest brief of the run (a deletion's
+damage does not surface as a failing test):
+- Scope exact: 2 files, 456 deletions, ZERO insertions; the two authorised hunks and nothing else.
+- SC7 holds: HEAD touched nothing under `remote-frontend/`; the hive's copy is intact at 20065
+  bytes, last modified by `62cffb0c`, two commits before this workstream.
+- Orphan hunt: every import of the deleted component (`@/components/ui/*`, `lucide-react`,
+  `@tanstack/react-query`, `date-fns`) is heavily shared. `nodesApi` and `@/types/nodes` retain live
+  consumers (`pages/Nodes.tsx`, `hooks/useNode.ts`, `components/swarm/NodeProjectsSection.tsx`).
+  The only genuine orphans are the api-key functions at `lib/api/nodes.ts:41-73` and their types at
+  `types/nodes.ts:46,67,72` — task 202's declared scope, correctly excluded from scoring.
+- **The panel chased and DISPROVED its own lead**, which is the behaviour this stage is for: the
+  i18n block `settings.swarm.apiKeys` (`frontend/src/i18n/locales/en/settings.json:744`) is
+  unreferenced, but is NOT an orphan created by 201 — the deleted component never imported
+  `useTranslation` and contained no `t(` calls, and `git grep` at HEAD^ finds no consumer either.
+  Pre-existing dead i18n, untouched by this task.
+- **Silenced-test check** (the deletion-specific risk): `git grep -ln 'NodeApiKeySection' HEAD^ --
+  frontend/` returns ONLY the component and its mount — no test file at HEAD^ ever referenced it, so
+  no test was deleted, made vacuous, or stopped running. Test-file count is 34 before and after.
+- Runtime reachability: no route, nav entry, menu item, or deep link targets the removed section —
+  it was an inline card inside `OrganizationSettings`, not its own route, so there is no blank area
+  or crash path.
+- Token audit: actual deletion is a SUBSET of the approved scope, nothing extra.
+- Gates verbatim with REAL exit codes: `tsc` 0, `eslint --max-warnings 0` 0, vitest failing set
+  byte-identical to the A2 baseline (same 8 files, same 15 assertions).
+
+**SC3 is now partially satisfied** — the node's API-key UI is gone. Tasks 202 (client functions and
+types) and 203 complete it.
