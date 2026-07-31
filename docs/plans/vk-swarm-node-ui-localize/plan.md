@@ -55,7 +55,7 @@ warnings). These conventions are dictated here instead of left to judgement:
 | Phase | File | Tasks | Ships |
 |---|---|---|---|
 | 1 | `phase-1-restore-proxy-routes.md` | 099–105 | `/api/nodes` + `/api/swarm/*` answer instead of 404 |
-| 2 | `phase-2-remove-node-api-key-surface.md` | 201–203 | node UI has no API-key management (D3) |
+| 2 | `phase-2-remove-node-api-key-surface.md` | 201–204 | node UI has no API-key management (D3) |
 | 3 | `phase-3-projectwithstats.md` | 301–303 | board runs on `ProjectWithStats`; `MergedProject` gone |
 | 4 | `phase-4-hive-absent-state.md` | 401–403 | "not connected to a hive" is a real state |
 | 5 | `phase-5-closeout.md` | 501 | full gates + hive regression + deploy evidence |
@@ -83,13 +83,14 @@ warnings). These conventions are dictated here instead of left to judgement:
 | 201 | dep: 101 | conflicts:  |
 | 202 | dep: 201 | conflicts:  |
 | 203 | dep: 202 | conflicts:  |
+| 204 | dep: 202 | conflicts:  |
 | 301 | dep: 100 | conflicts: 303 |
 | 302 | dep: 301 | conflicts: 303 |
 | 303 | dep: 302 | conflicts: 301 302 |
 | 401 | dep:  | conflicts:  |
 | 402 | dep: 104 401 | conflicts:  |
 | 403 | dep: 401 402 | conflicts:  |
-| 501 | dep: 105 202 203 303 402 403 | conflicts:  |
+| 501 | dep: 105 202 203 204 303 402 403 | conflicts:  |
 
 101–104 conflict because each edits `crates/server/src/routes/mod.rs`; they are ordered, never
 parallel. 301 and 303 conflict on `crates/server/src/routes/projects/mod.rs` and `types.rs`.

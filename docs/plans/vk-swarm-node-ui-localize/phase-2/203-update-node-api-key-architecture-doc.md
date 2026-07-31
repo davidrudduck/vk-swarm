@@ -26,6 +26,24 @@ exist on the node — the hive's `crates/remote/src/routes/nodes.rs` is the only
 the doc as-is ships a document that describes a 404 as if it were live, which is the exact class
 of drift this workstream was opened to remove.
 
+## Amendments (ORCHESTRATOR, pre-dispatch)
+
+**C1 — anchors re-verified against the live file; the task text is ACCURATE, implement as written.**
+`grep -n 'routes/nodes.rs' docs/architecture/db/functions/postgresql-node-api-keys.mdx` returns
+exactly six hits, at exactly the line numbers tabulated below (63, 108, 141, 171, 189, 329) with
+exactly the quoted text. There is no seventh. The STOP trigger about drifted line numbers should
+therefore NOT fire.
+
+**C2 — the ADR relative link resolves; do not "correct" it.** From
+`docs/architecture/db/functions/`, the path `../../../../dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md`
+normalises to `dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md`, which EXISTS. Use the
+four `../` exactly as written.
+
+**C3 — prose heading, not frontmatter.** The file opens with YAML frontmatter (`---` … `---`)
+followed by `# Node API Key Functions` at line 6. "Under the document's first heading" means after
+that `#` line — NOT inside the frontmatter block. Placing it in the frontmatter would corrupt the
+document.
+
 ## Change
 
 Four "Used By" citations point at the node's route module. Repoint each to the hive's.

@@ -681,3 +681,50 @@ damage does not surface as a failing test):
 
 **SC3 is now partially satisfied** — the node's API-key UI is gone. Tasks 202 (client functions and
 types) and 203 complete it.
+
+## Task 202 — remove unreachable API-key/merge methods from nodesApi
+
+**Implementer ledger: empty — verified genuinely empty.** Diff is `1 insertion(+), 61 deletions(-)`,
+the single insertion being the narrowed import line.
+
+**Pre-dispatch amendments (ORCHESTRATOR).**
+- **B1 — `scope_test` corrected from `frontend/src/lib` to `N/A`.** SECOND instance of the task-201
+  A1 defect, so this is now a pattern rather than a one-off. Vacuous: no test anywhere in
+  `frontend/src` references `nodesApi` or `lib/api/nodes`. Impossible: `src/lib/taskSorting.test.ts`
+  is one of the eight baseline-red files. **Standing check for remaining tasks: verify every
+  `scope_test` both (a) covers the change and (b) passes on a clean tree, BEFORE dispatch.** Applied
+  proactively from here on rather than discovering it at the gate.
+- **B2/B3** — anchors and the "no surviving callers" STOP trigger verified against the live tree
+  before dispatch; both clear.
+- **B4** — baseline-delta discipline (unchanged from 201's A2).
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS / APPROVE.**
+- Scope: exactly one path; zero hunks touch the four surviving methods (they appear only as
+  unchanged context).
+- Right five deleted: HEAD^ had 9 members, HEAD has exactly 4 (`list`, `getById`, `delete`,
+  `listProjects`).
+- **Route cross-check in BOTH directions** (the check that proves the deletion was correct rather
+  than merely clean): no `/nodes/api-keys*` or `/merge-to/` route exists server-side, so the five
+  deleted methods were genuinely unreachable; and all four survivors map 1:1 onto live routes at
+  `crates/server/src/routes/nodes.rs:63-65`. Nothing reachable was deleted.
+- No test silenced: no test at HEAD^ referenced any of the five names.
+- SC7: HEAD touched zero paths under `remote-frontend/`; the hive's own
+  `remote-frontend/src/lib/api/nodes.ts` retains its full surface (`listApiKeys:56`,
+  `createApiKey:67`, `revokeApiKey:81`, `unblockApiKey:95`, `mergeNodes:111`).
+- Gates: `tsc` 0, `lint` 0, vitest failing set byte-identical to baseline.
+
+**PANEL-SURFACED GAP — orphaned type declarations with no owning task (fixed by new task 204).**
+The panel checked something I had not asked any earlier panel for: whether a LATER task claims the
+now-dead types. It grepped every remaining task file in phases 2-5 and found none. The four
+declarations in `frontend/src/types/nodes.ts` — `NodeApiKey` (:46), `CreateNodeApiKeyRequest` (:67),
+`CreateNodeApiKeyResponse` (:72), `MergeNodesResponse` (:78) — now form a closed cluster with zero
+consumers elsewhere in `frontend/src`.
+
+They break no gate (being `export`ed, neither `noUnusedLocals` nor ESLint's no-unused rules fire),
+which is exactly why this would have shipped silently: the workstream would have closed fully green
+while leaving dead code the spec's D3 intent says should be gone. Deleting them was correctly OUT of
+202's scope (`types/nodes.ts` is not in its `files:`), so the fix is a new task, not a scope stretch.
+**Task 204 created in THIS session** — no deferral (CLAUDE.md "No Deferred Remediation").
+
+This is the second time an adversarial panel has caught something no gate could: task 104's panel
+proved route reachability empirically, and this one found dead code that passes every check.

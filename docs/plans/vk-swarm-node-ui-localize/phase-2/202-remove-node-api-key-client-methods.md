@@ -2,7 +2,7 @@
 id: "202"
 phase: 2
 title: "Remove the unreachable API-key and merge-node methods from the node's nodesApi client"
-status: ready
+status: passed
 depends_on: ["201"]
 parallel: false
 conflicts_with: []
