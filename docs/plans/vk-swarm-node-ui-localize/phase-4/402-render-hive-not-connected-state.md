@@ -56,6 +56,47 @@ describe('isHiveNotConfigured', () => {
 });
 ```
 
+## Amendments (ORCHESTRATOR, pre-dispatch — verified facts, DICTATED)
+
+**H1 — `ApiError` has TWO status fields; use `.status`.** `frontend/src/lib/api/utils.ts:10-24`:
+
+```typescript
+export class ApiError<E = unknown> extends Error {
+  public status?: number;
+  constructor(message: string, public statusCode?: number, public response?: Response, error_data?: E) {
+    super(message);
+    this.status = statusCode;   // <-- status is ASSIGNED FROM statusCode
+```
+
+Both are populated, so either would pass the unit test — but `handleApiResponse` throws
+`new ApiError(errorMessage, response.status, response)` (`utils.ts:147`), so at runtime both are the
+HTTP status. Use `.status` for consistency with the rest of the file. Do NOT add a third field.
+
+**H2 — the test's `new ApiError('nope', 503)` is VALID as written.** The second positional parameter
+is `statusCode`, which the constructor copies to `.status`. No adaptation needed.
+
+**H3 — every anchor VERIFIED present; do not stop on these.** `frontend/src/components/swarm/index.ts`
+EXISTS (so you are editing it, not creating it), and all five section components exist:
+`SwarmProjectsSection.tsx`, `NodeProjectsSection.tsx`, `SwarmLabelsSection.tsx`,
+`SwarmTemplatesSection.tsx`, `NodeTemplatesSection.tsx`.
+
+**H4 — `frontend/src/components/swarm` currently has NO test files.** Your new
+`HiveNotConnected.test.tsx` will be the only one, so the Stage-1 scope gate is meaningful ONLY
+because of it. Make it real: it must fail if `HiveNotConnected` renders nothing and if
+`isHiveNotConfigured` mis-classifies a status.
+
+**H5 — the backend contract this consumes is already live and proven.** Task 401 shipped
+`ApiError::HiveNotConfigured` → **HTTP 503** with body
+`{"success":false,...,"message":"HiveNotConfigured: This node is not connected to a hive"}`,
+verified at runtime on all four hive-proxy routes. `handleApiResponse` preserves the status on the
+thrown `ApiError`, so `isHiveNotConfigured` can discriminate on 503 alone — no string matching on the
+message. **Do NOT match on the message text**; it is not a stable contract.
+
+**H6 — baseline discipline.** The frontend suite is RED AT BASELINE (F-2026-07-31-01..03): expect
+`Test Files 8 failed | 27 passed (35)`, `Tests 15 failed | 409 passed (424)` before your change. Do
+NOT fix those. Your new test file adds to the PASSING side; report the new totals and confirm the
+same 8 files still fail with no new entrant.
+
 ## Sibling alignment (required reading before you write)
 
 Read `frontend/src/components/ui/alert.tsx` and the error branch of
