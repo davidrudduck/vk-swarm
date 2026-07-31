@@ -10,7 +10,7 @@ files:
   - frontend/src/components/org/NodeApiKeySection.tsx
   - frontend/src/pages/settings/OrganizationSettings.tsx
 irreversible: true
-scope_test: "frontend/src/pages/settings"
+scope_test: "N/A"
 allowed_change: mixed
 covers_criteria: [SC3]
 ---
@@ -25,6 +25,54 @@ grep assertions in Manual verification.
 This deletes a live, admin-gated, user-facing surface. Per ADR-0013 the hive owns node API-key
 management (`hive-node-api-key-ui`, shipped), and operators mint keys there. Surface the diff and
 wait for approval before running.
+
+## Amendments (ORCHESTRATOR, pre-dispatch — these are DICTATED, not choices)
+
+**A1 — `scope_test` changed from `frontend/src/pages/settings` to `N/A`.** The declared gate was
+both VACUOUS and IMPOSSIBLE, so it had to be corrected rather than satisfied:
+
+- *Vacuous:* the only test in that directory referencing `OrganizationSettings` is
+  `src/pages/settings/__tests__/SettingsMobile.test.tsx:26`, and it does
+  `vi.mock('../OrganizationSettings', ...)` — it STUBS the component out and never renders the
+  real one. Deleting a child of `OrganizationSettings` cannot change its result. The gate would
+  have "covered" this task without exercising one line of it.
+- *Impossible:* the gate is red before this task makes any change (see A2), so it could never pass.
+
+This is the same class of correction as the D1 mock-body amendments in tasks 102-104 — a
+decompose-time defect in MY task text. It is explicitly NOT the task-103 case, where the text was
+right and the implementer deviated; there the CODE was corrected and the text left alone. The
+distinction: at 103 the contract was correct; here the named gate cannot pass and does not cover
+the change. Verification falls to the `## Manual verification` block below, which plan.md already
+sanctions as the primary mechanism for tasks in this plan.
+
+**A2 — the `frontend` vitest suite is RED AT BASELINE. Assert the DELTA, not the total.** Captured
+immediately before dispatch, on a clean tree, with no change from this task:
+
+```text
+ Test Files  8 failed | 26 passed (34)
+      Tests  15 failed | 408 passed (423)
+```
+
+The 8 failing files are: `BottomNav`, `MessageQueuePanel`, `ConversationFocusMode`, `taskSorting`,
+`SettingsMobile`, `SystemSettings`, `DesignSystem`, `MobileIntegration`. None is related to this
+workstream — phase 1 changed only Rust and docs. Filed as F-2026-07-31-01..02 (the two under
+`pages/settings`) and F-2026-07-31-03 (the other six) in `dev-docs/BACKLOG.md`.
+
+**Do NOT try to fix them, and do NOT read "suite is red" as permission to ignore regressions.**
+Your job is to prove your deletion changed NOTHING about that set: after the change, re-run
+`npx vitest run` and confirm the failing set is IDENTICAL — same 8 files, same 15 assertions. Any
+new failure, or any change in the counts, is a STOP.
+
+Note `npx tsc --noEmit` IS green at baseline (exit 0), so it remains a real, load-bearing gate for
+this task — a deletion that breaks typing WILL be caught there. `frontend` vitest is not among the
+PR gates CLAUDE.md requires (it lists frontend lint + tsc, and remote-frontend vitest); `tsc` is.
+
+**A3 — the `isAdmin` STOP trigger is expected to stay quiet, and here is the proof.**
+`frontend/tsconfig.json:16-17` sets `noUnusedLocals: true` and `noUnusedParameters: true`, so an
+orphaned variable is a HARD `tsc --noEmit` error, not a warning. `isAdmin` is read at
+`OrganizationSettings.tsx` lines 82, 293, 341, 366 and 383 — all outside the deleted block — so it
+survives. If `tsc` nonetheless reports `isAdmin` unused, something other than this deletion
+changed: STOP, do not "fix" it by removing the declaration.
 
 ## Change
 

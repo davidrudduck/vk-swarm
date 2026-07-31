@@ -149,3 +149,36 @@ spec, ADR-0001 — no task file covers it).
 The user has explicitly directed that it be fixed immediately **after** this workstream
 ships. At `/wai:ship`, promote it: `/wai:finding-promote F-2026-07-30-03`. Mirror the
 existing guard in `cleanup_expired_attempt` rather than inventing a new check.
+
+## Pre-existing frontend test debt — named scope split (2026-07-31)
+
+Discovered at task 201's Stage-1 gate, NOT caused by this workstream (phase 1 changed only Rust
+and docs). Baseline captured on a clean tree before any phase-2 change:
+
+```
+ Test Files  8 failed | 26 passed (34)
+      Tests  15 failed | 408 passed (423)
+```
+
+Failing files: `BottomNav`, `MessageQueuePanel`, `ConversationFocusMode`, `taskSorting`,
+`SettingsMobile`, `SystemSettings`, `DesignSystem`, `MobileIntegration`.
+
+Filed as **F-2026-07-31-01** (SettingsMobile asserts 6 accordion sections, component renders 8),
+**F-2026-07-31-02** (`SystemSettings.test.tsx:40` — `vi.mock` factory closes over a hoisted import,
+suite fails to load), and **F-2026-07-31-03** (the remaining six files).
+
+**Why this is a sanctioned split and not a silent deferral** (CLAUDE.md "No Deferred Remediation"):
+
+1. It is pre-existing debt unrelated to this workstream's scope (the frozen spec covers node
+   hive-proxy routes, the API-key surface, `ProjectWithStats`, and the hive-absent state — none of
+   these test files).
+2. It is tracked here and in `dev-docs/BACKLOG.md` with specific file:line evidence.
+3. `frontend` vitest is NOT among the PR gates CLAUDE.md requires. Those are: `cargo clippy`,
+   `cargo test --workspace`, `frontend` lint + `tsc --noEmit`, `remote-frontend` lint +
+   `tsc --noEmit` + `vitest run`. **`frontend`'s `npx tsc --noEmit` is GREEN at baseline (exit 0)**
+   and remains a live, load-bearing gate for every phase 2-4 task.
+4. Every task that touches `frontend/` in this run asserts the **baseline delta**: the failing set
+   must remain identical (same 8 files, same 15 assertions). A new failure is a STOP. The run
+   therefore cannot hide a regression behind "the suite was already red".
+
+Fixing these belongs to a follow-up workstream alongside F-2026-07-30-03.
