@@ -64,6 +64,8 @@ pub enum ApiError {
     EditorOpen(#[from] EditorOpenError),
     #[error(transparent)]
     RemoteClient(#[from] RemoteClientError),
+    #[error("This node is not connected to a hive")]
+    HiveNotConfigured,
     #[error("Unauthorized")]
     Unauthorized,
     #[error("Bad request: {0}")]
@@ -102,7 +104,7 @@ impl From<Git2Error> for ApiError {
 
 impl From<RemoteClientNotConfigured> for ApiError {
     fn from(_: RemoteClientNotConfigured) -> Self {
-        ApiError::BadRequest("Remote client not configured".to_string())
+        ApiError::HiveNotConfigured
     }
 }
 
@@ -196,6 +198,7 @@ impl IntoResponse for ApiError {
                     (StatusCode::BAD_REQUEST, "RemoteClientError")
                 }
             },
+            ApiError::HiveNotConfigured => (StatusCode::SERVICE_UNAVAILABLE, "HiveNotConfigured"),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BadRequest"),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NotFound"),
