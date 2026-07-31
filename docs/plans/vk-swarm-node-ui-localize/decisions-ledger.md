@@ -780,3 +780,68 @@ false citation (203 C5). All are properties of the surrounding system that decom
 structurally cannot see. The two-stage design is doing exactly what it exists for — but the
 signal is that the DECOMPOSER needs the pre-dispatch verification pass, not that the implementers
 need more constraint.
+
+## Task 301 — add ProjectWithStats and GET /api/projects/with-stats (additive)
+
+Dispatched to **sonnet**, not haiku — the largest task in the run (new handler, two types, a
+test-harness helper, route registration, ts-rs codegen).
+
+**Implementer ledger: SIX declared items — the most useful ledger of this run.** Two mattered:
+
+**Item 2 — the task's test block was DEFECTIVE and the implementer caught it.** My text showed
+`h.seed_project("zeta", &[/* todo x3, in_progress x1, done x2 */])`. Those are comments inside an
+EMPTY slice literal: it compiles, seeds ZERO tasks, and makes the `todo == 3` / `done == 2`
+assertions vacuously false — the test would have failed confusingly, or worse, been "fixed" by
+weakening the assertions. The implementer read the comments as the intended values, wrote the literal
+`TaskStatus` arrays, and DECLARED the choice. The panel's experiment (c) vindicated it: seeding zero
+tasks kills the test with `left: Number(0) right: 3`, proving the counts are genuinely DB-derived.
+
+**Item 3 — `#[allow(dead_code)]` added to the SHARED harness.** The implementer added one to `Resp`'s
+`content_type` field AND one to the whole `impl Resp` block. I challenged the impl-level one
+specifically because `common/mod.rs` is used by every test binary, and a blanket allow there could
+mask real dead code for all future tests. Removing it did NOT break clippy — it was unnecessary. The
+field-level one is retained. The panel independently re-tested this (removed it, `touch`ed the file
+to force a real 13.84s rebuild) and confirmed clippy exit 0 either way: redundant but harmless,
+masking nothing, in a file the contract explicitly authorises.
+
+**ORCHESTRATOR correction — `assert_registered()` was missing.** The task's test asserted only
+`status == 200`. I ran the revert experiment, saw the test fail with a misleading message, and had
+`res.assert_registered()` added for a diagnostic failure, matching the convention tasks 101-104
+established.
+
+**A reachability nuance worth recording.** With `/with-stats` unregistered, the request does NOT hit
+the SPA catch-all — it falls into `.nest("/{id}", project_id_router)`, fails `Path<Uuid>` parsing,
+and returns `400 text/plain`. So `assert_registered()` correctly PASSES in that case and the status
+assertion is what catches it. Same phenomenon as `/api/nodes/api-keys` matching `/nodes/{node_id}`.
+**`assert_registered()` is necessary but NOT sufficient for routes that have a dynamic sibling** —
+relevant to any future task adding a static route beside a `{param}` route.
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS.** All FIVE hollow-test experiments killed it:
+
+| # | Mutation | Result |
+|---|---|---|
+| a | unregister the route | KILLED (`:28` status assert) |
+| b | reverse the sort comparator | KILLED (`left: "zeta" right: "alpha"`) |
+| c | `seed_project` creates ZERO tasks | KILLED (`left: Number(0) right: 3`) |
+| d | `seed_project` skips the TaskAttempt | KILLED (`last_attempt_at` null) |
+| e | re-add `has_local` to struct + handler | KILLED (dead-field assertion) |
+
+No vacuous assertions. Additivity proven at RUNTIME, not just by diff — the panel drove the same
+seeded project through BOTH endpoints and showed every shared field identical, with
+`/merged-projects` carrying exactly the three extras (`has_local`, `local_project_id`, `nodes`) and
+still returning 200. Codegen integrity proven by re-running `npm run generate-types` and confirming
+`git status` and `git diff` are both EMPTY afterwards, so `shared/types.ts` was not hand-edited.
+Field-by-field: `ProjectWithStats` is `MergedProject` minus exactly those three, same order, same
+types (`i32` per E1), same `#[ts(type=...)]` attributes.
+
+**Known coverage gap, evidenced rather than fixed (a CONTRACT limitation, not implementer drift).**
+The test asserts `task_counts.todo` and `.done` but not `.in_progress` or `.in_review`, because my
+contract dictated those two assertions verbatim. The panel confirmed the `in_progress`/`in_review`
+mapping is LINE-IDENTICAL to `merged.rs` (`with_stats.rs` vs `merged.rs`) and its runtime probe shows
+all four counts serialised correctly (`{"todo":1,"in_progress":0,"in_review":0,"done":0}`). The
+mapping is therefore proven correct by two independent means; only the automated regression net is
+narrower than ideal. Recorded here rather than widened, to avoid unreviewed scope growth at this
+stage — the frozen spec's required enrichment test is satisfied.
+
+Whole-workspace gates green with REAL exit codes: `clippy --all` 0, `cargo test --workspace` 0,
+`fmt` 0, `generate-types:check` up to date.

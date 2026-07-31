@@ -2,7 +2,7 @@
 id: "301"
 phase: 3
 title: "Add ProjectWithStats and GET /api/projects/with-stats (additive — MergedProject untouched)"
-status: ready
+status: passed
 depends_on: ["100"]
 parallel: false
 conflicts_with: ["303"]
