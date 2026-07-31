@@ -76,6 +76,37 @@ migrations applied.
 Adapt the response JSON path (`v["data"]["projects"]`) to the real `ApiResponse` shape if it
 differs — read `utils::response::ApiResponse` first.
 
+## Amendments (ORCHESTRATOR, pre-dispatch — verified facts, so you need not re-derive them)
+
+**E1 — every STOP trigger is pre-checked and CLEAR. Do not stop on these:**
+- `Project::find_local_projects_with_stats` EXISTS at `crates/db/src/models/project/stats.rs:96`.
+- `TaskCounts` EXISTS at `crates/server/src/routes/projects/types.rs:168`; `MergedProjectsResponse`
+  is at `:177` (the task text says "around line 179" — append after the struct, locate by name).
+- **Static-before-dynamic matching works here.** `crates/server/src/routes/projects/mod.rs` registers
+  `/scan-config` (:135) and `/link-local` (:136) BEFORE `.nest("/{id}", project_id_router)` (:141),
+  and those static siblings work today. `/with-stats` will match statically, not fall into the
+  per-project router. Do NOT rename the route.
+- Task 100's harness was built and passed review, so the "harness could not be built" STOP does not
+  apply.
+
+**E2 — the `ApiResponse` JSON path in the test is CORRECT as written.**
+`crates/utils/src/response.rs:5-10` defines `ApiResponse { success, data, error_data, message }`, so
+`v["data"]["projects"]` is right. Do not "adapt" it.
+
+**E3 — `seed_project` is yours to write, and it must insert through the harness's own pool.**
+Add it to `crates/server/tests/common/mod.rs` (which is in this task's `files:`). Insert via
+`deployment.db().pool`. **Never hand-write `CREATE TABLE`** (CLAUDE.md) — the harness database already
+has migrations applied. Read the existing harness before adding to it, and match its style.
+
+**E4 — `npm run generate-types` must produce a MINIMAL diff.** If `shared/types.ts` changes for any
+type other than the two new ones, STOP and report the drift rather than committing it — an unrelated
+regeneration diff would mean the checked-in file was stale, which is a separate problem.
+
+**E5 — run `cargo fmt --all` before reporting**, and report the REAL exit code of
+`cargo fmt --all -- --check` (`cmd > /tmp/f.txt 2>&1; echo $?`), NOT `$?` after a pipe to `tail`.
+Only `Diff in` lines are failures; the nightly `group_imports`/`imports_granularity` warnings are
+pre-existing noise.
+
 ## Sibling alignment (required reading before you write)
 
 Read `crates/server/src/routes/projects/handlers/merged.rs` in full. The new handler is a copy of

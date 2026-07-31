@@ -2,7 +2,7 @@
 id: "203"
 phase: 2
 title: "Correct the node-api-keys architecture doc, which documents routes D3 removes"
-status: ready
+status: passed
 depends_on: ["202"]
 parallel: false
 conflicts_with: []
@@ -39,10 +39,48 @@ therefore NOT fire.
 normalises to `dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md`, which EXISTS. Use the
 four `../` exactly as written.
 
+**C4 — the task text contradicted ITSELF; this amendment resolves it (found post-implementation).**
+The original `## Manual verification` asserted `grep -n '/api/nodes/api-keys' <file>` returns NO
+output, and `## Done when` said "No `/api/nodes/api-keys` reference survives in the file". But the
+ADR-0013 note that this SAME task dictates adding reads:
+
+> The node server exposes no `/api/nodes/api-keys*` routes
+
+— i.e. the note necessarily contains the forbidden string, in order to say the routes are gone. The
+two instructions could not both be satisfied.
+
+The implementer did the RIGHT thing and reported the hit verbatim rather than silently "fixing" it
+by deleting the note or weakening the wording. The defect is mine, in the task text. Resolution: the
+grep now excludes the disclaimer blockquote. The real invariant is "no CITATION presents
+`/api/nodes/api-keys` as a live node endpoint", which holds — the only remaining occurrence is the
+note asserting the opposite. Verified: `grep -n '/api/nodes/api-keys' <file>` returns exactly one
+line, `9:> \`/api/nodes/api-keys*\` routes — see`, which is the note.
+
 **C3 — prose heading, not frontmatter.** The file opens with YAML frontmatter (`---` … `---`)
 followed by `# Node API Key Functions` at line 6. "Under the document's first heading" means after
 that `#` line — NOT inside the frontmatter block. Placing it in the frontmatter would corrupt the
 document.
+
+**C5 — line 189's replacement text was ITSELF a false citation; corrected post-panel.** The 203
+panel's angle-7 check ("are the repointed claims TRUE?") caught that my dictated replacement for the
+"Hard delete option" row was wrong. Verified chain:
+
+- `NodeApiKeyRepository::delete` (`crates/remote/src/db/node_api_keys.rs:178`) has exactly one
+  caller: `NodeServiceImpl::delete_api_key` (`crates/remote/src/nodes/service.rs:263-266`).
+- `delete_api_key` has NO caller anywhere in `crates/` (`grep -rn 'delete_api_key' crates/ | grep -v
+  'fn delete_api_key'` returns nothing).
+- The hive's `DELETE /v1/nodes/api-keys/{key_id}` (`crates/remote/src/routes/nodes.rs:57`) is bound
+  to `revoke_api_key`, a SOFT revoke — it never reaches the hard delete.
+
+So `routes/nodes.rs` was never the "Used By" for this function, on the node OR the hive. Repointing
+a false citation to a differently-false citation would have shipped exactly the drift this
+workstream exists to remove. The row now cites the real caller and states plainly that no route
+reaches it. **Fixed in-session** (CLAUDE.md "No Deferred Remediation") — this is a correction to the
+same file task 203 owns, not a scope stretch.
+
+**C6 — "the five that name a URL" in `## Done when` was an arithmetic slip.** The table has FOUR
+URL-bearing rows (63, 141, 171, 329); rows 108 and 189 name no URL. All URL-bearing citations were
+converted to `/v1/`. Corrected below.
 
 ## Change
 
@@ -86,7 +124,10 @@ Then add this note under the document's first heading:
 ## Manual verification (emit verbatim; the ORCHESTRATOR records it)
 
 ```bash
-grep -n '/api/nodes/api-keys' docs/architecture/db/functions/postgresql-node-api-keys.mdx
+# C4 (see Amendments): the ADR-0013 note deliberately CONTAINS this string in order to state
+# that the routes do not exist. Exclude the disclaimer blockquote; what must not survive is a
+# CITATION presenting /api/nodes/api-keys as a live node endpoint.
+grep -n '/api/nodes/api-keys' docs/architecture/db/functions/postgresql-node-api-keys.mdx | grep -v '^9:>'
 # Expected: NO output
 
 grep -c 'crates/remote/src/routes/nodes.rs' docs/architecture/db/functions/postgresql-node-api-keys.mdx
@@ -98,7 +139,9 @@ grep -n 'routes/nodes.rs' docs/architecture/db/functions/postgresql-node-api-key
 
 ## Done when
 
-- No `/api/nodes/api-keys` reference survives in the file.
-- All six "Used By" citations point at `crates/remote/src/routes/nodes.rs`, and the five that
-  name a URL use a `/v1/` path.
+- No `/api/nodes/api-keys` CITATION survives (the ADR-0013 note's mention, which states the routes
+  do NOT exist, is expected and required — see amendment C4).
+- The four URL-bearing "Used By" citations point at `crates/remote/src/routes/nodes.rs` with `/v1/`
+  paths; the "Key management" row cites the same module; and the "Hard delete option" row cites the
+  real caller `crates/remote/src/nodes/service.rs` with a note that no route reaches it (see C5).
 - The ADR-0013 note is present.

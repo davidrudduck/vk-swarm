@@ -2,7 +2,7 @@
 id: "204"
 phase: 2
 title: "Delete the four node API-key/merge type declarations orphaned by tasks 201-202"
-status: ready
+status: passed
 depends_on: ["202"]
 parallel: false
 conflicts_with: []

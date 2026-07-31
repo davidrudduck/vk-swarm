@@ -190,7 +190,11 @@ async fn delete(&self, key_id: Uuid) -> Result<(), NodeApiKeyError>
 ```
 
 **Used By:**
-- `crates/remote/src/routes/nodes.rs` - Hard delete option
+- `crates/remote/src/nodes/service.rs:263` — `NodeServiceImpl::delete_api_key`
+
+> **No route reaches this function.** The hive's `DELETE /v1/nodes/api-keys/:id`
+> (`crates/remote/src/routes/nodes.rs:57`) calls `revoke_api_key`, which performs a soft revoke.
+> `delete_api_key` has no caller, so this hard delete is currently unreachable from the API.
 
 ---
 

@@ -728,3 +728,55 @@ while leaving dead code the spec's D3 intent says should be gone. Deleting them 
 
 This is the second time an adversarial panel has caught something no gate could: task 104's panel
 proved route reachability empirically, and this one found dead code that passes every check.
+
+## Tasks 203 + 204 — architecture doc repoint, and the orphaned type cluster
+
+**Both implementer ledgers: empty. Both panels: NO FINDINGS.** Phase 2 complete.
+
+### Task 204 (created mid-run — see the task 202 entry for why)
+
+Panel verified "truly orphaned" FOUR ways beyond `tsc`, which is the right standard for a deletion
+whose whole justification is "nothing uses this":
+- `grep -rn` across `frontend/src` → nothing.
+- Whole `frontend/` tree → the only hit is `frontend/dist/assets/*.js.map`, a stale build artifact.
+- Barrel/re-export check → the four importers of `types/nodes` import only `Node`/`NodeProject`; no
+  `index.ts` re-exports the module.
+- **ts-rs codegen check** → `grep 'NodeApiKey\|MergeNodesResponse' shared/types.ts` returns nothing,
+  so none of the four was Rust-generated. There was no duplicate and no codegen copy is masked; the
+  declarations were hand-written and genuinely dead.
+SC7 intact: `remote-frontend/src/types/nodes.ts` still declares all four (lines 46, 67, 72, 78).
+
+### Task 203 — and TWO defects the panel found in MY contract text
+
+**C4 (found at implementation).** The task told the implementer to add a note reading "The node
+server exposes no `/api/nodes/api-keys*` routes" while ALSO asserting that
+`grep '/api/nodes/api-keys'` must return nothing. Both could not hold. The implementer reported the
+hit verbatim rather than silently deleting the note or rewording it to dodge the grep — the correct
+behaviour, and the reason the constrained-implementer role forbids improvisation. Fixed the
+assertion, not the work: the real invariant is that no CITATION presents the path as a live node
+endpoint.
+
+**C5 (found by the panel's angle-7 check — the substantive one).** I asked this panel a question I
+had not asked earlier ones: *are the repointed claims actually TRUE?* It found that my dictated
+replacement text for the "Hard delete option" row was itself false. Verified chain:
+- `NodeApiKeyRepository::delete` (`crates/remote/src/db/node_api_keys.rs:178`) has exactly one
+  caller, `NodeServiceImpl::delete_api_key` (`crates/remote/src/nodes/service.rs:263-266`).
+- `delete_api_key` has NO caller anywhere in `crates/`.
+- The hive's `DELETE /v1/nodes/api-keys/{key_id}` (`routes/nodes.rs:57`) is bound to
+  `revoke_api_key`, a SOFT revoke, and never reaches the hard delete.
+
+`routes/nodes.rs` was never the "Used By" for that function — not on the node, not on the hive.
+**Repointing a false citation to a differently-false citation would have shipped precisely the drift
+this workstream was opened to remove.** The row now cites the real caller and states that no route
+reaches it. Fixed in-session.
+
+**C6.** `## Done when` said "the five that name a URL"; the table has four URL-bearing rows. An
+arithmetic slip in my text, corrected.
+
+**Pattern across this run, now unmistakable.** Every rejection and every contract defect has traced
+to MY task text, never to an implementer improvising: `json!([])` mock bodies (102/103/104), a
+vacuous+impossible `scope_test` (201, 202), a self-contradicting grep assertion (203 C4), and a
+false citation (203 C5). All are properties of the surrounding system that decompose-time review
+structurally cannot see. The two-stage design is doing exactly what it exists for — but the
+signal is that the DECOMPOSER needs the pre-dispatch verification pass, not that the implementers
+need more constraint.
