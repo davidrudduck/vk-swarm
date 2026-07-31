@@ -20,6 +20,35 @@ allowed_change: mixed
 covers_criteria: [SC6]
 ---
 
+## Amendments (ORCHESTRATOR, pre-dispatch — verified facts, DICTATED)
+
+**J1 — all four hooks exist; no STOP on missing anchors.** `useNodeLogStream.ts`, `useDiffStream.ts`,
+`useRemoteConnectionStatus.ts`, `useAvailableNodes.ts` are all present under `frontend/src/hooks/`.
+
+**J2 — `scope_test: "frontend/src/hooks"` is a REAL gate here, unlike earlier tasks.** That directory
+currently has 6 test files and **68 tests, all passing** (verified on a clean tree), and NONE of the
+8 baseline-red files (F-2026-07-31-01..03) live there. So the scope must be green BOTH before and
+after your change. If any of those 68 tests breaks, that is a regression you caused — not
+pre-existing debt. (The orchestrator runs the gate with
+`WAI_TEST_CMD='(s={scope}; cd frontend && npx vitest run "${s#frontend/}")'` because the gate
+otherwise invokes vitest from the repo root, where it is not installed.)
+
+**J3 — discriminate on status 503, never the message.** Task 402 shipped
+`isHiveNotConfigured(err)` in `frontend/src/lib/api/utils.ts` — `err instanceof ApiError &&
+err.status === 503`. REUSE it; do not write a second detector, and do not match on the message text
+(`"HiveNotConfigured: This node is not connected to a hive"` is a rendering detail, not a contract).
+
+**J4 — the retry context you are hardening against, measured rather than assumed.** The global
+`QueryClient` (`frontend/src/main.tsx:10-17`) sets only `staleTime` and `refetchOnWindowFocus` — there
+is **no `retry` override**, so TanStack Query's default `retry: 3` applies and retries on ANY thrown
+error without inspecting status. A hive-absent node therefore retries every hive-proxy query 3× with
+backoff before settling. This was true before task 401 as well (the old 400 retried identically), so
+it is pre-existing — but it is exactly what SC6 asks you to harden. `useAvailableNodes.ts:12-15`
+currently has no `retry` override and gates only on `enabled: options?.enabled !== false && !!taskId`.
+
+**J5 — do not "fix" the baseline.** The full frontend suite is red at baseline outside `hooks/`
+(8 files / 15 tests). Leave those alone; report that the same 8 still fail with no new entrant.
+
 ## Failing test (write first)
 
 Create `frontend/src/hooks/useAvailableNodes.test.ts` asserting the hook surfaces a clean
