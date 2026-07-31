@@ -1,0 +1,26 @@
+# Human approval token — task 201 (irreversible)
+
+Approved by: drudduck@expansionx.com.au (repo owner), via the /wai:execute human gate.
+Date: 2026-07-31
+
+## What was approved
+
+Deletion of the node frontend's node-API-key management surface:
+- `frontend/src/components/org/NodeApiKeySection.tsx` (451 lines)
+- its import (`OrganizationSettings.tsx:37`) and mount (`OrganizationSettings.tsx:379-381`)
+
+## Facts surfaced at the gate before approval
+
+- Only `OrganizationSettings.tsx` imports the component; no other consumer in `frontend/src`.
+- The hive's copy `remote-frontend/src/components/swarm/NodeApiKeySection.tsx` (20065 bytes) is
+  present and is explicitly OUT of this task's blast radius (SC7).
+- Rationale: spec decision D3 + ADR-0013 — the hive owns node API-key management
+  (`hive-node-api-key-ui`, shipped). Two admin-gated paths to the same privileged operation is
+  the duplication the node/hive split exists to remove.
+- Known transient: `frontend/src/lib/api/nodes.ts:43-70` still calls four now-deleted
+  `/api/nodes/api-keys*` endpoints. Task 202 removes them; dead client code exists between
+  201 and 202.
+- Reversibility: recoverable from git history, but this removes a shipped UI surface. Operators
+  who mint node API keys from the node UI must use the hive instead.
+
+Decision: **approve — delete it**, and continue through 202/203.
