@@ -24,6 +24,14 @@ export class ApiError<E = unknown> extends Error {
   }
 }
 
+/**
+ * True when an error is the server's "this node is not connected to a hive"
+ * response (ApiError::HiveNotConfigured -> HTTP 503).
+ */
+export function isHiveNotConfigured(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 503;
+}
+
 /** Request timeout in milliseconds (30 seconds) */
 export const REQUEST_TIMEOUT_MS = 30000;
 

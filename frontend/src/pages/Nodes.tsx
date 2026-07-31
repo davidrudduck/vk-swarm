@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { NodeCard } from '@/components/swarm/NodeCard';
+import { HiveNotConnected } from '@/components/swarm';
+import { isHiveNotConfigured } from '@/lib/api/utils';
 import { nodesApi } from '@/lib/api';
 import { useUserOrganizations } from '@/hooks';
 
@@ -15,6 +17,7 @@ export function Nodes() {
     data: nodes = [],
     isLoading: nodesLoading,
     isError,
+    error,
   } = useQuery({
     queryKey: ['nodes', orgId],
     queryFn: () => nodesApi.list(orgId!),
@@ -36,6 +39,8 @@ export function Nodes() {
         <p className="text-muted-foreground">
           Nodes are a swarm feature. Connect a hive server to get started.
         </p>
+      ) : isHiveNotConfigured(error) ? (
+        <HiveNotConnected />
       ) : isError ? (
         <p className="text-muted-foreground">Failed to load nodes.</p>
       ) : nodes.length === 0 ? (

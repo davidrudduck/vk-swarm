@@ -48,6 +48,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { nodesApi } from '@/lib/api';
+import { isHiveNotConfigured } from '@/lib/api/utils';
+import { HiveNotConnected } from './HiveNotConnected';
 import {
   useSwarmProjects,
   useSwarmProjectMutations,
@@ -279,6 +281,8 @@ export function NodeProjectsSection({
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
+          ) : isHiveNotConfigured(nodesError) ? (
+            <HiveNotConnected />
           ) : nodesError ? (
             <div className="px-4 pb-4 sm:px-6">
               <Alert variant="destructive">

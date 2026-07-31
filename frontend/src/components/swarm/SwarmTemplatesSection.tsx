@@ -21,6 +21,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SwarmTemplateDialog } from './SwarmTemplateDialog';
 import { MergeTemplatesDialog } from './MergeTemplatesDialog';
+import { HiveNotConnected } from './HiveNotConnected';
+import { isHiveNotConfigured } from '@/lib/api/utils';
 import {
   useSwarmTemplates,
   useSwarmTemplateMutations,
@@ -192,6 +194,8 @@ export function SwarmTemplatesSection({
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
+          ) : isHiveNotConfigured(error) ? (
+            <HiveNotConnected />
           ) : error ? (
             <div className="px-4 pb-4 sm:px-6">
               <Alert variant="destructive">
