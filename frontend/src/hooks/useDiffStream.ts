@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Diff, PatchType } from 'shared/types';
 import { useJsonPatchWsStream } from './useJsonPatchWsStream';
 import { tasksApi, TaskStreamConnectionInfoResponse } from '@/lib/api';
+import { isHiveNotConfigured } from '@/lib/api/utils';
 
 interface DiffEntries {
   [filePath: string]: PatchType;
@@ -82,12 +83,18 @@ export const useDiffStream = (
         }
       } catch (e) {
         if (!cancelled) {
-          console.error('Failed to fetch stream connection info:', e);
-          setFetchError(
-            e instanceof Error
-              ? e.message
-              : 'Failed to fetch stream connection info'
-          );
+          if (isHiveNotConfigured(e)) {
+            // Node has no hive configured: no stream, no retry loop, empty
+            // diffs, no error. DiffsPanel must render local diffs quietly.
+            setFetchError(null);
+          } else {
+            console.error('Failed to fetch stream connection info:', e);
+            setFetchError(
+              e instanceof Error
+                ? e.message
+                : 'Failed to fetch stream connection info'
+            );
+          }
           setConnectionInfo(null);
           setConnectionType(null);
         }

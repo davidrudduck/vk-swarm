@@ -80,10 +80,22 @@ export const useNodeLogStream = (
         const response = await fetch(
           `/v1/nodes/assignments/${id}/connection-info`
         );
+
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.error || `HTTP ${response.status}`);
         }
+
+        // `/v1/*` is the hive's namespace. On a node with no hive configured
+        // it isn't registered, so the request falls through to the SPA
+        // catch-all and returns 200 + text/html rather than JSON. Only a
+        // SUCCESSFUL non-JSON response means "no remote stream here" — real
+        // failures are thrown above, before this check runs.
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!contentType.includes('application/json')) {
+          return null;
+        }
+
         return await response.json();
       } catch (e) {
         console.error('Failed to fetch connection info:', e);

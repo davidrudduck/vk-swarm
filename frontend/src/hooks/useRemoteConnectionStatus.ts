@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { tasksApi, TaskStreamConnectionInfoResponse } from '@/lib/api';
+import { isHiveNotConfigured } from '@/lib/api/utils';
 import type { ConnectionStatus } from '@/components/common/ConnectionStatusBadge';
 import type { TaskWithAttemptStatus } from 'shared/types';
 
@@ -64,12 +65,19 @@ export function useRemoteConnectionStatus(
         }
       } catch (e) {
         if (!cancelled) {
-          console.error('Failed to fetch connection status:', e);
-          setError(
-            e instanceof Error
-              ? e.message
-              : 'Failed to determine connection status'
-          );
+          if (isHiveNotConfigured(e)) {
+            // No hive configured on this node: a definite, quiet
+            // "disconnected" outcome (via the !connectionInfo branch below),
+            // not a surfaced error and not an indefinite pending state.
+            setError(null);
+          } else {
+            console.error('Failed to fetch connection status:', e);
+            setError(
+              e instanceof Error
+                ? e.message
+                : 'Failed to determine connection status'
+            );
+          }
           setConnectionInfo(null);
         }
       } finally {
