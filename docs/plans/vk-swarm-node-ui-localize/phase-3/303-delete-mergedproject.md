@@ -13,6 +13,7 @@ files:
   - crates/server/src/routes/projects/mod.rs
   - crates/server/src/bin/generate_types.rs
   - crates/server/src/routes/projects/handlers/core.rs
+  - crates/server/src/routes/projects/handlers/with_stats.rs
   - frontend/src/lib/api/projects.ts
   - shared/types.ts
 irreversible: true
@@ -42,6 +43,54 @@ Note this reverses the *shape* of `a85f7d63`, not its intent: that commit restor
 the board would render at all, and task 301 preserved its enrichment verbatim under
 `/api/projects/with-stats`. Confirm task 302's board test is green BEFORE running this task — that
 test is what proves the board still renders once this endpoint is gone.
+
+## Amendments (ORCHESTRATOR, pre-dispatch — DICTATED)
+
+**G1 — `with_stats.rs` ADDED to `files:`, because its doc comment references what you are deleting.**
+Task 301 wrote this header at `crates/server/src/routes/projects/handlers/with_stats.rs:1-6`:
+
+```rust
+//! Additive replacement for `merged.rs`'s `MergedProject` shape: the same
+//! ... that `MergedProject` still carries (see
+//! ADR-0014). `merged.rs` and `/merged-projects` are untouched by this file.
+```
+
+Two consequences, both requiring action:
+1. The `## Done when` grep (`git grep 'MergedProject\|...\|merged-projects' -- crates frontend shared`
+   → expect NO output) would MATCH these comment lines and report failure **even on a perfect
+   implementation** — the same impossible-assertion defect corrected at task 302 (F1).
+2. Left alone, the comment would describe deleted code — exactly the documentation drift this
+   workstream exists to remove (cf. task 203).
+
+**Rewrite that doc comment** so it no longer names `MergedProject`, `merged.rs`, or
+`/merged-projects`. Suggested replacement (adjust freely, but do not reintroduce those names):
+
+```rust
+//! Local projects with display enrichment: task counts, last attempt, and GitHub counts.
+//!
+//! The response deliberately carries no node/merge fields — this node serves local projects
+//! only; hive-side project data lives on the hive (see ADR-0014).
+```
+
+**G2 — every other surviving reference is already inside `files:`. Verified pre-dispatch:**
+`git grep -ln 'MergedProject\|MergedProjectsResponse\|NodeLocation\|merged-projects' -- crates frontend shared`
+returns exactly `generate_types.rs`, `handlers/merged.rs`, `handlers/with_stats.rs` (G1),
+`projects/mod.rs`, `projects/types.rs`, `frontend/src/lib/api/projects.ts`, `shared/types.ts`. All are
+in `files:`. **If your grep finds a file NOT in that list, the STOP trigger is real — report it.**
+
+**G3 — STOP triggers pre-checked:**
+- `handlers/core.rs` contains NO reference to `MergedProject`/`NodeLocation` — leave it untouched
+  (it is in `files:` only as a precaution).
+- `TaskCounts` is used by `ProjectWithStats` (`types.rs:208`) and `with_stats.rs:16,44` — it will NOT
+  become unused. If it does, task 301 is broken; STOP.
+- `NodeLocation`'s only references are `generate_types.rs:31`, `projects/mod.rs:7`,
+  `types.rs:130` (the `MergedProject.nodes` field) and its own declaration at `types.rs:151` — all
+  removed by this task, as the contract states.
+- Task 302 IS `passed` (board test green), so the "do not run" precondition is satisfied.
+
+**G4 — `types.rs:88-110` (`impl From<Project> for RemoteNodeProject`) MUST SURVIVE.** It sits directly
+above the structs you are deleting and constructs same-named fields (`node_name`, `node_status`,
+`node_public_url`), which makes it easy to delete by accident. It backs `UnifiedProject::Remote`.
 
 ## Change
 
