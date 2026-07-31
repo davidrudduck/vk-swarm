@@ -170,6 +170,26 @@ export type TaskCounts = { todo: number, in_progress: number, in_review: number,
 
 export type MergedProjectsResponse = { projects: Array<MergedProject>, };
 
+export type ProjectWithStats = { id: string, name: string, git_repo_path: string, created_at: Date, 
+/**
+ * Linking status - Hive project ID (if linked)
+ */
+remote_project_id: string | null, 
+/**
+ * For sorting - timestamp of last task attempt
+ */
+last_attempt_at: Date | null, 
+/**
+ * GitHub integration fields
+ */
+github_enabled: boolean, github_owner: string | null, github_repo: string | null, github_open_issues: number, github_open_prs: number, github_last_synced_at: Date | null, 
+/**
+ * Task status counts for quick display
+ */
+task_counts: TaskCounts, };
+
+export type ProjectsWithStatsResponse = { projects: Array<ProjectWithStats>, };
+
 export type SyncHealthResponse = { 
 /**
  * Whether the project is currently linked to a Hive project

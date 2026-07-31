@@ -1,8 +1,15 @@
 use chrono::Utc;
+use db::models::{
+    project::{CreateProject, Project},
+    task::{CreateTask, Task, TaskStatus},
+    task_attempt::{CreateTaskAttempt, TaskAttempt},
+};
 use deployment::Deployment;
+use executors::executors::BaseCodingAgent;
 use local_deployment::LocalDeployment;
 use server::DeploymentImpl;
 use std::net::SocketAddr;
+use uuid::Uuid;
 
 pub struct HiveHarness {
     #[allow(dead_code)]
@@ -17,6 +24,7 @@ pub struct HiveHarness {
 pub struct Resp {
     pub status: u16,
     pub body: String,
+    #[allow(dead_code)]
     pub content_type: Option<String>,
 }
 
@@ -218,6 +226,64 @@ impl HiveHarness {
             body,
             content_type,
         }
+    }
+
+    /// Seed a local project plus one task per entry in `task_statuses`, inserted through the
+    /// deployment's own pool (never a hand-written `CREATE TABLE` — the harness DB already has
+    /// migrations applied). If `task_statuses` is non-empty, also creates a single task attempt
+    /// on the first task so `last_attempt_at` is non-null.
+    pub async fn seed_project(&self, name: &str, task_statuses: &[TaskStatus]) -> Uuid {
+        let pool = &self.deployment.db().pool;
+
+        let project_id = Uuid::new_v4();
+        let create_project = CreateProject {
+            name: name.to_string(),
+            git_repo_path: format!("/tmp/seed-project-{project_id}"),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(pool, &create_project, project_id)
+            .await
+            .expect("failed to seed project");
+
+        let mut first_task_id: Option<Uuid> = None;
+        for (i, status) in task_statuses.iter().enumerate() {
+            let task_id = Uuid::new_v4();
+            let create_task = CreateTask {
+                project_id,
+                title: format!("{name}-task-{i}"),
+                description: None,
+                status: Some(status.clone()),
+                parent_task_id: None,
+                image_ids: None,
+                shared_task_id: None,
+            };
+            Task::create(pool, &create_task, task_id)
+                .await
+                .expect("failed to seed task");
+            if first_task_id.is_none() {
+                first_task_id = Some(task_id);
+            }
+        }
+
+        if let Some(task_id) = first_task_id {
+            let attempt_id = Uuid::new_v4();
+            let create_attempt = CreateTaskAttempt {
+                executor: BaseCodingAgent::ClaudeCode,
+                base_branch: "main".to_string(),
+                branch: format!("seed/{project_id}"),
+                origin_node_id: None,
+            };
+            TaskAttempt::create(pool, &create_attempt, attempt_id, task_id)
+                .await
+                .expect("failed to seed task attempt");
+        }
+
+        project_id
     }
 }
 

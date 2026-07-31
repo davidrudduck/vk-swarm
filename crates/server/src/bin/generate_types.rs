@@ -31,6 +31,8 @@ fn generate_types_content() -> String {
         server::routes::projects::NodeLocation::decl(),
         server::routes::projects::TaskCounts::decl(),
         server::routes::projects::MergedProjectsResponse::decl(),
+        server::routes::projects::ProjectWithStats::decl(),
+        server::routes::projects::ProjectsWithStatsResponse::decl(),
         server::routes::projects::types::SyncHealthResponse::decl(),
         server::routes::projects::types::SyncIssue::decl(),
         server::routes::projects::types::UnlinkSwarmRequest::decl(),

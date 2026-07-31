@@ -13,6 +13,7 @@ pub mod github;
 pub mod linking;
 pub mod merged;
 pub mod swarm;
+pub mod with_stats;
 
 // Re-export all handlers for convenient access from the router
 pub use core::{
@@ -28,3 +29,4 @@ pub use github::{get_github_counts, set_github_enabled, sync_github_counts};
 pub use linking::{get_project_remote_members, get_remote_project_by_id, link_to_local_folder};
 pub use merged::get_merged_projects;
 pub use swarm::{force_resync_tasks, unlink_from_swarm};
+pub use with_stats::get_projects_with_stats;

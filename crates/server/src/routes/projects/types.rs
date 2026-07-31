@@ -178,6 +178,42 @@ pub struct MergedProjectsResponse {
     pub projects: Vec<MergedProject>,
 }
 
+/// A local project plus the display enrichment the board needs.
+/// Replaces `MergedProject`, whose merge fields are dead (see ADR-0014).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct ProjectWithStats {
+    pub id: Uuid,
+    pub name: String,
+    pub git_repo_path: String,
+    #[ts(type = "Date")]
+    pub created_at: DateTime<Utc>,
+
+    /// Linking status - Hive project ID (if linked)
+    pub remote_project_id: Option<Uuid>,
+
+    /// For sorting - timestamp of last task attempt
+    #[ts(type = "Date | null")]
+    pub last_attempt_at: Option<DateTime<Utc>>,
+
+    /// GitHub integration fields
+    pub github_enabled: bool,
+    pub github_owner: Option<String>,
+    pub github_repo: Option<String>,
+    pub github_open_issues: i32,
+    pub github_open_prs: i32,
+    #[ts(type = "Date | null")]
+    pub github_last_synced_at: Option<DateTime<Utc>>,
+
+    /// Task status counts for quick display
+    pub task_counts: TaskCounts,
+}
+
+/// Response for the projects-with-stats endpoint
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct ProjectsWithStatsResponse {
+    pub projects: Vec<ProjectWithStats>,
+}
+
 /// A group of projects from a single remote node
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct RemoteNodeGroup {

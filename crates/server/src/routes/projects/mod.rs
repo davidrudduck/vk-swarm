@@ -5,8 +5,8 @@ pub mod types;
 pub use types::{
     GitHubCountsResponse, LinkToLocalFolderRequest, ListProjectFilesQuery, MergedProject,
     MergedProjectsResponse, NodeLocation, OpenEditorRequest, OpenEditorResponse, OrphanedProject,
-    OrphanedProjectsResponse, RemoteNodeGroup, RemoteNodeProject, SetGitHubEnabledRequest,
-    TaskCounts, UnifiedProject,
+    OrphanedProjectsResponse, ProjectWithStats, ProjectsWithStatsResponse, RemoteNodeGroup,
+    RemoteNodeProject, SetGitHubEnabledRequest, TaskCounts, UnifiedProject,
 };
 
 use axum::{
@@ -41,6 +41,7 @@ use handlers::{
     get_project_remote_members,
     get_project_sync_health,
     get_projects,
+    get_projects_with_stats,
     link_to_local_folder,
     list_orphaned_projects,
     // File handlers
@@ -132,6 +133,7 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
 
     let projects_router = Router::new()
         .route("/", get(get_projects).post(create_project))
+        .route("/with-stats", get(get_projects_with_stats))
         .route("/scan-config", post(scan_project_config))
         .route("/link-local", post(link_to_local_folder))
         .route(
