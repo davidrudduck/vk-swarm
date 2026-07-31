@@ -917,3 +917,64 @@ It was already unreachable before this run (the `!has_local` guard has been perm
 node-foundations), so 302 did not remove working functionality — it removed the last reference to
 something already dead. Filed as F-2026-07-31-04 and put to the user at the 303 gate rather than
 resolved unilaterally.
+
+## Task 303 — delete MergedProject, NodeLocation, /api/merged-projects (IRREVERSIBLE, human-approved)
+
+**PHASE 3 COMPLETE. SC5 satisfied.**
+
+**Human gate.** Approved for 303 only; the offered "303 + phase 4 upfront" was DECLINED. At the same
+gate the user decided F-2026-07-31-04 (the orphaned `LinkToLocalFolderDialog`) as **"leave it —
+backlog only"**, so the dialog, its API client, its hook entry and the `/api/projects/link-local`
+route all REMAIN. That decision was written into the token and into the dispatch as an explicit
+prohibition, and the panel verified compliance file-by-file.
+
+**Implementer ledger: ONE declared item, and it was RIGHT.** It found a SECOND stale doc comment my
+amendment G1 missed — `types.rs:123`, "Replaces `MergedProject`, whose merge fields are dead" — left
+by task 301. Fixing it was not optional: the string `MergedProject` would have failed this task's own
+`## Done when` grep, and would have left documentation describing deleted code (the very drift task
+203 existed to fix). `types.rs` is in `files:`, so no boundary was crossed. **G1's silence on that
+second comment was a gap in MY amendment, not a scope boundary** — and the implementer resolved it in
+the direction the contract's own completeness criterion demanded, then declared it.
+
+**Pre-dispatch amendments (ORCHESTRATOR).** G1 added `with_stats.rs` to `files:` because task 301's
+doc comment named `MergedProject`/`merged.rs`/`/merged-projects` — the same impossible-assertion
+defect corrected at 302 (F1) and 203 (C4). G2-G4 pre-verified the blast radius and protected
+`impl From<Project> for RemoteNodeProject` (`types.rs:88-110`), which sits directly above the deleted
+structs and constructs same-named fields — the easiest thing in this task to clip by accident.
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS**, with the strongest evidence set of the run:
+- **Survivors verified individually:** `impl From<Project> for RemoteNodeProject` (`types.rs:88`),
+  `RemoteNodeProject` (`:69`), `TaskCounts` (`:115`, used at `:149`). **`CachedNodeStatus` is NOT
+  orphaned** — I asked specifically because it was a `NodeLocation` field type; it remains used at
+  `types.rs:84`, `:163`, `generate_types.rs:37`, `services/node_cache.rs:268-274`, and
+  `frontend/.../RemoteProjectCard.tsx:10`.
+- **Codegen enumerated exactly**, not merely "check passes": `export type` symbols went 244 → 241,
+  removing precisely `MergedProject`, `MergedProjectsResponse`, `NodeLocation` — 0 added, 0
+  collaterally dropped. Re-running `generate-types` left `git status` empty, proving `shared/types.ts`
+  was regenerated rather than hand-edited.
+- **Runtime proof on an isolated port (9377):** `/api/merged-projects` → `200 text/html` (SPA
+  fallback = route gone), `/api/projects/with-stats` → `200 application/json` with a real payload,
+  and the decisive one — `/api/projects/link-local` POST → `422 "missing field remote_project_id"`,
+  i.e. the extractor's rejection, which proves the handler was REACHED and is definitively not the
+  catch-all. A control request to `/api/definitely-not-a-route` returned `200 text/html`, confirming
+  the discriminator.
+- **Board survival re-proven:** mutating `ProjectList.test.tsx`'s mock to `projects: []` (via python,
+  with the mutation confirmed applied in-file first — the two-line trap that produced my own earlier
+  false alarm) KILLS the test.
+- Whole-workspace gates green: clippy 0, `cargo test --workspace` 0, fmt 0, build 0, frontend tsc 0,
+  lint 0, vitest at the exact documented baseline with the 8 failing files enumerated BY NAME (counts
+  alone could mask a swap) and no new entrant.
+
+**Three panel observations, correctly NOT acted on, now filed:**
+- **F-2026-07-31-05** — `useProjectMutations.ts:79` still invalidates `queryKey: ['mergedProjects']`,
+  now a no-op since no query produces that key. The panel left it because touching that file would
+  have violated the user's explicit keep-decision. Correct call: an explicit user instruction
+  outranks tidiness.
+- **F-2026-07-31-06** — stale doc comment at `crates/db/src/models/project/mod.rs:106` ("used in
+  merged projects view"). Outside `files:`.
+- **F-2026-07-31-07** — `remote-frontend/src/types/shared/types.ts` still declares the deleted types.
+  **Pre-existing drift, NOT caused by this run**: it already differed from `shared/types.ts` by 20
+  lines at HEAD^, is a hand-committed copy last touched by an unrelated hive PR (`b8c12d96`), is not
+  written by `generate_types.rs` (which writes only `shared/`), and no `remote-frontend` source
+  references the names. Filed as medium — a hand-maintained duplicate of a generated file is a
+  standing drift hazard.

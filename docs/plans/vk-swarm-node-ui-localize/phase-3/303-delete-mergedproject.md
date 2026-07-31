@@ -2,7 +2,7 @@
 id: "303"
 phase: 3
 title: "Delete MergedProject, NodeLocation, and the /api/merged-projects endpoint"
-status: ready
+status: passed
 depends_on: ["302"]
 parallel: false
 conflicts_with: ["301","302"]

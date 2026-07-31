@@ -30,6 +30,9 @@
 | F-2026-07-31-02 | SystemSettings.test.tsx suite fails to load: vi.mock factory closes over hoisted import | medium | open | frontend/src/pages/settings/__tests__/SystemSettings.test.tsx:40 | session/2026-07-31 | 2026-07-31 | — | — |
 | F-2026-07-31-03 | frontend vitest red at baseline: 8 files / 15 tests failing, unrelated to any active workstream | medium | open | frontend/ (BottomNav, MessageQueuePanel, ConversationFocusMode, taskSorting, DesignSystem, MobileIntegration) | session/2026-07-31 | 2026-07-31 | — | — |
 | F-2026-07-31-04 | LinkToLocalFolderDialog orphaned by task 302; its API client, hook and server route are still live | medium | open | frontend/src/components/dialogs/projects/LinkToLocalFolderDialog.tsx | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
+| F-2026-07-31-05 | Stale query key ['mergedProjects'] invalidated in linkLocalFolder onSuccess is now a no-op | low | open | frontend/src/hooks/useProjectMutations.ts:79 | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
+| F-2026-07-31-06 | Stale doc comment references the removed merged projects view | low | open | crates/db/src/models/project/mod.rs:106 | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
+| F-2026-07-31-07 | remote-frontend/src/types/shared/types.ts is a hand-copied duplicate that has drifted from generated shared/types.ts | medium | open | remote-frontend/src/types/shared/types.ts | session/2026-07-31 | 2026-07-31 | — | — |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
