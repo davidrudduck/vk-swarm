@@ -9,7 +9,7 @@ conflicts_with: []
 files:
   - frontend/src/lib/api/nodes.ts
 irreversible: false
-scope_test: "frontend/src/lib"
+scope_test: "N/A"
 allowed_change: edit
 covers_criteria: [SC3]
 ---
@@ -24,6 +24,39 @@ candidate terms have legitimate survivors: `/api/nodes/api-keys` appears in
 `docs/architecture/db/functions/postgresql-node-api-keys.mdx` (updated by task 203) and in this
 workstream's own spec, and `/merge-to/` appears in `crates/remote/src/routes/nodes.rs:68` and
 `remote-frontend/src/lib/api/nodes.ts`, both of which are the hive's and must survive (SC7).
+
+## Amendments (ORCHESTRATOR, pre-dispatch — these are DICTATED, not choices)
+
+**B1 — `scope_test` changed from `frontend/src/lib` to `N/A`.** Same defect as task 201's A1, same
+resolution. The gate was VACUOUS and IMPOSSIBLE:
+
+- *Vacuous:* no test anywhere in `frontend/src` references `nodesApi` or `lib/api/nodes` —
+  `grep -rln "lib/api/nodes\|nodesApi" src --include="*.test.ts" --include="*.test.tsx"` returns
+  NOTHING. The three tests under `src/lib` (`taskSorting`, `electric/collections`, `electric/config`)
+  are unrelated to this file.
+- *Impossible:* `src/lib/taskSorting.test.ts` is one of the eight baseline-red files
+  (F-2026-07-31-03), so the scope was already failing before this task changed anything.
+
+Verification falls to `## Manual verification` below, where `tsc --noEmit` is the load-bearing gate
+— and it is a STRONG one here, because `noUnusedLocals: true` (`frontend/tsconfig.json:16`) turns
+any leftover unused type import into a hard error.
+
+**B2 — anchors verified against the live file before dispatch.** The five methods sit at
+`frontend/src/lib/api/nodes.ts` lines 41 (`listApiKeys`), 48 (`createApiKey`), 58 (`revokeApiKey`),
+69 (`unblockApiKey`) and 81 (`mergeNodes`), and the object currently ends after `mergeNodes`. The
+import block at lines 5-12 is exactly as quoted below. The task text is accurate; implement it as
+written.
+
+**B3 — the "no surviving callers" STOP trigger is already confirmed clear.**
+`grep -rn 'listApiKeys\|createApiKey\|revokeApiKey\|unblockApiKey\|mergeNodes' frontend/src` returns
+ONLY the five definitions inside `nodes.ts` itself — no external caller anywhere, confirming task
+201 fully removed the consumer. If your grep shows anything outside `nodes.ts`, STOP.
+
+**B4 — baseline-delta discipline applies (same as 201's A2).** The `frontend` vitest suite is RED AT
+BASELINE: `Test Files 8 failed | 26 passed (34)`, `Tests 15 failed | 408 passed (423)`, across
+BottomNav, MessageQueuePanel, ConversationFocusMode, taskSorting, SettingsMobile, SystemSettings,
+DesignSystem, MobileIntegration (F-2026-07-31-01..03). Do NOT fix them. Prove your change altered
+NOTHING about that set — same 8 files, same 15 assertions. Any new failure or count change is a STOP.
 
 ## Change
 
