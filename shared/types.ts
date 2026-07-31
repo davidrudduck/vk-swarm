@@ -114,61 +114,7 @@ project_id: string, project_name: string, git_repo_path: string, last_synced_at:
 
 export type RemoteNodeGroup = { node_id: string, node_name: string, node_status: CachedNodeStatus, node_public_url: string | null, projects: Array<RemoteNodeProject>, };
 
-export type MergedProject = { 
-/**
- * Use local project ID if exists, otherwise first remote's ID
- */
-id: string, name: string, git_repo_path: string, created_at: Date, 
-/**
- * Linking status - Hive project ID (if linked)
- */
-remote_project_id: string | null, 
-/**
- * Location info - where the project runs
- */
-has_local: boolean, 
-/**
- * Local project ID if has_local is true
- */
-local_project_id: string | null, 
-/**
- * List of remote nodes that have this project
- */
-nodes: Array<NodeLocation>, 
-/**
- * For sorting - timestamp of last task attempt
- */
-last_attempt_at: Date | null, 
-/**
- * GitHub integration fields
- */
-github_enabled: boolean, github_owner: string | null, github_repo: string | null, github_open_issues: number, github_open_prs: number, github_last_synced_at: Date | null, 
-/**
- * Task status counts for quick display
- */
-task_counts: TaskCounts, };
-
-export type NodeLocation = { node_id: string, 
-/**
- * Full name like "tardis.raverx.net"
- */
-node_name: string, 
-/**
- * Truncated at first period: "tardis"
- */
-node_short_name: string, node_status: CachedNodeStatus, node_public_url: string | null, 
-/**
- * The project ID on that node
- */
-remote_project_id: string, 
-/**
- * Operating system: "darwin", "linux", "windows"
- */
-node_os: string | null, };
-
 export type TaskCounts = { todo: number, in_progress: number, in_review: number, done: number, };
-
-export type MergedProjectsResponse = { projects: Array<MergedProject>, };
 
 export type ProjectWithStats = { id: string, name: string, git_repo_path: string, created_at: Date, 
 /**

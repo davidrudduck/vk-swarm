@@ -1,9 +1,7 @@
-//! Local projects with display-stats enrichment.
+//! Local projects with display enrichment: task counts, last attempt, and GitHub counts.
 //!
-//! Additive replacement for `merged.rs`'s `MergedProject` shape: the same
-//! local-project-plus-stats data, minus the three dead merge fields (`nodes`,
-//! `has_local`, `local_project_id`) that `MergedProject` still carries (see
-//! ADR-0014). `merged.rs` and `/merged-projects` are untouched by this file.
+//! The response deliberately carries no node/merge fields — this node serves local projects
+//! only; hive-side project data lives on the hive (see ADR-0014).
 
 use axum::{extract::State, response::Json as ResponseJson};
 use db::models::project::Project;

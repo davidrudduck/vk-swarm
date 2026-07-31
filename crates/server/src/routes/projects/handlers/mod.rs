@@ -2,7 +2,6 @@
 //!
 //! Handlers are organized by concern:
 //! - `core`: CRUD operations (list, get, create, update, delete, orphaned, scan, branches, editor)
-//! - `merged`: Merged project views combining local and remote
 //! - `files`: File browser, search, and file content
 //! - `linking`: Remote project linking and members
 //! - `github`: GitHub integration (enable, counts, sync)
@@ -11,7 +10,6 @@ pub mod core;
 pub mod files;
 pub mod github;
 pub mod linking;
-pub mod merged;
 pub mod swarm;
 pub mod with_stats;
 
@@ -27,6 +25,5 @@ pub use files::{
 };
 pub use github::{get_github_counts, set_github_enabled, sync_github_counts};
 pub use linking::{get_project_remote_members, get_remote_project_by_id, link_to_local_folder};
-pub use merged::get_merged_projects;
 pub use swarm::{force_resync_tasks, unlink_from_swarm};
 pub use with_stats::get_projects_with_stats;

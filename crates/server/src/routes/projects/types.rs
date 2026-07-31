@@ -109,59 +109,6 @@ impl From<Project> for RemoteNodeProject {
     }
 }
 
-/// A project in the merged view - merges local and remote projects by remote_project_id
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct MergedProject {
-    /// Use local project ID if exists, otherwise first remote's ID
-    pub id: Uuid,
-    pub name: String,
-    pub git_repo_path: String,
-    #[ts(type = "Date")]
-    pub created_at: DateTime<Utc>,
-
-    /// Linking status - Hive project ID (if linked)
-    pub remote_project_id: Option<Uuid>,
-
-    /// Location info - where the project runs
-    pub has_local: bool,
-    /// Local project ID if has_local is true
-    pub local_project_id: Option<Uuid>,
-    /// List of remote nodes that have this project
-    pub nodes: Vec<NodeLocation>,
-
-    /// For sorting - timestamp of last task attempt
-    #[ts(type = "Date | null")]
-    pub last_attempt_at: Option<DateTime<Utc>>,
-
-    /// GitHub integration fields
-    pub github_enabled: bool,
-    pub github_owner: Option<String>,
-    pub github_repo: Option<String>,
-    pub github_open_issues: i32,
-    pub github_open_prs: i32,
-    #[ts(type = "Date | null")]
-    pub github_last_synced_at: Option<DateTime<Utc>>,
-
-    /// Task status counts for quick display
-    pub task_counts: TaskCounts,
-}
-
-/// A node location where a project exists
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct NodeLocation {
-    pub node_id: Uuid,
-    /// Full name like "tardis.raverx.net"
-    pub node_name: String,
-    /// Truncated at first period: "tardis"
-    pub node_short_name: String,
-    pub node_status: CachedNodeStatus,
-    pub node_public_url: Option<String>,
-    /// The project ID on that node
-    pub remote_project_id: Uuid,
-    /// Operating system: "darwin", "linux", "windows"
-    pub node_os: Option<String>,
-}
-
 /// Task status counts for a project
 #[derive(Debug, Clone, Default, Serialize, TS)]
 #[ts(export)]
@@ -172,14 +119,8 @@ pub struct TaskCounts {
     pub done: i32,
 }
 
-/// Response for the merged projects endpoint
-#[derive(Debug, Clone, Serialize, TS)]
-pub struct MergedProjectsResponse {
-    pub projects: Vec<MergedProject>,
-}
-
-/// A local project plus the display enrichment the board needs.
-/// Replaces `MergedProject`, whose merge fields are dead (see ADR-0014).
+/// A local project plus the display enrichment the board needs: task counts,
+/// last attempt, and GitHub counts (see ADR-0014).
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct ProjectWithStats {
     pub id: Uuid,
