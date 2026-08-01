@@ -59,11 +59,12 @@ describe('getSortTimestamp', () => {
     expect(timestamp).toBe(new Date('2024-06-20T15:00:00Z').getTime());
   });
 
-  it('uses latest_execution_completed_at for inreview tasks', () => {
+  it('uses activity_at for inreview tasks', () => {
     const task = createMockTask({
       status: 'inreview',
       created_at: '2024-01-01T00:00:00Z',
-      latest_execution_completed_at: '2024-06-18T10:00:00Z',
+      activity_at: '2024-06-18T10:00:00Z',
+      latest_execution_completed_at: '2024-07-01T00:00:00Z',
     });
 
     const timestamp = getSortTimestamp(task);
@@ -249,12 +250,12 @@ describe('sortTaskGroups', () => {
         createMockTask({
           status: 'inreview',
           created_at: '2024-01-01T00:00:00Z',
-          latest_execution_completed_at: '2024-02-15T00:00:00Z',
+          activity_at: '2024-02-15T00:00:00Z',
         }),
         createMockTask({
           status: 'inreview',
           created_at: '2024-01-02T00:00:00Z',
-          latest_execution_completed_at: '2024-01-20T00:00:00Z',
+          activity_at: '2024-01-20T00:00:00Z',
         }),
       ],
       done: [],
@@ -275,13 +276,9 @@ describe('sortTaskGroups', () => {
       '2024-03-01T00:00:00Z'
     );
 
-    // Inreview: oldest latest_execution_completed_at first
-    expect(sorted.inreview[0].latest_execution_completed_at).toBe(
-      '2024-01-20T00:00:00Z'
-    );
-    expect(sorted.inreview[1].latest_execution_completed_at).toBe(
-      '2024-02-15T00:00:00Z'
-    );
+    // Inreview: oldest activity_at first
+    expect(sorted.inreview[0].activity_at).toBe('2024-01-20T00:00:00Z');
+    expect(sorted.inreview[1].activity_at).toBe('2024-02-15T00:00:00Z');
   });
 
   it('applies custom directions per status', () => {

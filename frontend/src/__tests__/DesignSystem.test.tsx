@@ -50,7 +50,7 @@ describe('VKSLogo', () => {
   it('uses code font for terminal aesthetic', () => {
     render(<VKSLogo />);
     const logo = screen.getByLabelText('VK-Swarm');
-    expect(logo).toHaveClass('font-code');
+    expect(logo).toHaveClass('font-wordmark');
   });
 });
 
