@@ -51,3 +51,49 @@ These are why triage ran before any fix was attempted:
   matching section — searching "backup" in mobile settings returns nothing. Minor real
   discoverability gap.
 - `i18n/locales/en/tasks.json:184` `messageQueue.variant` is dead since b43ddbae.
+
+## Outcome — COMPLETE (2026-08-01)
+
+**Frontend suite: 37 files / 433 tests passing, exit 0** (was 8 files / 15 tests failing).
+`tsc --noEmit` 0, `npm run lint` 0. **No product code changed** — the commit contains test files
+only, verified by `git show HEAD --name-only | grep -v '\.test\.'` returning nothing.
+
+Closes F-2026-07-31-01, F-2026-07-31-02, F-2026-07-31-03.
+
+### Every fix proven real by mutation
+
+A stale-test fix is worthless if the "fixed" test passes when the product is broken. Each was
+verified by reverting the product behaviour and confirming failure, then restoring byte-identical:
+
+- **taskSorting** — reverting `inreview` to `latest_execution_completed_at` (pre-4215189a) fails
+  BOTH tests. Verified independently by the orchestrator as well as the implementer.
+- **BottomNav** — forcing `aria-current="page"` unconditionally fails the inactive-state assertion,
+  proving the new assertion is not the false green the old class regex would have been.
+
+### A false-positive the implementer caught in its OWN mutation
+
+The first `taskSorting` mutation run broke only 1 of 2 tests. Cause: the fixture set
+`latest_execution_completed_at` to the SAME value as `activity_at`, so swapping the field changed
+nothing for that case. The implementer noticed the asymmetry, gave the fixture a distinct
+`latest_execution_completed_at: '2024-07-01T00:00:00Z'`, and re-ran — both tests then failed.
+
+**A mutation that only half-fails means the test is only half-real.** Worth remembering: the
+mutation itself needs fixtures that can distinguish the two behaviours, or it silently under-tests.
+
+### Two undictated implementer choices, both declared and both correct
+
+1. **`has: () => true` added to the lucide-react Proxy** (`SystemSettings.test.tsx`). The prescribed
+   `then`/`__esModule`/symbol guard fixed the load hang, but named imports such as `HardDrive` then
+   failed with "No export defined on mock" because the Proxy had no `has` trap. Inside the same
+   `vi.mock` block; no scope violation.
+2. **A second, pre-existing failure in `SystemSettings.test.tsx`** surfaced only once the suite could
+   load: the test asserted the vacuum dialog title `stringContaining('Optimisation')`, but the real
+   i18n string (`settings.system.cleanup.confirmVacuumTitle`) is `"Optimize Database?"` — a value the
+   test asserted that was **never true**. Product/i18n confirmed correct; expectation corrected.
+   My brief said this file had "1 suite-load failure"; it had a second failure hiding behind it.
+
+### Out-of-scope observations from triage (filed, not fixed)
+
+- `i18n/locales/en/settings.json:184` still carries `backups`/`backupsDesc` nav strings with no
+  matching section — searching "backup" in mobile settings returns nothing.
+- `i18n/locales/en/tasks.json:184` `messageQueue.variant` is dead since b43ddbae.
