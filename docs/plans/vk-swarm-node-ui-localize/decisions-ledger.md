@@ -1106,3 +1106,68 @@ dictate was about consistency, not correctness.)
 undefined in all four locales, so ja/ko/es fall back to the English default. Sibling keys such as
 `settings.swarm.projects.title` ARE defined, so this is a genuine gap — but the locale files were
 outside this task's `files:`, making `t(key, default)` the correct in-scope behaviour.
+
+## Task 403 — harden the four remote stream hooks (PHASE 4 COMPLETE)
+
+**The task text was WRONG about `useNodeLogStream`, and the real defect was worse than the one I
+specified.** I assumed it needed 503/`isHiveNotConfigured` handling and forbade editing it. Reality:
+`/v1/*` is the hive's namespace and is unregistered on the node server, so on a hive-less node the
+request falls through to the SPA catch-all and returns `200 text/html`. Because the status is 200,
+`if (!response.ok)` never fires and `response.json()` threw
+`SyntaxError: Unexpected token '<', "<!doctype "... is not valid JSON` — surfaced to the user via
+`console.error` and the error state, on every hive-less node whose logs were viewed.
+
+**This is the SPA-catch-all trap in PRODUCTION code, not just tests.** It is the same root cause that
+made `assert_ne!(status, 404)` vacuous across seven task files in phase 1 and that
+`Resp::assert_registered()` exists to catch: **on this server a status code does not tell you whether
+a route exists.** Content-type does. Phase 1 learned that lesson about test assertions; task 403
+found the same bug shipped in a hook.
+
+**Guard ORDERING matters as much as the guard**, and both directions are pinned:
+- Guard AFTER `!response.ok` → only a SUCCESSFUL non-JSON response counts as "no stream"; genuine
+  failures still throw.
+- Deleting the guard → the SPA-fallback test fails with the exact `SyntaxError`.
+- Moving the guard ABOVE `!response.ok` → the `500 text/plain` test fails
+  (`expected null not to be null`), proving it would swallow real errors.
+I ran both mutations myself, and the panel independently reproduced both.
+
+**J6 — I OVERRODE A STOP TRIGGER, and the panel was right to demand it be recorded.** The contract
+said `useNodeLogStream.ts` must be "reported back unmodified"; I authorised the edit in a SendMessage
+review brief, which left the shipped code contradicting the contract's `## Done when` until J6 was
+written. The override itself was justified (the STOP's stated reason — needing a task id from
+`ProcessLogsViewer` — did not apply to a content-type guard inside the file's own boundary), but
+issuing it out-of-band was a process defect on my part. **An orchestrator override belongs in the
+task file, not only in a message.** Recorded as amendment J6.
+
+**Implementer conduct was exemplary throughout:** it STOPped rather than improvising on the forbidden
+file; it flagged that `useRemoteConnectionStatus` ALREADY computed a definite `'disconnected'`
+(`:117-123`) so my task text implied a bug that did not exist; and it proactively added a negative
+case (non-503 still errors) after being warned about task 402's over-broad-detector class.
+
+**Stage 2 — adversarial panel (opus): NO FINDINGS**, with a per-hook pinning table and four
+observations, all correctly scoped as observations rather than findings:
+1. **F-2026-08-01-01** — `useDiffStream` and `useRemoteConnectionStatus` have NO test pinning their
+   503 discrimination: replacing `isHiveNotConfigured(e)` with `if (true)` in both SURVIVED the whole
+   72-test scope run. Their source is correct today; nothing stops a future edit from broadening them
+   to swallow all errors silently. Filed.
+2. **F-2026-08-01-02** — retry suppression is unpinned by construction: the test wrapper sets
+   `retry: false`, so the suite structurally cannot observe that `useAvailableNodes` no longer
+   retries on 503. Filed.
+3. The J6 contract contradiction, now recorded above.
+4. A genuine hive replying 200 with no content-type header would read as "no stream" — low
+   likelihood, noted.
+
+**Consumer compatibility verified by the panel, and one change is a strict IMPROVEMENT:**
+`DiffsPanel.tsx:111` previously returned an error card when the hive-absent error was set, which
+**blocked local diffs entirely**; with `error` now null it falls through and renders the local diff
+stream. `CreateAttemptDialog` resolves immediately instead of after 3 retries plus backoff, so the
+local-attempt path is less blocked than before, not more.
+
+**Retry behaviour is correct by construction:** `useAvailableNodes` now RESOLVES `{ nodes: [] }` for
+503 — a fulfilled promise, which TanStack cannot retry — while real errors still `throw`, leaving the
+default `retry: 3` untouched for them.
+
+**SC7 verified with the strongest available evidence.** `remote-frontend` is at exactly its
+documented baseline (52 files / 405 tests passing; lint 0, tsc 0), and
+`git diff $(git merge-base HEAD origin/main)..HEAD -- remote-frontend/ crates/remote/` is EMPTY —
+the hive was not touched anywhere in this branch, not merely left passing.

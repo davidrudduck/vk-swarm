@@ -2,7 +2,7 @@
 id: "403"
 phase: 4
 title: "Harden the four remote stream hooks for a node with no hive"
-status: ready
+status: passed
 depends_on: ["401", "402"]
 parallel: false
 conflicts_with: []
@@ -48,6 +48,42 @@ currently has no `retry` override and gates only on `enabled: options?.enabled !
 
 **J5 — do not "fix" the baseline.** The full frontend suite is red at baseline outside `hooks/`
 (8 files / 15 tests). Leave those alone; report that the same 8 still fail with no new entrant.
+
+**J6 — ORCHESTRATOR OVERRIDE of item 2's STOP trigger (added POST-DISPATCH, recorded here because
+the override happened in a review message rather than in this contract).**
+
+This task originally instructed that `useNodeLogStream.ts` must NOT be edited — "STOP AND REPORT; do
+not attempt this one", "stays in `files:` only so a STOP report can cite it", and a `## Done when`
+bullet requiring it be "reported back unmodified". The implementer correctly STOPped on it.
+
+**That instruction was based on a WRONG PREMISE in my task text.** I assumed the hook needed the
+503/`isHiveNotConfigured` treatment and would therefore require threading a task id from
+`ProcessLogsViewer` (outside `files:`). Investigation showed something different and worse:
+
+- `useNodeLogStream.ts:80` issues a bare `fetch('/v1/nodes/assignments/${id}/connection-info')`.
+- `/v1/*` is the HIVE's namespace and is **not registered on the node server** — verified:
+  `grep '"/v1' crates/server/src/routes/mod.rs` returns nothing.
+- So on a hive-less node the request falls through to the SPA catch-all and returns **`200
+  text/html`**. Because the status is 200, the `if (!response.ok)` guard never fires, and
+  `response.json()` throws `SyntaxError: Unexpected token '<'` — a user-visible error with a
+  nonsense message, on every hive-less node whose logs are viewed.
+- `isHiveNotConfigured` cannot help: the thrown value is a plain `Error`, and the status is 200, not
+  503.
+
+The fix — a content-type guard placed AFTER the `!response.ok` check — is entirely within
+`useNodeLogStream.ts`, which IS in `files:`. It needs no task id and touches no consumer. The STOP's
+stated reason therefore did not apply, so I authorised the edit.
+
+**Why this is recorded as an amendment rather than left implicit:** the override was issued in a
+SendMessage review brief, not in this contract, which means the shipped code contradicted the
+contract's `## Done when` until this entry existed. Task 403's panel caught exactly that
+("the contract text now contradicts shipped code — needs a ledger/amendment entry before closeout")
+and was right to. Superseding text:
+
+- Item 2's STOP trigger for `useNodeLogStream.ts` is **withdrawn**.
+- `## Done when` no longer requires it be "reported back unmodified"; it requires the content-type
+  guard, placed after `!response.ok`, with BOTH behaviours pinned by tests (200 text/html → quiet
+  no-stream; 500 text/plain → still an error).
 
 ## Failing test (write first)
 

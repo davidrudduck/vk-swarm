@@ -34,6 +34,8 @@
 | F-2026-07-31-06 | Stale doc comment references the removed merged projects view | low | open | crates/db/src/models/project/mod.rs:106 | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
 | F-2026-07-31-07 | remote-frontend/src/types/shared/types.ts is a hand-copied duplicate that has drifted from generated shared/types.ts | medium | open | remote-frontend/src/types/shared/types.ts | session/2026-07-31 | 2026-07-31 | — | — |
 | F-2026-07-31-08 | i18n key settings.swarm.hiveNotConnected undefined in all locales; ja/ko/es fall back to English | low | open | frontend/src/i18n/locales/*/settings.json | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
+| F-2026-08-01-01 | useDiffStream and useRemoteConnectionStatus 503 discrimination is unpinned; an unconditional guard survives the suite | low | open | frontend/src/hooks/useDiffStream.ts:86, frontend/src/hooks/useRemoteConnectionStatus.ts:68 | session/2026-08-01 | 2026-08-01 | vk-swarm-node-ui-localize | — |
+| F-2026-08-01-02 | useAvailableNodes retry suppression is unpinned; test wrapper sets retry:false so retry behaviour cannot be observed | low | open | frontend/src/hooks/useAvailableNodes.test.ts | session/2026-08-01 | 2026-08-01 | vk-swarm-node-ui-localize | — |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
