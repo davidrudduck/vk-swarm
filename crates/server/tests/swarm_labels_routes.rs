@@ -27,8 +27,10 @@ async fn absent_hive_is_registered_and_not_a_500() {
         .get("/api/swarm/labels?organization_id=00000000-0000-0000-0000-000000000000")
         .await;
     res.assert_registered();
-    assert_ne!(
-        res.status, 500,
-        "hive-absent must be the specific HiveNotConfigured 503 (task 401), never an unhandled 500"
+    assert_eq!(
+        res.status, 503,
+        "hive-absent must be the specific HiveNotConfigured 503 (task 401), never an unhandled 500 \
+         and never a silently-different status; body: {}",
+        res.body
     );
 }

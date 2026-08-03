@@ -1295,3 +1295,52 @@ proven by handler-specific output, not by status code); SC5/ADR-0014 (`/api/merg
 
 **Not observable on this host:** SC4's `503 HiveNotConfigured`, because this node IS hive-configured
 (`remote_client()` returned `Ok`). In-process tests cover it. Recorded as a limit, not claimed.
+
+## Task 502 — the hive-absent 503 was never actually pinned (found at 501 close)
+
+**LEDGER: one orchestrator-initiated correction, recorded in full.**
+
+Found by the orchestrator working attack vector 4 independently while the Stage-2 panel was
+running. The four hive-absent tests asserted `assert_ne!(res.status, 500)` under a message that
+*claimed* to pin `503`. The assertion passes for 200/400/401/404 — anything but 500.
+
+**This invalidated a claim already written into task 501's ledger.** The `## Deploy verification`
+section states SC4's 503 is *"not observable on this host ... In-process tests cover it."* That was
+FALSE as written: no in-process test pinned 503. Corrected at the source (the tests), not by
+softening the ledger sentence — the sentence is now true.
+
+Fourth instance of one defect class in this run — `assert_ne!(status, 404)` (phase 1),
+`status >= 500` (402 mutation D), the over-broad content-type guard (403), and now this. All four
+were **invisible to Stage 1** (mechanical) and to the suite (green either way). The through-line
+holds: every one originated in ORCHESTRATOR-authored task text, not in implementer improvisation.
+
+**The product was already correct.** Behaviour is genuinely 503; only the test was hollow. No
+product code changed.
+
+**Mutation evidence — the assertion is real, and all four kill it:**
+
+```text
+$ # mutate crates/server/src/error.rs:201 SERVICE_UNAVAILABLE -> BAD_GATEWAY
+$ cargo test -p server --no-fail-fast --test nodes_routes --test swarm_projects_routes \
+      --test swarm_labels_routes --test swarm_templates_routes
+EXIT=101
+failure blocks: 4
+  left: 502
+ right: 503
+
+$ # revert error.rs, re-run
+$ git diff --stat crates/server/src/error.rs
+(empty)
+test result: ok  x4
+```
+
+`--no-fail-fast` was required: the first run stopped after ONE failure block, which would have left
+three of the four unproven. Checking only the aggregate exit code would have hidden that.
+
+**Full gates after the fix (real exit codes captured, not paraphrased):**
+
+```text
+fmt=0        (nightly imports_granularity/group_imports warnings only; exit code read directly)
+clippy=0     cargo clippy --all --all-targets --all-features -- -D warnings
+test=0       cargo test --workspace  -> 57 "test result: ok" blocks
+```
