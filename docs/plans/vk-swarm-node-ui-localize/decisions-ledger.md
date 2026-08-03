@@ -1171,3 +1171,120 @@ default `retry: 3` untouched for them.
 documented baseline (52 files / 405 tests passing; lint 0, tsc 0), and
 `git diff $(git merge-base HEAD origin/main)..HEAD -- remote-frontend/ crates/remote/` is EMPTY —
 the hive was not touched anywhere in this branch, not merely left passing.
+
+## Reachability gate
+
+Run-level gate, fired once at close (task 501). `change_kind: bugfix` → mandatory.
+Full captures: `reviews/501-live-before-evidence.md`, `reviews/501-live-after-evidence.md`.
+
+### (a) CALL-PATH TRACE
+
+Traced against the **merged code as it actually exists**, not the spec's model of it.
+
+1. **Production entry point.** `crates/server/src/routes/mod.rs` — `pub async fn router(deployment)`
+   composes the app. Its `.merge(...)` chain registers `nodes::router()`, `swarm_projects::router()`,
+   `swarm_labels::router()`, `swarm_templates::router()` under `/api`. The chain **ends** at
+   `.route("/{*path}", get(frontend::serve_frontend))` (`mod.rs:76`).
+2. **Why the bug was invisible.** `serve_frontend` returns `StatusCode::OK` with index.html
+   (`frontend.rs:40-43`). An UNREGISTERED `/api` GET therefore returns **200 text/html**, never 404.
+   This is the spec's one factual error: it described the symptom as a 404. It is not. Consequence,
+   recorded at task 100/105 — `assert_ne!(status, 404)` is **vacuous** here and would have passed
+   against the broken production server. Confirmed live in the before-capture. The spec was NOT
+   edited (ADR-0001); the assertions were corrected instead, and `Resp::assert_registered()`
+   (`crates/server/tests/common/mod.rs`) now fails when a response is the SPA fallback.
+3. **The changed code is ON that path.** `routes/nodes.rs:61-65` declares
+   `.route("/nodes", get(list_nodes))` etc. `list_nodes` (`routes/nodes.rs:22-28`) takes only
+   `State` + `Query` — **no `.layer()`, no auth middleware anywhere in the router**. Body:
+   `deployment.remote_client()?` then `client.list_nodes(query.organization_id).await?`.
+4. **Confirmed executing in production, by output only the handler can produce.** Live on the
+   deployed branch build, `GET /api/nodes` returns
+   `Failed to deserialize query string: missing field 'organization_id'` — emitted by the
+   `Query<ListNodesQuery>` extractor of the restored handler. The catch-all has no extractor and
+   cannot name that field; a nonexistent route cannot reject a query string.
+5. **The proxy traverses end-to-end.** With a well-formed uuid, all four return `401` in the
+   `ApiResponse` envelope. Two sites share that string — `error.rs:261`
+   (`RemoteClient(RemoteClientError::Auth)`) and `error.rs:309` (`ApiError::Unauthorized`). The
+   absence of any middleware layer (step 3) rules out the latter: nothing can 401 before the handler
+   body runs. So the node built a remote client, **called the hive, and propagated the hive's
+   rejection**. Live end-to-end proxy traversal.
+6. **Corollary, stated rather than implied.** `remote_client()?` returned `Ok`, so task 401's
+   `From<RemoteClientNotConfigured>` → `503 HiveNotConfigured` correctly did NOT fire: this host IS
+   hive-configured. SC4's 503 path is consequently **not live-observable on this host by
+   construction**, and remains covered by in-process tests only. Recorded as a known limit of this
+   evidence, not papered over.
+
+### (b) REAL-SEAM TEST
+
+`crates/server/tests/common/mod.rs:109` and `:162` build the app via
+`server::routes::router(deployment.clone()).await` — **the same function the production binary
+calls**, catch-all included. Tests issue real HTTP through that router; none call a handler
+directly. This satisfies the gate's explicit failure mode ("a task whose only test calls the
+changed unit directly FAILS"): no test in this run does.
+
+Seam tests: `nodes_routes.rs`, `swarm_projects_routes.rs`, `swarm_labels_routes.rs`,
+`swarm_templates_routes.rs`, `projects_with_stats.rs`, `harness_smoke.rs`.
+
+`harness_smoke.rs` is load-bearing in a way worth naming: it proves the harness can DETECT the SPA
+fallback. Without it, `assert_registered()` could itself be vacuous — a test asserting a test.
+
+### (c) INCIDENT-SYMPTOM ASSERTION
+
+The incident symptom is *"node Nodes/swarm screens receive HTML where they expect JSON"* — not
+"a helper returns X". Asserted at both levels:
+
+- **Live, before:** all four routes `200 text/html` on `main`/`feff74be` (before-capture).
+- **Live, after:** all four reach the handler and return JSON/extractor errors; `/api/merged-projects`
+  inverted to the SPA (deleted); `/api/projects/with-stats` serves real project rows (after-capture).
+- **In-suite:** `assert_registered()` fails precisely on the content-type signature of the symptom,
+  so a regression re-introducing it turns the suite red rather than green.
+
+(a), (b) and (c) all hold.
+
+VERDICT: PASS
+
+## Deploy verification
+
+Feature-branch build deployed by the user to the live node at `http://10.69.96.233:9001`
+(hive: `https://vkswarm.thedoctor.raverx.net`). Merge is NOT a prerequisite for deploying a branch.
+Build identity was verified BEFORE any probe was trusted — the deployed commit is byte-identical to
+the branch HEAD under review:
+
+```text
+$ curl -s http://10.69.96.233:9001/api/health
+{"status":"ok","version":"0.0.125","git_commit":"374598a7","git_branch":"feat/vk-swarm-node-ui-localize","build_timestamp":"2026-08-03T20:22:33Z","database_ready":true}
+
+$ git rev-parse --short=8 HEAD
+374598a7
+$ git branch --contains 374598a7
+* feat/vk-swarm-node-ui-localize
+
+$ for p in /api/nodes /api/swarm/projects /api/swarm/labels /api/swarm/templates /api/merged-projects /api/projects/with-stats; do
+    printf '%-42s -> ' "$p"; curl -s -o /dev/null -w '%{http_code} %{content_type}\n' "http://10.69.96.233:9001$p"; done
+/api/nodes                                 -> 400 text/plain; charset=utf-8
+/api/swarm/projects                        -> 400 text/plain; charset=utf-8
+/api/swarm/labels                          -> 400 text/plain; charset=utf-8
+/api/swarm/templates                       -> 400 text/plain; charset=utf-8
+/api/merged-projects                       -> 200 text/html
+/api/projects/with-stats                   -> 200 application/json
+
+$ curl -s http://10.69.96.233:9001/api/nodes
+Failed to deserialize query string: missing field `organization_id`
+
+$ curl -s "http://10.69.96.233:9001/api/nodes?organization_id=00000000-0000-0000-0000-000000000000"
+{"success":false,"data":null,"error_data":null,"message":"Unauthorized. Please sign in again."}
+
+$ curl -s http://10.69.96.233:9001/api/merged-projects | head -c 120
+<!DOCTYPE html>
+<html><head><title>Build frontend first</title></head>
+<body><h1>Please build the frontend</h1></body></
+
+$ curl -s http://10.69.96.233:9001/api/projects/with-stats | head -c 200
+{"success":true,"data":{"projects":[{"id":"c8809147-3066-439e-9f2b-9477cb3e8bec","name":"vibe-kanban","git_repo_path":"/home/david/Code/vibe-kanban","created_at":"2025-11-28T03:41:40.239Z","remote_pro
+```
+
+**Observed SC outcomes:** SC1/SC2 (four node-surface routes registered and proxying to the hive —
+proven by handler-specific output, not by status code); SC5/ADR-0014 (`/api/merged-projects` gone,
+`/api/projects/with-stats` serving real rows).
+
+**Not observable on this host:** SC4's `503 HiveNotConfigured`, because this node IS hive-configured
+(`remote_client()` returned `Ok`). In-process tests cover it. Recorded as a limit, not claimed.
