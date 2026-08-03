@@ -2,7 +2,7 @@
 id: "501"
 phase: 5
 title: "Full gates, hive-unchanged regression, and live deploy evidence"
-status: ready
+status: passed
 depends_on: ["105", "202", "203", "204", "303", "402", "403"]
 parallel: false
 conflicts_with: []
