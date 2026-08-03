@@ -76,6 +76,12 @@ before the handler body runs; the only reachable source is `client.list_nodes(..
 `RemoteClientError::Auth` — i.e. **the node built a remote client, called the hive, and propagated
 the hive's rejection of an unauthenticated curl.** That is a full end-to-end proxy traversal, live.
 
+**Ruling out a GLOBAL `/api` auth layer.** A blanket guard would produce the same 401 via
+`error.rs:309` with no per-router `.layer()`, so the router-level argument above is not sufficient
+on its own. The same sweep excludes it: `GET /api/projects/with-stats` returned `200
+application/json` with real project rows on an identical unauthenticated curl. `/api` is not
+blanket-guarded, so the four 401s cannot originate from a global guard.
+
 **A second fact falls out of the same observation.** `deployment.remote_client()?`
 (`routes/nodes.rs:26`) returned `Ok` — otherwise task 401's `From<RemoteClientNotConfigured>`
 mapping would have produced `503 HiveNotConfigured` instead. So this node **is** hive-configured,

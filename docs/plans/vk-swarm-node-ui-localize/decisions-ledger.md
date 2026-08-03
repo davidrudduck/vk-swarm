@@ -1207,6 +1207,13 @@ Traced against the **merged code as it actually exists**, not the spec's model o
    absence of any middleware layer (step 3) rules out the latter: nothing can 401 before the handler
    body runs. So the node built a remote client, **called the hive, and propagated the hive's
    rejection**. Live end-to-end proxy traversal.
+
+   **A GLOBAL `/api` auth layer would defeat that argument** — it would 401 via `error.rs:309`
+   without any per-router `.layer()`, and step 3 alone does not exclude it. The same live capture
+   excludes it empirically: **`GET /api/projects/with-stats` returned `200 application/json` with
+   real project rows on the SAME unauthenticated curl**, in the same sweep. `/api` is therefore not
+   blanket-guarded, so the four 401s cannot come from a global guard. Cited explicitly so a future
+   session need not re-derive it.
 6. **Corollary, stated rather than implied.** `remote_client()?` returned `Ok`, so task 401's
    `From<RemoteClientNotConfigured>` → `503 HiveNotConfigured` correctly did NOT fire: this host IS
    hive-configured. SC4's 503 path is consequently **not live-observable on this host by
