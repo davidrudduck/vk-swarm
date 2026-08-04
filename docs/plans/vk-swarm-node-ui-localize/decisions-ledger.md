@@ -1348,3 +1348,38 @@ fmt=0        (nightly imports_granularity/group_imports warnings only; exit code
 clippy=0     cargo clippy --all --all-targets --all-features -- -D warnings
 test=0       cargo test --workspace  -> 57 "test result: ok" blocks
 ```
+
+## Stage-2 panel FAILURE on tasks 501 and 502 — recorded, not papered over
+
+**Tasks 501 and 502 closed WITHOUT an independent Stage-2 adversarial panel.** A panel
+(`panel-501-a`, Opus) was dispatched with the standard 7 attack vectors. It never returned findings
+despite four explicit requests, cycling to `idle_notification ... "idleReason":"available"` four
+times (2026-08-03 20:42, 2026-08-04 01:31, and two mid-run) without producing a single line of
+output. No partial result, no error.
+
+Every other task in this run (099–403) received a real panel. These two did not.
+
+**What was done instead.** The orchestrator worked the panel's attack vectors directly. This is
+explicitly WEAKER than an independent check — it shares the orchestrator's blind spots, which is the
+entire reason Stage 2 exists as a separate rung. It is recorded as a substitution, not an
+equivalent.
+
+**It was not empty theatre — self-review caught two real defects:**
+
+1. **Vector 4 → task 502 (BLOCKING).** Four hive-absent tests asserted `assert_ne!(res.status, 500)`
+   under a message claiming to pin `503`. This falsified 501's own ledger claim that in-process
+   tests cover SC4's 503 path. Fixed; mutation-verified across all four.
+2. **Vector 6 → the registration proof's justification (MINOR).** The evidence docs asserted the SPA
+   catch-all "has no extractor". It has one: `serve_frontend(uri: axum::extract::Path<String>)`
+   (`frontend.rs:13`). The conclusion held (no `Query` extractor; a wildcard `Path<String>` always
+   succeeds) but the stated reason was wrong. Corrected in both the ledger and the after-evidence
+   doc.
+
+**Vectors NOT independently covered**, and therefore the residual risk a reviewer should weigh:
+1 (call-path trace re-derivation), 3 (real-seam test genuineness), 5 (incident-symptom mapping),
+7 (SC7 hive-untouched) — all were verified by the orchestrator, none by a second party. Vector 7 has
+the strongest independent backing regardless, being a mechanical empty-diff check.
+
+**Recommendation for `/wai:close` or `/wai:ship`:** if an independent adversarial review of 501/502
+is cheap to obtain, run it before merge. The deploy evidence itself is live-captured and
+reproducible from the recorded commands, so re-verification does not depend on trusting this ledger.
