@@ -27,7 +27,12 @@ async fn harness_serves_an_absent_hive() {
     let h = common::HiveHarness::hive_absent().await;
     let res = h.get("/api/organizations").await;
     res.assert_registered();
-    assert_ne!(res.status, 500, "absent hive is not a server error");
+    assert_eq!(
+        res.status, 503,
+        "absent hive must be the specific HiveNotConfigured 503 — list_organizations goes through \
+         deployment.remote_client()? (organizations.rs:72), same as the four swarm routes; body: {}",
+        res.body
+    );
 }
 
 #[tokio::test]
