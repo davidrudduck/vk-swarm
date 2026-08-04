@@ -98,13 +98,31 @@ Caching `GET /v1/oauth/{provider}/start` is the concrete hazard: that endpoint m
 sign-in cannot complete. `NetworkFirst` also falls back to cache on any network hiccup, which
 serves a stale redirect rather than failing loudly.
 
-**This is why the node symptom and the hive symptom are probably one bug.** The node's login is a
-POPUP (`frontend/src/components/dialogs/global/OAuthDialog.tsx:116-124`) that navigates to the
-**hive origin** — where the hive's service worker is registered and intercepting. So a node user's
-login traverses the hive's SW even though the node itself has no SW. Unregistering the PWA clears
-that cache, which matches the user's report that hive sign-in then works.
+**A possible link between the two symptoms — but the user's own report probably contradicts it.**
+The node's login is a POPUP (`frontend/src/components/dialogs/global/OAuthDialog.tsx:116-124`) that
+navigates to the **hive origin**, where the hive's service worker is registered and intercepting. So
+a node user's login traverses the hive's SW even though the node serves no SW of its own. That is a
+mechanism by which one root cause could produce both symptoms.
 
-Still a hypothesis, not a verdict: not yet reproduced.
+**Do not build on it yet.** The user wrote: *"the hive thinks it's a pwa and causes issues until you
+unregister it as a pwa first. signin then works on the hive, but a user on a node cant login."* The
+plain reading is that **after** unregistering the PWA, hive sign-in works and **node sign-in still
+fails** — which would mean the SW is NOT the node blocker's cause, and these are two independent
+bugs. An earlier revision of this document asserted the unification; that was an over-read of the
+report and is retracted here.
+
+**Discriminating question (one sentence, must be answered before any spec):** with the hive PWA
+unregistered — or in a fresh incognito profile with no service worker — does node sign-in still
+fail? Yes → two independent bugs, SW irrelevant to the node blocker. No → the unification holds.
+
+Neither symptom has been reproduced locally. `F-2026-08-03-02` stands on its own merits regardless
+of the answer: caching auth endpoints is a defect independent of what it currently breaks.
+
+**Also unconfirmed:** that `/v1/oauth/*` responses actually land in the cache. `start` returns a
+302, and Workbox `NetworkFirst`'s default `cacheableResponse` is `[0, 200]`, so the redirect may
+never be cached. Check DevTools → Application → Cache Storage → `api-cache` for `/v1/oauth/*`
+entries. Reading the config is not the same as observing the cache — if nothing lands there, this
+hypothesis dies cheaply.
 
 ### Ruled out (do not re-investigate)
 
