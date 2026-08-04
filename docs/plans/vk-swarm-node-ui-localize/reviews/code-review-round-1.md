@@ -56,11 +56,30 @@ presented as a completed high-effort fan-out.
 - **`crates/utils/src/assets.rs` is in scope** — task 099 (`phase-1/099-vk-asset-dir-override.md`,
   passed, covers SC1/SC4), not an accidental inclusion.
 
-**NOT independently covered** — the residual risk a re-reviewer should target first:
+### Addendum — two of the uncovered items closed after the round record was written
+
+Both were on the "not covered" list below; both were then checked inline and are clean. Done before
+`/wai:ship`, so a finding would still have been actionable.
+
+- **`From<RemoteClientNotConfigured>` totality — CLEAN.** `RemoteClientNotConfigured` is a **unit
+  struct** (`crates/deployment/src/lib.rs:39`) carrying no variants, and `remote_client()` returns
+  `Result<RemoteClient, RemoteClientNotConfigured>` (`local-deployment/src/lib.rs:448`). The
+  conversion (`error.rs:105-109`) maps exactly one unambiguous condition. It cannot swallow a
+  different error that should not be a 503.
+- **`with_stats.rs` N+1 / unbounded — CLEAN, and pre-existing.** The handler makes ONE call to
+  `Project::find_local_projects_with_stats`, which is a single aggregate query — `LEFT JOIN tasks`
+  + `LEFT JOIN task_attempts`, `GROUP BY p.id`, `COALESCE(SUM(CASE …))` per status
+  (`crates/db/src/models/project/stats.rs:100-137`). No per-project follow-up query. No `LIMIT`, but
+  the result is bounded by local project count. `crates/db/` is untouched by this branch
+  (`git diff --name-only feff74be..HEAD -- crates/db/` empty), so the query is unchanged from `main`.
+  - Cosmetic, pre-existing, NOT filed: the SQL's `ORDER BY p.created_at DESC` is discarded by the
+    handler's `sort_by(name)`. Harmless; the deleted `merged.rs` did the same.
+
+**Still NOT independently covered** — where a re-reviewer should start:
 semantic (non-signature) drift in the four byte-verbatim restored route modules against current
-surrounding code; totality of `From<RemoteClientNotConfigured>`; N+1/unbounded-result risk in
-`with_stats.rs`; the frontend test files as a body; `HiveNotConnected` render conditions across all
-consumers; orphaned i18n keys.
+surrounding code (compilation proves signatures, and the live probe proves all four proxy to the
+hive end-to-end, which materially reduces but does not eliminate this); the frontend test files as a
+body; `HiveNotConnected` render conditions across all consumers; orphaned i18n keys.
 
 ## Gate results at this commit
 
