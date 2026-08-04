@@ -36,8 +36,9 @@
 | F-2026-07-31-08 | i18n key settings.swarm.hiveNotConnected undefined in all locales; ja/ko/es fall back to English | low | open | frontend/src/i18n/locales/*/settings.json | session/2026-07-31 | 2026-07-31 | vk-swarm-node-ui-localize | — |
 | F-2026-08-01-01 | useDiffStream and useRemoteConnectionStatus 503 discrimination is unpinned; an unconditional guard survives the suite | low | open | frontend/src/hooks/useDiffStream.ts:86, frontend/src/hooks/useRemoteConnectionStatus.ts:68 | session/2026-08-01 | 2026-08-01 | vk-swarm-node-ui-localize | — |
 | F-2026-08-01-02 | useAvailableNodes retry suppression is unpinned; test wrapper sets retry:false so retry behaviour cannot be observed | low | open | frontend/src/hooks/useAvailableNodes.test.ts | session/2026-08-01 | 2026-08-01 | vk-swarm-node-ui-localize | — |
-| F-2026-08-03-01 | Node OAuth handoff does not complete; user cannot sign in on a node and has no permissions | high | open | crates/server/src/routes/oauth.rs:80-119 | session/2026-08-03 | 2026-08-03 | — | — |
-| F-2026-08-03-02 | Hive service worker caches all /v1/ responses incl. auth for 300s; PWA must be unregistered before sign-in works | high | open | remote-frontend/vite.config.ts:16-28 | session/2026-08-03 | 2026-08-03 | — | — |
+| F-2026-08-03-01 | Node OAuth handoff does not complete; user cannot sign in on a node and has no permissions | high | triaged | crates/server/src/routes/oauth.rs:80-119 | session/2026-08-03 | 2026-08-03 | — | root cause = F-2026-08-03-02 (hive SW), confirmed 2026-08-04 |
+| F-2026-08-03-02 | Hive SW intercepts /v1/oauth/* OAuth navigations; blocks node AND hive sign-in until unregistered | high | triaged | remote-frontend/vite.config.ts:19-20 | session/2026-08-03 | 2026-08-03 | — | root cause confirmed by controlled experiment 2026-08-04 |
+| F-2026-08-04-01 | OAuthDialog polls /api/auth/status forever with no timeout or error branch, so auth failures present as an endless spinner | medium | open | frontend/src/components/dialogs/global/OAuthDialog.tsx:95-113 | session/2026-08-04 | 2026-08-04 | — | surfaced while diagnosing F-2026-08-03-02 |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes

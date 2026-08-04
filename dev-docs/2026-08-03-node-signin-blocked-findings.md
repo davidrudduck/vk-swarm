@@ -104,6 +104,54 @@ navigates to the **hive origin**, where the hive's service worker is registered 
 a node user's login traverses the hive's SW even though the node serves no SW of its own. That is a
 mechanism by which one root cause could produce both symptoms.
 
+### 2026-08-04 — ROOT CAUSE CONFIRMED by controlled experiment
+
+User result:
+
+> "opening the hive, unregistering the service worker, switching tabs to the node and logging in via
+> github oauth **works**."
+
+| Hive service worker | Node sign-in |
+|---|---|
+| registered | spins forever |
+| unregistered | **works** |
+
+Single variable changed, both directions observed. **The hive's service worker is the root cause of
+the node sign-in blocker.** The competing browser-extension hypothesis is disproven — extensions
+were active in both arms of this experiment.
+
+**Why the SW sits on the node's login path at all.** Both OAuth legs are hive-origin `/v1/` URLs:
+
+- `authorize_url` = `{public_origin}/v1/oauth/{provider}/start?handoff_id={id}`
+  (`crates/remote/src/auth/handoff.rs:157-162`) — what the node's popup navigates to.
+- the provider `redirect_uri` = `{public_origin}/v1/oauth/{provider}/callback`
+  (`crates/remote/src/auth/handoff.rs:198-202`) — where GitHub sends the browser back.
+
+Both are GET navigations on the hive origin matching
+`url.pathname.startsWith('/v1/') && !url.pathname.startsWith('/v1/shape')`
+(`remote-frontend/vite.config.ts:19-20`). So the SW intercepts the **entire OAuth redirect chain**,
+even though the user started on the node and the node serves no SW of its own.
+
+Two mechanisms are consistent with "spins forever"; the fix is the same either way, and pinning
+which one dominates is a task for the workstream, not a blocker for it:
+
+1. **Redirected responses through a SW.** These legs are 302 chains. A navigation served from a
+   service worker whose response is `redirected: true` is rejected by the browser, so the popup
+   navigation dies silently. The parent then polls `/api/auth/status` forever
+   (`OAuthDialog.tsx:95-113`), which is exactly the observed spin.
+2. **`NetworkFirst` cache fallback.** Any network hiccup serves a stale `/v1/oauth/*` response
+   rather than failing loudly; `/v1/oauth/{provider}/start` rejects a non-`Pending` record
+   (`handoff.rs:194-196`), so a replayed leg cannot succeed.
+
+**The fix has a precedent in the same rule.** `/v1/shape` is already excluded from this cache for an
+analogous reason (streaming/long-poll traffic must not be cached — recorded in the file as
+"adversarial review F3"). Excluding `/v1/oauth` is the same shape of change.
+
+**Second, independent defect surfaced by this.** `OAuthDialog` has **no failure branch** — it polls
+until success with no timeout and no error state, which is why a broken flow presents as an
+indefinite spinner rather than an error. Worth fixing alongside, so the next auth regression is
+diagnosable instead of silent.
+
 ### 2026-08-04 — user reproduction data REINSTATES the link
 
 The user tested the discriminating question and reported:
