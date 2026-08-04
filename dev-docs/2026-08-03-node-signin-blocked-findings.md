@@ -77,9 +77,49 @@ navigations was recognised for the shell but **not** for the `/v1/` API rule.
 `registerType: 'autoUpdate'` plus `remote-frontend/src/lib/pwa.ts` reloading the window on an
 updated SW activation (`pwa.ts:15-19`) may compound this by reloading mid-flow.
 
-**Possible interaction between the two findings:** if the hive SW reloads or replays a navigation
-during the node handoff, it would consume the node's single-use handoff (F-...-01) and produce the
-node symptom. Worth testing together, but do not assume a shared root cause at filing time.
+### 2026-08-03 follow-up: the two findings share a mechanism
+
+**The hive's OAuth endpoints live under `/v1/`, i.e. inside the cached prefix.**
+`crates/remote/src/routes/oauth.rs:27-30` declares:
+
+```text
+POST /oauth/web/init
+POST /oauth/web/redeem
+GET  /oauth/{provider}/start
+GET  /oauth/{provider}/callback
+```
+
+and `crates/remote/src/routes/mod.rs:112-113` mounts both routers with `.nest("/v1", ...)`. So the
+real paths are `/v1/oauth/{provider}/start` and `/v1/oauth/{provider}/callback` — **GETs**, which is
+precisely what Workbox's `NetworkFirst` rule caches. (The two `POST`s are not cached by default.)
+
+Caching `GET /v1/oauth/{provider}/start` is the concrete hazard: that endpoint mints an OAuth
+`state`. A replayed/stale response reuses a dead `state`, so the handoff record never matches and
+sign-in cannot complete. `NetworkFirst` also falls back to cache on any network hiccup, which
+serves a stale redirect rather than failing loudly.
+
+**This is why the node symptom and the hive symptom are probably one bug.** The node's login is a
+POPUP (`frontend/src/components/dialogs/global/OAuthDialog.tsx:116-124`) that navigates to the
+**hive origin** — where the hive's service worker is registered and intercepting. So a node user's
+login traverses the hive's SW even though the node itself has no SW. Unregistering the PWA clears
+that cache, which matches the user's report that hive sign-in then works.
+
+Still a hypothesis, not a verdict: not yet reproduced.
+
+### Ruled out (do not re-investigate)
+
+- **`crypto.subtle` / non-secure-context PKCE (the F-2026-07-06-02 class).** The node runs at
+  `http://10.69.96.233:9001`, a non-loopback plain-HTTP origin, so this looked likely. It is not:
+  `grep -rn "crypto\.|isSecureContext|subtle" frontend/src` returns only CSS/comment matches. The
+  node does PKCE **server-side** in Rust (`routes/oauth.rs:48-49`, `generate_secret` +
+  `hash_sha256_hex`).
+- **Hive `return_to` allowlist rejecting the node's origin.**
+  `is_allowed_return_to` (`crates/remote/src/auth/handoff.rs:488-507`) special-cases loopback and
+  the public origin, then **falls through to `true`** for everything else ("allowing external
+  redirect URL ... rely on PKCE"). It rejects nothing.
+- **`returnTo` pointing at the wrong host.** Derived from
+  `import.meta.env.VITE_APP_BASE_URL || window.location.origin`
+  (`OAuthDialog.tsx:120`), which is correct for a user browsing the node directly.
 
 ## Constraints for whoever picks this up
 
