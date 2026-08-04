@@ -1199,8 +1199,12 @@ Traced against the **merged code as it actually exists**, not the spec's model o
 4. **Confirmed executing in production, by output only the handler can produce.** Live on the
    deployed branch build, `GET /api/nodes` returns
    `Failed to deserialize query string: missing field 'organization_id'` — emitted by the
-   `Query<ListNodesQuery>` extractor of the restored handler. The catch-all has no extractor and
-   cannot name that field; a nonexistent route cannot reject a query string.
+   `Query<ListNodesQuery>` extractor of the restored handler. The catch-all is
+   `serve_frontend(uri: axum::extract::Path<String>)` (`frontend.rs:13`) — a wildcard `Path` capture
+   that always succeeds, with **no `Query` extractor**, so it cannot name that field; a nonexistent
+   route cannot reject a query string. (Corrected: an earlier revision said the catch-all "has no
+   extractor" full stop. It has a `Path` one. Conclusion unchanged — found by working panel attack
+   vector 6, "claims that overstate what the captured output shows", against my own docs.)
 5. **The proxy traverses end-to-end.** With a well-formed uuid, all four return `401` in the
    `ApiResponse` envelope. Two sites share that string — `error.rs:261`
    (`RemoteClient(RemoteClientError::Auth)`) and `error.rs:309` (`ApiError::Unauthorized`). The

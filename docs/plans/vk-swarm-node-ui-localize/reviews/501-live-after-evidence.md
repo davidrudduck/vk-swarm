@@ -47,8 +47,12 @@ Failed to deserialize query string: missing field `organization_id`
 This is **stronger evidence than the content-type flip the before-doc predicted.** That message is
 emitted by Axum's `Query<ListNodesQuery>` extractor rejecting a request that had already been
 **routed to the restored handler** (`crates/server/src/routes/nodes.rs:22-28`). The SPA catch-all
-(`routes/mod.rs:76` → `frontend.rs:40-43`) can only ever return `200 text/html`; it has no
-extractor and cannot name `organization_id`. A route that does not exist cannot reject a query
+(`routes/mod.rs:76` → `frontend.rs:40-43`) can only ever return `200 text/html`. Precisely:
+`serve_frontend` is `serve_frontend(uri: axum::extract::Path<String>)` (`frontend.rs:13`) — a
+wildcard `Path<String>` capture, which always succeeds, and **no `Query` extractor at all**, so it
+can never emit a query-deserialisation error naming `organization_id`. (An earlier revision of this
+doc said the catch-all "has no extractor". That was inaccurate — it has a `Path` extractor. The
+conclusion is unchanged.) A route that does not exist cannot reject a query
 string. Registration is therefore proven by the response BODY, not merely inferred from a header.
 
 ### With a well-formed `organization_id` — the proxy actually traverses to the hive
