@@ -104,18 +104,54 @@ navigates to the **hive origin**, where the hive's service worker is registered 
 a node user's login traverses the hive's SW even though the node serves no SW of its own. That is a
 mechanism by which one root cause could produce both symptoms.
 
-**Do not build on it yet.** The user wrote: *"the hive thinks it's a pwa and causes issues until you
-unregister it as a pwa first. signin then works on the hive, but a user on a node cant login."* The
-plain reading is that **after** unregistering the PWA, hive sign-in works and **node sign-in still
-fails** — which would mean the SW is NOT the node blocker's cause, and these are two independent
-bugs. An earlier revision of this document asserted the unification; that was an over-read of the
-report and is retracted here.
+### 2026-08-04 — user reproduction data REINSTATES the link
 
-**Discriminating question (one sentence, must be answered before any spec):** with the hive PWA
-unregistered — or in a fresh incognito profile with no service worker — does node sign-in still
-fail? Yes → two independent bugs, SW irrelevant to the node blocker. No → the unification holds.
+The user tested the discriminating question and reported:
 
-Neither symptom has been reproduced locally. `F-2026-08-03-02` stands on its own merits regardless
+> "logging in direct to the hive, service worker must be disabled. in incognito mode, the node
+> auth'ed against github as expected and **worked**. but even after clearing all storage, cookies,
+> browser refresh, etc, trying to log in via the node **without** incognito mode results in the
+> node's auth page **just spinning** after clicking 'Sign in with Github' on the hive based page."
+
+So the differential is:
+
+| Context | Node sign-in |
+|---|---|
+| Incognito (no SW, no extensions) | **works** |
+| Normal window, after clearing all storage + cookies | **spins forever** |
+
+This retracts the retraction below: the earlier "plain reading" of the original report was wrong,
+and the SW-link hypothesis is now **supported by observation**. The node blocker and the hive PWA
+issue are very likely one bug after all.
+
+**Why "cleared cookies and storage" does not exonerate the service worker:** clearing cookies and
+site storage does **not** unregister a service worker. A registered SW persists until explicitly
+unregistered (DevTools → Application → Service Workers → Unregister, or ticking "Unregister service
+workers" in Clear site data). Incognito has no SW at all. That asymmetry fits the evidence exactly.
+
+"Just spinning" is the expected UI for this: `OAuthDialog` polls `/api/auth/status` until it flips
+to logged-in (`OAuthDialog.tsx:95-113`). If the handoff never completes, it polls forever — there is
+no failure branch, which is itself a UX defect worth capturing separately.
+
+**Competing hypothesis that fits the SAME signature — do not skip it.** Browser **extensions** are
+also disabled in incognito by default. An extension interfering with the popup or the OAuth
+redirect would produce identical incognito-works/normal-fails behaviour. Discriminate cheaply:
+
+1. Normal window → DevTools → Application → Service Workers → **Unregister** on the hive origin.
+   Retry node sign-in. Works → service worker confirmed.
+2. Still fails → disable extensions (or use a clean browser profile with SW allowed) and retry.
+   Works → an extension, not the SW.
+3. While reproducing, check Application → Cache Storage → `api-cache` for `/v1/oauth/*` entries, and
+   capture the Network tab for the popup — specifically whether any request shows
+   `(from ServiceWorker)`.
+
+**Superseded reasoning, kept for the audit trail.** Before the reproduction above, the user's
+original wording (*"signin then works on the hive, but a user on a node cant login"*) was read as
+meaning node sign-in still failed WITHOUT a service worker, which would have made these two
+independent bugs. That reading is now disproven by the incognito result. Recorded so the reversal
+is visible rather than silently overwritten.
+
+Neither symptom has been reproduced by the assistant locally; the evidence above is the user's. `F-2026-08-03-02` stands on its own merits regardless
 of the answer: caching auth endpoints is a defect independent of what it currently breaks.
 
 **Also unconfirmed:** that `/v1/oauth/*` responses actually land in the cache. `start` returns a
