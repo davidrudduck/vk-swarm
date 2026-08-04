@@ -1383,3 +1383,30 @@ the strongest independent backing regardless, being a mechanical empty-diff chec
 **Recommendation for `/wai:close` or `/wai:ship`:** if an independent adversarial review of 501/502
 is cheap to obtain, run it before merge. The deploy evidence itself is live-captured and
 reproducible from the recorded commands, so re-verification does not depend on trusting this ledger.
+
+## Post-review known issues
+
+Non-actionable findings from the `/dr:code-review` pre-graduation gate (round 1). Recorded so they
+do not resurface as fresh blockers in a later round, per SC3a/SC3b.
+
+1. **`crates/services/tests/normalize_sync_test.rs:359-368` — `test_fast_execution_no_lost_logs`
+   flakes under full-workspace runs.** The `tokio::time::timeout` result is discarded (`let _ =`),
+   so under contention the assertion runs before the normalizer writes and reads 0 patches. NOT
+   caused by this branch — `git diff feff74be..HEAD -- crates/services/ crates/executors/` is empty,
+   and it reproduces with this run's own edit stashed. Promoted to a tracked workstream created in
+   THIS session (`dev-docs/workstreams/services-normalize-flaky-test/`), filed as `F-2026-08-04-02`.
+   Not suppressed — no `#[ignore]`, the test stays live.
+
+2. **`~/.config/pnpm/rc` sets a global `virtual-store-dir` to a temp DAG worktree.** Outside the
+   repo and outside the diff, but it made the whole frontend suite report "no tests, 37 errors"
+   after `/tmp` cleanup gutted the store. Worked around locally
+   (`--virtual-store-dir=node_modules/.pnpm`); suite restored to 37 files / 433 tests. Surfaced to
+   the user — it affects every pnpm project on that machine, so the fix is theirs to make, not a
+   repo change.
+
+3. **Subagent dispatch failed for all three code-review finders** (`cr-rust`, `cr-tests`,
+   `cr-frontend`), as it did earlier for the Stage-2 panel `panel-501-a` on tasks 501/502. Appears
+   systemic to this session. Consequence: round 1's findings come from the orchestrator's own
+   inline review, which is weaker than independent review. The uncovered areas are enumerated in
+   `reviews/code-review-round-1.md` under "NOT independently covered" — that list, not this ledger,
+   is the place to start a re-review.
