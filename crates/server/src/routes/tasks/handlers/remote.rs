@@ -226,17 +226,35 @@ pub(crate) async fn delete_remote_task(
     if let Some(shared_task_id) = task.shared_task_id {
         let remote_client = deployment.remote_client()?;
         let request = DeleteSharedTaskRequest { version: None };
-        remote_client
+        match remote_client
             .delete_shared_task(shared_task_id, &request)
-            .await?;
-
-        tracing::info!(
-            task_id = %task.id,
-            shared_task_id = %shared_task_id,
-            "Deleted remote task via Hive; local cache will be cleaned by WebSocket sync"
-        );
-        // NOTE: Do NOT delete locally here - WebSocket handler will process
-        // the "task.deleted" event and clean up the local cache in a transaction
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    task_id = %task.id,
+                    shared_task_id = %shared_task_id,
+                    "Deleted remote task via Hive; local cache will be cleaned by WebSocket sync"
+                );
+                // NOTE: Do NOT delete locally here - WebSocket handler will process
+                // the "task.deleted" event and clean up the local cache in a transaction
+            }
+            // Idempotent delete: the hive row is already gone (dangling shared_task_id,
+            // e.g. after a hive cutover truncation), so the desired end state is reached
+            // remotely — fall through to the same local deletion the no-shared-id branch
+            // performs. Discriminates on 404 ONLY via RemoteClientError::is_not_found();
+            // auth/transport/timeout/5xx/conflict take the arm below and still abort.
+            // (F-2026-08-05-01, ADR-0015)
+            Err(e) if e.is_not_found() => {
+                tracing::warn!(
+                    task_id = %task.id,
+                    shared_task_id = %shared_task_id,
+                    "Hive returned not-found for dangling shared_task_id; deleting task locally"
+                );
+                Task::delete(&deployment.db().pool, task.id).await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
     } else {
         // Task is marked remote but has no shared_task_id (sync never completed)
         // Delete locally since there's no Hive event to sync from
