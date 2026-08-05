@@ -98,7 +98,10 @@ gh pr merge <PR> --squash
 Then the **mandatory post-merge live verify** (`bugfix` spec, so this is not optional):
 
 ```bash
-WAI_ROOT="$HOME/.claude/plugins/cache/agent-plugins/wai/0.27.2"
+# Resolve WAI_ROOT dynamically — do NOT pin a version. This session pinned
+# .../wai/0.27.2, which went stale the moment the launcher resolved 0.28.2.
+WAI_ROOT="$HOME/.agents/wai"                       # canonical install (wai-install)
+[ -d "$WAI_ROOT/scripts" ] || WAI_ROOT="$(ls -d "$HOME"/.claude/plugins/cache/agent-plugins/wai/* | sort -V | tail -1)"
 bash "$WAI_ROOT/scripts/wai-verify.sh" vk-swarm-node-ui-localize
 ```
 
