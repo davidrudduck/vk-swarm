@@ -40,6 +40,7 @@
 | F-2026-08-03-02 | Hive SW intercepts /v1/oauth/* OAuth navigations; blocks node AND hive sign-in until unregistered | high | triaged | remote-frontend/vite.config.ts:19-20 | session/2026-08-03 | 2026-08-03 | — | root cause confirmed by controlled experiment 2026-08-04 |
 | F-2026-08-04-01 | OAuthDialog polls /api/auth/status forever with no timeout or error branch, so auth failures present as an endless spinner | medium | open | frontend/src/components/dialogs/global/OAuthDialog.tsx:95-113 | session/2026-08-04 | 2026-08-04 | — | surfaced while diagnosing F-2026-08-03-02 |
 | F-2026-08-04-02 | test_fast_execution_no_lost_logs flakes in full-workspace runs; discarded tokio timeout races the assertion | medium | promoted | crates/services/tests/normalize_sync_test.rs:359-368 | session/2026-08-04 | 2026-08-04 | services-normalize-flaky-test | dev-docs/workstreams/services-normalize-flaky-test/README.md |
+| F-2026-08-05-01 | Dangling shared_task_id makes a node task permanently undeletable; hive 404 aborts the delete instead of falling back to local | high | promoted | crates/server/src/routes/tasks/handlers/remote.rs:229-231 | session/2026-08-05 | 2026-08-05 | node-task-delete-dangling-shared-id | dev-docs/workstreams/node-task-delete-dangling-shared-id/README.md |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
