@@ -41,6 +41,7 @@
 | F-2026-08-04-01 | OAuthDialog polls /api/auth/status forever with no timeout or error branch, so auth failures present as an endless spinner | medium | open | frontend/src/components/dialogs/global/OAuthDialog.tsx:95-113 | session/2026-08-04 | 2026-08-04 | hive-oauth-sw-bypass | dev-docs/workstreams/hive-oauth-sw-bypass/README.md |
 | F-2026-08-04-02 | test_fast_execution_no_lost_logs flakes in full-workspace runs; discarded tokio timeout races the assertion | medium | promoted | crates/services/tests/normalize_sync_test.rs:359-368 | session/2026-08-04 | 2026-08-04 | services-normalize-flaky-test | dev-docs/workstreams/services-normalize-flaky-test/README.md |
 | F-2026-08-05-01 | Dangling shared_task_id makes a node task permanently undeletable; hive 404 aborts the delete instead of falling back to local | high | promoted | crates/server/src/routes/tasks/handlers/remote.rs:229-231 | session/2026-08-05 | 2026-08-05 | node-task-delete-dangling-shared-id | dev-docs/workstreams/node-task-delete-dangling-shared-id/README.md |
+| F-2026-08-05-02 | frontend format:check fails on 35 files; lint is ESLint-only so Prettier was never gated | medium | promoted | frontend/package.json | session/2026-08-05 | 2026-08-05 | frontend-prettier-debt | dev-docs/workstreams/frontend-prettier-debt/README.md |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
