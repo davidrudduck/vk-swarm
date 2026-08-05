@@ -12,8 +12,23 @@ describe('HiveNotConnected', () => {
 });
 
 describe('isHiveNotConfigured', () => {
-  it('is true for a 503 ApiError', () => {
-    expect(isHiveNotConfigured(new ApiError('nope', 503))).toBe(true);
+  it('is true for the server’s HiveNotConfigured 503', () => {
+    // Must be the REAL message shape: status alone is not sufficient, because
+    // RemoteClientError::Http forwards an upstream 503 from a hive OUTAGE.
+    expect(
+      isHiveNotConfigured(
+        new ApiError(
+          'HiveNotConfigured: This node is not connected to a hive',
+          503
+        )
+      )
+    ).toBe(true);
+  });
+
+  it('is false for a configured hive that is DOWN (upstream 503 forwarded)', () => {
+    expect(isHiveNotConfigured(new ApiError('Service Unavailable', 503))).toBe(
+      false
+    );
   });
 
   it('is false for other errors', () => {

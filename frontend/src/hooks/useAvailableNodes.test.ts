@@ -21,7 +21,12 @@ describe('useAvailableNodes with no hive', () => {
   it('does not throw and reports no nodes when the server says HiveNotConfigured', async () => {
     const { tasksApi } = await import('@/lib/api');
     vi.mocked(tasksApi.availableNodes).mockRejectedValue(
-      new ApiError('no hive', 503)
+      // The REAL server message — status alone is not sufficient, because an
+      // upstream 503 from a hive OUTAGE is forwarded verbatim.
+      new ApiError(
+        'HiveNotConfigured: This node is not connected to a hive',
+        503
+      )
     );
 
     const { result } = renderHook(() => useAvailableNodes('task-1'), {

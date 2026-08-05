@@ -15,7 +15,9 @@
 | foundations-followup1 | shipped | foundations-followup1 | - | - | 2 |
 | frontend-test-debt-2026-08 | active |  | - | - | 0 |
 | hive-node-api-key-ui | shipped | Hive node API key management UI — generate/revoke/unblock keys on the Nodes page | - | - | 2 |
+| hive-oauth-sw-bypass | active |  | - | - | 0 |
 | node-task-delete-dangling-shared-id | active |  | - | - | 0 |
+| node-ui-localize-followups | active |  | - | - | 0 |
 | remote-docker-build-fix | shipped | Fix crates/remote Docker build — unblock remote/hive standup | - | - | 2 |
 | remote-services-doctest-revival | active | Bring 32 rust,ignore'd doctests in remote + services crates back to live | - | - | 0 |
 | services-normalize-flaky-test | active |  | - | - | 0 |
@@ -28,6 +30,7 @@
 | vk-swarm-node-foundations | shipped | Phase 2a — node correct, durable, crash-resumable (ships first) | - | - | 2 |
 | vk-swarm-node-ui-localize | shipped | Localize the node frontend — proxy swarm management to the hive, make the board local-only | - | - | 2 |
 | vk-swarm-refactor | draft | vk-swarm orchestration platform — 8-phase program umbrella | - | - | 1 |
+| worktree-orphan-sweep-guard | active |  | - | - | 0 |
 
 <!-- WAI:STATUS:END -->
 
@@ -50,8 +53,6 @@ _None._
 | id | title | severity | status | location |
 |---|---|---|---|---|
 | F-2026-07-22-01 | NodeCard references undefined vks tokens (vks-pulse, --vks-text-dim) | low | open | remote-frontend/src/components/swarm/NodeCard.tsx:48-53 |
-| F-2026-07-29-01 | node Nodes page and swarm labels call removed /api/nodes and /api/swarm routes | high | open | frontend/src/pages/Nodes.tsx |
-| F-2026-07-29-02 | node board still consumes MergedProject via bridge endpoint, repoint to Project | medium | open | frontend/src/hooks/useMergedProjects.ts |
 | F-2026-07-29-03 | hive drawer and navbar actions disabled pending hive APIs, no assign or delete E2E | medium | open | remote-frontend/src/ui/panels/TaskDrawer.tsx |
 | F-2026-07-29-04 | remote-frontend vitest flaky when run concurrently with vite build in same dir | low | open | remote-frontend/ |
 | F-2026-07-30-01 | `cargo test -p db` fails to compile: integration test needs the test-utils feature | medium | open | crates/db/tests/task_visibility_discriminator.rs:9 |
