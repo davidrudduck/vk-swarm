@@ -1,14 +1,15 @@
 ---
 workstream: vk-swarm-node-ui-localize
 doc_type: readme
-status: draft
+status: shipped
 title: "Localize the node frontend — proxy swarm management to the hive, make the board local-only"
-staging_pointers:
-  - docs/superpowers/specs/2026-07-30-vk-swarm-node-ui-localize.md
 depends_on: [vk-swarm-node-foundations]
 adrs:
   - dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md
   - dev-docs/adr/0014-retire-mergedproject-for-projectwithstats.md
+staging_pointers:
+  - docs/plans/vk-swarm-node-ui-localize
+  - docs/superpowers/specs/2026-07-30-vk-swarm-node-ui-localize.md
 ---
 
 # vk-swarm-node-ui-localize

@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: vk-swarm-node-ui-localize
 change_kind: bugfix
 verify_cmd: "curl -fsS http://127.0.0.1:${BACKEND_PORT:-3001}/api/projects/with-stats | grep -q 'success.:true'"
