@@ -26,3 +26,6 @@ export { MergeTemplatesDialog } from './MergeTemplatesDialog';
 
 // Node Templates (for promoting to swarm templates)
 export { NodeTemplatesSection } from './NodeTemplatesSection';
+
+// Hive not-connected state
+export { HiveNotConnected } from './HiveNotConnected';

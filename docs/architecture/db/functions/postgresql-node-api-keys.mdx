@@ -5,6 +5,10 @@ description: PostgreSQL functions for API key management and security in the Hiv
 
 # Node API Key Functions
 
+> **Node API keys are managed on the hive only.** The node server exposes no
+> `/api/nodes/api-keys*` routes — see
+> [ADR-0013](../../../../dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md).
+
 Functions for managing node API keys in the PostgreSQL Hive database. API keys authenticate nodes connecting to the Hive with security features for duplicate detection.
 
 **Source:** `crates/remote/src/db/node_api_keys.rs`
@@ -60,7 +64,7 @@ async fn create(
 **Returns:** Created API key (without raw value).
 
 **Used By:**
-- `routes/nodes.rs` - POST /api/nodes/api-keys
+- `crates/remote/src/routes/nodes.rs` - POST /v1/nodes/api-keys
 
 **Notes:**
 - Raw key returned separately by service layer
@@ -105,7 +109,7 @@ async fn find_by_id(&self, key_id: Uuid) -> Result<Option<NodeApiKey>, NodeApiKe
 ```
 
 **Used By:**
-- `routes/nodes.rs` - Key management
+- `crates/remote/src/routes/nodes.rs` - Key management
 
 ---
 
@@ -138,7 +142,7 @@ async fn list_by_organization(
 **Returns:** Keys ordered by creation date descending.
 
 **Used By:**
-- `routes/nodes.rs` - GET /api/nodes/api-keys
+- `crates/remote/src/routes/nodes.rs` - GET /v1/nodes/api-keys
 
 ---
 
@@ -168,7 +172,7 @@ async fn revoke(&self, key_id: Uuid) -> Result<(), NodeApiKeyError>
 ```
 
 **Used By:**
-- `routes/nodes.rs` - DELETE /api/nodes/api-keys/:id
+- `crates/remote/src/routes/nodes.rs` - DELETE /v1/nodes/api-keys/:id
 
 **Notes:**
 - Sets `revoked_at` timestamp
@@ -186,7 +190,11 @@ async fn delete(&self, key_id: Uuid) -> Result<(), NodeApiKeyError>
 ```
 
 **Used By:**
-- `routes/nodes.rs` - Hard delete option
+- `crates/remote/src/nodes/service.rs:263` — `NodeServiceImpl::delete_api_key`
+
+> **No route reaches this function.** The hive's `DELETE /v1/nodes/api-keys/:id`
+> (`crates/remote/src/routes/nodes.rs:57`) calls `revoke_api_key`, which performs a soft revoke.
+> `delete_api_key` has no caller, so this hard delete is currently unreachable from the API.
 
 ---
 
@@ -326,7 +334,7 @@ async fn unblock_key(&self, key_id: Uuid) -> Result<NodeApiKey, NodeApiKeyError>
 **Returns:** Unblocked key with reset counters.
 
 **Used By:**
-- `routes/nodes.rs` - POST /api/nodes/api-keys/:id/unblock
+- `crates/remote/src/routes/nodes.rs` - POST /v1/nodes/api-keys/:id/unblock
 
 ---
 

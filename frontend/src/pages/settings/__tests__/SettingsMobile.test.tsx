@@ -82,7 +82,7 @@ describe('MobileSettingsAccordion', () => {
     await waitFor(() => {
       // Check section titles by looking at the accordion header structure
       const sectionHeaders = screen.getAllByTestId('section-icon');
-      expect(sectionHeaders.length).toBe(6);
+      expect(sectionHeaders.length).toBe(8);
     });
 
     // Verify all section buttons are present
@@ -171,12 +171,12 @@ describe('MobileSettingsAccordion', () => {
 
     const searchInput = screen.getByPlaceholderText(/search settings/i);
 
-    // Type to search for "backup" (more unique than "mcp")
-    fireEvent.change(searchInput, { target: { value: 'backup' } });
+    // Type to search for "system" (unique match; "backup" was folded into "system")
+    fireEvent.change(searchInput, { target: { value: 'system' } });
 
     // Wait for filter to apply
     await waitFor(() => {
-      // Should only show backup section
+      // Should only show system section
       const accordionButtons = screen
         .getAllByRole('button')
         .filter((btn) =>
@@ -214,7 +214,7 @@ describe('MobileSettingsAccordion', () => {
     await waitFor(() => {
       // Each section should have an icon
       const icons = screen.getAllByTestId('section-icon');
-      expect(icons.length).toBe(6);
+      expect(icons.length).toBe(8);
     });
   });
 
@@ -242,7 +242,7 @@ describe('MobileSettingsAccordion', () => {
     await waitFor(() => {
       // Each section should show a description
       const descriptions = screen.getAllByTestId('section-description');
-      expect(descriptions.length).toBe(6);
+      expect(descriptions.length).toBe(8);
     });
   });
 });

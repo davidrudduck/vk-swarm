@@ -78,7 +78,7 @@ describe('BottomNav', () => {
     (useLocation as Mock).mockReturnValue({ pathname: '/projects' });
     render(<BottomNav />);
     const projectsBtn = screen.getByRole('button', { name: /projects/i });
-    expect(projectsBtn.className).toMatch(/text-primary|bg-primary/);
+    expect(projectsBtn).toHaveAttribute('aria-current', 'page');
   });
 
   it('should highlight active route for Tasks', () => {
@@ -87,7 +87,7 @@ describe('BottomNav', () => {
     });
     render(<BottomNav />);
     const tasksBtn = screen.getByRole('button', { name: /tasks/i });
-    expect(tasksBtn.className).toMatch(/text-primary|bg-primary/);
+    expect(tasksBtn).toHaveAttribute('aria-current', 'page');
   });
 
   it('should navigate on tap', () => {

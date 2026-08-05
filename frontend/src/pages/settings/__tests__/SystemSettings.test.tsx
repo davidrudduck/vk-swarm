@@ -34,16 +34,20 @@ vi.mock('@/components/settings', () => ({
 }));
 
 // Mock lucide icons to reduce noise
-vi.mock('lucide-react', () => {
+vi.mock('lucide-react', async () => {
+  const React = await vi.importActual<typeof import('react')>('react');
   // Create a generic icon component
-  const Icon = ({ className }: { className?: string }) => (
-    <div className={className}>Icon</div>
-  );
+  const Icon = ({ className }: { className?: string }) =>
+    React.createElement('div', { className }, 'Icon');
 
   return new Proxy(
-    {},
+    { __esModule: true },
     {
-      get: () => Icon,
+      get: (target, prop) =>
+        prop === 'then' || prop === '__esModule' || typeof prop === 'symbol'
+          ? Reflect.get(target, prop)
+          : Icon,
+      has: () => true,
     }
   );
 });
@@ -199,7 +203,7 @@ describe('SystemSettings', () => {
     await waitFor(() => {
       expect(mockShow).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: expect.stringContaining('Optimisation'),
+          title: expect.stringContaining('Optimize Database'),
           message: expect.stringContaining('VACUUM'),
           variant: 'info',
         })

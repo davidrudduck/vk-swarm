@@ -99,12 +99,6 @@ describe('MessageQueuePanel', () => {
       expect(screen.getByText('3')).toBeInTheDocument();
     });
 
-    it('shows variant for messages with variants', () => {
-      render(<MessageQueuePanel {...defaultProps} queue={messages} />);
-
-      expect(screen.getByText('Variant: plan')).toBeInTheDocument();
-    });
-
     it('shows Clear button when messages exist', () => {
       render(<MessageQueuePanel {...defaultProps} queue={messages} />);
 

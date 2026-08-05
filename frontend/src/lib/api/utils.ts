@@ -24,6 +24,37 @@ export class ApiError<E = unknown> extends Error {
   }
 }
 
+/**
+ * Discriminator the server emits for `ApiError::HiveNotConfigured`.
+ *
+ * `into_response` builds the message as `format!("{}: {}", error_type, self)`
+ * (`crates/server/src/error.rs`), so the body message is
+ * `"HiveNotConfigured: This node is not connected to a hive"`. A Rust test pins
+ * this prefix — if it changes, the backend suite fails rather than this guard
+ * silently going dead.
+ */
+const HIVE_NOT_CONFIGURED_CODE = 'HiveNotConfigured';
+
+/**
+ * True when an error is the server's "this node is not connected to a hive"
+ * response (`ApiError::HiveNotConfigured` -> HTTP 503).
+ *
+ * **Status alone is NOT sufficient.** `RemoteClientError::Http` forwards the
+ * upstream status verbatim (`error.rs`: `StatusCode::from_u16(*status)`), so a
+ * configured-but-DOWN hive returning 503 would otherwise be misread as "no hive
+ * configured" — showing the not-connected UI for an outage, and (because callers
+ * resolve rather than throw for this case) suppressing the retry that would let
+ * it recover. The message discriminator separates the two: a forwarded upstream
+ * 503 carries the hive's own body, not this code.
+ */
+export function isHiveNotConfigured(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 503 &&
+    err.message.startsWith(HIVE_NOT_CONFIGURED_CODE)
+  );
+}
+
 /** Request timeout in milliseconds (30 seconds) */
 export const REQUEST_TIMEOUT_MS = 30000;
 

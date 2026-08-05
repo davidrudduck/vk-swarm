@@ -1,0 +1,34 @@
+# Human approval token — task 302 (irreversible)
+
+Approved by: drudduck@expansionx.com.au (repo owner), via the /wai:execute human gate.
+Date: 2026-07-31
+Scope of approval: task 302 ONLY. Task 303 was offered as a combined approval and DECLINED —
+it must return to the human gate separately.
+
+## What was approved
+
+Repointing the project board and switcher from `MergedProject` onto `ProjectWithStats`, including
+deletion of three frontend files:
+- `frontend/src/hooks/useMergedProjects.ts`
+- `frontend/src/components/projects/LocationBadges.tsx`
+- `frontend/src/components/projects/ProjectTypeFilter.tsx`
+
+plus the rewrite of ~23 references to the dropped fields `has_local`, `local_project_id`, `nodes`
+across `ProjectList.tsx`, `UnifiedProjectCard.tsx`, and `ProjectSwitcher.tsx`.
+
+## Facts surfaced at the gate before approval
+
+- All three dropped fields have been CONSTANTS since node-foundations (`merged.rs` hardcodes
+  `has_local: true`, `local_project_id: Some(project.id)`, `nodes: Vec::new()`), so:
+  - `LocationBadges` renders `project.nodes` — it has been rendering nothing.
+  - `ProjectTypeFilter`'s "swarm" tab has always matched zero projects.
+  - The `!has_local` branches are dead code.
+- Blast radius verified: `has_local` appears in exactly the four files in `files:`; `MergedProject`
+  has exactly six consumers, all in `files:`.
+- All STOP triggers verified clear before dispatch (F2/F4).
+- `/api/merged-projects` and `MergedProject` SURVIVE this task (deleted by 303), so the old path
+  remains available if the new board misbehaves.
+- Task 301's endpoint was proven by five hollow-test experiments plus a runtime probe showing both
+  endpoints returning identical shared fields.
+
+Decision: **approve — run 302**, pause again before 303.

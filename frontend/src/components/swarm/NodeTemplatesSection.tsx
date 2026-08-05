@@ -27,6 +27,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { templatesApi } from '@/lib/api';
+import { isHiveNotConfigured } from '@/lib/api/utils';
+import { HiveNotConnected } from './HiveNotConnected';
 import {
   useSwarmTemplates,
   useSwarmTemplateMutations,
@@ -60,10 +62,11 @@ export function NodeTemplatesSection({
   });
 
   // Fetch swarm templates to check which ones are already promoted
-  const { data: swarmTemplates = [] } = useSwarmTemplates({
-    organizationId,
-    enabled: !!organizationId,
-  });
+  const { data: swarmTemplates = [], error: swarmTemplatesError } =
+    useSwarmTemplates({
+      organizationId,
+      enabled: !!organizationId,
+    });
 
   // Mutations for creating swarm template
   const mutations = useSwarmTemplateMutations({
@@ -153,6 +156,8 @@ export function NodeTemplatesSection({
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
+          ) : isHiveNotConfigured(swarmTemplatesError) ? (
+            <HiveNotConnected />
           ) : error ? (
             <div className="px-4 pb-4 sm:px-6">
               <Alert variant="destructive">

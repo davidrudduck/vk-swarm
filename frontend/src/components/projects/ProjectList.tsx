@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { MergedProject } from 'shared/types';
+import { ProjectWithStats } from 'shared/types';
 import { ProjectFormDialog } from '@/components/dialogs/projects/ProjectFormDialog';
 import { Loader2, Plus } from 'lucide-react';
 import UnifiedProjectCard from '@/components/projects/UnifiedProjectCard.tsx';
@@ -13,16 +13,13 @@ import ProjectSortControls, {
   SortOption,
   loadSortOption,
 } from '@/components/projects/ProjectSortControls';
-import ProjectTypeFilterTabs, {
-  ProjectTypeFilter,
-} from '@/components/projects/ProjectTypeFilter';
 import { useKeyCreate, Scope } from '@/keyboard';
-import { useMergedProjects } from '@/hooks/useMergedProjects';
+import { useProjectsWithStats } from '@/hooks/useProjectsWithStats';
 
 function sortProjects(
-  projects: MergedProject[],
+  projects: ProjectWithStats[],
   sortOption: SortOption
-): MergedProject[] {
+): ProjectWithStats[] {
   return [...projects].sort((a, b) => {
     switch (sortOption) {
       case 'name_asc':
@@ -53,66 +50,29 @@ function sortProjects(
   });
 }
 
-function filterProjects(
-  projects: MergedProject[],
-  filter: ProjectTypeFilter
-): MergedProject[] {
-  switch (filter) {
-    case 'local':
-      return projects.filter((p) => p.has_local);
-    case 'swarm':
-      return projects.filter((p) => p.nodes.length > 0);
-    case 'all':
-    default:
-      return projects;
-  }
-}
-
 export function ProjectList() {
   const navigate = useNavigate();
   const { t } = useTranslation('projects');
   const [focusedProjectId, setFocusedProjectId] = useState<string | null>(null);
   const [sortOption, setSortOption] = useState<SortOption>(loadSortOption);
-  const [typeFilter, setTypeFilter] = useState<ProjectTypeFilter>('all');
 
-  // Fetch merged projects (includes local and remote)
+  // Fetch this node's projects with display enrichment
   const {
-    data: mergedData,
+    data: projectsData,
     isLoading,
-    refetch: refetchMerged,
-  } = useMergedProjects();
-
-  // Calculate counts for filter tabs
-  const counts = useMemo(() => {
-    const projects = mergedData?.projects ?? [];
-    return {
-      total: projects.length,
-      local: projects.filter((p) => p.has_local).length,
-      swarm: projects.filter((p) => p.nodes.length > 0).length,
-    };
-  }, [mergedData?.projects]);
-
-  // Calculate total node count for subtitle
-  const nodeCount = useMemo(() => {
-    const projects = mergedData?.projects ?? [];
-    const uniqueNodeIds = new Set<string>();
-    projects.forEach((p) => {
-      p.nodes.forEach((n) => uniqueNodeIds.add(n.node_id));
-    });
-    return uniqueNodeIds.size;
-  }, [mergedData?.projects]);
+    refetch: refetchProjects,
+  } = useProjectsWithStats();
 
   const sortedProjects = useMemo(() => {
-    const projects = mergedData?.projects ?? [];
-    const filtered = filterProjects(projects, typeFilter);
-    return sortProjects(filtered, sortOption);
-  }, [mergedData?.projects, sortOption, typeFilter]);
+    const projects = projectsData?.projects ?? [];
+    return sortProjects(projects, sortOption);
+  }, [projectsData?.projects, sortOption]);
 
   const handleCreateProject = async () => {
     try {
       const result = await ProjectFormDialog.show({});
       if (result === 'saved') {
-        refetchMerged();
+        refetchProjects();
       }
     } catch {
       // User cancelled - do nothing
@@ -123,10 +83,8 @@ export function ProjectList() {
   useKeyCreate(handleCreateProject, { scope: Scope.PROJECTS });
 
   const handleEditProject = useCallback(
-    (project: MergedProject) => {
-      if (project.has_local && project.local_project_id) {
-        navigate(`/settings/projects?projectId=${project.local_project_id}`);
-      }
+    (project: ProjectWithStats) => {
+      navigate(`/settings/projects?projectId=${project.id}`);
     },
     [navigate]
   );
@@ -138,7 +96,7 @@ export function ProjectList() {
     }
   }, [sortedProjects, focusedProjectId]);
 
-  const hasProjects = counts.total > 0;
+  const hasProjects = (projectsData?.projects.length ?? 0) > 0;
   const hasFilteredProjects = sortedProjects.length > 0;
 
   return (
@@ -152,12 +110,6 @@ export function ProjectList() {
             </h1>
             <p className="text-muted-foreground text-sm mt-0.5">
               {t('subtitle')}
-              {nodeCount > 0 && (
-                <span className="ml-1 text-muted-foreground/70">
-                  {' '}
-                  • {nodeCount} node{nodeCount !== 1 ? 's' : ''}
-                </span>
-              )}
             </p>
           </div>
           <Button onClick={handleCreateProject} className="shrink-0">
@@ -169,11 +121,6 @@ export function ProjectList() {
         {/* Filter/Sort Bar */}
         {hasProjects && (
           <div className="flex flex-wrap gap-3 mt-4 items-center justify-between">
-            <ProjectTypeFilterTabs
-              value={typeFilter}
-              onChange={setTypeFilter}
-              counts={counts}
-            />
             <ProjectSortControls value={sortOption} onChange={setSortOption} />
           </div>
         )}
@@ -226,7 +173,7 @@ export function ProjectList() {
                   <UnifiedProjectCard
                     project={project}
                     isFocused={focusedProjectId === project.id}
-                    onRefresh={refetchMerged}
+                    onRefresh={refetchProjects}
                     onEdit={handleEditProject}
                   />
                 </motion.div>

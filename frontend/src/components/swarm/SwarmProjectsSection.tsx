@@ -14,6 +14,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { SwarmProjectRow } from './SwarmProjectRow';
 import { SwarmProjectDialog } from './SwarmProjectDialog';
 import { MergeProjectsDialog } from './MergeProjectsDialog';
+import { HiveNotConnected } from './HiveNotConnected';
+import { isHiveNotConfigured } from '@/lib/api/utils';
 import {
   useSwarmProjects,
   useSwarmProjectNodes,
@@ -209,6 +211,8 @@ export function SwarmProjectsSection({
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
+          ) : isHiveNotConfigured(error) ? (
+            <HiveNotConnected />
           ) : error ? (
             <div className="px-4 pb-4 sm:px-6">
               <Alert variant="destructive">

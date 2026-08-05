@@ -21,6 +21,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SwarmLabelDialog } from './SwarmLabelDialog';
 import { MergeLabelsDialog } from './MergeLabelsDialog';
+import { HiveNotConnected } from './HiveNotConnected';
+import { isHiveNotConfigured } from '@/lib/api/utils';
 import { useSwarmLabels, useSwarmLabelMutations } from '@/hooks/useSwarmLabels';
 import type { SwarmLabel } from '@/types/swarm';
 import type { Label } from 'shared/types';
@@ -205,6 +207,8 @@ export function SwarmLabelsSection({
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
+          ) : isHiveNotConfigured(error) ? (
+            <HiveNotConnected />
           ) : error ? (
             <div className="px-4 pb-4 sm:px-6">
               <Alert variant="destructive">

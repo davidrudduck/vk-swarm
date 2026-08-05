@@ -10,7 +10,7 @@ import type {
   SearchResult,
   ScanConfigRequest,
   ScanConfigResponse,
-  MergedProjectsResponse,
+  ProjectsWithStatsResponse,
   LinkToLocalFolderRequest,
   RemoteProjectMembersResponse,
   OpenEditorRequest,
@@ -103,9 +103,9 @@ export const projectsApi = {
     return handleApiResponse<ScanConfigResponse>(response);
   },
 
-  getMerged: async (): Promise<MergedProjectsResponse> => {
-    const response = await makeRequest('/api/merged-projects');
-    return handleApiResponse<MergedProjectsResponse>(response);
+  getWithStats: async (): Promise<ProjectsWithStatsResponse> => {
+    const response = await makeRequest('/api/projects/with-stats');
+    return handleApiResponse<ProjectsWithStatsResponse>(response);
   },
 
   linkLocalFolder: async (data: LinkToLocalFolderRequest): Promise<Project> => {

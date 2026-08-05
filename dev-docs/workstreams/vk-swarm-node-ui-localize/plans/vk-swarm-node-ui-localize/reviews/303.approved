@@ -1,0 +1,39 @@
+# Human approval token — task 303 (irreversible)
+
+Approved by: drudduck@expansionx.com.au (repo owner), via the /wai:execute human gate.
+Date: 2026-07-31
+Scope: task 303 ONLY. A combined "303 + phase 4 upfront" approval was offered and DECLINED,
+so phase 4 proceeds under normal reporting.
+
+## What was approved
+
+Permanent deletion of the pre-ProjectWithStats surface:
+- `crates/server/src/routes/projects/handlers/merged.rs`
+- the `/api/merged-projects` HTTP route
+- exported types `MergedProject`, `MergedProjectsResponse`, `NodeLocation`, their `#[ts(export)]`
+  registrations and their entries in `shared/types.ts`
+- `getMerged` in `frontend/src/lib/api/projects.ts`
+
+## Facts surfaced at the gate before approval
+
+- Task 301 preserved the enrichment verbatim at `/api/projects/with-stats`; task 302's board test
+  is green and proven non-hollow (it fails when task counts are zeroed AND when the project list
+  is empty — the a85f7d63 blank-board regression).
+- Payload parity verified at the projection level by task 302's panel: `with_stats.rs` and
+  `merged.rs` run the same query, map the same 12 shared fields, apply the identical sort, and add
+  no LIMIT or filter. Nothing disappears from the board.
+- Every surviving reference is inside the task's `files:` list (verified pre-dispatch, G2).
+- `TaskCounts` survives (used by `ProjectWithStats`); `handlers/core.rs` needs no edit;
+  `impl From<Project> for RemoteNodeProject` (`types.rs:88-110`) is protected (G4).
+- This reverses the SHAPE of `a85f7d63` but not its intent — that commit restored the endpoint so
+  the board would render; that capability now lives at the new endpoint.
+
+## Related decision — F-2026-07-31-04 (asked at the same gate)
+
+`frontend/src/components/dialogs/projects/LinkToLocalFolderDialog.tsx` was orphaned by task 302.
+The user chose **"Leave it — backlog only"**: the dialog, `projectsApi.linkLocalFolder`, the
+`useProjectMutations` entry and the `/api/projects/link-local` server route all REMAIN untouched.
+No product behaviour is retired inside this workstream; the finding stays open for a follow-up.
+**Task 303 must not touch any of them.**
+
+Decision: **approve — run 303**.

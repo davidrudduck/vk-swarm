@@ -98,23 +98,23 @@ function createMockTask(
 }
 
 describe('TodosBadge', () => {
-  it('should render nothing when todos is empty', () => {
-    const { container } = render(<TodosBadge todos={[]} />);
-    expect(container.firstChild).toBeNull();
+  it('renders with (0) when todos is empty', () => {
+    render(<TodosBadge todos={[]} />);
+    expect(screen.getByRole('button')).toBeInTheDocument();
+    expect(screen.getByText('(0)')).toBeInTheDocument();
   });
 
-  it('should render nothing when todos is undefined', () => {
-    const { container } = render(
-      <TodosBadge todos={undefined as unknown as TodoItem[]} />
-    );
-    expect(container.firstChild).toBeNull();
+  it('renders with (0) when todos is undefined', () => {
+    render(<TodosBadge todos={undefined as unknown as TodoItem[]} />);
+    expect(screen.getByRole('button')).toBeInTheDocument();
+    expect(screen.getByText('(0)')).toBeInTheDocument();
   });
 
   it('should display pending count in badge', () => {
     const todos = createMockTodos();
     render(<TodosBadge todos={todos} />);
     // 2 pending (pending + in_progress), 1 completed
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('(2)')).toBeInTheDocument();
   });
 
   it('should show todo count when all completed', () => {
@@ -124,7 +124,7 @@ describe('TodosBadge', () => {
     ];
     render(<TodosBadge todos={todos} />);
     // 0 pending
-    expect(screen.getByText('0')).toBeInTheDocument();
+    expect(screen.getByText('(0)')).toBeInTheDocument();
   });
 
   it('should have accessible label', () => {

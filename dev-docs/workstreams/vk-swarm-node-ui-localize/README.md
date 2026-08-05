@@ -1,14 +1,15 @@
 ---
 workstream: vk-swarm-node-ui-localize
 doc_type: readme
-status: draft
+status: shipped
 title: "Localize the node frontend — proxy swarm management to the hive, make the board local-only"
-staging_pointers:
-  - docs/superpowers/specs/2026-07-30-vk-swarm-node-ui-localize.md
 depends_on: [vk-swarm-node-foundations]
 adrs:
   - dev-docs/adr/0013-restore-node-surface-hive-proxy-routes.md
   - dev-docs/adr/0014-retire-mergedproject-for-projectwithstats.md
+staging_pointers:
+  - docs/plans/vk-swarm-node-ui-localize
+  - docs/superpowers/specs/2026-07-30-vk-swarm-node-ui-localize.md
 ---
 
 # vk-swarm-node-ui-localize
@@ -105,3 +106,80 @@ Three tracks: A (restore routes, backend-only), B (`MergedProject` retirement, f
 C (hive-absent hardening, after A). A and B are file-disjoint and parallel.
 
 Next: `/wai:precheck vk-swarm-node-ui-localize`.
+
+## Precheck passed (2026-07-30)
+
+`/wai:precheck` LOCAL PASS → committed here as DURABLE COMPLETE. Token:
+`docs/plans/vk-swarm-node-ui-localize/.precheck.passed`, `spec_sha=6946be63…`. **The spec is now
+frozen (ADR-0001)** — decompose/execute halt on drift; changing it means re-running precheck to
+re-freeze, never editing it to make a run pass.
+
+Three spec defects the gate caught and this session fixed:
+1. Success criteria lacked colon-anchored `SC<N>:` ids.
+2. No `## User stories`, so no `→ US<N>:` parent for any criterion (added US1–US7).
+3. **A real contradiction:** SC1/SC3 still asserted the `/api/nodes/api-keys` surface that
+   decision D3 deletes. The spec would have shipped an SC the design contradicts.
+
+**Known false positive — anchor check skipped (`--no-anchor-check`).** `wai-precheck.sh:240`
+extracts anchors with `(src|extensions|ui|packages|apps)/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+`, which
+matches the *substring* `src/routes/organizations.rs` inside
+`crates/server/src/routes/organizations.rs` and then fails `git cat-file -e main:src/...`. This
+misfires on **every** Rust path in this repo (`crates/*/src/…`) — it is not specific to this spec.
+All nine anchors were verified by hand against `main` instead:
+
+```
+✓ crates/server/src/routes/organizations.rs        ✓ frontend/src/App.tsx
+✓ crates/server/src/routes/mod.rs                  ✓ frontend/src/components/org/NodeApiKeySection.tsx
+✓ crates/server/src/routes/projects/mod.rs         ✓ frontend/src/components/projects/LocationBadges.tsx
+✓ crates/server/src/routes/projects/handlers/merged.rs  ✓ frontend/src/hooks/useMergedProjects.ts
+✓ crates/services/src/services/remote_client.rs
+```
+
+Worth fixing upstream in the `wai` plugin (anchor the regex to a path boundary).
+
+Next: `/wai:decompose vk-swarm-node-ui-localize`.
+
+## Deferred to a follow-up workstream (user-directed, 2026-07-30)
+
+**F-2026-07-30-03 (high) — orphan worktree sweep deletes uncommitted work.**
+`crates/local-deployment/src/container.rs:319-383` calls `remove_dir_all` on orphaned
+worktrees with **no dirty-file guard**, unlike `cleanup_expired_attempt` in the same file.
+Discovered by this run's adversarial panel; **out of scope** for this workstream (frozen
+spec, ADR-0001 — no task file covers it).
+
+The user has explicitly directed that it be fixed immediately **after** this workstream
+ships. At `/wai:ship`, promote it: `/wai:finding-promote F-2026-07-30-03`. Mirror the
+existing guard in `cleanup_expired_attempt` rather than inventing a new check.
+
+## Pre-existing frontend test debt — named scope split (2026-07-31)
+
+Discovered at task 201's Stage-1 gate, NOT caused by this workstream (phase 1 changed only Rust
+and docs). Baseline captured on a clean tree before any phase-2 change:
+
+```
+ Test Files  8 failed | 26 passed (34)
+      Tests  15 failed | 408 passed (423)
+```
+
+Failing files: `BottomNav`, `MessageQueuePanel`, `ConversationFocusMode`, `taskSorting`,
+`SettingsMobile`, `SystemSettings`, `DesignSystem`, `MobileIntegration`.
+
+Filed as **F-2026-07-31-01** (SettingsMobile asserts 6 accordion sections, component renders 8),
+**F-2026-07-31-02** (`SystemSettings.test.tsx:40` — `vi.mock` factory closes over a hoisted import,
+suite fails to load), and **F-2026-07-31-03** (the remaining six files).
+
+**Why this is a sanctioned split and not a silent deferral** (CLAUDE.md "No Deferred Remediation"):
+
+1. It is pre-existing debt unrelated to this workstream's scope (the frozen spec covers node
+   hive-proxy routes, the API-key surface, `ProjectWithStats`, and the hive-absent state — none of
+   these test files).
+2. It is tracked here and in `dev-docs/BACKLOG.md` with specific file:line evidence.
+3. `frontend` vitest is NOT among the PR gates CLAUDE.md requires. Those are: `cargo clippy`,
+   `cargo test --workspace`, `frontend` lint + `tsc --noEmit`, `remote-frontend` lint +
+   `tsc --noEmit` + `vitest run`. **`frontend`'s `npx tsc --noEmit` is GREEN at baseline (exit 0)**
+   and remains a live, load-bearing gate for every phase 2-4 task.
+4. Every task that touches `frontend/` in this run asserts the **baseline delta**: the failing set
+   must remain identical (same 8 files, same 15 assertions). A new failure is a STOP. The run
+   therefore cannot hide a regression behind "the suite was already red".
+
+Fixing these belongs to a follow-up workstream alongside F-2026-07-30-03.

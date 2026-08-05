@@ -3,9 +3,9 @@ pub mod types;
 
 // Re-export types for public API
 pub use types::{
-    GitHubCountsResponse, LinkToLocalFolderRequest, ListProjectFilesQuery, MergedProject,
-    MergedProjectsResponse, NodeLocation, OpenEditorRequest, OpenEditorResponse, OrphanedProject,
-    OrphanedProjectsResponse, RemoteNodeGroup, RemoteNodeProject, SetGitHubEnabledRequest,
+    GitHubCountsResponse, LinkToLocalFolderRequest, ListProjectFilesQuery, OpenEditorRequest,
+    OpenEditorResponse, OrphanedProject, OrphanedProjectsResponse, ProjectWithStats,
+    ProjectsWithStatsResponse, RemoteNodeGroup, RemoteNodeProject, SetGitHubEnabledRequest,
     TaskCounts, UnifiedProject,
 };
 
@@ -33,14 +33,13 @@ use handlers::{
     force_resync_tasks,
     // GitHub handlers
     get_github_counts,
-    // Merged handlers
-    get_merged_projects,
     get_project,
     get_project_branches,
     // Linking handlers
     get_project_remote_members,
     get_project_sync_health,
     get_projects,
+    get_projects_with_stats,
     link_to_local_folder,
     list_orphaned_projects,
     // File handlers
@@ -132,6 +131,7 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
 
     let projects_router = Router::new()
         .route("/", get(get_projects).post(create_project))
+        .route("/with-stats", get(get_projects_with_stats))
         .route("/scan-config", post(scan_project_config))
         .route("/link-local", post(link_to_local_folder))
         .route(
@@ -143,9 +143,7 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .nest("/by-remote-id/{remote_project_id}", by_remote_id_router)
         .merge(by_remote_id_files_router);
 
-    Router::new()
-        .nest("/projects", projects_router)
-        .route("/merged-projects", get(get_merged_projects))
+    Router::new().nest("/projects", projects_router)
 }
 
 // Note: Type tests are in types.rs

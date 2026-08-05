@@ -16,31 +16,28 @@ import {
   Edit,
   ExternalLink,
   FolderOpen,
-  Link2,
   MoreHorizontal,
   Terminal,
   Trash2,
 } from 'lucide-react';
 import GithubIcon from '@/components/ui/github-icon';
-import type { MergedProject, Project } from 'shared/types';
+import type { ProjectWithStats, Project } from 'shared/types';
 import { useEffect, useRef } from 'react';
 import { useNavigateWithSearch } from '@/hooks';
 import { projectsApi } from '@/lib/api';
-import { LinkToLocalFolderDialog } from '@/components/dialogs/projects/LinkToLocalFolderDialog';
 import { GitHubSettingsDialog } from '@/components/dialogs/projects/GitHubSettingsDialog';
 import { TerminalDialog } from '@/components/dialogs/terminal/TerminalDialog';
 import { useTranslation } from 'react-i18next';
 import { ProjectEditorSelectionDialog } from '@/components/dialogs/projects/ProjectEditorSelectionDialog';
 import { GitHubBadges } from './GitHubBadges';
 import { TaskCountPills } from './TaskCountPills';
-import { LocationBadges } from './LocationBadges';
 import { cn } from '@/lib/utils';
 
 type Props = {
-  project: MergedProject;
+  project: ProjectWithStats;
   isFocused: boolean;
   onRefresh: () => void;
-  onEdit?: (project: MergedProject) => void;
+  onEdit?: (project: ProjectWithStats) => void;
 };
 
 /**
@@ -72,8 +69,6 @@ function UnifiedProjectCard({ project, isFocused, onRefresh, onEdit }: Props) {
   }, [isFocused]);
 
   const handleDelete = async () => {
-    if (!project.has_local || !project.local_project_id) return;
-
     if (
       !confirm(
         `Are you sure you want to delete "${project.name}"? This action cannot be undone.`
@@ -82,7 +77,7 @@ function UnifiedProjectCard({ project, isFocused, onRefresh, onEdit }: Props) {
       return;
 
     try {
-      await projectsApi.delete(project.local_project_id);
+      await projectsApi.delete(project.id);
       onRefresh();
     } catch (error) {
       console.error('Failed to delete project:', error);
@@ -97,10 +92,8 @@ function UnifiedProjectCard({ project, isFocused, onRefresh, onEdit }: Props) {
   };
 
   const handleOpenInIDE = async () => {
-    if (!project.has_local || !project.local_project_id) return;
-
     try {
-      const response = await projectsApi.openEditor(project.local_project_id, {
+      const response = await projectsApi.openEditor(project.id, {
         editor_type: null,
         file_path: null,
       });
@@ -113,7 +106,7 @@ function UnifiedProjectCard({ project, isFocused, onRefresh, onEdit }: Props) {
       // Show editor selection dialog on failure
       ProjectEditorSelectionDialog.show({
         selectedProject: {
-          id: project.local_project_id,
+          id: project.id,
           name: project.name,
           git_repo_path: project.git_repo_path,
           created_at: project.created_at,
@@ -129,7 +122,7 @@ function UnifiedProjectCard({ project, isFocused, onRefresh, onEdit }: Props) {
   };
 
   const handleOpenTerminal = async () => {
-    if (!project.has_local || !project.git_repo_path) return;
+    if (!project.git_repo_path) return;
     try {
       await TerminalDialog.show({
         workingDir: project.git_repo_path,
@@ -142,11 +135,10 @@ function UnifiedProjectCard({ project, isFocused, onRefresh, onEdit }: Props) {
   };
 
   const handleGitHubSettings = async () => {
-    if (!project.has_local || !project.local_project_id) return;
     try {
       const result = await GitHubSettingsDialog.show({
         project: {
-          id: project.local_project_id,
+          id: project.id,
           github_enabled: project.github_enabled,
           github_owner: project.github_owner,
           github_repo: project.github_repo,
@@ -213,107 +205,67 @@ function UnifiedProjectCard({ project, isFocused, onRefresh, onEdit }: Props) {
                 {t('viewProject')}
               </DropdownMenuItem>
 
-              {project.has_local && (
-                <>
-                  <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleOpenInIDE();
-                    }}
-                  >
-                    <FolderOpen className="mr-2 h-4 w-4" />
-                    {t('openInIDE')}
-                  </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleOpenInIDE();
+                }}
+              >
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('openInIDE')}
+              </DropdownMenuItem>
 
-                  <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleOpenTerminal();
-                    }}
-                  >
-                    <Terminal className="mr-2 h-4 w-4" />
-                    {t('openTerminal')}
-                  </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleOpenTerminal();
+                }}
+              >
+                <Terminal className="mr-2 h-4 w-4" />
+                {t('openTerminal')}
+              </DropdownMenuItem>
 
-                  <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleGitHubSettings();
-                    }}
-                  >
-                    <GithubIcon className="mr-2 h-4 w-4" />
-                    {t('github.settings')}
-                  </DropdownMenuItem>
-                </>
-              )}
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleGitHubSettings();
+                }}
+              >
+                <GithubIcon className="mr-2 h-4 w-4" />
+                {t('github.settings')}
+              </DropdownMenuItem>
 
               {/* Local project actions */}
-              {project.has_local && (
-                <>
-                  <DropdownMenuSeparator />
-                  {onEdit && (
-                    <DropdownMenuItem
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleEdit();
-                      }}
-                    >
-                      <Edit className="mr-2 h-4 w-4" />
-                      {t('common:buttons.edit')}
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete();
-                    }}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    {t('common:buttons.delete')}
-                  </DropdownMenuItem>
-                </>
+              <DropdownMenuSeparator />
+              {onEdit && (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleEdit();
+                  }}
+                >
+                  <Edit className="mr-2 h-4 w-4" />
+                  {t('common:buttons.edit')}
+                </DropdownMenuItem>
               )}
-
-              {/* Remote-only project actions */}
-              {!project.has_local && project.remote_project_id && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      try {
-                        const result = await LinkToLocalFolderDialog.show({
-                          remoteProjectId: project.remote_project_id!,
-                          projectName: project.name,
-                        });
-                        if (result.action === 'linked') {
-                          onRefresh();
-                        }
-                      } catch (error) {
-                        console.error('Failed to link to local folder:', error);
-                        alert(t('errors.linkFolderFailed'));
-                      }
-                    }}
-                  >
-                    <Link2 className="mr-2 h-4 w-4" />
-                    {t('linkToLocalFolder')}
-                  </DropdownMenuItem>
-                </>
-              )}
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDelete();
+                }}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                {t('common:buttons.delete')}
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-
-        {/* Location badges row */}
-        <div className="mt-1.5">
-          <LocationBadges project={project} />
         </div>
       </CardHeader>
 
       <CardContent className="pt-0 pb-3 space-y-3">
         {/* GitHub row (if enabled) */}
-        {project.github_enabled && project.has_local && (
+        {project.github_enabled && (
           <div onClick={(e) => e.stopPropagation()}>
             <GitHubBadges
               project={{

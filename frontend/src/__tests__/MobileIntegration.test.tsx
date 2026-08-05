@@ -222,11 +222,12 @@ describe('Mobile Integration Tests', () => {
       render(<BottomNav />);
 
       const menuBtn = screen.getByRole('button', { name: /menu/i });
-      // Should have active styling (primary color)
-      expect(menuBtn.className).toMatch(/text-primary|bg-primary/);
+      // Should have active styling (aria-current marks the active route)
+      expect(menuBtn).toHaveAttribute('aria-current', 'page');
 
       const projectsBtn = screen.getByRole('button', { name: /projects/i });
       // Should not have active styling
+      expect(projectsBtn).not.toHaveAttribute('aria-current');
       expect(projectsBtn.className).toMatch(/text-muted-foreground/);
     });
   });
