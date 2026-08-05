@@ -2,6 +2,13 @@ packages:
   - 'frontend'
   - 'remote-frontend'
 
+allowBuilds:
+  esbuild: false
+
+minimumReleaseAgeExclude:
+  - '@tanstack/db@0.6.14'
+  - '@tanstack/electric-db-collection@0.3.12'
+
 onlyBuiltDependencies:
   - '@sentry/cli'
   - core-js
