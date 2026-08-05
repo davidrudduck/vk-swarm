@@ -1255,13 +1255,13 @@ VERDICT: PASS
 
 ## Deploy verification
 
-Feature-branch build deployed by the user to the live node at `http://10.69.96.233:9001`
-(hive: `https://vkswarm.thedoctor.raverx.net`). Merge is NOT a prerequisite for deploying a branch.
+Feature-branch build deployed by the user to the live node at `http://NODE_HOST`
+(hive: `https://HIVE_HOST`). Merge is NOT a prerequisite for deploying a branch.
 Build identity was verified BEFORE any probe was trusted — the deployed commit is byte-identical to
 the branch HEAD under review:
 
 ```text
-$ curl -s http://10.69.96.233:9001/api/health
+$ curl -s http://NODE_HOST/api/health
 {"status":"ok","version":"0.0.125","git_commit":"374598a7","git_branch":"feat/vk-swarm-node-ui-localize","build_timestamp":"2026-08-03T20:22:33Z","database_ready":true}
 
 $ git rev-parse --short=8 HEAD
@@ -1270,7 +1270,7 @@ $ git branch --contains 374598a7
 * feat/vk-swarm-node-ui-localize
 
 $ for p in /api/nodes /api/swarm/projects /api/swarm/labels /api/swarm/templates /api/merged-projects /api/projects/with-stats; do
-    printf '%-42s -> ' "$p"; curl -s -o /dev/null -w '%{http_code} %{content_type}\n' "http://10.69.96.233:9001$p"; done
+    printf '%-42s -> ' "$p"; curl -s -o /dev/null -w '%{http_code} %{content_type}\n' "http://NODE_HOST$p"; done
 /api/nodes                                 -> 400 text/plain; charset=utf-8
 /api/swarm/projects                        -> 400 text/plain; charset=utf-8
 /api/swarm/labels                          -> 400 text/plain; charset=utf-8
@@ -1278,18 +1278,18 @@ $ for p in /api/nodes /api/swarm/projects /api/swarm/labels /api/swarm/templates
 /api/merged-projects                       -> 200 text/html
 /api/projects/with-stats                   -> 200 application/json
 
-$ curl -s http://10.69.96.233:9001/api/nodes
+$ curl -s http://NODE_HOST/api/nodes
 Failed to deserialize query string: missing field `organization_id`
 
-$ curl -s "http://10.69.96.233:9001/api/nodes?organization_id=00000000-0000-0000-0000-000000000000"
+$ curl -s "http://NODE_HOST/api/nodes?organization_id=00000000-0000-0000-0000-000000000000"
 {"success":false,"data":null,"error_data":null,"message":"Unauthorized. Please sign in again."}
 
-$ curl -s http://10.69.96.233:9001/api/merged-projects | head -c 120
+$ curl -s http://NODE_HOST/api/merged-projects | head -c 120
 <!DOCTYPE html>
 <html><head><title>Build frontend first</title></head>
 <body><h1>Please build the frontend</h1></body></
 
-$ curl -s http://10.69.96.233:9001/api/projects/with-stats | head -c 200
+$ curl -s http://NODE_HOST/api/projects/with-stats | head -c 200
 {"success":true,"data":{"projects":[{"id":"c8809147-3066-439e-9f2b-9477cb3e8bec","name":"vibe-kanban","git_repo_path":"/home/david/Code/vibe-kanban","created_at":"2025-11-28T03:41:40.239Z","remote_pro
 ```
 

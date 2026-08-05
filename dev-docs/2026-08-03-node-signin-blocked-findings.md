@@ -211,7 +211,7 @@ hypothesis dies cheaply.
 ### Ruled out (do not re-investigate)
 
 - **`crypto.subtle` / non-secure-context PKCE (the F-2026-07-06-02 class).** The node runs at
-  `http://10.69.96.233:9001`, a non-loopback plain-HTTP origin, so this looked likely. It is not:
+  `http://NODE_HOST`, a non-loopback plain-HTTP origin, so this looked likely. It is not:
   `grep -rn "crypto\.|isSecureContext|subtle" frontend/src` returns only CSS/comment matches. The
   node does PKCE **server-side** in Rust (`routes/oauth.rs:48-49`, `generate_secret` +
   `hash_sha256_hex`).
@@ -229,5 +229,5 @@ hypothesis dies cheaply.
   goes through `/data/Code/vk-swarm` and the WAI workflow. Treat that directory as build output.
 - That path has previously hosted a separate vibe-kanban instance on port 9002; confirm the
   topology before touching any process, and never use `pkill`/`killall` (CLAUDE.md).
-- After `/wai:ship` merges `vk-swarm-node-ui-localize`, the node at `10.69.96.233:9001` must be
+- After `/wai:ship` merges `vk-swarm-node-ui-localize`, the node at `NODE_HOST` must be
   redeployed off the feature branch onto `main`.

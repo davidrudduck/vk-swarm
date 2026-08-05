@@ -3,10 +3,16 @@
 Captured **2026-08-03** against the user's real node deployment, read-only GETs only.
 Pairs with [`501-live-before-evidence.md`](501-live-before-evidence.md), same host, same six paths.
 
+> **Host addresses redacted.** `NODE_HOST` and `HIVE_HOST` stand for the real node and hive
+> addresses this evidence was captured against. This repository is public, so the internal
+> addresses were replaced before publication. Every status code, content-type, response body,
+> command, and commit hash below is **unmodified** — only the host portion is opaque. The capture
+> is reproducible by substituting the real hosts.
+
 ## Target under test — build identity verified BEFORE trusting any probe
 
 ```text
-$ curl -s http://10.69.96.233:9001/api/health
+$ curl -s http://NODE_HOST/api/health
 {"status":"ok","version":"0.0.125","git_commit":"374598a7","git_branch":"feat/vk-swarm-node-ui-localize","build_timestamp":"2026-08-03T20:22:33Z","database_ready":true}
 ```
 
@@ -34,13 +40,13 @@ The before-capture ran against `main`/`feff74be`; this is the same host on this 
 ### Bodies — the decisive part
 
 ```text
-$ curl -s http://10.69.96.233:9001/api/nodes
+$ curl -s http://NODE_HOST/api/nodes
 Failed to deserialize query string: missing field `organization_id`
-$ curl -s http://10.69.96.233:9001/api/swarm/projects
+$ curl -s http://NODE_HOST/api/swarm/projects
 Failed to deserialize query string: missing field `organization_id`
-$ curl -s http://10.69.96.233:9001/api/swarm/labels
+$ curl -s http://NODE_HOST/api/swarm/labels
 Failed to deserialize query string: missing field `organization_id`
-$ curl -s http://10.69.96.233:9001/api/swarm/templates
+$ curl -s http://NODE_HOST/api/swarm/templates
 Failed to deserialize query string: missing field `organization_id`
 ```
 
@@ -59,13 +65,13 @@ string. Registration is therefore proven by the response BODY, not merely inferr
 
 ```text
 $ O=00000000-0000-0000-0000-000000000000
-$ curl -s "http://10.69.96.233:9001/api/nodes?organization_id=$O"
+$ curl -s "http://NODE_HOST/api/nodes?organization_id=$O"
 {"success":false,"data":null,"error_data":null,"message":"Unauthorized. Please sign in again."}
-$ curl -s "http://10.69.96.233:9001/api/swarm/projects?organization_id=$O"
+$ curl -s "http://NODE_HOST/api/swarm/projects?organization_id=$O"
 {"success":false,"data":null,"error_data":null,"message":"Unauthorized. Please sign in again."}
-$ curl -s "http://10.69.96.233:9001/api/swarm/labels?organization_id=$O"
+$ curl -s "http://NODE_HOST/api/swarm/labels?organization_id=$O"
 {"success":false,"data":null,"error_data":null,"message":"Unauthorized. Please sign in again."}
-$ curl -s "http://10.69.96.233:9001/api/swarm/templates?organization_id=$O"
+$ curl -s "http://NODE_HOST/api/swarm/templates?organization_id=$O"
 {"success":false,"data":null,"error_data":null,"message":"Unauthorized. Please sign in again."}
 ```
 
@@ -96,7 +102,7 @@ rather than implied.
 ### `/api/merged-projects` — deleted, now falls through to the SPA
 
 ```text
-$ curl -s http://10.69.96.233:9001/api/merged-projects | head -c 120
+$ curl -s http://NODE_HOST/api/merged-projects | head -c 120
 <!DOCTYPE html>
 <html><head><title>Build frontend first</title></head>
 <body><h1>Please build the frontend</h1></body></
@@ -108,7 +114,7 @@ catch-all serves the SPA placeholder. ADR-0014 satisfied.
 ### `/api/projects/with-stats` — live, with real data
 
 ```text
-$ curl -s http://10.69.96.233:9001/api/projects/with-stats | head -c 400
+$ curl -s http://NODE_HOST/api/projects/with-stats | head -c 400
 {"success":true,"data":{"projects":[{"id":"c8809147-3066-439e-9f2b-9477cb3e8bec","name":"vibe-kanban","git_repo_path":"/home/david/Code/vibe-kanban","created_at":"2025-11-28T03:41:40.239Z","remote_project_id":"e9debe6a-f267-4243-8e46-e2fabdbe66c8","last_attempt_at":"2026-06-25T01:24:50Z","github_enabled":false,"github_owner":null,"github_repo":null,"github_open_issues":0,"github_open_prs":0,"githu
 ```
 

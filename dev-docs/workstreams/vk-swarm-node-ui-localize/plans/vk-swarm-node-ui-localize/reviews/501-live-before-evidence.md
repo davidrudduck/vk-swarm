@@ -3,10 +3,16 @@
 Captured against the user's real deployment on **2026-08-03**, read-only GETs only.
 This is the reachability gate's part (c): the incident symptom **observed live**, not inferred.
 
+> **Host addresses redacted.** `NODE_HOST` and `HIVE_HOST` stand for the real node and hive
+> addresses this evidence was captured against. This repository is public, so the internal
+> addresses were replaced before publication. Every status code, content-type, response body,
+> command, and commit hash below is **unmodified** — only the host portion is opaque. The capture
+> is reproducible by substituting the real hosts.
+
 ## Target under test
 
 ```text
-$ curl -s http://10.69.96.233:9001/api/health
+$ curl -s http://NODE_HOST/api/health
 {"status":"ok","version":"0.0.125","git_commit":"feff74be","git_branch":"main","build_timestamp":"2026-08-01T09:34:53Z","database_ready":true}
 ```
 
@@ -16,7 +22,7 @@ branch. That is what makes this a valid *before* observation.
 The hive is up and healthy, so this is not a hive outage:
 
 ```text
-$ curl -s -o /dev/null -w 'hive health -> %{http_code} %{content_type}\n' https://vkswarm.thedoctor.raverx.net/v1/health
+$ curl -s -o /dev/null -w 'hive health -> %{http_code} %{content_type}\n' https://HIVE_HOST/v1/health
 hive health -> 200 application/json
 ```
 

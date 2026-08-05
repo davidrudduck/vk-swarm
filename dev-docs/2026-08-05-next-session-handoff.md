@@ -9,7 +9,7 @@ Written at the close of the `vk-swarm-node-ui-localize` ship. Start a fresh sess
   PASS, `/dr:code-review` round 1 `Actionable: []`).
 - **The branch `feat/vk-swarm-node-ui-localize` is pushed but NOT merged, and no PR exists yet.**
   This is the one loose end. See "Finish the merge" below.
-- The live node `http://10.69.96.233:9001` is still running the **feature branch** build
+- The live node `http://NODE_HOST` is still running the **feature branch** build
   (`374598a7`). It needs redeploying off `main` once the merge lands.
 
 ## Can the three open items be done together? — YES, with one caveat
