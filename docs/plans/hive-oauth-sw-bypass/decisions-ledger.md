@@ -137,3 +137,41 @@ $ npm run lint       # eslint . --max-warnings 0
 ```
 
 No further undictated choices — the amendment's code block was applied byte-exactly.
+
+## Reachability gate
+
+### (a) Call-path trace (merged code on feat/hive-oauth-sw-bypass)
+Production entry point: node user clicks "Continue with GitHub" in `OAuthDialog`
+(`frontend/src/components/dialogs/global/OAuthDialog.tsx` — `handleProviderSelect` →
+`initHandoff.mutate`; on success the popup opens at `data.authorize_url`, OAuthDialog.tsx:51-52).
+`authorize_url` is minted by the hive as `{public_origin}/v1/oauth/{provider}/start?...`
+(`crates/remote/src/auth/handoff.rs:157-166`), and the provider redirects back to
+`{public_origin}/v1/oauth/{provider}/callback` (`handoff.rs:198-205`). Both are GET navigations
+on the hive origin, where the PWA service worker is registered. The SW's ONLY runtime route for
+`/v1/` is the api-cache rule in `remote-frontend/vite.config.ts`; the changed predicate at
+vite.config.ts:27-29 now returns false for both legs (`!url.pathname.startsWith('/v1/oauth')`,
+line 29), so the SW registers no respondWith for the OAuth chain — the fix executes on exactly
+the path the bug lives on. The compiled sw.js carries the serialized arrow (task 102 evidence:
+`grep -c 'v1/oauth' dist/sw.js` = 1), so the exclusion exists in the artifact the browser runs.
+The second defect's path: a dead flow leaves `isPolling` true forever; the new deadline effect
+(OAuthDialog.tsx, deps `[isPolling]`) is on that exact path and fires at POLL_DEADLINE_MS.
+
+### (b) Real-seam test
+- The Workbox config→sw.js seam is driven by the REAL build: task 102's verification runs
+  `npx vite build` (vite-plugin-pwa generateSW) and asserts the exclusion literal is present in
+  the emitted `dist/sw.js` (count=1) — not a mock of the serializer. Drift guards tie the inline
+  predicate to the vitest-pinned mirror module clause-for-clause.
+- The dialog seam is driven by the component's real UI: `OAuthDialog.test.tsx` renders the real
+  component, clicks the real provider button, and observes the rendered error state + polling
+  `enabled` flag across the deadline (5/5 green; RED-first evidence in `### task 202`).
+- The full browser-level seam (registered SW intercepting a real popup navigation) is only
+  observable on the deployed system — covered by `## Deploy verification` below (SC1b/SC2/SC3
+  operator evidence).
+
+### (c) Incident-symptom assertion
+Incident symptom (F-2026-08-03-01/-02): "sign-in spins forever; works only after unregistering
+the SW". Mapped assertions: post-deadline the dialog STOPS spinning and shows
+`oauth.timeoutError` + `oauth.tryAgain` with polling ceased (`enabled:false`) — the "silent
+infinite spin" symptom is now impossible (test: OAuthDialog.test.tsx, assertions 2/3). The
+root-cause symptom ("works only after unregistering") is asserted live in Deploy verification:
+SC2/SC3 sign-ins complete WITH the SW registered.
