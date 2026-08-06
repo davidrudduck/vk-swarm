@@ -175,3 +175,26 @@ the SW". Mapped assertions: post-deadline the dialog STOPS spinning and shows
 infinite spin" symptom is now impossible (test: OAuthDialog.test.tsx, assertions 2/3). The
 root-cause symptom ("works only after unregistering") is asserted live in Deploy verification:
 SC2/SC3 sign-ins complete WITH the SW registered.
+
+### task 301 — full gate suites (2026-08-06, run in tmux gates301)
+```
+clippy_exit=0
+test_exit=0
+f_lint=0
+f_tsc=0
+f_vitest=0
+rf_lint=0
+rf_tsc=0
+rf_vitest=0
+DONE
+```
+Log tails:
+```
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+[2m   Duration [22m 18.08s[2m (transform 3.13s, setup 1.72s, import 14.86s, tests 12.06s, environment 16.62s)[22m
+
+[2m   Duration [22m 25.57s[2m (transform 1.32s, setup 2.25s, import 7.08s, tests 20.73s, environment 19.44s)[22m
+
+```
