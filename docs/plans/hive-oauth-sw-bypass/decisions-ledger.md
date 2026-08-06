@@ -199,6 +199,21 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ```
 
+### Reachability amendment (post round-1 deploy failure)
+The original trace's claim "the SW's ONLY runtime route for /v1/ is the api-cache rule" was
+WRONG: generateSW's default navigateFallback also registered an unconditional NavigationRoute
+(`registerRoute(new NavigationRoute(createHandlerBoundToURL("index.html")))` in the served
+worker) that answered both OAuth NAVIGATIONS with the SPA shell — runtimeCaching routes never
+see navigations handled by it. Amendment 3 (commit 4e796e5e) adds
+`navigateFallbackDenylist: [/^\/v1\//]`; the real build emits `denylist:[/^\/v1\//]` into
+dist/sw.js (verified by grep on the emitted artifact and on the deployed system), so every
+/v1/ navigation falls through to the network. Corrected trace: OAuth popup navigation →
+NavigationRoute denylist rejects → no api-cache match (oauth excluded) → network. Live
+round-2 operator observations (SC2/SC3 PASS, SC1b PASS) confirm the corrected path executes
+in production.
+
+VERDICT: PASS
+
 ## Deploy verification
 
 Feature-branch build deployed to the live hive 2026-08-06 (compose project `remote`,
