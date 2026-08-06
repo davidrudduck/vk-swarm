@@ -222,3 +222,32 @@ SC1a (served sw.js carries the compiled /v1/oauth exclusion): OBSERVED above.
 SC1b (api-cache empty of /v1/oauth), SC2 (node sign-in, SW registered), SC3 (hive
 sign-in, SW registered), SC4 (stalled flow → 120s timeout error): operator
 observations pending — to be appended below when performed.
+
+### Deploy verification round 1 — SC2/SC3 FAILED; amendment 3 (navigateFallbackDenylist)
+
+Operator observation on the round-1 deploy (bb9fa1fd build): hive sign-in STILL
+required unregistering the SW; intermittent "OAuth session lost. Please try again."
+Root cause found in the served worker:
+
+```
+$ grep -o 'registerRoute([^,]*' live-sw.js | head -1
+registerRoute(new e.NavigationRoute(e.createHandlerBoundToURL("index.html")))
+```
+
+generateSW's default navigateFallback registers an UNCONDITIONAL NavigationRoute:
+every top-level navigation — including /v1/oauth/{provider}/start and /callback —
+is answered with the precached SPA index.html. The api-cache urlPattern exclusion
+(runtime caching) never sees navigations, so the shipped fix was necessary but not
+sufficient. The spec's mechanism model (NetworkFirst api-cache rule as the
+interceptor) was incomplete — exactly the class of defect the deploy-verification
+gate exists to catch.
+
+Amendment 3 (orchestrator): add `navigateFallbackDenylist: [/^\/v1\//]` to the
+workbox config — /v1/* are server endpoints, never SPA routes. Verified compiled:
+
+```
+$ grep -o 'denylist[^]]*]' dist/sw.js
+denylist:[/^\/v1\//]
+```
+
+remote-frontend gates re-run after change: lint PASS, tsc PASS, vitest 420/420 PASS.
