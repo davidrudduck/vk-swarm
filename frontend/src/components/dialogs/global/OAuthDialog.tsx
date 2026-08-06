@@ -27,6 +27,10 @@ type OAuthState =
   | { type: 'success'; profile: ProfileResponse }
   | { type: 'error'; message: string };
 
+// Bounded window for the whole OAuth round-trip. Without a deadline a dead flow
+// polls /api/auth/status forever and presents as a silent spinner (F-2026-08-04-01).
+export const POLL_DEADLINE_MS = 120_000;
+
 const OAuthDialogImpl = NiceModal.create<NoProps>(() => {
   const modal = useModal();
   const { t } = useTranslation('common');
@@ -79,6 +83,25 @@ const OAuthDialogImpl = NiceModal.create<NoProps>(() => {
       });
     }
   }, [isStatusError, isPolling]);
+
+  // Bounded polling: a flow that has not completed within the deadline is dead.
+  // The deadline must not reset on language change, so the effect depends only
+  // on isPolling and resolves the message from a ref at fire time.
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
+  useEffect(() => {
+    if (!isPolling) return;
+    const deadline = window.setTimeout(() => {
+      setIsPolling(false);
+      if (popupRef.current && !popupRef.current.closed) {
+        popupRef.current.close();
+      }
+      setState({ type: 'error', message: tRef.current('oauth.timeoutError') });
+    }, POLL_DEADLINE_MS);
+    return () => window.clearTimeout(deadline);
+  }, [isPolling]);
 
   // Monitor status changes
   useEffect(() => {
