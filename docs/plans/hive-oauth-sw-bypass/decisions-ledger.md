@@ -300,3 +300,23 @@ SC4 (stalled-flow 120s timeout) was not exercised live in this round; it is
 pinned by frontend vitest fake-timer tests (16 OAuthDialog tests incl. exact
 deadline firing, popup close, polling cessation) and the reachability-gate
 call-path trace. Live observation can piggyback on any future stalled flow.
+
+## Post-review known issues
+
+Adjudicated non-actionable in code-review round 1 (reviews/code-review-round-1.md #4-#11);
+must not resurface as fresh blockers in later rounds:
+
+- OAuthDialog popup close/closed-detection is dead in real browsers: `window.open` with
+  `noopener=yes` (OAuthDialog.tsx:54, pre-existing) returns null, so popupRef is always null.
+  Guarded (no crash); tests exercise it via mocked window.open. Follow-up decision: drop
+  noopener (security tradeoff) or drop the popupRef plumbing + add a closePopup() helper
+  (also folds the 5x duplicated close block).
+- ~1s deadline/success boundary race in OAuthDialog (inherent to bounded deadline + 1s poll).
+- Bare `/v1` (no trailing slash) navigation not denylisted — no real endpoint there.
+- `@vitest/coverage-v8` devDep not wired to any script — housekeeping.
+- Frontend vitest not part of any CI gate (`npm run check` = tsc only) — pre-existing repo
+  gap; the new deadline pins rot silently without a gate. Repo-owner decision.
+- No automated assertion that `oauth.timeoutError` exists in all 4 locale JSONs (repo-standard
+  mock returns raw keys); verified manually this run.
+- en/es timeoutError wording sub-nits (en predicates the "window", es "ha caducado" vs
+  "se agotó el tiempo").
