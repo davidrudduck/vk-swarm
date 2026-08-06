@@ -29,3 +29,10 @@ completes the scaffold; it does not alter any gate-checked artifact.
   module (error helpers) and shares no pattern dependency with a URL predicate; the declared
   sibling `pwa.ts` (and its colocated `pwa.test.ts` convention) is the pattern reference the
   task follows. The new files neither import nor mock `errors.test.ts`.
+
+## Executor ladder
+
+- requested_executor: default
+- actual_executor(s) used: haiku
+- honored: n/a (default ladder)
+- run_id: 20260806T012548Z-ad8f0631-3015469

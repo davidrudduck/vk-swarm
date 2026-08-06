@@ -82,8 +82,16 @@ export function isApiCacheable(pathname: string): boolean {
 Only creating the two listed files with the exact content above. Do not touch vite.config.ts (that is task 102). Do not add extra exports, options objects, or configuration parameters.
 
 
+## Orchestrator amendment (2026-08-06, STOP resolution)
+The RED phase of this task is ALREADY COMMITTED as `4420547d` ("test: create
+swCachePredicate.test.ts (RED phase)") — the test file exists byte-identical to the
+prescription above and its RED run is recorded in the executor journal. Do NOT recreate or
+modify the test file. This attempt creates ONLY `remote-frontend/src/lib/swCachePredicate.ts`
+(exact content from `## Change`), turning the suite GREEN. The existing-file STOP trigger
+below applies to `swCachePredicate.ts` only.
+
 ## STOP triggers
-remote-frontend has no vitest runner; an existing file at either path; the test passes before the module exists; lint/tsc reports errors that require touching any unlisted file.
+remote-frontend has no vitest runner; an existing file at remote-frontend/src/lib/swCachePredicate.ts; the test file missing or differing from the prescription; the test passes before the module exists; lint/tsc reports errors that require touching any unlisted file.
 
 
 ## Manual verification (record in decisions-ledger)
