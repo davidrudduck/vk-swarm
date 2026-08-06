@@ -2,7 +2,7 @@
 id: "401"
 phase: 4
 title: "Automated drift-guard test for sw config (denylist + api-cache predicate) + correct stale comments"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
@@ -12,7 +12,7 @@ files:
   - "remote-frontend/src/lib/swCachePredicate.ts"
 irreversible: false
 scope_test: "remote-frontend/src/lib/swConfigDriftGuard.test.ts"
-allowed_change: create+edit
+allowed_change: mixed
 forbid_after: ["drift-guard grep (task 102) ties the two copies together", "Excluded requests bypass the SW entirely."]
 covers_criteria: []
 covers_tests: []

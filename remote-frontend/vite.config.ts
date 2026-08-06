@@ -27,11 +27,13 @@ export default defineConfig({
             // Cache `/v1/` REST responses, EXCLUDING `/v1/shape/*` (Electric
             // long-poll/streaming — adversarial review F3) and `/v1/oauth/*` (the
             // OAuth redirect chain; SW interception breaks sign-in on hive and
-            // node — F-2026-08-03-02). Excluded requests bypass the SW entirely.
+            // node — F-2026-08-03-02). Excluded requests bypass the SW caches (navigations additionally need the
+            // navigateFallbackDenylist above to reach the network).
             // KEEP THIS ARROW SELF-CONTAINED: Workbox generateSW serializes it
             // into sw.js via toString(); an imported identifier would be
             // undefined at SW runtime. Mirrored + unit-tested in
-            // src/lib/swCachePredicate.ts (drift-guarded, see task 102 evidence).
+            // src/lib/swCachePredicate.ts; kept in sync by
+            // src/lib/swConfigDriftGuard.test.ts (source-reading drift guard).
             urlPattern: ({ url }) =>
               url.pathname.startsWith('/v1/') &&
               !url.pathname.startsWith('/v1/shape') &&

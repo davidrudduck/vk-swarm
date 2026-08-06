@@ -320,3 +320,20 @@ must not resurface as fresh blockers in later rounds:
   mock returns raw keys); verified manually this run.
 - en/es timeoutError wording sub-nits (en predicates the "window", es "ha caducado" vs
   "se agotó el tiempo").
+
+### task 401 — orchestrator normalization + gate/panel evidence
+
+- `allowed_change: create+edit` in the authored task file was INVALID per
+  schema/task.frontmatter.md (enum: import-only|move|edit|create|delete|mixed); Stage-1 gate
+  rejected it (`REJECT: unknown allowed_change: create+edit`). The ORCHESTRATOR (not the
+  implementer) normalized it to `mixed` — the correct enum for a create+edit task — before
+  re-running the gate. Panel finding 1 (task-file self-edit) is thereby adjudicated: authorized
+  schema normalization, rationale recorded here.
+- Stage-1: CONFORMS (file-set 3 declared paths only; forbid_after absent; scope test green
+  under `WAI_TEST_CMD` vitest override — the auto-detected runner wrongly used node:test).
+- Stage-2 panel: all mutation attacks caught (denylist deletion 2F/4P, /^\/v2\// 1F/5P,
+  config-only clause drop 2F/4P, mirror-only clause drop 2F/4P); full suite 426/426; lint/tsc
+  clean; built sw.js denylist grep=1. Verdict after adjudication: APPROVE.
+- Panel non-blocking note kept: the bare `toContain('navigateFallbackDenylist')` assertion is
+  non-discriminating alone (comment contains the literal too); the regex-extraction tests are
+  the real guard.
