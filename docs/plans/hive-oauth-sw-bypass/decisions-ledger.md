@@ -251,3 +251,20 @@ denylist:[/^\/v1\//]
 ```
 
 remote-frontend gates re-run after change: lint PASS, tsc PASS, vitest 420/420 PASS.
+
+### Deploy verification round 2 — amended build live
+
+```
+$ curl -fsS http://127.0.0.1:9000/v1/health
+{"status":"ok","version":"0.0.125","git_commit":"71c444c1","git_branch":"deploy/hive-oauth-sw-bypass","build_timestamp":"2026-08-06T19:34:35Z"}
+
+$ curl -fsS http://127.0.0.1:9000/sw.js | grep -o 'denylist[^]]*]'
+denylist:[/^\/v1\//]
+
+$ curl -fsS http://127.0.0.1:9000/sw.js | grep -o 'startsWith("/v1/oauth")'
+startsWith("/v1/oauth")
+```
+
+SC1a re-observed on the amended build (both the navigation denylist and the
+api-cache exclusion present in the served worker). SC1b/SC2/SC3/SC4 operator
+observations pending round-2 retest.
