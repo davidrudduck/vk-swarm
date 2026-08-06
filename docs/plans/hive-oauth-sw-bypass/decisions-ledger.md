@@ -268,3 +268,20 @@ startsWith("/v1/oauth")
 SC1a re-observed on the amended build (both the navigation denylist and the
 api-cache exclusion present in the served worker). SC1b/SC2/SC3/SC4 operator
 observations pending round-2 retest.
+
+### Deploy verification round 2 — operator observations (2026-08-06)
+
+Operator (David) retested on the amended live build (71c444c1), normal browser
+window, service worker registered, NO manual unregister:
+
+- SC3 PASS: sign-in on the hive completes.
+- SC2 PASS: sign-in initiated from the node completes.
+- SC1b PASS: no /v1/oauth/* entries in Cache Storage api-cache on either system.
+
+Operator statement verbatim: "sign in now works. no /v1/oauth/* entries on
+either system."
+
+SC4 (stalled-flow 120s timeout) was not exercised live in this round; it is
+pinned by frontend vitest fake-timer tests (16 OAuthDialog tests incl. exact
+deadline firing, popup close, polling cessation) and the reachability-gate
+call-path trace. Live observation can piggyback on any future stalled flow.
