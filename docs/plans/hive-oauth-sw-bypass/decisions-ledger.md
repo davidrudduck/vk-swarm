@@ -22,3 +22,10 @@ completes the scaffold; it does not alter any gate-checked artifact.
 `crates/remote/src/auth/handoff.rs` / `crates/server/src/routes/oauth.rs` to `src/...`
 (both verified present on main via `git cat-file -e`), and
 `remote-frontend/src/lib/swCachePredicate.ts` is a to-create file (verified absent on main).
+
+### Plan-lint advisory W: warnings (acknowledged, not blocking)
+- Task 101 creates `swCachePredicate{,.test}.ts` beside unlisted same-directory sibling
+  `remote-frontend/src/lib/errors.test.ts`. Justification: `errors.test.ts` tests a different
+  module (error helpers) and shares no pattern dependency with a URL predicate; the declared
+  sibling `pwa.ts` (and its colocated `pwa.test.ts` convention) is the pattern reference the
+  task follows. The new files neither import nor mock `errors.test.ts`.
