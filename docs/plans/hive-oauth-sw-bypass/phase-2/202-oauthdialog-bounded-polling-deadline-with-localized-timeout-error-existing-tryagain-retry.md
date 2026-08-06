@@ -91,3 +91,34 @@ The stated anchors are not found; the error branch does NOT already contain the 
 
 ## Done when
 `WAI_ROOT="$(ls -d ~/.claude/plugins/cache/agent-plugins/wai/[0-9]*/ | sort -V | tail -1)"; WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="cd frontend && npx vitest run src/components/dialogs/global/__tests__/OAuthDialog.test.tsx" bash "$WAI_ROOT/scripts/task-gate.sh" hive-oauth-sw-bypass 202` exits 0
+
+## Orchestrator amendment 2 (2026-08-06, STOP resolution — eslint directive ban)
+`frontend/eslint.config.js:51` bans ALL eslint directive comments (`eslint-comments/no-use`
+allow: []) and lint runs `--max-warnings 0`, so the Anchor 2 form above cannot pass lint.
+Replace Anchor 2's effect with this structural equivalent (same non-negotiable semantics:
+deadline depends only on `isPolling`, never resets on `t` identity change, message resolved
+at fire time — now from a ref, so no directive is needed):
+
+```ts
+  // Bounded polling: a flow that has not completed within the deadline is dead.
+  // The deadline must not reset on language change, so the effect depends only
+  // on isPolling and resolves the message from a ref at fire time.
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
+  useEffect(() => {
+    if (!isPolling) return;
+    const deadline = window.setTimeout(() => {
+      setIsPolling(false);
+      if (popupRef.current && !popupRef.current.closed) {
+        popupRef.current.close();
+      }
+      setState({ type: 'error', message: tRef.current('oauth.timeoutError') });
+    }, POLL_DEADLINE_MS);
+    return () => window.clearTimeout(deadline);
+  }, [isPolling]);
+```
+
+(`useRef` is already imported.) `npm run lint` (zero warnings) is added to this task's
+verification alongside tsc and the scope test.
