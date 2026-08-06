@@ -2,7 +2,7 @@
 id: "102"
 phase: 1
 title: "Add /v1/oauth exclusion inline to the vite.config.ts api-cache urlPattern (generateSW-safe)"
-status: ready
+status: passed
 depends_on: ["101"]
 parallel: false
 conflicts_with: []
