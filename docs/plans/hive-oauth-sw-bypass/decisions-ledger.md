@@ -47,3 +47,32 @@ completes the scaffold; it does not alter any gate-checked artifact.
 ### task 201
 - No undictated choices.
 - Manual verification: `for l in en ja ko es; do node -e "const o=require('./frontend/src/i18n/locales/$l/common.json'); if(!o.oauth.timeoutError||!o.oauth.tryAgain)process.exit(1)" && echo "$l OK"; done` → `en OK` / `ja OK` / `ko OK` / `es OK`.
+
+### task 102
+
+Manual verification (run from `remote-frontend/`, 2026-08-06):
+
+```
+$ npx vite build && grep -c 'v1/oauth' dist/sw.js
+vite v8.0.7 building client environment for production...
+✓ 2263 modules transformed.
+✓ built in 729ms
+PWA v1.3.0
+mode      generateSW
+precache  13 entries (521.99 KiB)
+files generated
+  dist/sw.js
+  dist/workbox-07e28819.js
+1
+
+$ grep -c 'v1/shape' dist/sw.js
+1
+
+$ grep -q "startsWith('/v1/oauth')" vite.config.ts && grep -q "startsWith('/v1/oauth')" src/lib/swCachePredicate.ts && echo DRIFT-GUARD-OK
+DRIFT-GUARD-OK
+
+$ grep -q "startsWith('/v1/shape')" vite.config.ts && grep -q "startsWith('/v1/shape')" src/lib/swCachePredicate.ts && echo DRIFT-GUARD-OK
+DRIFT-GUARD-OK
+```
+
+Before→After replacement applied byte-exactly; no undictated choices. Note: the WAI task-gate scans HEAD, so the gate was run after the commit (first pre-commit run failed only because HEAD still held the old text).

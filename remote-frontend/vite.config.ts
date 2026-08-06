@@ -15,12 +15,18 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         runtimeCaching: [
           {
-            // Cache `/v1/` REST responses, but EXCLUDE `/v1/shape/*` (the Electric
-            // proxy base). Electric shape traffic is long-poll/streaming; letting
-            // Workbox's NetworkFirst cache it would serve stale/partial real-time
-            // data (adversarial review F3). Shape requests bypass the SW cache.
+            // Cache `/v1/` REST responses, EXCLUDING `/v1/shape/*` (Electric
+            // long-poll/streaming — adversarial review F3) and `/v1/oauth/*` (the
+            // OAuth redirect chain; SW interception breaks sign-in on hive and
+            // node — F-2026-08-03-02). Excluded requests bypass the SW entirely.
+            // KEEP THIS ARROW SELF-CONTAINED: Workbox generateSW serializes it
+            // into sw.js via toString(); an imported identifier would be
+            // undefined at SW runtime. Mirrored + unit-tested in
+            // src/lib/swCachePredicate.ts (drift-guarded, see task 102 evidence).
             urlPattern: ({ url }) =>
-              url.pathname.startsWith('/v1/') && !url.pathname.startsWith('/v1/shape'),
+              url.pathname.startsWith('/v1/') &&
+              !url.pathname.startsWith('/v1/shape') &&
+              !url.pathname.startsWith('/v1/oauth'),
             handler: 'NetworkFirst',
             options: {
               cacheName: 'api-cache',
