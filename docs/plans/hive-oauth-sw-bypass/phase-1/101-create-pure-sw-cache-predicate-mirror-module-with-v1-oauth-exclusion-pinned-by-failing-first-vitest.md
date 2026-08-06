@@ -2,7 +2,7 @@
 id: "101"
 phase: 1
 title: "Create pure SW cache predicate mirror module with /v1/oauth exclusion, pinned by failing-first vitest"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
