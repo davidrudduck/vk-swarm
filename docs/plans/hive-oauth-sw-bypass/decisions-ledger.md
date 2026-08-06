@@ -198,3 +198,27 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 [2m   Duration [22m 25.57s[2m (transform 1.32s, setup 2.25s, import 7.08s, tests 20.73s, environment 19.44s)[22m
 
 ```
+
+## Deploy verification
+
+Feature-branch build deployed to the live hive 2026-08-06 (compose project `remote`,
+branch `deploy/hive-oauth-sw-bypass` = PR #469 head bb9fa1fd + host-local pnpm-workspace
+commit). Evidence captured from the deployed system:
+
+```
+$ curl -fsS http://127.0.0.1:9000/v1/health
+{"status":"ok","version":"0.0.125","git_commit":"1fc5ba71","git_branch":"deploy/hive-oauth-sw-bypass","build_timestamp":"2026-08-06T11:38:03Z"}
+
+$ curl -fsS http://127.0.0.1:9000/sw.js | grep -c 'v1/oauth'
+1
+
+$ curl -fsS http://127.0.0.1:9000/sw.js | grep -o 'startsWith("/v1/[a-z]*")' | sort | uniq -c
+      1 startsWith("/v1/")
+      1 startsWith("/v1/oauth")
+      1 startsWith("/v1/shape")
+```
+
+SC1a (served sw.js carries the compiled /v1/oauth exclusion): OBSERVED above.
+SC1b (api-cache empty of /v1/oauth), SC2 (node sign-in, SW registered), SC3 (hive
+sign-in, SW registered), SC4 (stalled flow → 120s timeout error): operator
+observations pending — to be appended below when performed.
