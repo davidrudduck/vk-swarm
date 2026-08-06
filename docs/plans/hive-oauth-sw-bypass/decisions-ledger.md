@@ -36,3 +36,14 @@ completes the scaffold; it does not alter any gate-checked artifact.
 - actual_executor(s) used: haiku
 - honored: n/a (default ladder)
 - run_id: 20260806T012548Z-ad8f0631-3015469
+
+## Executor ladder
+
+- requested_executor: default
+- actual_executor(s) used: haiku
+- honored: n/a (default ladder)
+- run_id: 20260806T013154Z-2a7881e8-3044839
+
+### task 201
+- No undictated choices.
+- Manual verification: `for l in en ja ko es; do node -e "const o=require('./frontend/src/i18n/locales/$l/common.json'); if(!o.oauth.timeoutError||!o.oauth.tryAgain)process.exit(1)" && echo "$l OK"; done` → `en OK` / `ja OK` / `ko OK` / `es OK`.

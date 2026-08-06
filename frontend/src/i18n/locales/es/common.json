@@ -130,7 +130,8 @@
     "welcomeBack": "Bienvenido de nuevo, {{name}}",
     "errorTitle": "Falló la autenticación",
     "errorDescription": "Hubo un problema al autenticar tu cuenta",
-    "tryAgain": "Intentar de nuevo"
+    "tryAgain": "Intentar de nuevo",
+    "timeoutError": "El inicio de sesión ha caducado. La ventana de autenticación no se completó; ciérrala e inténtalo de nuevo."
   },
   "execution": {
     "finalResponse": "Respuesta Final"
