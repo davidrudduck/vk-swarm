@@ -3,13 +3,13 @@ doc_type: spec
 status: active
 workstream: vk-swarm-event-bus
 change_kind: behaviour
-verify_cmd: "sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} 'select event_type from event_journal limit 20' | grep -q task"
+verify_cmd: "sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} \"select 1 from event_journal where event_type like 'task_%' limit 1\" | grep -q 1"
 ---
 
 # vk-swarm-event-bus — task-lifecycle event bus (P4 / SC4)
 
 ## Intent
-Phase 4 of the vk-swarm-refactor program (docs/superpowers/specs/2026-06-25-vk-swarm-refactor.md). Owns umbrella success criterion SC4: task lifecycle changes emit events on an internal/external bus that downstream triggers consume. Independent of P3 (P3 is parallel to P4); together they gate P5-P7.
+Phase 4 of the vk-swarm-refactor program (docs/superpowers/specs/2026-06-25-vk-swarm-refactor.md). Owns umbrella success criterion refactor-SC4 (the parent program's SC4 — distinct from this spec's own SC4 defined under Success criteria below): task lifecycle changes emit events on an internal/external bus that downstream triggers consume. Independent of P3 (P3 is parallel to P4); together they gate P5-P7.
 
 Give every node a durable, subscribable event bus so that things happening in vk-swarm (task changes, attempt/executor runs, hive connectivity) become first-class, ordered, replayable events instead of state that consumers must poll for. This is the nervous system the later phases attach to: P6's management agent reacts to bus triggers, P7 exposes bus observability over MCP/ACP, and the UIs stop polling.
 
@@ -89,7 +89,7 @@ Data model (crates/db, additive migration): event_journal table — seq INTEGER 
 
 Event schema (crates/db or crates/utils, TS-exported): enum NodeEvent with #[serde(tag = "type", rename_all = "snake_case")] — task_created, task_status_changed, task_deleted, attempt_started, attempt_finished, attempt_failed, hive_connected, hive_disconnected, reconcile_completed (fields: task_id/attempt_id/executor identity/old+new status/timestamps as applicable). Registered in generate_types.rs; frontend consumes the generated union type.
 
-Bus core (crates/services/src/services/event_bus.rs): EventBus struct (Clone) holding tokio::sync::broadcast::Sender<SequencedEvent> where SequencedEvent = { seq, event: NodeEvent }. emit(&mut tx, event) appends to event_journal inside the caller's transaction and stages the broadcast; a post-commit hook publishes staged events (never broadcast before commit). subscribe_from(cursor) returns journal catch-up rows chained with the live stream, deduplicated by seq monotonicity at the consumer edge.
+Bus core (crates/services/src/services/event_bus.rs): EventBus struct (Clone) holding tokio::sync::broadcast::Sender<SequencedEvent> where SequencedEvent = { seq, event: NodeEvent }. emit(&mut tx, event) appends to event_journal inside the caller's transaction and stages the broadcast; a post-commit hook publishes staged events (never broadcast before commit). subscribe_from(cursor) hands off replay-to-live with this exact algorithm: (1) subscribe to the live broadcast channel FIRST; (2) capture the journal high-water mark (max seq); (3) replay journal rows (cursor, mark] in seq order; (4) drain the live receiver, discarding any buffered event with seq <= last-replayed (dedupe by seq monotonicity at the consumer edge); (5) on tokio broadcast Lagged(n), re-enter journal refill from the last-delivered seq before resuming live. This contract binds all three consumers (SSE, UI hook, TriggerHook runner) and is what TS2's gap/duplicate/lag tests assert.
 
 Emission instrumentation: Task::create/update/delete (queries.rs — alongside the existing enqueue_task_upsert_op outbox calls), ContainerService::start_execution + the completion path that consumes next_action (container.rs), HiveSyncService connect/disconnect/reconcile transitions (hive_sync.rs). Each site emits exactly one event per state change.
 

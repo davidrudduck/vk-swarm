@@ -26,6 +26,11 @@ Events are **journaled first, broadcast second**, entirely node-local:
 - Consumers (internal trigger hooks, the external SSE endpoint, the UI) resume from any
   `seq` cursor by reading the journal, then switch to live — **at-least-once, gap-free,
   duplicates possible; consumers must be idempotent**.
+- Replay-to-live handoff contract (all consumers): subscribe to the live channel FIRST,
+  capture the journal high-water mark, replay journal rows `(cursor, mark]` in seq order,
+  drain buffered live events discarding `seq <= last-replayed`, and on broadcast `Lagged(n)`
+  refill from the journal at the last-delivered seq before resuming live. Lag never creates
+  a gap — it degrades to a journal re-read.
 - The event schema is one Rust enum (snake_case serde, ts-rs export) — the single typed
   contract for backend, frontend, and external subscribers.
 - Retention: journal is bounded by a compaction policy (age + row-count floor, env-tunable)
