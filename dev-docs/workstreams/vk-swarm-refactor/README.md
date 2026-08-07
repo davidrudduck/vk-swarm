@@ -19,15 +19,15 @@ SC1–SC7, dependency graph, constraints).
 Dependency graph: P2 blocks everything; P3 ⟂ P4; P5 needs P3 (+rides P4); P6 consumes P4+P5;
 P7 rides P3–P5; P8 trails P7 (optional).
 
-| Phase | Scope | Child workstream(s) | State (2026-07-23) |
+| Phase | Scope | Child workstream(s) | State (2026-08-07) |
 |---|---|---|---|
 | P1 | Deep analysis | — (spec: `docs/specs/2026-06-25-vk-swarm-phase1-analysis.md`) | ✅ done |
 | P2a | Node correct/durable/crash-resumable (SC1 local, SC2) | `vk-swarm-node-foundations` (+ `foundations-followup1`) | ✅ shipped |
 | P2b | Hub-and-spoke central hive (SC1 reconcile) | `vk-swarm-hive-redesign` | ✅ shipped |
 | P2c | Hive console UI + hardening | `vk-swarm-hive-ui`, `vk-swarm-hive-ui-polish`, `hive-node-api-key-ui`, `fix-nonloopback-signin`, `error-handling-and-dialog-a11y`, `remote-docker-build-fix`, `ui-overhaul` | ✅ shipped |
-| P2 tail | UI kit + node-UI cleanup + test-debt revival | `vk-swarm-design-system` (planned, ready to execute), `vk-swarm-node-ui-localize` (stub — needs prd/spec), `remote-services-doctest-revival` (0/32), `terminal-session-pty-tests` (0/5) | 🔶 in progress |
-| P3 | AI task breakdown harness (SC3) | _unmapped — needs `/wai:prd-new vk-swarm-task-breakdown`_ | ⬜ not started |
-| P4 | Task-lifecycle event bus (SC4) | _unmapped — needs `/wai:prd-new vk-swarm-event-bus`_ | ⬜ not started |
+| P2 tail | UI kit + node-UI cleanup + test-debt revival | `vk-swarm-design-system` (✅ PR #466), `vk-swarm-node-ui-localize` (✅ PR #467, verify PASS), `node-ui-localize-followups`, `hive-oauth-sw-bypass` (✅ PR #469; task 301 deploy evidence pending), `node-task-delete-dangling-shared-id` (✅ PR #468; deploy verify pending), `worktree-orphan-sweep-guard`, `remote-services-doctest-revival` (0/32), `terminal-session-pty-tests` (0/5) | 🔶 cleanup tail |
+| P3 | AI task breakdown harness (SC3) | `vk-swarm-task-breakdown` (PRD 2026-08-07 — needs `/wai:spec`) | 🔶 intent captured |
+| P4 | Task-lifecycle event bus (SC4) | `vk-swarm-event-bus` (PRD 2026-08-07 — needs `/wai:spec`) | 🔶 intent captured |
 | P5 | Conflict/priority/dependency automation (SC5; paperclip ref) | _unmapped — after P3_ | ⬜ not started |
 | P6 | AI management agent (SC6; consumes P4+P5) | _unmapped_ | ⬜ not started |
 | P7 | MCP/ACP connectivity (SC7; rides P3–P5) | _unmapped_ | ⬜ not started |
@@ -35,11 +35,11 @@ P7 rides P3–P5; P8 trails P7 (optional).
 
 ## Recommended order from here
 
-1. Execute `vk-swarm-design-system` (fully decomposed: 24 tasks in
-   `docs/plans/vk-swarm-design-system/`, precheck passed, 3 adversarial breakdown reviews).
-2. Spec + decompose `vk-swarm-node-ui-localize` (unblocks node-UI simplification; carved from
-   node-foundations Phase 4).
-3. PRD P3 (`task breakdown`) and P4 (`event bus`) — independent, can be specced in parallel;
-   they gate P5–P7.
+1. `/wai:spec vk-swarm-task-breakdown` → precheck → decompose → execute (P3; first
+   "use the board to manage work" capability, gates P5).
+2. `/wai:spec vk-swarm-event-bus` → precheck → decompose → execute (P4 ⟂ P3; gates P6/P7).
+3. Close the P2 cleanup tail: hive-oauth-sw-bypass task 301 deploy evidence,
+   node-task-delete deploy verify, backend/frontend hygiene bundles
+   (`worktree-orphan-sweep-guard`, `node-ui-localize-followups`).
 4. Burn down test-debt trackers (`remote-services-doctest-revival`,
    `terminal-session-pty-tests`) opportunistically alongside.
