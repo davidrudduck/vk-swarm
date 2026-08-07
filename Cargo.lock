@@ -5225,6 +5225,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tracing-test",
  "ts-rs 11.0.1",
  "url",
  "urlencoding",

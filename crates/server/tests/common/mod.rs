@@ -228,6 +228,56 @@ impl HiveHarness {
         }
     }
 
+    /// DELETE against the REAL served router over HTTP
+    pub async fn delete(&self, path: &str) -> Resp {
+        let client = reqwest::Client::new();
+        let res = client
+            .delete(format!("http://{}{}", self.addr, path))
+            .send()
+            .await
+            .unwrap();
+        let status = res.status().as_u16();
+        let content_type = res
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let body = res.text().await.unwrap();
+        Resp {
+            status,
+            body,
+            content_type,
+        }
+    }
+
+    /// Seed one task carrying a `shared_task_id` under an existing project, inserted through
+    /// the deployment's own pool (migrations already applied — never hand-written DDL).
+    pub async fn seed_shared_task(&self, project_id: Uuid, shared_task_id: Uuid) -> Uuid {
+        let pool = &self.deployment.db().pool;
+        let task_id = Uuid::new_v4();
+        let create_task = CreateTask {
+            project_id,
+            title: format!("shared-task-{task_id}"),
+            description: None,
+            status: Some(TaskStatus::Todo),
+            parent_task_id: None,
+            image_ids: None,
+            shared_task_id: Some(shared_task_id),
+        };
+        Task::create(pool, &create_task, task_id)
+            .await
+            .expect("failed to seed shared task");
+        task_id
+    }
+
+    /// True when the task row still exists in the node DB.
+    pub async fn task_row_exists(&self, task_id: Uuid) -> bool {
+        Task::find_by_id(&self.deployment.db().pool, task_id)
+            .await
+            .expect("task lookup failed")
+            .is_some()
+    }
+
     /// Seed a local project plus one task per entry in `task_statuses`, inserted through the
     /// deployment's own pool (never a hand-written `CREATE TABLE` — the harness DB already has
     /// migrations applied). If `task_statuses` is non-empty, also creates a single task attempt
