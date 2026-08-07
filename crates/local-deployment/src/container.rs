@@ -364,6 +364,12 @@ impl LocalContainerService {
             let worktree_path_str = path.to_string_lossy().to_string();
             if let Ok(false) = TaskAttempt::container_ref_exists(&db.pool, &worktree_path_str).await
             {
+                // Safety check (mirrors `cleanup_expired_attempt`): never delete a
+                // worktree with uncommitted/untracked changes, and skip when
+                // dirtiness cannot be determined.
+                if Self::orphan_worktree_must_be_preserved(&path) {
+                    continue;
+                }
                 // This is an orphaned worktree - delete it
                 tracing::info!("Found orphaned worktree: {}", worktree_path_str);
                 if let Err(e) =
@@ -384,6 +390,33 @@ impl LocalContainerService {
         }
     }
 
+    /// Dirty-guard for the orphan worktree sweep (F-2026-07-30-03).
+    ///
+    /// Returns `true` when the worktree at `path` must NOT be deleted: it has
+    /// uncommitted/untracked changes, or its git status could not be determined
+    /// (in which case we skip for safety, matching `cleanup_expired_attempt`).
+    fn orphan_worktree_must_be_preserved(path: &Path) -> bool {
+        let git = GitService {};
+        match git.has_uncommitted_changes(path) {
+            Ok(true) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "Skipping orphaned worktree with uncommitted or untracked changes"
+                );
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to check orphaned worktree for uncommitted changes, skipping for safety"
+                );
+                true
+            }
+            Ok(false) => false,
+        }
+    }
+
     pub async fn cleanup_expired_attempt(
         db: &DBService,
         attempt_id: Uuid,
@@ -393,13 +426,12 @@ impl LocalContainerService {
         // Safety check: don't delete worktrees with uncommitted changes
         if worktree_path.exists() {
             let git = GitService {};
-            match git.get_dirty_files(&worktree_path) {
-                Ok(dirty_files) if !dirty_files.is_empty() => {
+            match git.has_uncommitted_changes(&worktree_path) {
+                Ok(true) => {
                     tracing::warn!(
                         attempt_id = %attempt_id,
-                        dirty_file_count = dirty_files.len(),
                         path = %worktree_path.display(),
-                        "Skipping cleanup of expired worktree with uncommitted changes"
+                        "Skipping cleanup of expired worktree with uncommitted or untracked changes"
                     );
                     return Ok(());
                 }
@@ -412,8 +444,8 @@ impl LocalContainerService {
                     );
                     return Ok(());
                 }
-                Ok(_) => {
-                    // No dirty files, safe to proceed with cleanup
+                Ok(false) => {
+                    // No uncommitted or untracked changes, safe to proceed with cleanup
                 }
             }
         }
@@ -2327,6 +2359,67 @@ fn success_exit_status() -> std::process::ExitStatus {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    /// Initialize a git repo with one commit in `dir`.
+    fn init_git_repo(dir: &Path) {
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .status()
+                .expect("failed to run git");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(dir.join("README.md"), "hello").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "init"]);
+    }
+
+    #[test]
+    fn orphan_guard_allows_clean_worktree() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+        assert!(
+            !LocalContainerService::orphan_worktree_must_be_preserved(tmp.path()),
+            "clean worktree must be eligible for orphan cleanup"
+        );
+    }
+
+    #[test]
+    fn orphan_guard_preserves_dirty_worktree() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+        std::fs::write(tmp.path().join("untracked.txt"), "uncommitted work").unwrap();
+        assert!(
+            LocalContainerService::orphan_worktree_must_be_preserved(tmp.path()),
+            "worktree with untracked changes must be preserved"
+        );
+    }
+
+    #[test]
+    fn orphan_guard_preserves_worktree_with_modified_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+        std::fs::write(tmp.path().join("README.md"), "modified").unwrap();
+        assert!(
+            LocalContainerService::orphan_worktree_must_be_preserved(tmp.path()),
+            "worktree with modified tracked file must be preserved"
+        );
+    }
+
+    #[test]
+    fn orphan_guard_preserves_when_status_unknown() {
+        // Not a git repo at all: dirtiness cannot be determined → skip for safety.
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(LocalContainerService::orphan_worktree_must_be_preserved(
+            tmp.path()
+        ));
+    }
 
     /// Helper to safely set an environment variable in tests.
     ///

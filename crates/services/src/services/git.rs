@@ -1919,6 +1919,17 @@ impl GitService {
             .map_err(|e| GitServiceError::InvalidRepository(format!("git status failed: {e}")))
     }
 
+    /// Check whether the worktree has any uncommitted changes, including
+    /// untracked files (which `get_dirty_files` deliberately skips).
+    ///
+    /// This is the check cleanup safety guards must use: untracked work is
+    /// still work worth preserving.
+    pub fn has_uncommitted_changes(&self, worktree_path: &Path) -> Result<bool, GitServiceError> {
+        let git = GitCli::new();
+        git.has_uncommitted_changes(worktree_path)
+            .map_err(|e| GitServiceError::InvalidRepository(format!("git status failed: {e}")))
+    }
+
     /// Clone a repository from a URL to a destination path.
     ///
     /// This function uses the Git CLI with native authentication (SSH agent,
