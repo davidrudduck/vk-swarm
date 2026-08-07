@@ -1,9 +1,10 @@
 ---
 workstream: hive-oauth-sw-bypass
-status: active
+status: shipped
 created: 2026-08-05
 parent_session: vk-swarm-node-ui-localize close-out
 staging_pointers:
+  - docs/plans/hive-oauth-sw-bypass
   - docs/superpowers/specs/2026-08-05-hive-oauth-sw-bypass.md
 ---
 

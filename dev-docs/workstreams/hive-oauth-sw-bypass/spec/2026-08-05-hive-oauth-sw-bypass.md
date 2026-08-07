@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: hive-oauth-sw-bypass
 change_kind: bugfix
 verify_cmd: "curl -fsS http://127.0.0.1:9000/sw.js | grep -q 'v1/oauth'"
