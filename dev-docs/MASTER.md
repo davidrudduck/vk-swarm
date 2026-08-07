@@ -16,7 +16,7 @@
 | frontend-prettier-debt | active |  | - | - | 0 |
 | frontend-test-debt-2026-08 | active |  | - | - | 0 |
 | hive-node-api-key-ui | shipped | Hive node API key management UI — generate/revoke/unblock keys on the Nodes page | - | - | 2 |
-| hive-oauth-sw-bypass | active |  | - | - | 0 |
+| hive-oauth-sw-bypass | shipped |  | - | - | 2 |
 | node-task-delete-dangling-shared-id | active |  | - | - | 0 |
 | node-ui-localize-followups | active |  | - | - | 0 |
 | remote-docker-build-fix | shipped | Fix crates/remote Docker build — unblock remote/hive standup | - | - | 2 |

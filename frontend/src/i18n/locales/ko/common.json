@@ -130,7 +130,8 @@
     "welcomeBack": "환영합니다, {{name}}",
     "errorTitle": "인증 실패",
     "errorDescription": "계정 인증 중 문제가 발생했습니다",
-    "tryAgain": "다시 시도"
+    "tryAgain": "다시 시도",
+    "timeoutError": "로그인 시간이 초과되었습니다. 인증 창이 완료되지 않았습니다. 창을 닫고 다시 시도하세요."
   },
   "execution": {
     "finalResponse": "최종 응답"

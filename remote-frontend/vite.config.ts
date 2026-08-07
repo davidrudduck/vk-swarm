@@ -13,14 +13,31 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // CRITICAL: without this, generateSW's default navigateFallback
+        // ('index.html') registers an UNCONDITIONAL NavigationRoute that
+        // answers every top-level navigation — including the OAuth popup's
+        // /v1/oauth/{provider}/start and /callback legs — with the precached
+        // SPA shell, so the handoff never reaches the server (F-2026-08-03-01/
+        // -02; deploy verification 2026-08-06 proved the api-cache exclusion
+        // alone was insufficient). /v1/* are server endpoints, never SPA
+        // routes: all /v1/ navigations must fall through to the network.
+        navigateFallbackDenylist: [/^\/v1\//],
         runtimeCaching: [
           {
-            // Cache `/v1/` REST responses, but EXCLUDE `/v1/shape/*` (the Electric
-            // proxy base). Electric shape traffic is long-poll/streaming; letting
-            // Workbox's NetworkFirst cache it would serve stale/partial real-time
-            // data (adversarial review F3). Shape requests bypass the SW cache.
+            // Cache `/v1/` REST responses, EXCLUDING `/v1/shape/*` (Electric
+            // long-poll/streaming — adversarial review F3) and `/v1/oauth/*` (the
+            // OAuth redirect chain; SW interception breaks sign-in on hive and
+            // node — F-2026-08-03-02). Excluded requests bypass the SW caches (navigations additionally need the
+            // navigateFallbackDenylist above to reach the network).
+            // KEEP THIS ARROW SELF-CONTAINED: Workbox generateSW serializes it
+            // into sw.js via toString(); an imported identifier would be
+            // undefined at SW runtime. Mirrored + unit-tested in
+            // src/lib/swCachePredicate.ts; kept in sync by
+            // src/lib/swConfigDriftGuard.test.ts (source-reading drift guard).
             urlPattern: ({ url }) =>
-              url.pathname.startsWith('/v1/') && !url.pathname.startsWith('/v1/shape'),
+              url.pathname.startsWith('/v1/') &&
+              !url.pathname.startsWith('/v1/shape') &&
+              !url.pathname.startsWith('/v1/oauth'),
             handler: 'NetworkFirst',
             options: {
               cacheName: 'api-cache',

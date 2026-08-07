@@ -130,7 +130,8 @@
     "welcomeBack": "おかえりなさい、{{name}}",
     "errorTitle": "認証失敗",
     "errorDescription": "アカウントの認証中に問題が発生しました",
-    "tryAgain": "再試行"
+    "tryAgain": "再試行",
+    "timeoutError": "サインインがタイムアウトしました。認証ウィンドウが完了しませんでした。閉じてからもう一度お試しください。"
   },
   "execution": {
     "finalResponse": "最終応答"
