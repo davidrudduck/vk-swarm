@@ -142,9 +142,32 @@ impl InstanceRegistry {
     }
 
     /// Register an instance in the registry.
+    ///
+    /// The registry is keyed by project root only (`instance_filename`), which
+    /// all lookup/stop/unregister tooling depends on. Two live instances of the
+    /// same project root therefore cannot both be tracked: the newer
+    /// registration supersedes the older entry. That collision is detected here
+    /// and surfaced loudly instead of silently clobbering the previous record
+    /// (F-2026-07-30-05).
     pub async fn register(info: &InstanceInfo) -> std::io::Result<PathBuf> {
         let dir = Self::registry_dir();
         fs::create_dir_all(&dir).await?;
+
+        // Collision guard: another *running* instance is already registered for
+        // this project root under a different PID.
+        if let Ok(existing) = Self::get(&info.project_root).await
+            && existing.pid != info.pid
+            && existing.is_running()
+        {
+            tracing::warn!(
+                project = %info.project_root.display(),
+                existing_pid = existing.pid,
+                new_pid = info.pid,
+                "Another running vibe-kanban instance is already registered for this \
+                 project root; superseding its registry entry. `pnpm run stop` will \
+                 only see the newest instance — stop the old one by PID if needed"
+            );
+        }
 
         // Read dev_root_pid from temp file if present (dev mode only)
         let dev_root_pid = read_dev_root_pid();
@@ -488,6 +511,39 @@ mod tests {
 
         // Cleanup
         fs::remove_file(&pid_file).ok();
+    }
+
+    #[tokio::test]
+    async fn test_register_supersedes_same_root_with_warning_not_error() {
+        // Two instances of the same project root map to the same registry file
+        // (keyed by project root only). Registration must succeed and supersede
+        // the previous entry rather than fail or corrupt the registry.
+        let root = PathBuf::from(format!("/test/collision-{}", uuid_like()));
+
+        let mut first = InstanceInfo::new(root.clone());
+        first.pid = process::id(); // a PID that is definitely running
+        InstanceRegistry::register(&first).await.unwrap();
+
+        let mut second = InstanceInfo::new(root.clone());
+        second.pid = process::id().wrapping_add(1);
+        InstanceRegistry::register(&second).await.unwrap();
+
+        let stored = InstanceRegistry::get(&root).await.unwrap();
+        assert_eq!(stored.pid, second.pid, "newest registration must win");
+
+        InstanceRegistry::unregister(&root).await.unwrap();
+    }
+
+    /// Cheap unique suffix without pulling in uuid.
+    fn uuid_like() -> String {
+        format!(
+            "{}-{}",
+            process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
     }
 
     #[test]
