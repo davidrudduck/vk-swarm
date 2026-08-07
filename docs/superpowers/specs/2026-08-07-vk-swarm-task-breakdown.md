@@ -94,7 +94,7 @@ Directory-module pattern: crates/db/src/models/task_breakdown/ (mod.rs, queries.
 Execution vehicle (crates/services + crates/executors):
 - New ExecutionProcessRunReason::Breakdown variant (additive TEXT value in execution_processes.run_reason).
 - BreakdownService (stateless, Clone) composes the prompt from the parent task title/description plus a fixed instruction block demanding a final fenced JSON object matching BreakdownResult { subtasks: [{ title, description, depends_on: [index] }] }.
-- The run uses a dedicated task attempt on the parent task created with skip_worktree_creation (precedent: create_task_and_start, crates/server/src/routes/tasks/handlers/core.rs:405-435), executor resolved from the project's default executor profile.
+- The run uses a dedicated task attempt on the parent task created through the normal start_attempt path (ContainerService::start_attempt, crates/services/src/services/container.rs:1193) with a worktree created as usual; the breakdown prompt is read-only analysis, so the completion path's try_commit_changes finds a clean tree and commits nothing. (Note: skip_worktree_creation exists but means reuse-the-parent-attempt's-container, which a fresh goal task does not have.)
 - On process completion, BreakdownService parses the durable log (ExecutionProcessLogs::find_by_execution_id + parse_logs, crates/db/src/models/execution_process_logs.rs) extracting the last valid BreakdownResult JSON block; success writes proposal items, failure (missing/malformed JSON, non-zero exit) marks the proposal failed with a stored error string — no partial items land.
 
 API (crates/server/src/routes/tasks/, ApiResponse<T> pattern):
@@ -122,7 +122,7 @@ Sync/offline: proposals and dependencies are node-local tables with no outbox op
 ## Decisions
 D1 (irreversible — ADR dev-docs/adr/0016-breakdown-proposals-separate-entity.md): proposals are a separate node-local entity (task_breakdown_proposals/_items) plus a first-class task_dependencies edge table keyed on real task ids; TaskStatus is never extended. P5/P6 build on this contract.
 
-D2 (reversible): the breakdown run rides a dedicated task attempt with skip_worktree_creation and a new additive ExecutionProcessRunReason::Breakdown value, reusing spawn/logging/durability machinery instead of a parallel runner or a nullable task_attempt_id migration.
+D2 (reversible): the breakdown run rides a dedicated task attempt through the normal start_attempt/worktree path with a new additive ExecutionProcessRunReason::Breakdown value, reusing spawn/logging/durability machinery instead of a parallel runner or a nullable task_attempt_id migration; the prompt is read-only so no commits are produced.
 
 D3 (reversible): the executor output contract is a final fenced BreakdownResult JSON object parsed from the durable execution log (ResultMessage precedent); malformed output fails the proposal atomically — no partial items.
 
