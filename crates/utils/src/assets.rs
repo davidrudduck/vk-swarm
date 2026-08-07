@@ -66,7 +66,14 @@ pub fn credentials_path() -> std::path::PathBuf {
 /// When a custom path is configured via `VK_DATABASE_PATH`, the parent directory
 /// is created automatically if it does not exist.
 pub fn database_path() -> std::path::PathBuf {
-    if let Ok(path) = std::env::var("VK_DATABASE_PATH") {
+    // Trim-then-filter like asset_dir(): a set-but-blank (or whitespace-only)
+    // override must be treated as unset, not resolved relative to the CWD.
+    let override_path = std::env::var("VK_DATABASE_PATH")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(path) = override_path {
         let expanded = crate::path::expand_tilde(&path);
         if let Some(parent) = expanded
             .parent()
@@ -90,7 +97,14 @@ pub fn database_path() -> std::path::PathBuf {
 /// When a custom path is configured via `VK_BACKUP_DIR`, the directory is
 /// created automatically if it does not exist.
 pub fn backup_dir() -> std::path::PathBuf {
-    if let Ok(path) = std::env::var("VK_BACKUP_DIR") {
+    // Trim-then-filter like asset_dir(): a set-but-blank (or whitespace-only)
+    // override must be treated as unset, not resolved relative to the CWD.
+    let override_dir = std::env::var("VK_BACKUP_DIR")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(path) = override_dir {
         let expanded = crate::path::expand_tilde(&path);
         if !expanded.exists() {
             std::fs::create_dir_all(&expanded)
@@ -145,6 +159,51 @@ mod tests {
         unsafe { env::remove_var("VK_DATABASE_PATH") };
         assert!(!path.to_string_lossy().contains('~'));
         assert!(path.is_absolute());
+    }
+
+    #[test]
+    #[serial]
+    fn test_database_path_empty_env_falls_back_to_default() {
+        // SAFETY: Tests run serially via #[serial] attribute
+        unsafe { env::remove_var("VK_DATABASE_PATH") };
+        let default_path = database_path();
+        unsafe { env::set_var("VK_DATABASE_PATH", "") };
+        let path = database_path();
+        unsafe { env::set_var("VK_DATABASE_PATH", "   ") };
+        let padded = database_path();
+        unsafe { env::remove_var("VK_DATABASE_PATH") };
+        // A blank override must be ignored, NOT resolved relative to the CWD.
+        assert_eq!(path, default_path);
+        assert_eq!(padded, default_path);
+        assert!(path.is_absolute());
+    }
+
+    #[test]
+    #[serial]
+    fn test_database_path_env_override_is_trimmed() {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = tmp.path().join("test.db");
+        let padded = format!("  {}  ", db_path.display());
+        // SAFETY: Tests run serially via #[serial] attribute
+        unsafe { env::set_var("VK_DATABASE_PATH", &padded) };
+        let path = database_path();
+        unsafe { env::remove_var("VK_DATABASE_PATH") };
+        // Surrounding whitespace must not make the path relative.
+        assert_eq!(path, db_path);
+        assert!(path.is_absolute());
+    }
+
+    #[test]
+    #[serial]
+    fn test_backup_dir_empty_env_falls_back_to_default() {
+        // SAFETY: Tests run serially via #[serial] attribute
+        unsafe { env::remove_var("VK_BACKUP_DIR") };
+        let default_dir = backup_dir();
+        unsafe { env::set_var("VK_BACKUP_DIR", "   ") };
+        let dir = backup_dir();
+        unsafe { env::remove_var("VK_BACKUP_DIR") };
+        assert_eq!(dir, default_dir);
+        assert!(dir.is_absolute());
     }
 
     #[test]
