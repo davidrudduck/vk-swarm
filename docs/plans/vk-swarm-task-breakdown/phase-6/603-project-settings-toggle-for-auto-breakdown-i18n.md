@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - "frontend/src/pages/settings/ProjectSettings.tsx"
+  - "frontend/src/pages/settings/ProjectSettings.test.tsx"
   - "frontend/src/i18n/locales/en/settings.json"
   - "frontend/src/i18n/locales/ja/settings.json"
   - "frontend/src/i18n/locales/ko/settings.json"
@@ -19,7 +20,7 @@ covers_criteria: []
 covers_tests: []
 ---
 ## Failing test (write first)
-Extend the ProjectSettings test file if one exists (else create a colocated test): load a project with auto_breakdown_enabled=false, assert the checkbox renders unchecked; toggle it and save; assert the UpdateProject payload includes auto_breakdown_enabled: true. Mirror however the parallel_setup_script checkbox is tested; if it has no test, model on the nearest tested field and note the gap in the ledger.
+Extend the ProjectSettings test file if one exists (else CREATE frontend/src/pages/settings/ProjectSettings.test.tsx — in files: so the task scope covers it; CodeRabbit PR470): load a project with auto_breakdown_enabled=false, assert the checkbox renders unchecked; toggle it and save; assert the UpdateProject payload includes auto_breakdown_enabled: true. Mirror however the parallel_setup_script checkbox is tested; if it has no test, model on the nearest tested field and note the gap in the ledger.
 
 
 ## Change

@@ -35,7 +35,7 @@ ALTER TABLE projects ADD COLUMN auto_breakdown_enabled INTEGER NOT NULL DEFAULT 
 ```
 **File:** crates/db/src/models/project/mod.rs — add `pub auto_breakdown_enabled: bool,` to Project (next to the script fields) and `pub auto_breakdown_enabled: Option<bool>,` to UpdateProject (sibling field: parallel_setup_script at line ~96 — mirror its Option<bool> handling end-to-end).
 **Files:** crates/db/src/models/project/queries.rs, stats.rs, github.rs, sync.rs, crates/server/src/routes/projects/handlers/core.rs, crates/server/src/routes/tasks/handlers/streams.rs — thread the new column through EVERY Project materialization site exactly the way parallel_setup_script is threaded (tournament R1 F4/F-codex9 site inventory, verified 2026-08-07: query_as! column lists in queries.rs/github.rs/sync.rs, the full struct literal in stats.rs:62-84, and the Project literals/destructurings in the two server files; `grep -rn parallel_setup_script crates/` enumerates them; cargo check enumerates any miss).
-**Files:** generate_types.rs untouched unless Project/UpdateProject decl lines are absent (they exist — verify only); shared/types.ts regenerated via npm run generate-types, committed verbatim.
+**Files:** generate_types.rs untouched unless Project/UpdateProject decl lines are absent (they exist — verify only); shared/types.ts regenerated via npm run generate-types, committed verbatim, and `npm run generate-types:check` run to exit 0 as part of THIS task's gate (a stale generated file must fail here, not in 701; CodeRabbit PR470).
 
 
 ## Allowed moves

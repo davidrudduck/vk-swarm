@@ -18,7 +18,7 @@ covers_criteria: []
 covers_tests: []
 ---
 ## Failing test (write first)
-frontend/src/hooks/useBreakdown.test.ts (vitest, mirror the mocking style of the crate's existing hook tests — read useAvailableNodes.test.ts / useTaskMutations conventions first). Cases: useBreakdownProposal fetches GET /api/tasks/:id/breakdown and exposes proposal+items; useBreakdownMutations.trigger POSTs and invalidates ['breakdown', taskId]; accept invalidates BOTH ['breakdown', taskId] and ['tasks', projectId]. Strict-TS trap (prior ledgers): no unused imports, null-safe access on possibly-null proposal.
+frontend/src/hooks/useBreakdown.test.ts (vitest, mirror the mocking style of the crate's existing hook tests — read useAvailableNodes.test.ts / useTaskMutations conventions first). Cases: useBreakdownProposal fetches GET /api/tasks/:id/breakdown and exposes proposal+items; useBreakdownMutations — ALL FIVE mutations (trigger, putItems, discard, retry, accept) invalidate ['breakdown', taskId] on success (each changes the cached proposal; CodeRabbit PR470); accept ADDITIONALLY invalidates ['tasks', projectId]. Strict-TS trap (prior ledgers): no unused imports, null-safe access on possibly-null proposal.
 
 
 ## Change

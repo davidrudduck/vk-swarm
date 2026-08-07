@@ -34,3 +34,25 @@ other asserts pass unmodified.
   plan's ```sql blocks define NEW tables (would be phantom-flagged by design). Referenced
   EXISTING objects (tasks.id, execution_processes.id, projects, node_outbox) verified manually
   against crates/db/migrations on 2026-08-07.
+
+## CodeRabbit PR #470 review round (2026-08-07)
+
+Accepted + applied via envelope resubmits (spec re-prechecked; plan-lint re-PASS): 102 updated_at
+SET on mutations + replace_items self/dangling-ref validation; 202 elementwise i64 cast + min-2
+subtask bound; 203 fail_proposal error logging + lookup-error logging + tracked-follow-up wording;
+301 proposal/item-scoped outbox predicate + origin-node guard (+ spec Constraints amendment); 501
+invalidation on all five mutations; 601 in-task generate-types:check gate; 603 test file added to
+files:; 701 SC7b malformed-completion live step; spec Approach ¶ skip_worktree contradiction fixed.
+
+Declined (with evidence):
+- Durable auto-trigger (spec:110): deliberate. Auto-breakdown is an opt-in convenience; the card
+  action and MCP tool remain as manual triggers, and P4's TriggerHook + journal replay
+  (ADR-0017) is the designed home for durable event-driven triggering — duplicating durability
+  here would be throwaway.
+- 202 max-10 hard enforcement: an 11-subtask result is still a usable proposal; hard-failing it
+  discards a paid executor run. Min-2 is enforced (a 1-item result is a non-breakdown).
+- 701 literal `npm run check`: the enumerated gates 1-6 are a superset of npm run check's
+  contents (fmt/clippy/tests + both frontends' lint/tsc + typegen check).
+- reviews/find-prompt.md Phase-6 coverage: tournament artifacts are immutable records of the
+  prompt actually dispatched; retro-editing would falsify the audit trail. Adopted for future
+  rounds' prompts instead.

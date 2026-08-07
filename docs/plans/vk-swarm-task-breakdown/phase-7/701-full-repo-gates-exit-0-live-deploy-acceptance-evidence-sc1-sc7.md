@@ -41,6 +41,7 @@ Live on a running node (operator evidence):
 11. SC5: with auto_breakdown_enabled ON create a described task → draft proposal appears (paste); with it OFF create another → no proposal (paste query).
 12. SC6: stop the hive (or disconnect network), repeat SC1→SC3 end-to-end; paste evidence + post-reconnect hive task list showing the children synced.
 13. SC7: point the project's executor profile at a bad binary, trigger a breakdown; paste the failed-proposal JSON (status failed, error set) and the retry succeeding after restoring the profile.
+14. SC7b (malformed completion; CodeRabbit PR470): point the executor profile at a stub that prints non-JSON prose and exits 0; trigger; paste the failed-proposal JSON (error from the parser's NoResult path), confirm zero proposal items and zero child tasks, then a successful retry after restoring the profile.
 
 
 ## Done when

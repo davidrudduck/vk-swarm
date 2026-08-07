@@ -15,7 +15,7 @@ covers_criteria: []
 covers_tests: []
 ---
 ## Failing test (write first)
-N/A — covered by existing tests: crates/local-deployment suite must stay green; the parser/persistence behaviour is unit-tested in 202 and the end-to-end effect is proven live in 701 (SC7 failure-path evidence). If the exit-monitor region already has a test harness, add a case there; otherwise record the gap in the decisions ledger (do NOT build a new process-spawning harness in this task).
+N/A — covered by existing tests: crates/local-deployment suite must stay green; the parser/persistence behaviour is unit-tested in 202 and the end-to-end effect is proven live in 701 (SC7 failure-path evidence). If the exit-monitor region already has a test harness, add a case there; otherwise record the gap in the decisions ledger AND as a tracked follow-up item in dev-docs/workstreams/vk-swarm-task-breakdown/README.md with the re-enable condition (per CLAUDE.md a ledger note alone is not a tracked follow-up); do NOT build a new process-spawning harness in this task.
 
 
 ## Change
@@ -34,9 +34,15 @@ Add a private async fn on the impl (near the other completion helpers):
 ```rust
     async fn handle_breakdown_completion(pool: &SqlitePool, ctx: &ExecutionContext, success: bool) {
         use services::services::breakdown::BreakdownService;
-        let Some(proposal) = db::models::task_breakdown::find_by_execution_process_id(pool, ctx.execution_process.id).await.ok().flatten() else { return; };
+        let proposal = match db::models::task_breakdown::find_by_execution_process_id(pool, ctx.execution_process.id).await {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
+            Err(e) => { tracing::error!(execution_process_id = %ctx.execution_process.id, error = ?e, "breakdown proposal lookup failed"); return; }
+        };
         if !success {
-            let _ = BreakdownService::fail_proposal(pool, proposal.id, "executor run failed".into()).await;
+            if let Err(fe) = BreakdownService::fail_proposal(pool, proposal.id, "executor run failed".into()).await {
+                tracing::error!(proposal_id = %proposal.id, error = ?fe, "failed to mark breakdown proposal failed");
+            }
             return;
         }
         match BreakdownService::extract_stdout_lines(pool, ctx.execution_process.id).await
@@ -45,12 +51,16 @@ Add a private async fn on the impl (near the other completion helpers):
             Ok((_lines, result)) => {
                 if let Err(e) = BreakdownService::persist_result(pool, proposal.id, &result).await {
                     tracing::error!(proposal_id = %proposal.id, error = ?e, "breakdown persist failed");
-                    let _ = BreakdownService::fail_proposal(pool, proposal.id, e.to_string()).await;
+                    if let Err(fe) = BreakdownService::fail_proposal(pool, proposal.id, e.to_string()).await {
+                        tracing::error!(proposal_id = %proposal.id, error = ?fe, "failed to mark breakdown proposal failed");
+                    }
                 }
             }
             Err(e) => {
                 tracing::warn!(proposal_id = %proposal.id, error = ?e, "breakdown output unusable");
-                let _ = BreakdownService::fail_proposal(pool, proposal.id, e.to_string()).await;
+                if let Err(fe) = BreakdownService::fail_proposal(pool, proposal.id, e.to_string()).await {
+                    tracing::error!(proposal_id = %proposal.id, error = ?fe, "failed to mark breakdown proposal failed");
+                }
             }
         }
     }
