@@ -555,6 +555,7 @@
     },
     "swarm": {
       "title": "Swarm Management",
+      "hiveNotConnected": "This node is not connected to a hive. Swarm management lives on the hive server — connect a hive to manage swarm projects, labels, and templates.",
       "description": "Manage shared projects, labels, and templates across your swarm nodes.",
       "loading": "Loading swarm settings...",
       "loadError": "Failed to load organizations",
