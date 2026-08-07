@@ -89,9 +89,7 @@ vi.mock('@/components/ConfigProvider', () => ({
 import { OAuthDialog, POLL_DEADLINE_MS } from '../OAuthDialog';
 
 function lastAuthStatusEnabled(): boolean {
-  const calls = authStatusSpy.mock.calls as unknown as [
-    { enabled: boolean },
-  ][];
+  const calls = authStatusSpy.mock.calls as unknown as [{ enabled: boolean }][];
   return calls[calls.length - 1][0].enabled;
 }
 

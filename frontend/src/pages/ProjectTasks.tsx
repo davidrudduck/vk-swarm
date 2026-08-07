@@ -110,7 +110,9 @@ function GitErrorBanner() {
           <>
             The base branch has moved forward since this task was created.
             Rebase the task branch onto the base branch before merging.
-            <div className="mt-1 opacity-70 text-xs break-words">{gitError}</div>
+            <div className="mt-1 opacity-70 text-xs break-words">
+              {gitError}
+            </div>
           </>
         ) : (
           gitError
@@ -155,8 +157,7 @@ function ProcessStatusBanner() {
 
   if (!shouldShow || !lastAgentProcess) return null;
 
-  const reason =
-    lastAgentProcess.completion_reason ?? lastAgentProcess.status;
+  const reason = lastAgentProcess.completion_reason ?? lastAgentProcess.status;
   const message =
     reason === 'eof'
       ? 'Agent disconnected unexpectedly.'

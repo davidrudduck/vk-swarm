@@ -52,10 +52,10 @@ function cleanDescription(
   if (!description) return null;
   // Strip leading markdown headers and empty lines to show meaningful content
   const cleaned = description
-    .replace(/^\s+/, '')             // trim leading whitespace first (handles \n before headers)
+    .replace(/^\s+/, '') // trim leading whitespace first (handles \n before headers)
     .replace(/^(#{1,6} [^\n]*\n?)+/, '') // remove leading markdown headers (require space after # to avoid eating #hashtags)
-    .replace(/^\s+/, '')             // trim any whitespace exposed after header removal
-    .replace(/\s+/g, ' ')           // collapse internal newlines to spaces
+    .replace(/^\s+/, '') // trim any whitespace exposed after header removal
+    .replace(/\s+/g, ' ') // collapse internal newlines to spaces
     .trim();
   if (!cleaned) return null;
   return cleaned;
@@ -99,7 +99,9 @@ export function TaskCard({
     task.remote_assignee_name ?? task.remote_assignee_username ?? null;
 
   // Get short node name from task (falls back to project for backward compat)
-  const shortNodeName = getShortNodeName(task.source_node_name ?? project?.source_node_name);
+  const shortNodeName = getShortNodeName(
+    task.source_node_name ?? project?.source_node_name
+  );
 
   const handleClick = useCallback(() => {
     onViewDetails(task);
@@ -191,7 +193,10 @@ export function TaskCard({
     statusStripColors[task.status as TaskStatus] || statusStripColors['todo'];
 
   // Truncated description for compact view
-  const truncatedDesc = useMemo(() => cleanDescription(task.description), [task.description]);
+  const truncatedDesc = useMemo(
+    () => cleanDescription(task.description),
+    [task.description]
+  );
 
   return (
     <KanbanCard

@@ -33,7 +33,9 @@ const VariantSelectorInner = forwardRef<HTMLButtonElement, Props>(
     const hasVariants =
       currentProfile && Object.keys(currentProfile).length > 0;
     const selectedConfig =
-      currentProfile?.[(selectedVariant || 'DEFAULT') as keyof typeof currentProfile];
+      currentProfile?.[
+        (selectedVariant || 'DEFAULT') as keyof typeof currentProfile
+      ];
     const selectedExecutor = selectedConfig
       ? Object.keys(selectedConfig as Record<string, unknown>)[0]
       : null;
@@ -102,20 +104,22 @@ const VariantSelectorInner = forwardRef<HTMLButtonElement, Props>(
                 variantLabel
               );
               return (
-              <DropdownMenuItem
-                key={variantLabel}
-                onClick={() => onChange(variantLabel)}
-                className={selectedVariant === variantLabel ? 'bg-accent' : ''}
-              >
-                <div className="min-w-0">
-                  <div>{variantLabel}</div>
-                  {summary && (
-                    <div className="truncate text-[11px] text-muted-foreground">
-                      {summary}
-                    </div>
-                  )}
-                </div>
-              </DropdownMenuItem>
+                <DropdownMenuItem
+                  key={variantLabel}
+                  onClick={() => onChange(variantLabel)}
+                  className={
+                    selectedVariant === variantLabel ? 'bg-accent' : ''
+                  }
+                >
+                  <div className="min-w-0">
+                    <div>{variantLabel}</div>
+                    {summary && (
+                      <div className="truncate text-[11px] text-muted-foreground">
+                        {summary}
+                      </div>
+                    )}
+                  </div>
+                </DropdownMenuItem>
               );
             })}
         </DropdownMenuContent>

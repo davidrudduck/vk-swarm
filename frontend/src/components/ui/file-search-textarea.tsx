@@ -86,7 +86,9 @@ export const FileSearchTextarea = forwardRef<
   // Slash command state
   const [slashPosition, setSlashPosition] = useState(-1);
   const [slashQuery, setSlashQuery] = useState('');
-  const [allSlashCommands, setAllSlashCommands] = useState<SlashCommandItem[]>([]);
+  const [allSlashCommands, setAllSlashCommands] = useState<SlashCommandItem[]>(
+    []
+  );
   const [slashCommandsLoaded, setSlashCommandsLoaded] = useState(false);
   const [slashLoading, setSlashLoading] = useState(false);
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(-1);
@@ -171,7 +173,7 @@ export const FileSearchTextarea = forwardRef<
           ...result.commands,
           ...result.agents.map((a) => ({
             name: a.id,
-            description: a.label !== a.id ? a.label : a.description ?? null,
+            description: a.label !== a.id ? a.label : (a.description ?? null),
           })),
         ];
         setAllSlashCommands(items);
@@ -476,7 +478,13 @@ export const FileSearchTextarea = forwardRef<
       window.removeEventListener('resize', scheduleUpdate);
       window.removeEventListener('scroll', scheduleUpdate, true);
     };
-  }, [showDropdown, showSlashDropdown, searchResults.length, slashResults.length, getDropdownPosition]);
+  }, [
+    showDropdown,
+    showSlashDropdown,
+    searchResults.length,
+    slashResults.length,
+    getDropdownPosition,
+  ]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Handle slash command dropdown navigation

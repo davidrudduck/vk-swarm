@@ -1140,11 +1140,16 @@ const TaskFormSheetImpl = NiceModal.create<TaskFormSheetProps>((props) => {
               <Button
                 onClick={(e) => form.handleSubmit(e)}
                 disabled={!canSubmit}
-                className={cn('w-full h-11 text-base gap-2', isMobile && 'h-12')}
+                className={cn(
+                  'w-full h-11 text-base gap-2',
+                  isMobile && 'h-12'
+                )}
               >
                 {buttonText}
                 {!isSubmitting && (
-                  <kbd className="text-xs opacity-50 font-mono hidden sm:inline">⌘↵</kbd>
+                  <kbd className="text-xs opacity-50 font-mono hidden sm:inline">
+                    ⌘↵
+                  </kbd>
                 )}
               </Button>
             );

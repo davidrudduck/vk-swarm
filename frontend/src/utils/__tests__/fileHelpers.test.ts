@@ -39,7 +39,9 @@ describe('getClaudeRelativePath', () => {
       'plans/foo.md'
     );
     expect(
-      getClaudeRelativePath('/var/tmp/worktree/.claude/tasks/quiet-coalescing-lagoon/001.md')
+      getClaudeRelativePath(
+        '/var/tmp/worktree/.claude/tasks/quiet-coalescing-lagoon/001.md'
+      )
     ).toBe('tasks/quiet-coalescing-lagoon/001.md');
   });
 

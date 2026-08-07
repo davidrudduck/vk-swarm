@@ -18,7 +18,10 @@ const statusConfig: Record<TaskStatus, { dotClass: string; label: string }> = {
     dotClass: 'bg-[hsl(var(--status-inprogress))]',
     label: 'In Progress',
   },
-  inreview: { dotClass: 'bg-[hsl(var(--status-inreview))]', label: 'In Review' },
+  inreview: {
+    dotClass: 'bg-[hsl(var(--status-inreview))]',
+    label: 'In Review',
+  },
   done: { dotClass: 'bg-[hsl(var(--status-done))]', label: 'Done' },
   cancelled: {
     dotClass: 'bg-[hsl(var(--status-cancelled))]',
@@ -39,16 +42,12 @@ export function StatusBadge({
   const config = statusConfig[status];
 
   return (
-    <span
-      className={cn('inline-flex items-center gap-1.5', className)}
-    >
+    <span className={cn('inline-flex items-center gap-1.5', className)}>
       <span
         className={cn('h-2 w-2 rounded-full shrink-0', config.dotClass)}
         aria-hidden="true"
       />
-      {showLabel && (
-        <span className="text-xs font-medium">{config.label}</span>
-      )}
+      {showLabel && <span className="text-xs font-medium">{config.label}</span>}
     </span>
   );
 }

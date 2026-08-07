@@ -48,9 +48,7 @@ function ModelChangeWarningDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>
-            {t('modelChangeWarning.title')}
-          </AlertDialogTitle>
+          <AlertDialogTitle>{t('modelChangeWarning.title')}</AlertDialogTitle>
           <AlertDialogDescription>
             {t('modelChangeWarning.summary', {
               previousLabel,

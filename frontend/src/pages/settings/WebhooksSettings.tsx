@@ -42,7 +42,12 @@ import {
 } from 'lucide-react';
 import { webhooksApi } from '@/lib/api';
 import { ConfirmDialog } from '@/components/dialogs';
-import type { WebhookResponse, WebhookEventType, CreateWebhook, UpdateWebhook } from 'shared/types';
+import type {
+  WebhookResponse,
+  WebhookEventType,
+  CreateWebhook,
+  UpdateWebhook,
+} from 'shared/types';
 
 const ALL_EVENTS: WebhookEventType[] = [
   'approval_request',
@@ -59,23 +64,50 @@ const EVENT_LABELS: Record<WebhookEventType, string> = {
 const VARIABLE_GROUPS = [
   {
     label: 'Project',
-    vars: ['project.id', 'project.name', 'project.git_repo_path', 'project.github_owner', 'project.github_repo'],
+    vars: [
+      'project.id',
+      'project.name',
+      'project.git_repo_path',
+      'project.github_owner',
+      'project.github_repo',
+    ],
   },
   {
     label: 'Task',
-    vars: ['task.id', 'task.title', 'task.description', 'task.status', 'task.labels'],
+    vars: [
+      'task.id',
+      'task.title',
+      'task.description',
+      'task.status',
+      'task.labels',
+    ],
   },
   {
     label: 'Task Attempt',
-    vars: ['task_attempt.id', 'task_attempt.executor', 'task_attempt.branch', 'task_attempt.worktree_path'],
+    vars: [
+      'task_attempt.id',
+      'task_attempt.executor',
+      'task_attempt.branch',
+      'task_attempt.worktree_path',
+    ],
   },
   {
     label: 'Execution',
-    vars: ['execution_process.id', 'execution_process.run_reason', 'event.type', 'event.timestamp'],
+    vars: [
+      'execution_process.id',
+      'execution_process.run_reason',
+      'event.type',
+      'event.timestamp',
+    ],
   },
   {
     label: 'Approval Request',
-    vars: ['approval.id', 'approval.tool_name', 'approval.tool_input_json', 'approval.timeout_at'],
+    vars: [
+      'approval.id',
+      'approval.tool_name',
+      'approval.tool_input_json',
+      'approval.timeout_at',
+    ],
   },
   {
     label: 'Pending Question',
@@ -84,9 +116,14 @@ const VARIABLE_GROUPS = [
   {
     label: 'Executor Finish',
     vars: [
-      'finish.status', 'finish.completion_reason', 'finish.exit_code',
-      'finish.duration_ms', 'finish.started_at', 'finish.completed_at',
-      'finish.pr_url', 'finish.pr_number',
+      'finish.status',
+      'finish.completion_reason',
+      'finish.exit_code',
+      'finish.duration_ms',
+      'finish.started_at',
+      'finish.completed_at',
+      'finish.pr_url',
+      'finish.pr_number',
     ],
   },
 ];
@@ -108,13 +145,20 @@ interface WebhookFormProps {
   onSaved: () => void;
 }
 
-function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps) {
+function WebhookForm({
+  initial,
+  projectId,
+  onClose,
+  onSaved,
+}: WebhookFormProps) {
   const queryClient = useQueryClient();
   const templateRef = useRef<HTMLTextAreaElement>(null);
 
   const [name, setName] = useState(initial?.name ?? '');
   const [url, setUrl] = useState(initial?.url ?? '');
-  const [events, setEvents] = useState<WebhookEventType[]>(initial?.events ?? ['executor_finish']);
+  const [events, setEvents] = useState<WebhookEventType[]>(
+    initial?.events ?? ['executor_finish']
+  );
 
   // Step 10 (H4): track whether the user has touched headers so we can send null to preserve existing.
   const [headersText, setHeadersText] = useState(() => {
@@ -132,11 +176,15 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
   // Step 9 (C2): track whether user explicitly cleared the secret
   const [clearSecret, setClearSecret] = useState(false);
 
-  const [payloadTemplate, setPayloadTemplate] = useState(initial?.payload_template ?? '');
+  const [payloadTemplate, setPayloadTemplate] = useState(
+    initial?.payload_template ?? ''
+  );
   // Step 9 (C2): track whether user explicitly cleared the template
   const [clearTemplate, setClearTemplate] = useState(false);
 
-  const [overrideGlobal, setOverrideGlobal] = useState(initial?.override_global ?? false);
+  const [overrideGlobal, setOverrideGlobal] = useState(
+    initial?.override_global ?? false
+  );
   const [active, setActive] = useState(initial?.active ?? true);
   const [varsOpen, setVarsOpen] = useState(false);
   const [testResult, setTestResult] = useState<WebhookTestResult | null>(null);
@@ -145,9 +193,15 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
 
   const createMutation = useMutation({
     mutationFn: (data: CreateWebhook) =>
-      projectId ? webhooksApi.createForProject(projectId, data) : webhooksApi.createGlobal(data),
+      projectId
+        ? webhooksApi.createForProject(projectId, data)
+        : webhooksApi.createGlobal(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: projectId ? ['webhooks', 'project', projectId] : ['webhooks', 'global'] });
+      queryClient.invalidateQueries({
+        queryKey: projectId
+          ? ['webhooks', 'project', projectId]
+          : ['webhooks', 'global'],
+      });
       onSaved();
     },
     onError: (err) => {
@@ -158,7 +212,11 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
   const updateMutation = useMutation({
     mutationFn: (data: UpdateWebhook) => webhooksApi.update(initial!.id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: projectId ? ['webhooks', 'project', projectId] : ['webhooks', 'global'] });
+      queryClient.invalidateQueries({
+        queryKey: projectId
+          ? ['webhooks', 'project', projectId]
+          : ['webhooks', 'global'],
+      });
       onSaved();
     },
     onError: (err) => {
@@ -240,9 +298,15 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
     // null = preserve existing; {} = clear all; {...} = replace all
     // For creates, headers are always required (non-null), default to empty object.
     const parsedHeaders: Record<string, string> = (() => {
-      try { return JSON.parse(headersText); } catch { return {}; }
+      try {
+        return JSON.parse(headersText);
+      } catch {
+        return {};
+      }
     })();
-    const updateHeadersField: Record<string, string> | null = headersDirty ? parsedHeaders : null;
+    const updateHeadersField: Record<string, string> | null = headersDirty
+      ? parsedHeaders
+      : null;
 
     const sharedBase = {
       name: name.trim() || 'Webhook',
@@ -297,7 +361,10 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
         <Input
           id="wh-url"
           value={url}
-          onChange={(e) => { setUrl(e.target.value); setUrlError(null); }}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            setUrlError(null);
+          }}
           placeholder="https://hooks.example.com/..."
         />
         {urlError && <p className="text-destructive text-xs">{urlError}</p>}
@@ -349,8 +416,8 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
         {initial?.id && Object.keys(initial.headers ?? {}).length > 0 && (
           <p className="text-xs text-muted-foreground">
             Existing header values are write-only. Leave as{' '}
-            <code className="font-mono">{'{}'}</code> to keep current headers, or
-            enter all headers (including ones to preserve) to replace them.
+            <code className="font-mono">{'{}'}</code> to keep current headers,
+            or enter all headers (including ones to preserve) to replace them.
           </p>
         )}
       </div>
@@ -363,7 +430,11 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
             type="password"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
-            placeholder={initial?.secret_set && !clearSecret ? '••••••••' : 'Leave empty to disable signing'}
+            placeholder={
+              initial?.secret_set && !clearSecret
+                ? '••••••••'
+                : 'Leave empty to disable signing'
+            }
             disabled={clearSecret}
             className="flex-1"
           />
@@ -373,7 +444,10 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
               variant="ghost"
               size="sm"
               type="button"
-              onClick={() => { setClearSecret(true); setSecret(''); }}
+              onClick={() => {
+                setClearSecret(true);
+                setSecret('');
+              }}
             >
               Remove secret
             </Button>
@@ -390,11 +464,14 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
           )}
         </div>
         {clearSecret && (
-          <p className="text-xs text-destructive">Secret will be removed on save.</p>
+          <p className="text-xs text-destructive">
+            Secret will be removed on save.
+          </p>
         )}
         {!clearSecret && (
           <p className="text-xs text-muted-foreground">
-            When set, payloads are signed with <code className="font-mono">X-VkSwarm-Signature: sha256=…</code>
+            When set, payloads are signed with{' '}
+            <code className="font-mono">X-VkSwarm-Signature: sha256=…</code>
           </p>
         )}
       </div>
@@ -403,7 +480,9 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
         <div className="flex items-center justify-between">
           <Label htmlFor="wh-template">
             Payload Template{' '}
-            <span className="text-muted-foreground font-normal">(optional — default JSON if empty)</span>
+            <span className="text-muted-foreground font-normal">
+              (optional — default JSON if empty)
+            </span>
           </Label>
           {/* Step 9 (C2): "Clear template" affordance when editing a webhook that has a template */}
           {initial?.payload_template && !clearTemplate && (
@@ -411,7 +490,10 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
               variant="ghost"
               size="sm"
               type="button"
-              onClick={() => { setClearTemplate(true); setPayloadTemplate(''); }}
+              onClick={() => {
+                setClearTemplate(true);
+                setPayloadTemplate('');
+              }}
             >
               Clear template
             </Button>
@@ -421,7 +503,10 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
               variant="ghost"
               size="sm"
               type="button"
-              onClick={() => { setClearTemplate(false); setPayloadTemplate(initial?.payload_template ?? ''); }}
+              onClick={() => {
+                setClearTemplate(false);
+                setPayloadTemplate(initial?.payload_template ?? '');
+              }}
             >
               Undo
             </Button>
@@ -432,19 +517,27 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
           ref={templateRef}
           value={payloadTemplate}
           onChange={(e) => setPayloadTemplate(e.target.value)}
-          placeholder={'{"text": "{{task.title}} finished with status {{finish.status}}"}'}
+          placeholder={
+            '{"text": "{{task.title}} finished with status {{finish.status}}"}'
+          }
           className="font-mono text-sm h-28"
           disabled={clearTemplate}
         />
         {clearTemplate && (
-          <p className="text-xs text-destructive">Payload template will be cleared on save.</p>
+          <p className="text-xs text-destructive">
+            Payload template will be cleared on save.
+          </p>
         )}
         <button
           type="button"
           onClick={() => setVarsOpen((v) => !v)}
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
-          {varsOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          {varsOpen ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
           Available variables ({TOTAL_VAR_COUNT})
         </button>
         {varsOpen && (
@@ -475,7 +568,9 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
 
       <div className="flex items-center gap-3">
         <Switch id="wh-active" checked={active} onCheckedChange={setActive} />
-        <label htmlFor="wh-active" className="text-sm cursor-pointer">Active</label>
+        <label htmlFor="wh-active" className="text-sm cursor-pointer">
+          Active
+        </label>
       </div>
 
       {initial && (
@@ -506,8 +601,12 @@ function WebhookForm({ initial, projectId, onClose, onSaved }: WebhookFormProps)
                     {testResult.error && `: ${testResult.error}`}
                     {testResult.body_preview && (
                       <details className="mt-1">
-                        <summary className="cursor-pointer text-xs">Response body</summary>
-                        <pre className="text-xs mt-1 whitespace-pre-wrap break-all">{testResult.body_preview}</pre>
+                        <summary className="cursor-pointer text-xs">
+                          Response body
+                        </summary>
+                        <pre className="text-xs mt-1 whitespace-pre-wrap break-all">
+                          {testResult.body_preview}
+                        </pre>
                       </details>
                     )}
                   </>
@@ -593,11 +692,18 @@ function WebhookList({
               </Badge>
             ))}
             {wh.override_global && (
-              <Badge variant="outline" className="text-xs">override</Badge>
+              <Badge variant="outline" className="text-xs">
+                override
+              </Badge>
             )}
           </div>
           <div className="flex gap-1 shrink-0">
-            <Button variant="ghost" size="sm" onClick={() => onEdit(wh)} className="h-8 w-8 p-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onEdit(wh)}
+              className="h-8 w-8 p-0"
+            >
               <Edit2 className="h-4 w-4" />
             </Button>
             <Button
@@ -630,12 +736,16 @@ export function WebhooksSection({
   showOverrideNote = false,
 }: WebhooksSectionProps) {
   const queryClient = useQueryClient();
-  const queryKey = projectId ? ['webhooks', 'project', projectId] : ['webhooks', 'global'];
+  const queryKey = projectId
+    ? ['webhooks', 'project', projectId]
+    : ['webhooks', 'global'];
 
   const { data: webhooks = [], isLoading } = useQuery({
     queryKey,
     queryFn: () =>
-      projectId ? webhooksApi.listForProject(projectId) : webhooksApi.listGlobal(),
+      projectId
+        ? webhooksApi.listForProject(projectId)
+        : webhooksApi.listGlobal(),
   });
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -672,10 +782,16 @@ export function WebhooksSection({
     updateMutation.mutate({
       id: wh.id,
       data: {
-        name: null, url: null, events: null, headers: null,
-        secret: null, clear_secret: false,
-        payload_template: null, clear_payload_template: false,
-        override_global: null, active: !wh.active,
+        name: null,
+        url: null,
+        events: null,
+        headers: null,
+        secret: null,
+        clear_secret: false,
+        payload_template: null,
+        clear_payload_template: false,
+        override_global: null,
+        active: !wh.active,
       },
     });
   };
@@ -683,7 +799,8 @@ export function WebhooksSection({
   const handleDelete = async (id: string) => {
     const result = await ConfirmDialog.show({
       title: 'Delete Webhook',
-      message: 'Are you sure you want to delete this webhook? This cannot be undone.',
+      message:
+        'Are you sure you want to delete this webhook? This cannot be undone.',
       confirmText: 'Delete',
     });
     if (result !== 'confirmed') return;
@@ -710,8 +827,8 @@ export function WebhooksSection({
             <Info className="h-4 w-4" />
             <AlertDescription>
               Project webhooks fire in addition to global webhooks. Enable{' '}
-              <span className="font-medium">Override global</span> on a project webhook to suppress
-              global webhooks for those event types.
+              <span className="font-medium">Override global</span> on a project
+              webhook to suppress global webhooks for those event types.
             </AlertDescription>
           </Alert>
         )}

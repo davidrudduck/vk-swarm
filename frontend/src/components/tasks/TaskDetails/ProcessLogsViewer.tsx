@@ -240,11 +240,7 @@ function LocalProcessLogsViewer({ processId }: { processId: string }) {
   const { logs, error } = useLogStream(processId);
 
   return (
-    <ProcessLogsViewerContent
-      logs={logs}
-      error={error}
-      sourceKey={processId}
-    />
+    <ProcessLogsViewerContent logs={logs} error={error} sourceKey={processId} />
   );
 }
 

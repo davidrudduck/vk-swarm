@@ -92,7 +92,9 @@ export const AttemptHeaderActions = ({
                   : '_none'
           }
           onValueChange={(v) => {
-            onModeChange(v === 'diff' ? 'diffs' : v === 'logs' ? 'terminal' : null);
+            onModeChange(
+              v === 'diff' ? 'diffs' : v === 'logs' ? 'terminal' : null
+            );
           }}
           aria-label="Layout mode"
         >

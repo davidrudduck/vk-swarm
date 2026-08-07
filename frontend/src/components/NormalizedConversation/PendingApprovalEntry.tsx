@@ -20,7 +20,10 @@ import { Check, X, Send, FileText, Image as ImageIcon } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { FileSearchTextarea } from '@/components/ui/file-search-textarea';
-import { TemplatePicker, type Template as PickerTemplate } from '@/components/tasks/TemplatePicker';
+import {
+  TemplatePicker,
+  type Template as PickerTemplate,
+} from '@/components/tasks/TemplatePicker';
 import { templatesApi } from '@/lib/api';
 
 import { useHotkeysContext } from 'react-hotkeys-hook';
@@ -209,23 +212,31 @@ function DenyReasonForm({
     if (!showTemplatePicker) return;
     let cancelled = false;
     setLoadingTemplates(true);
-    templatesApi.list()
+    templatesApi
+      .list()
       .then((templates) => {
         if (cancelled) return;
-        setCustomTemplates(templates.map((tmpl) => ({
-          id: tmpl.id,
-          name: tmpl.template_name,
-          description: `@${tmpl.template_name}`,
-          content: tmpl.content,
-        })));
+        setCustomTemplates(
+          templates.map((tmpl) => ({
+            id: tmpl.id,
+            name: tmpl.template_name,
+            description: `@${tmpl.template_name}`,
+            content: tmpl.content,
+          }))
+        );
       })
       .finally(() => !cancelled && setLoadingTemplates(false));
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [showTemplatePicker]);
 
-  const handleTemplateSelect = useCallback((template: PickerTemplate) => {
-    onChange(value + template.content);
-  }, [value, onChange]);
+  const handleTemplateSelect = useCallback(
+    (template: PickerTemplate) => {
+      onChange(value + template.content);
+    },
+    [value, onChange]
+  );
 
   return (
     <div className="mt-3 bg-background px-3 py-3 text-sm">
@@ -254,7 +265,12 @@ function DenyReasonForm({
         </div>
         <div className="flex-1" />
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={onCancel} disabled={isResponding}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onCancel}
+            disabled={isResponding}
+          >
             Cancel
           </Button>
           <Button size="sm" onClick={onSubmit} disabled={isResponding}>
