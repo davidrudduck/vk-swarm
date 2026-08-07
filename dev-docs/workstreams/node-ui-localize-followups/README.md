@@ -1,6 +1,7 @@
 ---
 workstream: node-ui-localize-followups
-status: active
+status: shipped
+shipped: 2026-08-07
 created: 2026-08-05
 parent_session: vk-swarm-node-ui-localize close-out
 ---
@@ -10,16 +11,19 @@ parent_session: vk-swarm-node-ui-localize close-out
 Low-risk leftovers from the shipped `vk-swarm-node-ui-localize` workstream. Batched because they
 share one area and are individually trivial.
 
-- `F-2026-07-31-04` — `LinkToLocalFolderDialog` orphaned by task 302; its API client, hook, and
-  server route are still live
-- `F-2026-07-31-05` — stale `['mergedProjects']` query key invalidated in
-  `frontend/src/hooks/useProjectMutations.ts:79` is now a no-op (verified still present 2026-08-05)
-- `F-2026-07-31-06` — stale doc comment "merged projects view" at
-  `crates/db/src/models/project/mod.rs:106` (verified still present)
-- `F-2026-07-31-08` — i18n key `settings.swarm.hiveNotConnected` undefined in all locales;
-  ja/ko/es fall back to English
-- `F-2026-08-01-01`, `F-2026-08-01-02` — 503-discrimination and retry behaviour are unpinned; an
-  unconditional guard would survive the suite
+All tasks completed 2026-08-07 on branch `fix/frontend-cleanup-bundle`:
+
+- `F-2026-07-31-04` — **fixed.** `LinkToLocalFolderDialog` deleted plus its API client method,
+  hook mutation, and the Rust `POST /api/projects/link-local` route/handler and request type
+  (verified unreferenced by remote-frontend); `shared/types.ts` regenerated
+- `F-2026-07-31-05` — **fixed.** The stale `['mergedProjects']` invalidation was removed with
+  the `linkLocalFolder` mutation above
+- `F-2026-07-31-06` — **fixed.** Doc comment repointed to "project stats"
+- `F-2026-07-31-08` — **fixed.** `settings.swarm.hiveNotConnected` added to en/ja/ko/es
+- `F-2026-08-01-01` — **fixed.** `useDiffStream.test.ts` / `useRemoteConnectionStatus.test.ts`
+  pin the discrimination: HiveNotConfigured 503 is quiet, plain 503 (outage) and 500 surface
+- `F-2026-08-01-02` — **fixed.** `useAvailableNodes.test.ts` wrapper enables retries
+  (`retry: 2, retryDelay: 0`) and asserts 1 call (suppressed) vs 3 calls (control)
 
 Note on the last two: the 503 discrimination was materially changed during PR #467 review —
 `isHiveNotConfigured` now requires the `HiveNotConfigured` message discriminator as well as status
