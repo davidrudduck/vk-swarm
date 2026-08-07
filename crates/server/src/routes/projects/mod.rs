@@ -3,10 +3,9 @@ pub mod types;
 
 // Re-export types for public API
 pub use types::{
-    GitHubCountsResponse, ListProjectFilesQuery, OpenEditorRequest,
-    OpenEditorResponse, OrphanedProject, OrphanedProjectsResponse, ProjectWithStats,
-    ProjectsWithStatsResponse, RemoteNodeGroup, RemoteNodeProject, SetGitHubEnabledRequest,
-    TaskCounts, UnifiedProject,
+    GitHubCountsResponse, ListProjectFilesQuery, OpenEditorRequest, OpenEditorResponse,
+    OrphanedProject, OrphanedProjectsResponse, ProjectWithStats, ProjectsWithStatsResponse,
+    RemoteNodeGroup, RemoteNodeProject, SetGitHubEnabledRequest, TaskCounts, UnifiedProject,
 };
 
 use axum::{
