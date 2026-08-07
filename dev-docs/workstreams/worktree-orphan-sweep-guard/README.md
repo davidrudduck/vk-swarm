@@ -1,6 +1,6 @@
 ---
 workstream: worktree-orphan-sweep-guard
-status: active
+status: done
 created: 2026-08-05
 parent_session: vk-swarm-node-ui-localize close-out
 ---
@@ -16,3 +16,21 @@ Storage-safety fixes on destructive/relocating paths.
 - `F-2026-07-30-02` — an empty `VK_DATABASE_PATH` silently relocates the database to the process
   CWD (`crates/utils/src/assets.rs:61`). `asset_dir()` already trims-then-filters its override for
   exactly this reason (task 099); apply the same treatment.
+
+## Decisions ledger
+
+- 2026-08-07 — **F-2026-07-30-03 fixed** (branch `fix/backend-hygiene-bundle`). The orphan sweep in
+  `crates/local-deployment/src/container.rs` now calls `orphan_worktree_must_be_preserved()` before
+  deleting: dirty worktrees are skipped with a warning, and an indeterminate git status also skips
+  (matching `cleanup_expired_attempt`'s safety posture). **Deliberate divergence from the sibling as
+  written**: `GitService::get_dirty_files` skips untracked files (it exists for stash display), which
+  is inadequate for a data-loss guard. Added `GitService::has_uncommitted_changes()` (untracked
+  inclusive, `git status --porcelain`) and switched **both** the orphan guard and
+  `cleanup_expired_attempt` to it. Unit tests cover clean / modified / untracked / non-repo cases.
+- 2026-08-07 — **F-2026-07-30-02 fixed** (same branch). `database_path()` now trims-then-filters its
+  `VK_DATABASE_PATH` override exactly like `asset_dir()` (task 099); a set-but-blank value falls back
+  to the default instead of relocating the DB to the CWD. The identically-shaped hole in
+  `backup_dir()` / `VK_BACKUP_DIR` was fixed in the same commit. Tests cover blank, whitespace-only,
+  and padded overrides.
+
+Status: both findings in this workstream are fixed; workstream complete pending merge.
