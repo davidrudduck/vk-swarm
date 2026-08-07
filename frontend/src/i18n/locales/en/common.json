@@ -141,7 +141,8 @@
     "welcomeBack": "Welcome back, {{name}}",
     "errorTitle": "Authentication Failed",
     "errorDescription": "There was a problem authenticating your account",
-    "tryAgain": "Try Again"
+    "tryAgain": "Try Again",
+    "timeoutError": "Sign-in timed out. The authentication window did not complete — close it and try again."
   },
   "execution": {
     "finalResponse": "Final Response"
