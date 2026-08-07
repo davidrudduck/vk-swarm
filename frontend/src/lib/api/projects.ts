@@ -11,7 +11,6 @@ import type {
   ScanConfigRequest,
   ScanConfigResponse,
   ProjectsWithStatsResponse,
-  LinkToLocalFolderRequest,
   RemoteProjectMembersResponse,
   OpenEditorRequest,
   OpenEditorResponse,
@@ -106,14 +105,6 @@ export const projectsApi = {
   getWithStats: async (): Promise<ProjectsWithStatsResponse> => {
     const response = await makeRequest('/api/projects/with-stats');
     return handleApiResponse<ProjectsWithStatsResponse>(response);
-  },
-
-  linkLocalFolder: async (data: LinkToLocalFolderRequest): Promise<Project> => {
-    const response = await makeRequest('/api/projects/link-local', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-    return handleApiResponse<Project>(response);
   },
 
   // GitHub Integration

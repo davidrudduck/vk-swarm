@@ -20,18 +20,6 @@ pub struct ListProjectFilesQuery {
 // Request Types
 // ============================================================================
 
-/// Request to link a local folder to a remote project
-/// This creates a new local project at the specified path and links it to the remote project
-#[derive(Deserialize, TS)]
-pub struct LinkToLocalFolderRequest {
-    /// The remote project ID to link to (from the Hive)
-    pub remote_project_id: Uuid,
-    /// The local folder path where the project will be created
-    pub local_folder_path: String,
-    /// Optional project name (defaults to folder name if not provided)
-    pub project_name: Option<String>,
-}
-
 #[derive(serde::Deserialize)]
 pub struct OpenEditorRequest {
     pub editor_type: Option<String>,

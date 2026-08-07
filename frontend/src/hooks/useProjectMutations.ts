@@ -4,7 +4,6 @@ import type {
   CreateProject,
   UpdateProject,
   Project,
-  LinkToLocalFolderRequest,
   UnlinkSwarmRequest,
   UnlinkSwarmResponse,
 } from 'shared/types';
@@ -14,8 +13,6 @@ interface UseProjectMutationsOptions {
   onCreateError?: (err: unknown) => void;
   onUpdateSuccess?: (project: Project) => void;
   onUpdateError?: (err: unknown) => void;
-  onLinkLocalFolderSuccess?: (project: Project) => void;
-  onLinkLocalFolderError?: (err: unknown) => void;
   // Legacy link/unlink options (deprecated - API not implemented)
   onLinkSuccess?: () => void;
   onLinkError?: (err: unknown) => void;
@@ -64,39 +61,6 @@ export function useProjectMutations(options?: UseProjectMutationsOptions) {
     onError: (err) => {
       console.error('Failed to update project:', err);
       options?.onUpdateError?.(err);
-    },
-  });
-
-  const linkLocalFolder = useMutation({
-    mutationKey: ['linkLocalFolder'],
-    mutationFn: (data: LinkToLocalFolderRequest) =>
-      projectsApi.linkLocalFolder(data),
-    onSuccess: (project: Project) => {
-      queryClient.setQueryData(['project', project.id], project);
-
-      // Invalidate to ensure fresh data from server
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['mergedProjects'] });
-      queryClient.invalidateQueries({ queryKey: ['unifiedProjects'] });
-
-      // Invalidate organization projects queries since linking affects remote projects
-      queryClient.invalidateQueries({
-        queryKey: ['organizations'],
-        predicate: (query) => {
-          const key = query.queryKey;
-          return (
-            key.length === 3 &&
-            key[0] === 'organizations' &&
-            key[2] === 'projects'
-          );
-        },
-      });
-
-      options?.onLinkLocalFolderSuccess?.(project);
-    },
-    onError: (err) => {
-      console.error('Failed to link local folder:', err);
-      options?.onLinkLocalFolderError?.(err);
     },
   });
 
@@ -158,7 +122,6 @@ export function useProjectMutations(options?: UseProjectMutationsOptions) {
   return {
     createProject,
     updateProject,
-    linkLocalFolder,
     linkToExisting,
     unlinkProject,
     unlinkFromSwarm,
