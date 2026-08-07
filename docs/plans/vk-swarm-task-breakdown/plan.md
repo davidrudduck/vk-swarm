@@ -13,7 +13,7 @@ Traps pre-empted from prior ledgers: strict-TS test snippets (no unused imports,
 
 ## Phases
 - **Phase 1: data-substrate** — Proposal + dependency tables exist with a typed, tested db module and generated TS types
-- **Phase 2: execution-vehicle** — A breakdown run can be spawned as a normal attempt and its structured result parsed durably into proposal items
+- **Phase 2: execution-vehicle** — A breakdown run can be spawned as a normal attempt (with a breakdown-specific prompt/run-reason entry point) and its structured result parsed durably into proposal items
 - **Phase 3: api** — All breakdown lifecycle endpoints live under /api with review-gate invariants enforced
 - **Phase 4: mcp** — External agents reach the same endpoints through MCP tools
 - **Phase 5: frontend** — Operator can trigger, review, edit, accept/discard breakdowns from the board
@@ -29,8 +29,9 @@ Traps pre-empted from prior ledgers: strict-TS test snippets (no unused imports,
 | 103 | 1 | Register breakdown types in generate_types.rs and regenerate shared/types.ts | dep: 102 | conflicts: none |
 | 201 | 2 | Add ExecutionProcessRunReason::Breakdown variant | dep: none | conflicts: none |
 | 202 | 2 | BreakdownService: prompt template + BreakdownResult parser + persistence | dep: 102 201 | conflicts: none |
-| 203 | 2 | Exit-monitor completion hook: parse breakdown runs into proposal items | dep: 202 | conflicts: none |
-| 301 | 3 | REST API: breakdown lifecycle endpoints + dependencies query | dep: 103 203 | conflicts: none |
+| 204 | 2 | Services-layer start_breakdown_attempt + finalize exclusion for Breakdown runs | dep: 201 | conflicts: none |
+| 203 | 2 | Exit-monitor completion hook: parse breakdown runs into proposal items | dep: 202 204 | conflicts: none |
+| 301 | 3 | REST API: breakdown lifecycle endpoints + dependencies query | dep: 103 203 204 | conflicts: none |
 | 401 | 4 | MCP tools: break_down_task, get_breakdown, accept_breakdown | dep: 301 | conflicts: none |
 | 501 | 5 | Frontend api client + hooks for breakdown | dep: 301 | conflicts: none |
 | 502 | 5 | BreakdownReviewDialog (NiceModal) with edit/reorder/accept/discard/retry | dep: 501 | conflicts: none |

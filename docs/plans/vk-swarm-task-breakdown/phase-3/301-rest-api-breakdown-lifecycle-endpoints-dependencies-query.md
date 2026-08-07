@@ -3,7 +3,7 @@ id: "301"
 phase: 3
 title: "REST API: breakdown lifecycle endpoints + dependencies query"
 status: ready
-depends_on: ["103","203"]
+depends_on: ["103","203","204"]
 parallel: false
 conflicts_with: []
 files:
@@ -23,12 +23,13 @@ In crates/server/src/routes/breakdown.rs `#[cfg(test)] mod tests` using db::test
 3. test_accept_returns_children_and_edges — seed a draft with 2 items (B dep A) via db fns; POST accept → 200 listing 2 tasks; GET dependencies for B's task returns the A edge.
 4. test_edit_items_only_in_draft — PUT items on an accepted proposal → 4xx.
 5. test_discard_and_retry — discard → status discarded; retry on a failed proposal creates a fresh draft run.
+6. test_spawn_failure_marks_failed (tournament R1 F9) — force stage-2 failure (e.g. a task/project state that makes attempt creation error, or an unresolvable executor profile); assert the proposal ends status='failed' with error set (NOT a stranded draft) and that a subsequent trigger succeeds with a new draft.
 Note: the trigger's attempt-spawn is exercised only as far as the test harness allows without a real executor (assert the proposal row + linked attempt row exist; do NOT spawn a real CLI in tests — stub via the harness's existing pattern if present, else assert up to the DB effects and record the boundary in the ledger).
 
 
 ## Change
 **File:** crates/server/src/routes/breakdown.rs (new) — read sibling labels.rs first for the single-file route-module shape (router fn + handlers + ApiResponse envelope + ApiError mapping). Handlers (all Result<ResponseJson<ApiResponse<T>>, ApiError>):
-- `POST /tasks/{task_id}/breakdown` trigger_breakdown: load task (404 if absent); TaskBreakdownProposal::create (map unique violation → ApiError::Conflict / the crate's 409 variant); create a TaskAttempt on the task and call deployment.container().start_attempt(&attempt, executor_profile_id_from_project_default, false) with an ExecutorAction whose initial prompt is BreakdownService::breakdown_prompt(...) and run_reason Breakdown — read how create_task_and_start builds attempt+start (tasks/handlers/core.rs:305-452) and mirror EXACTLY the parts needed, diverging only in run_reason and prompt (justify divergences in ledger); link_execution_process on the proposal.
+- `POST /tasks/{task_id}/breakdown` trigger_breakdown: structured as TWO shared pub(crate) fns — `create_draft_proposal(deployment, task_id)` (stage 1) and `spawn_breakdown_run(deployment, proposal)` (stage 2, detaches internally) — composed by the handler (tournament R1 F9/F10): STAGE 1 (synchronous, awaited): load task (404 if absent); TaskBreakdownProposal::create (map the one-draft unique violation → the crate's 409/Conflict ApiError variant — read error.rs first; if no 409-shaped variant exists STOP). STAGE 2 (spawn): create a TaskAttempt on the task (mirror create_task_and_start's attempt creation, tasks/handlers/core.rs:305-452), then call deployment.container().start_breakdown_attempt(&attempt, project_default_profile, BreakdownService::breakdown_prompt(...)) (the 204 entry point) and link_execution_process on the proposal. ANY error in stage 2 (attempt creation, spawn, linking) must mark the proposal Failed with the error text — never leave a stranded draft (the unique index would 409-block retriggering forever). The route handler awaits stage 1 (so a draft row exists deterministically at response time) and stage 2's outcome may be deferred; return the proposal.
 - `GET /tasks/{task_id}/breakdown` get_breakdown → proposal + items (204/null data when none).
 - `PUT /breakdown-proposals/{id}/items` put_items(Json<UpsertProposalItems>) → replace_items (draft-only errors → 409).
 - `POST /breakdown-proposals/{id}/accept` accept → accept_proposal → Vec<Task>.
@@ -45,7 +46,7 @@ Create breakdown.rs; the two mod.rs lines. NO edits to tasks/handlers/core.rs (m
 
 
 ## STOP triggers
-ApiError lacks a 409-shaped variant (check error.rs; if truly absent, STOP and escalate rather than inventing one here — error.rs is unlisted); the attempt-creation path researched in core.rs:305-452 requires fields a breakdown context cannot supply; ExecutorAction construction for an initial prompt is not expressible without executor-crate changes.
+ApiError lacks a 409-shaped variant (check error.rs; if truly absent, STOP and escalate rather than inventing one here — error.rs is unlisted); the attempt-creation path researched in core.rs:305-452 requires fields a breakdown context cannot supply; 204's start_breakdown_attempt is absent or its signature differs.
 
 
 ## Manual verification (record in decisions-ledger)

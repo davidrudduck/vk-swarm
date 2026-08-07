@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "codex",
+    "exec",
+    "-C",
+    "/data/Code/vk-swarm-worktrees/p3-p4-specs",
+    "--sandbox",
+    "read-only",
+    "--json",
+    "-"
+  ],
+  "cwd": "/data/Code/vk-swarm-worktrees/p3-p4-specs",
+  "exit_code": 0,
+  "finished_at": "2026-08-07T13:24:17.503401+00:00",
+  "notes": [],
+  "prompt_file": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/judge-prompt-of-claude.md",
+  "raw_log": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/judge-codex-on-claude.raw.log",
+  "report": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/judge-codex-on-claude.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-08-07T13:21:16.442953+00:00",
+  "status": "ok",
+  "task": "plan-review",
+  "tool": "codex",
+  "tool_version": "codex-cli 0.147.0"
+}

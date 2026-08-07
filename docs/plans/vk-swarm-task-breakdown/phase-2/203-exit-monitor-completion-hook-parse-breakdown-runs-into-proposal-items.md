@@ -3,7 +3,7 @@ id: "203"
 phase: 2
 title: "Exit-monitor completion hook: parse breakdown runs into proposal items"
 status: ready
-depends_on: ["202"]
+depends_on: ["202","204"]
 parallel: false
 conflicts_with: []
 files:
@@ -20,7 +20,7 @@ N/A — covered by existing tests: crates/local-deployment suite must stay green
 
 ## Change
 **File:** crates/local-deployment/src/container.rs
-**Anchor:** the exit-monitor completion block, lines ~711-782 — specifically after `let success = matches!(...) && exit_code == Some(0);` (line ~730) and BEFORE the `if success || cleanup_done` commit/next-action block.
+**Anchor:** the exit-monitor, AFTER the durable-log flush — locate the block that finishes the log batcher and completes normalization (`log_batcher.finish` ~:797-799 and the push_finished/normalization await ~:806-810) and insert the hook AFTER it, NOT at the earlier `success` binding (~:730): parsing before the flush reads incomplete ExecutionProcessLogs and falsely fails good runs (tournament R1 F-codex4). The `success` value computed at ~:730 (`ExecutionProcessStatus::Completed && exit_code == Some(0)`) must be captured/recomputed for use here.
 Insert:
 ```rust
                 if matches!(
@@ -34,7 +34,7 @@ Add a private async fn on the impl (near the other completion helpers):
 ```rust
     async fn handle_breakdown_completion(pool: &SqlitePool, ctx: &ExecutionContext, success: bool) {
         use services::services::breakdown::BreakdownService;
-        let Some(proposal) = /* task_breakdown::find_by_execution_process_id(pool, ctx.execution_process.id) — add this query in db if absent per 102's module (STOP if 102 omitted it: it is find_by_task_id on ctx.task_attempt.task_id filtered to draft + matching execution_process_id) */ else { return; };
+        let Some(proposal) = db::models::task_breakdown::find_by_execution_process_id(pool, ctx.execution_process.id).await.ok().flatten() else { return; };
         if !success {
             let _ = BreakdownService::fail_proposal(pool, proposal.id, "executor run failed".into()).await;
             return;
@@ -55,15 +55,15 @@ Add a private async fn on the impl (near the other completion helpers):
         }
     }
 ```
-Breakdown runs must NOT enter the commit/next-action path: extend the `if success || cleanup_done` condition to `if (success || cleanup_done) && !matches!(ctx.execution_process.run_reason, ExecutionProcessRunReason::Breakdown)`.
+Breakdown runs must NOT enter the commit/next-action path: extend the `if success || cleanup_done` condition (~:740) to `if (success || cleanup_done) && !matches!(ctx.execution_process.run_reason, ExecutionProcessRunReason::Breakdown)`. (The finalize_task exclusion is owned by 204's should_finalize guard — do not duplicate it here.)
 
 
 ## Allowed moves
-Only the insertion at the stated anchor, the one condition extension, and the private helper fn. Match the surrounding tracing/error-handling idiom. No other behaviour change in the exit monitor.
+Only the post-flush insertion, the one condition extension, and the private helper fn. Match the surrounding tracing/error-handling idiom. No other behaviour change in the exit monitor.
 
 
 ## STOP triggers
-The anchor block has moved/been refactored (verify the `success` binding and `if success || cleanup_done` exist as researched); ExecutionContext lacks the fields used; the proposal-by-execution-process lookup does not exist in 102's module and cannot be expressed via find_by_task_id (escalate to amend 102 rather than inventing SQL here — unlisted file).
+The log-batcher finish / normalization-completion block cannot be located near ~:797-810 (refactored — re-anchor by searching for log_batcher.finish, else escalate); the `success` binding or `if success || cleanup_done` condition is absent as researched; ExecutionContext lacks the fields used; 102's find_by_execution_process_id is missing (102 must be amended — do not invent SQL here).
 
 
 ## Manual verification (record in decisions-ledger)

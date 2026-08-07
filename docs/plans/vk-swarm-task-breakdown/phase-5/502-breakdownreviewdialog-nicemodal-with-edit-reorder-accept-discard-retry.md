@@ -14,10 +14,10 @@ irreversible: false
 scope_test: "frontend/src/components/dialogs/tasks"
 allowed_change: create
 covers_criteria: []
-covers_tests: ["TS4"]
+covers_tests: []
 ---
 ## Failing test (write first)
-frontend/src/components/dialogs/tasks/BreakdownReviewDialog.test.tsx (vitest + testing-library, mirror the mocking approach of existing dialog/component tests). Cases: renders items with titles + dependency chips; edit title persists via putItems on save; delete item removes row; Accept calls breakdownApi.accept then closes; Discard calls discard; status 'failed' renders the localized error + Retry button wired to retry; status 'draft' with zero items and a live run renders the running state. i18n: assert keys resolve via the test i18n harness (no literal strings — eslint i18next rule).
+frontend/src/components/dialogs/tasks/BreakdownReviewDialog.test.tsx (vitest + testing-library, mirror the mocking approach of existing dialog/component tests). Cases: renders items with titles + dependency chips; edit title persists via putItems on save; delete item removes row AND remaps surviving dependency indices in the putItems payload; reorder (move item down) produces a putItems payload with updated sort_order + correctly remapped depends_on_indices (tournament R1 F-codex12); Accept calls breakdownApi.accept then closes; Discard calls discard; status 'failed' renders the localized error + Retry button wired to retry; status 'draft' with zero items and a live run renders the running state. i18n: assert keys resolve via the test i18n harness (no literal strings — eslint i18next rule). (TS4 is claimed by 503, which completes the suite with locale-parity + card/action coverage.)
 
 
 ## Change

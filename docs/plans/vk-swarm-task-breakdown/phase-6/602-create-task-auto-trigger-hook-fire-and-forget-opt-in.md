@@ -15,7 +15,7 @@ covers_criteria: []
 covers_tests: []
 ---
 ## Failing test (write first)
-In the tasks-handler test module (mirror existing create_task tests): with auto_breakdown_enabled=false, POST create → NO task_breakdown_proposals row (byte-for-byte unchanged path); with it true and a description present and no parent_task_id → a draft proposal row exists after the handler returns (poll briefly if the spawn is async); with it true but empty description or a parent_task_id set → no proposal.
+In the tasks-handler test module (mirror existing create_task tests). Deterministic by construction (tournament R1 F10): the hook AWAITS stage 1 of start_breakdown_for_task (draft insert — see 301's two-stage structure) before detaching stage 2, so: with auto_breakdown_enabled=false, POST create → NO task_breakdown_proposals row (byte-for-byte unchanged path); with it true + description + no parent_task_id → a proposal row with status='draft' EXISTS at handler return (no polling, no status-race — stage 2 may later mark it failed but that is not asserted here; live end-to-end proof is 701/SC5); with it true but empty description or parent_task_id set → no proposal.
 
 
 ## Change
@@ -29,14 +29,13 @@ Insert a guarded fire-and-forget:
     {
         let deployment = deployment.clone();
         let task_id = task.id;
-        tokio::spawn(async move {
-            if let Err(e) = crate::routes::breakdown::start_breakdown_for_task(&deployment, task_id).await {
-                tracing::warn!(task_id = %task_id, error = ?e, "auto-breakdown trigger failed");
-            }
-        });
+        match crate::routes::breakdown::create_draft_proposal(&deployment, task_id).await {
+        Ok(proposal) => { crate::routes::breakdown::spawn_breakdown_run(deployment.clone(), proposal); }
+        Err(e) => tracing::warn!(task_id = %task_id, error = ?e, "auto-breakdown trigger failed"),
+    }
     }
 ```
-This requires 301's route module to expose its shared private trigger fn as `pub(crate) async fn start_breakdown_for_task(deployment, task_id)` — 301 already factors the trigger path into a shared fn; making it pub(crate) is within THIS task's allowed moves ONLY if it is a visibility keyword change in breakdown.rs; if more than the keyword is needed, STOP (301 must be amended).
+(Stage 1 `create_draft_proposal` is AWAITED so the draft row exists deterministically before the handler returns — tournament R1 F10; stage 2 `spawn_breakdown_run` detaches internally.) 301 already structures start_breakdown_for_task in these two stages as pub(crate) fns; if the names/signatures differ, adapt the call site only — if the two-stage split is absent, STOP (301 must be amended).
 
 
 ## Allowed moves

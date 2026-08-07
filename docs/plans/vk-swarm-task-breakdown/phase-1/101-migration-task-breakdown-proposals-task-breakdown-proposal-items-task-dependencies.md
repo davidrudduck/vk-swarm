@@ -9,14 +9,14 @@ conflicts_with: []
 files:
   - "crates/db/migrations/20260807000000_add_task_breakdown.sql"
 siblings: ["crates/db/migrations/20260201000400_add_node_outbox.sql"]
-irreversible: false
+irreversible: true
 scope_test: "crates/db"
 allowed_change: create
 covers_criteria: []
 covers_tests: []
 ---
 ## Failing test (write first)
-N/A — covered by existing tests: every test using db::test_utils::create_test_pool() applies all migrations; a malformed migration fails the whole crates/db suite. Structural assertions land in task 102's tests.
+N/A — covered by existing tests: every test using db::test_utils::create_test_pool() applies all migrations; a malformed migration fails the whole crates/db suite. Structural assertions land in task 102's tests. NOTE: irreversible=true (tournament R1: this migration durably lands the ADR-0016 schema contract D1 marks irreversible) — the human gate requires reviews/101.approved; the approver should re-read dev-docs/adr/0016-breakdown-proposals-separate-entity.md before approving.
 
 
 ## Change

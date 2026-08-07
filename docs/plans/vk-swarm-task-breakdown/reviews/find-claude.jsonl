@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "claude",
+    "-p",
+    "--permission-mode",
+    "plan",
+    "--output-format",
+    "json"
+  ],
+  "cwd": "/data/Code/vk-swarm-worktrees/p3-p4-specs",
+  "exit_code": 0,
+  "finished_at": "2026-08-07T13:18:33.907289+00:00",
+  "notes": [],
+  "prompt_file": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-prompt.md",
+  "raw_log": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-claude.raw.log",
+  "report": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-claude.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-08-07T13:12:13.915737+00:00",
+  "status": "ok",
+  "task": "plan-review",
+  "tool": "claude",
+  "tool_version": "2.1.224 (Claude Code)"
+}

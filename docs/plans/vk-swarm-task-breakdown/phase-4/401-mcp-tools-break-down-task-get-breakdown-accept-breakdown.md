@@ -15,7 +15,7 @@ covers_criteria: []
 covers_tests: ["TS5"]
 ---
 ## Failing test (write first)
-Mirror the file's existing test conventions (read its #[cfg(test)] mod if present; if the file has NO tests today, add param-struct serde tests: BreakDownTaskRequest/AcceptBreakdownRequest deserialize from the documented JSON shapes, and the three tools appear in the tool router's list — assert via ToolRouter introspection if the rmcp API exposes it, else record the boundary in the ledger and rely on 701's live MCP check).
+task_server.rs has NO tests today (verified 2026-08-07) — add a #[cfg(test)] mod with REAL proxy tests (tournament R1 F-codex11: param-struct serde + router-presence tests pass even with wrong URLs/verbs): bind a local mock HTTP server (tokio TcpListener + a minimal axum Router recording method/path/body and returning canned ApiResponse envelopes — the server crate already depends on axum), construct TaskServer with base_url pointing at it, and for EACH of the three tools assert: exact method + path (incl. the id interpolation), request body shape, success-envelope conversion to CallToolResult, and that a success:false envelope propagates the message as a tool error. Router registration is supplementary coverage only.
 
 
 ## Change

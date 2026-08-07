@@ -9,18 +9,19 @@ conflicts_with: []
 files:
   - "frontend/src/components/ui/actions-dropdown.tsx"
   - "frontend/src/components/tasks/TaskCard.tsx"
+  - "frontend/src/components/tasks/TaskCard.breakdown.test.tsx"
   - "frontend/src/i18n/locales/en/tasks.json"
   - "frontend/src/i18n/locales/ja/tasks.json"
   - "frontend/src/i18n/locales/ko/tasks.json"
   - "frontend/src/i18n/locales/es/tasks.json"
 irreversible: false
 scope_test: "frontend/src/components/tasks"
-allowed_change: edit
+allowed_change: mixed
 covers_criteria: []
-covers_tests: []
+covers_tests: ["TS4"]
 ---
 ## Failing test (write first)
-Extend the existing TaskCard test file (or create TaskCard.breakdown.test.tsx if none): with a draft proposal present (mock useBreakdownProposal), the card shows the proposed-subtasks badge; the actions dropdown contains the Break down item which shows BreakdownReviewDialog on click. Assert the menu item exists in BOTH renders if the test harness can drive the mobile branch; otherwise cover desktop and record the mobile-branch gap in the ledger.
+frontend/src/components/tasks/TaskCard.breakdown.test.tsx (new, listed in files). Cases (tournament R1 F-codex12 — no ledger-only mobile gap): with a draft proposal present (mock useBreakdownProposal), the card shows the proposed-subtasks badge; the DESKTOP dropdown contains the Break down item which shows BreakdownReviewDialog on click; the MOBILE bottom-sheet branch also renders the Break down action (drive it via the same mechanism the component uses to select branches — viewport/matchMedia mock or its prop switch; read the component to find the switch); locale parity — import all four tasks.json files and assert the full breakdown.* key set exists in each (en/ja/ko/es).
 
 
 ## Change

@@ -1,0 +1,30 @@
+{
+  "argv": [
+    "opencode",
+    "run",
+    "--dir",
+    "/data/Code/vk-swarm-worktrees/p3-p4-specs",
+    "--auto",
+    "--agent",
+    "plan",
+    "--format",
+    "json",
+    "--model",
+    "ollama-cloud/glm-5.2",
+    "Read the full task instructions from /data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-prompt.md and execute them."
+  ],
+  "cwd": "/data/Code/vk-swarm-worktrees/p3-p4-specs",
+  "exit_code": 1,
+  "finished_at": "2026-08-07T13:11:22.728823+00:00",
+  "notes": [],
+  "prompt_file": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-prompt.md",
+  "raw_log": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-opencode.raw.log",
+  "report": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-opencode.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-08-07T13:11:20.357127+00:00",
+  "status": "failed",
+  "task": "plan-review",
+  "tool": "opencode",
+  "tool_version": "1.18.15"
+}
