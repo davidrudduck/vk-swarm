@@ -1,5 +1,5 @@
 import { makeRequest, ApiError } from './utils';
-import type { Organization } from '@/types/shared/types';
+import type { Organization } from 'shared/types';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 

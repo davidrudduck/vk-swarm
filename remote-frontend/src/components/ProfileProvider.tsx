@@ -7,7 +7,7 @@ import {
   useState,
 } from 'react';
 
-import type { ProfileResponse } from '@/types/shared/types';
+import type { ProfileResponse } from 'shared/types';
 import { profileApi } from '@/lib/api/profile';
 import { ApiError } from '@/lib/api/utils';
 

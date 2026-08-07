@@ -1,5 +1,5 @@
 import { makeRequest, ApiError } from './utils';
-import type { ProfileResponse } from '@/types/shared/types';
+import type { ProfileResponse } from 'shared/types';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 

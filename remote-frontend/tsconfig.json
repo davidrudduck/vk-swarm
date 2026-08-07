@@ -19,7 +19,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "shared/*": ["src/types/shared/*"]
+      "shared/*": ["../shared/*"]
     }
   },
   "include": ["src"],
