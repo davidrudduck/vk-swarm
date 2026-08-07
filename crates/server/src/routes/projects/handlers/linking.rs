@@ -10,7 +10,6 @@ use axum::{
     response::Json as ResponseJson,
 };
 use db::models::project::Project;
-use deployment::Deployment;
 use utils::{
     api::projects::{RemoteProject, RemoteProjectMembersResponse},
     response::ApiResponse,
