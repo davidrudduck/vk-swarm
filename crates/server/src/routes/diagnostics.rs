@@ -17,7 +17,7 @@ use services::services::{
     worktree_manager::{DiskUsageStats, WorktreeManager},
 };
 use ts_rs::TS;
-use utils::{assets::asset_dir, response::ApiResponse};
+use utils::{assets::database_path, response::ApiResponse};
 
 use crate::{DeploymentImpl, error::ApiError};
 
@@ -106,7 +106,7 @@ async fn get_diagnostics(
     let pool_stats = db.metrics.get_pool_stats(&db.pool);
 
     // Get WAL file size
-    let db_path = asset_dir().join("db.sqlite");
+    let db_path = database_path();
     let wal_size_bytes = get_wal_size(&db_path);
     let wal_size_human = format_bytes(wal_size_bytes);
 
@@ -135,7 +135,7 @@ async fn get_prometheus_metrics(State(deployment): State<DeploymentImpl>) -> Str
     let db = deployment.db();
     let metrics = db.metrics.snapshot();
     let pool_stats = db.metrics.get_pool_stats(&db.pool);
-    let db_path = asset_dir().join("db.sqlite");
+    let db_path = database_path();
     let wal_size = get_wal_size(&db_path);
     let norm_metrics = deployment.container().normalization_metrics().snapshot();
 
