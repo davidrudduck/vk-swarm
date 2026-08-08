@@ -32,7 +32,7 @@ Any gate exits non-zero (fix belongs in the owning task — reopen it; PRE-EXIST
 
 ## Manual verification (record in decisions-ledger)
 Record ALL in the ledger, fenced; every gate MUST exit 0:
-1. `cargo fmt --all -- --check`; 2. `cargo clippy --all --all-targets --all-features -- -D warnings`; 3. `cargo test --workspace`; 4. `cd frontend && npm run lint && npx tsc --noEmit && npx vitest run`; 5. `cd remote-frontend && npm run lint && npx tsc --noEmit && npx vitest run`; 6. `npm run generate-types:check`.
+0. `npm run check` (the repo's aggregate gate, recorded literally per coding guidelines); 1. `cargo fmt --all -- --check`; 2. `cargo clippy --all --all-targets --all-features -- -D warnings`; 3. `cargo test --workspace`; 4. `cd frontend && npm run lint && npx tsc --noEmit && npx vitest run`; 5. `cd remote-frontend && npm run lint && npx tsc --noEmit && npx vitest run`; 6. `npm run generate-types:check`.
 Live on a running node (operator evidence):
 7. SC1: create a task titled 'Add CSV export' with a multi-part description; invoke Break down from the card; paste the GET /api/tasks/{id}/breakdown JSON showing ≥2 proposed items.
 8. SC2: edit one item title, delete one item via the dialog; paste before/after items JSON; confirm no attempt can be started from a proposal and `sqlite3 <db> "SELECT count(*) FROM node_outbox WHERE created_at > <trigger-ts>"` shows no proposal-driven rows pre-accept.

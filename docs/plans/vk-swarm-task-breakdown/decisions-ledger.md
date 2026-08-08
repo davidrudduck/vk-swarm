@@ -80,3 +80,13 @@ Declined (with evidence):
   judge-prompt-of-codex.md: these are verbatim competitor/judge submissions and dispatched
   prompts — immutable tournament records; cosmetic rendering fixes would alter the audit trail.
   Table-escape hygiene adopted for future rounds' report templates.
+
+## CodeRabbit PR #470 review round 3 (2026-08-08)
+
+All three accepted (envelope resubmit, plan-lint re-PASS): 301 spawn_breakdown_run is AWAITABLE
+(runs stage 2 to completion, persists Failed itself; the HTTP handler detaches it via tokio::spawn
+— fixes the round-2 contradiction where tests were told to await a fn described as detaching
+internally); 301 get_breakdown loads the task first and 404s unknown task ids (200 + data:null
+reserved for existing-task-no-proposal, with test 8); 701 gains gate 0 `npm run check` recorded
+literally (reverses the round-1 decline: guideline-sourced, trivially cheap, ends the ambiguity —
+the enumerated gates remain as the itemized evidence).
