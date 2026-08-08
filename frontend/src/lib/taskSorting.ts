@@ -66,7 +66,11 @@ export function getSortTimestamp(task: SortableTask): number {
     case 'done':
     case 'cancelled':
       // Completed tasks: use execution completion time, fall back to activity_at, then created_at
-      return toTimestamp(task.latest_execution_completed_at) || toTimestamp(task.activity_at) || createdAt;
+      return (
+        toTimestamp(task.latest_execution_completed_at) ||
+        toTimestamp(task.activity_at) ||
+        createdAt
+      );
 
     default:
       // Unknown status: use created_at

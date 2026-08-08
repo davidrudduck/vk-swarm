@@ -94,7 +94,9 @@ function MobileAllProjectsKanban({
         currentIndex={currentColumnIndex}
         totalColumns={COLUMN_ORDER.length}
         sortDirection={sortDirections?.[currentStatus]}
-        onSortToggle={onSortToggle ? () => onSortToggle(currentStatus) : undefined}
+        onSortToggle={
+          onSortToggle ? () => onSortToggle(currentStatus) : undefined
+        }
       />
 
       <div

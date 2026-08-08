@@ -24,7 +24,11 @@ function StatRow({
   value: string | number | bigint | boolean | null | undefined;
 }) {
   const displayValue =
-    typeof value === 'boolean' ? (value ? 'Connected' : 'Disconnected') : value ?? 'Not configured';
+    typeof value === 'boolean'
+      ? value
+        ? 'Connected'
+        : 'Disconnected'
+      : (value ?? 'Not configured');
   return (
     <div className="flex justify-between py-2 border-b last:border-b-0">
       <span className="text-muted-foreground">{label}</span>
@@ -65,23 +69,32 @@ export function HiveSyncStatusCard() {
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             <span className="ml-2 text-muted-foreground">
-              {t('settings.hiveSync.loading', { defaultValue: 'Loading sync status...' })}
+              {t('settings.hiveSync.loading', {
+                defaultValue: 'Loading sync status...',
+              })}
             </span>
           </div>
         ) : error ? (
           <div className="text-center py-8 text-destructive">
-            {t('settings.hiveSync.loadError', { defaultValue: 'Failed to load sync status' })}
+            {t('settings.hiveSync.loadError', {
+              defaultValue: 'Failed to load sync status',
+            })}
           </div>
         ) : syncStatus ? (
           <div className="space-y-4">
             {/* Connection Status Section */}
             <div>
               <h3 className="text-sm font-semibold mb-2">
-                {t('settings.hiveSync.section.connection', { defaultValue: 'Connection' })}
+                {t('settings.hiveSync.section.connection', {
+                  defaultValue: 'Connection',
+                })}
               </h3>
               <div className="border rounded-lg p-3 space-y-2">
                 <StatRow label="Status" value={syncStatus.is_connected} />
-                <StatRow label="Node ID" value={syncStatus.node_id || 'Not connected'} />
+                <StatRow
+                  label="Node ID"
+                  value={syncStatus.node_id || 'Not connected'}
+                />
                 <StatRow label="Node Name" value={syncStatus.node_name} />
                 <StatRow label="Hive URL" value={syncStatus.hive_url} />
               </div>
@@ -90,14 +103,31 @@ export function HiveSyncStatusCard() {
             {/* Sync Status Section */}
             <div>
               <h3 className="text-sm font-semibold mb-2">
-                {t('settings.hiveSync.section.syncStatus', { defaultValue: 'Sync Status' })}
+                {t('settings.hiveSync.section.syncStatus', {
+                  defaultValue: 'Sync Status',
+                })}
               </h3>
               <div className="border rounded-lg p-3 space-y-2">
-                <StatRow label="Last Synced" value={formatDate(syncStatus.last_synced_at)} />
-                <StatRow label="Unsynced Tasks" value={syncStatus.unsynced_tasks} />
-                <StatRow label="Unsynced Attempts" value={syncStatus.unsynced_attempts} />
-                <StatRow label="Unsynced Executions" value={syncStatus.unsynced_executions} />
-                <StatRow label="Unsynced Logs" value={syncStatus.unsynced_logs} />
+                <StatRow
+                  label="Last Synced"
+                  value={formatDate(syncStatus.last_synced_at)}
+                />
+                <StatRow
+                  label="Unsynced Tasks"
+                  value={syncStatus.unsynced_tasks}
+                />
+                <StatRow
+                  label="Unsynced Attempts"
+                  value={syncStatus.unsynced_attempts}
+                />
+                <StatRow
+                  label="Unsynced Executions"
+                  value={syncStatus.unsynced_executions}
+                />
+                <StatRow
+                  label="Unsynced Logs"
+                  value={syncStatus.unsynced_logs}
+                />
               </div>
             </div>
           </div>

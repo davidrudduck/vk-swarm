@@ -88,12 +88,15 @@ export const useExecutionProcesses = (
     []
   );
 
-  const { data: wsData, isConnected, error: wsError } =
-    useJsonPatchWsStream<ExecutionProcessState>(
-      endpoint,
-      !!taskAttemptId && !assignmentId,
-      initialData
-    );
+  const {
+    data: wsData,
+    isConnected,
+    error: wsError,
+  } = useJsonPatchWsStream<ExecutionProcessState>(
+    endpoint,
+    !!taskAttemptId && !assignmentId,
+    initialData
+  );
 
   // Use Hive data if available, otherwise WebSocket data
   let executionProcessesById: Record<string, ExecutionProcess>;
@@ -108,7 +111,8 @@ export const useExecutionProcesses = (
           id: exec.id,
           task_attempt_id: exec.attempt_id,
           run_reason: exec.run_reason as ExecutionProcess['run_reason'],
-          executor_action: exec.executor_action as ExecutionProcess['executor_action'],
+          executor_action:
+            exec.executor_action as ExecutionProcess['executor_action'],
           before_head_commit: exec.before_head_commit,
           after_head_commit: exec.after_head_commit,
           status: exec.status as ExecutionProcess['status'],

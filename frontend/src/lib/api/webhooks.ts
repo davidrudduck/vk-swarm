@@ -30,9 +30,7 @@ export const webhooksApi = {
 
   /** List webhooks for a specific project */
   listForProject: async (projectId: string): Promise<WebhookResponse[]> => {
-    const response = await makeRequest(
-      `/api/projects/${projectId}/webhooks`
-    );
+    const response = await makeRequest(`/api/projects/${projectId}/webhooks`);
     return handleApiResponse<WebhookResponse[]>(response);
   },
 

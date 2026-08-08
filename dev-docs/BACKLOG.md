@@ -16,7 +16,7 @@
 | F-2026-07-06-02 | Sign-in broken on non-loopback HTTP origins (crypto.subtle undefined) | high | fixed | remote-frontend/src/pkce.ts:10 | session/2026-07-06 | 2026-07-06 | fix-nonloopback-signin | dev-docs/workstreams/fix-nonloopback-signin/spec/2026-07-08-fix-nonloopback-signin.md |
 | F-2026-07-11-01 | AppRouter test isolation: authenticated / → /nodes redirect fails | medium | fixed | remote-frontend/src/AppRouter.test.tsx | session/2026-07-11 | 2026-07-11 | — | — |
 | F-2026-07-11-02 | no-push-invariant test fails on baseline | medium | fixed | remote-frontend/scripts/no-push-invariant.test.mjs | session/2026-07-11 | 2026-07-11 | — | — |
-| F-2026-07-22-01 | NodeCard references undefined vks tokens (vks-pulse, --vks-text-dim) | low | open | remote-frontend/src/components/swarm/NodeCard.tsx:48-53 | sweep/2026-07-22 | 2026-07-22 | vk-swarm-design-system | — |
+| F-2026-07-22-01 | NodeCard references undefined vks tokens (vks-pulse, --vks-text-dim) | low | fixed | remote-frontend/src/components/swarm/NodeCard.tsx:48-53 | sweep/2026-07-22 | 2026-07-22 | vk-swarm-design-system | fixed 2026-08-07 (tokens shipped in design-system Phase 1) |
 | F-2026-07-29-01 | node Nodes page and swarm labels call removed /api/nodes and /api/swarm routes | high | fixed | frontend/src/pages/Nodes.tsx | session/2026-07-29 | 2026-07-29 | vk-swarm-node-ui-localize | shipped 2026-08-05 |
 | F-2026-07-29-02 | node board still consumes MergedProject via bridge endpoint, repoint to Project | medium | fixed | frontend/src/hooks/useMergedProjects.ts | session/2026-07-29 | 2026-07-29 | vk-swarm-node-ui-localize | shipped 2026-08-05 |
 | F-2026-07-29-03 | hive drawer and navbar actions disabled pending hive APIs, no assign or delete E2E | medium | open | remote-frontend/src/ui/panels/TaskDrawer.tsx | session/2026-07-29 | 2026-07-29 | — | — |
@@ -26,25 +26,53 @@
 | F-2026-07-30-03 | Orphan worktree cleanup deletes worktrees with uncommitted changes (no dirty guard) | high | open | crates/local-deployment/src/container.rs:319-383 | session/2026-07-30 | 2026-07-30 | worktree-orphan-sweep-guard | dev-docs/workstreams/worktree-orphan-sweep-guard/README.md |
 | F-2026-07-30-04 | WAL diagnostics hardcode asset_dir()/db.sqlite, ignoring VK_DATABASE_PATH | low | open | crates/server/src/routes/diagnostics.rs:109 | session/2026-07-30 | 2026-07-30 | — | — |
 | F-2026-07-30-05 | Instance registry keyed on project_root only; two instances collide | low | open | crates/utils/src/port_file.rs:123-141 | session/2026-07-30 | 2026-07-30 | — | — |
-| F-2026-07-31-01 | SettingsMobile.test.tsx asserts 6 accordion sections but component renders 8 (stale test) | medium | fixed | frontend/src/pages/settings/__tests__/SettingsMobile.test.tsx:85,185,217,245 | session/2026-07-31 | 2026-07-31 | — | — |
-| F-2026-07-31-02 | SystemSettings.test.tsx suite fails to load: vi.mock factory closes over hoisted import | medium | fixed | frontend/src/pages/settings/__tests__/SystemSettings.test.tsx:40 | session/2026-07-31 | 2026-07-31 | — | — |
-| F-2026-07-31-03 | frontend vitest red at baseline: 8 files / 15 tests failing, unrelated to any active workstream | medium | fixed | frontend/ (BottomNav, MessageQueuePanel, ConversationFocusMode, taskSorting, DesignSystem, MobileIntegration) | session/2026-07-31 | 2026-07-31 | — | — |
-| F-2026-07-31-04 | LinkToLocalFolderDialog orphaned by task 302; its API client, hook and server route are still live | medium | open | frontend/src/components/dialogs/projects/LinkToLocalFolderDialog.tsx | session/2026-07-31 | 2026-07-31 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
-| F-2026-07-31-05 | Stale query key ['mergedProjects'] invalidated in linkLocalFolder onSuccess is now a no-op | low | open | frontend/src/hooks/useProjectMutations.ts:79 | session/2026-07-31 | 2026-07-31 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
-| F-2026-07-31-06 | Stale doc comment references the removed merged projects view | low | open | crates/db/src/models/project/mod.rs:106 | session/2026-07-31 | 2026-07-31 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
-| F-2026-07-31-07 | remote-frontend/src/types/shared/types.ts is a hand-copied duplicate that has drifted from generated shared/types.ts | medium | open | remote-frontend/src/types/shared/types.ts | session/2026-07-31 | 2026-07-31 | — | — |
-| F-2026-07-31-08 | i18n key settings.swarm.hiveNotConnected undefined in all locales; ja/ko/es fall back to English | low | open | frontend/src/i18n/locales/*/settings.json | session/2026-07-31 | 2026-07-31 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
-| F-2026-08-01-01 | useDiffStream and useRemoteConnectionStatus 503 discrimination is unpinned; an unconditional guard survives the suite | low | open | frontend/src/hooks/useDiffStream.ts:86, frontend/src/hooks/useRemoteConnectionStatus.ts:68 | session/2026-08-01 | 2026-08-01 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
-| F-2026-08-01-02 | useAvailableNodes retry suppression is unpinned; test wrapper sets retry:false so retry behaviour cannot be observed | low | open | frontend/src/hooks/useAvailableNodes.test.ts | session/2026-08-01 | 2026-08-01 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
+| F-2026-07-31-01 | SettingsMobile.test.tsx asserts 6 accordion sections but component renders 8 (stale test) | medium | fixed | frontend/src/pages/settings/__tests__/SettingsMobile.test.tsx:85,185,217,245 | session/2026-07-31 | 2026-07-31 | — | fixed 2026-08-07 |
+| F-2026-07-31-02 | SystemSettings.test.tsx suite fails to load: vi.mock factory closes over hoisted import | medium | fixed | frontend/src/pages/settings/__tests__/SystemSettings.test.tsx:40 | session/2026-07-31 | 2026-07-31 | — | fixed 2026-08-07 |
+| F-2026-07-31-03 | frontend vitest red at baseline: 8 files / 15 tests failing, unrelated to any active workstream | medium | fixed | frontend/ (BottomNav, MessageQueuePanel, ConversationFocusMode, taskSorting, DesignSystem, MobileIntegration) | session/2026-07-31 | 2026-07-31 | — | fixed 2026-08-07 |
+| F-2026-07-31-04 | LinkToLocalFolderDialog orphaned by task 302; its API client, hook and server route are still live | medium | fixed | frontend/src/components/dialogs/projects/LinkToLocalFolderDialog.tsx | session/2026-07-31 | 2026-07-31 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
+| F-2026-07-31-05 | Stale query key ['mergedProjects'] invalidated in linkLocalFolder onSuccess is now a no-op | low | fixed | frontend/src/hooks/useProjectMutations.ts:79 | session/2026-07-31 | 2026-07-31 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
+| F-2026-07-31-06 | Stale doc comment references the removed merged projects view | low | fixed | crates/db/src/models/project/mod.rs:106 | session/2026-07-31 | 2026-07-31 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
+| F-2026-07-31-07 | remote-frontend/src/types/shared/types.ts is a hand-copied duplicate that has drifted from generated shared/types.ts | medium | fixed | remote-frontend/src/types/shared/types.ts | session/2026-07-31 | 2026-07-31 | — | fixed 2026-08-07 |
+| F-2026-07-31-08 | i18n key settings.swarm.hiveNotConnected undefined in all locales; ja/ko/es fall back to English | low | fixed | frontend/src/i18n/locales/*/settings.json | session/2026-07-31 | 2026-07-31 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
+| F-2026-08-01-01 | useDiffStream and useRemoteConnectionStatus 503 discrimination is unpinned; an unconditional guard survives the suite | low | fixed | frontend/src/hooks/useDiffStream.ts:86, frontend/src/hooks/useRemoteConnectionStatus.ts:68 | session/2026-08-01 | 2026-08-01 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
+| F-2026-08-01-02 | useAvailableNodes retry suppression is unpinned; test wrapper sets retry:false so retry behaviour cannot be observed | low | fixed | frontend/src/hooks/useAvailableNodes.test.ts | session/2026-08-01 | 2026-08-01 | node-ui-localize-followups | dev-docs/workstreams/node-ui-localize-followups/README.md |
 | F-2026-08-03-01 | Node OAuth handoff does not complete; user cannot sign in on a node and has no permissions | high | triaged | crates/server/src/routes/oauth.rs:80-119 | session/2026-08-03 | 2026-08-03 | hive-oauth-sw-bypass | dev-docs/workstreams/hive-oauth-sw-bypass/README.md |
 | F-2026-08-03-02 | Hive SW intercepts /v1/oauth/* OAuth navigations; blocks node AND hive sign-in until unregistered | high | triaged | remote-frontend/vite.config.ts:19-20 | session/2026-08-03 | 2026-08-03 | hive-oauth-sw-bypass | dev-docs/workstreams/hive-oauth-sw-bypass/README.md |
 | F-2026-08-04-01 | OAuthDialog polls /api/auth/status forever with no timeout or error branch, so auth failures present as an endless spinner | medium | open | frontend/src/components/dialogs/global/OAuthDialog.tsx:95-113 | session/2026-08-04 | 2026-08-04 | hive-oauth-sw-bypass | dev-docs/workstreams/hive-oauth-sw-bypass/README.md |
 | F-2026-08-04-02 | test_fast_execution_no_lost_logs flakes in full-workspace runs; discarded tokio timeout races the assertion | medium | promoted | crates/services/tests/normalize_sync_test.rs:359-368 | session/2026-08-04 | 2026-08-04 | services-normalize-flaky-test | dev-docs/workstreams/services-normalize-flaky-test/README.md |
 | F-2026-08-05-01 | Dangling shared_task_id makes a node task permanently undeletable; hive 404 aborts the delete instead of falling back to local | high | promoted | crates/server/src/routes/tasks/handlers/remote.rs:229-231 | session/2026-08-05 | 2026-08-05 | node-task-delete-dangling-shared-id | dev-docs/workstreams/node-task-delete-dangling-shared-id/README.md |
-| F-2026-08-05-02 | frontend format:check fails on 35 files; lint is ESLint-only so Prettier was never gated | medium | promoted | frontend/package.json | session/2026-08-05 | 2026-08-05 | frontend-prettier-debt | dev-docs/workstreams/frontend-prettier-debt/README.md |
+| F-2026-08-05-02 | frontend format:check fails on 35 files; lint is ESLint-only so Prettier was never gated | medium | fixed | frontend/package.json | session/2026-08-05 | 2026-08-05 | frontend-prettier-debt | dev-docs/workstreams/frontend-prettier-debt/README.md |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
+
+### 2026-08-07 — frontend cleanup bundle (branch `fix/frontend-cleanup-bundle`)
+
+- **F-2026-07-31-04/-05 → fixed.** `LinkToLocalFolderDialog` deleted along with
+  `projectsApi.linkLocalFolder`, the `linkLocalFolder` mutation (which also removes the stale
+  `['mergedProjects']` invalidation), the Rust `POST /api/projects/link-local` route/handler,
+  and `LinkToLocalFolderRequest` (types.rs + generate_types + regenerated `shared/types.ts`).
+  Verified unreferenced by `remote-frontend` before removal.
+- **F-2026-07-31-06 → fixed.** Doc comment repointed from "merged projects view" to
+  "project stats".
+- **F-2026-07-31-07 → fixed.** `remote-frontend/src/types/shared/` hand-copy deleted;
+  tsconfig/vite `shared` alias repointed to the generated repo-root `shared/`; five
+  `@/types/shared/types` imports repointed to `shared/types`. Copy-only types
+  (`MergedProject`, `MergedProjectsResponse`, `NodeLocation`) were unreferenced.
+- **F-2026-07-31-08 → fixed.** `settings.swarm.hiveNotConnected` added to en/ja/ko/es.
+- **F-2026-08-01-01 → fixed.** New `useDiffStream.test.ts` and
+  `useRemoteConnectionStatus.test.ts` pin the 503 discrimination: HiveNotConfigured (503 +
+  discriminator) is quiet, a plain 503 (outage) and a 500 must surface — an unconditional
+  guard fails both suites.
+- **F-2026-08-01-02 → fixed.** `useAvailableNodes.test.ts` wrapper now enables retries
+  (`retry: 2, retryDelay: 0`); asserts exactly 1 call for HiveNotConfigured (resolution
+  suppresses retry) and 3 calls for a real 500 (control proving retries are live).
+- **F-2026-07-22-01 → fixed (already resolved on main).** `--vks-text-dim`
+  (`styles/tokens/colors.css:39`) and `@keyframes vks-pulse` (`styles/components.css:157`)
+  shipped with design-system Phase 1 (PR #466) and are test-pinned
+  (`colors.test.ts`, `components.test.ts`); NodeCard needs no change.
+- **F-2026-08-05-02 → fixed.** `prettier --write` applied to the 36 red files in a dedicated
+  formatting-only commit; `npm run format:check` now green.
 
 ### 2026-07-04 — backlog triage
 

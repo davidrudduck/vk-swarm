@@ -468,6 +468,7 @@
       }
     },
     "swarm": {
+      "hiveNotConnected": "Este nodo no está conectado a una colmena. La gestión del enjambre reside en el servidor de la colmena; conecta una colmena para gestionar proyectos, etiquetas y plantillas del enjambre.",
       "apiKeys": {
         "title": "",
         "description": "",

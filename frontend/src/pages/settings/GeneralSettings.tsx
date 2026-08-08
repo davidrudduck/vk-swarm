@@ -1042,7 +1042,10 @@ export function GeneralSettings() {
               }
             />
             <div className="space-y-1">
-              <Label id="token-timestamp-label" htmlFor="token-timestamp-enabled">
+              <Label
+                id="token-timestamp-label"
+                htmlFor="token-timestamp-enabled"
+              >
                 {t('settings.general.timestamps.tokenTimestamp.label')}
               </Label>
             </div>
@@ -1055,7 +1058,10 @@ export function GeneralSettings() {
               </Label>
               <Input
                 id="token-timestamp-format"
-                value={draft?.timestamps?.token_timestamp_format ?? '[HH:mm:ss.SSS dd/MM/yyyy]'}
+                value={
+                  draft?.timestamps?.token_timestamp_format ??
+                  '[HH:mm:ss.SSS dd/MM/yyyy]'
+                }
                 onChange={(e) =>
                   updateDraft({
                     timestamps: {

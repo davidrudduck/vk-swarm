@@ -450,7 +450,10 @@ describe('mergeRunningAppendOnlyItems', () => {
       return revision;
     };
 
-    const errorItem = (content: string, patchKey = 'process-1:0'): PatchTypeWithKey => ({
+    const errorItem = (
+      content: string,
+      patchKey = 'process-1:0'
+    ): PatchTypeWithKey => ({
       type: 'NORMALIZED_ENTRY',
       content: {
         entry_type: {
@@ -498,7 +501,10 @@ describe('mergeRunningAppendOnlyItems', () => {
 
     const third = mergeRunningAppendOnlyItems(
       second,
-      [systemMessageItem('process-1:0', 'model: gpt-5.4'), errorItem('warn\nerror', 'process-1:1')],
+      [
+        systemMessageItem('process-1:0', 'model: gpt-5.4'),
+        errorItem('warn\nerror', 'process-1:1'),
+      ],
       getNextRevision,
       [errorItem('warn\nerror')]
     );
@@ -511,7 +517,10 @@ describe('mergeRunningAppendOnlyItems', () => {
         errorItem('warn\nerror', 'process-1:2'),
       ],
       getNextRevision,
-      [systemMessageItem('process-1:0', 'model: gpt-5.4'), errorItem('warn\nerror', 'process-1:1')]
+      [
+        systemMessageItem('process-1:0', 'model: gpt-5.4'),
+        errorItem('warn\nerror', 'process-1:1'),
+      ]
     );
 
     expect(fourth).toEqual([

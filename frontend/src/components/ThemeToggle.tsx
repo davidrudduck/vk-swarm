@@ -41,11 +41,7 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
       // TODO(i18n): vk-swarm-node-ui-localize
       aria-label="Toggle theme"
     >
-      {isDark ? (
-        <Moon className="h-4 w-4" />
-      ) : (
-        <Sun className="h-4 w-4" />
-      )}
+      {isDark ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
     </Button>
   );
 }

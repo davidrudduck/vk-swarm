@@ -24,6 +24,6 @@ pub use files::{
     list_project_files, read_project_file, read_project_file_by_remote_id, search_project_files,
 };
 pub use github::{get_github_counts, set_github_enabled, sync_github_counts};
-pub use linking::{get_project_remote_members, get_remote_project_by_id, link_to_local_folder};
+pub use linking::{get_project_remote_members, get_remote_project_by_id};
 pub use swarm::{force_resync_tasks, unlink_from_swarm};
 pub use with_stats::get_projects_with_stats;

@@ -3,10 +3,9 @@ pub mod types;
 
 // Re-export types for public API
 pub use types::{
-    GitHubCountsResponse, LinkToLocalFolderRequest, ListProjectFilesQuery, OpenEditorRequest,
-    OpenEditorResponse, OrphanedProject, OrphanedProjectsResponse, ProjectWithStats,
-    ProjectsWithStatsResponse, RemoteNodeGroup, RemoteNodeProject, SetGitHubEnabledRequest,
-    TaskCounts, UnifiedProject,
+    GitHubCountsResponse, ListProjectFilesQuery, OpenEditorRequest, OpenEditorResponse,
+    OrphanedProject, OrphanedProjectsResponse, ProjectWithStats, ProjectsWithStatsResponse,
+    RemoteNodeGroup, RemoteNodeProject, SetGitHubEnabledRequest, TaskCounts, UnifiedProject,
 };
 
 use axum::{
@@ -40,7 +39,6 @@ use handlers::{
     get_project_sync_health,
     get_projects,
     get_projects_with_stats,
-    link_to_local_folder,
     list_orphaned_projects,
     // File handlers
     list_project_files,
@@ -133,7 +131,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .route("/", get(get_projects).post(create_project))
         .route("/with-stats", get(get_projects_with_stats))
         .route("/scan-config", post(scan_project_config))
-        .route("/link-local", post(link_to_local_folder))
         .route(
             "/orphaned",
             get(list_orphaned_projects).delete(delete_orphaned_projects),

@@ -331,19 +331,13 @@ export const useProjectTasks = (
   }, [mergedTasksById, sortDirections]);
 
   // Determine loading and error states based on mode
-  const isLoading = isRemote
-    ? restLoading
-    : !wsData && !wsError; // until first snapshot
+  const isLoading = isRemote ? restLoading : !wsData && !wsError; // until first snapshot
 
   const isConnected = isRemote
     ? !restError // REST doesn't have "connected" concept, but no error = good
     : wsConnected;
 
-  const error = isRemote
-    ? restError
-      ? String(restError)
-      : null
-    : wsError;
+  const error = isRemote ? (restError ? String(restError) : null) : wsError;
 
   return {
     tasks,

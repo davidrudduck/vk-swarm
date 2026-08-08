@@ -67,7 +67,10 @@ export function useSwarmHealthActions(options?: UseSwarmHealthActionsOptions) {
         if (res.status === 'fulfilled') {
           result.successCount++;
         } else {
-          console.error(`Failed to unlink project ${project.name}:`, res.reason);
+          console.error(
+            `Failed to unlink project ${project.name}:`,
+            res.reason
+          );
           result.errorCount++;
           result.errors.push({
             projectId: project.id,

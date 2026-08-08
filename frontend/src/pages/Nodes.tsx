@@ -10,8 +10,8 @@ export function Nodes() {
   const { data: orgData, isLoading: orgsLoading } = useUserOrganizations();
   const organizations = orgData?.organizations ?? [];
   // Same default as useOrganizationSelection: first non-personal, else first.
-  const orgId =
-    (organizations.find((o) => !o.is_personal) ?? organizations[0])?.id;
+  const orgId = (organizations.find((o) => !o.is_personal) ?? organizations[0])
+    ?.id;
 
   const {
     data: nodes = [],

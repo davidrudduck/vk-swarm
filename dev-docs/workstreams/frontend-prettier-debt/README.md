@@ -1,6 +1,7 @@
 ---
 workstream: frontend-prettier-debt
-status: active
+status: shipped
+shipped: 2026-08-07 (branch fix/frontend-cleanup-bundle: prettier --write commit + format:check wired into frontend npm run check)
 created: 2026-08-05
 parent_session: PR #467 /dr:pr-feedback
 ---

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
@@ -10,15 +10,26 @@ vi.mock('@/lib/api', () => ({
   tasksApi: { availableNodes: vi.fn() },
 }));
 
-function wrapper({ children }: { children: React.ReactNode }) {
+// NOTE (F-2026-08-01-02): retry is deliberately NOT disabled here. The hook's
+// contract is that HiveNotConfigured RESOLVES (empty node list) rather than
+// throwing, which is what suppresses TanStack Query's retry loop. A wrapper
+// with `retry: false` would make that suppression unobservable — the retry
+// assertions below only mean something because retries are enabled.
+function makeWrapper() {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: 2, retryDelay: 0 } },
   });
-  return React.createElement(QueryClientProvider, { client }, children);
+  return function wrapper({ children }: { children: React.ReactNode }) {
+    return React.createElement(QueryClientProvider, { client }, children);
+  };
 }
 
 describe('useAvailableNodes with no hive', () => {
-  it('does not throw and reports no nodes when the server says HiveNotConfigured', async () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('resolves quietly with no nodes and WITHOUT retrying when the server says HiveNotConfigured', async () => {
     const { tasksApi } = await import('@/lib/api');
     vi.mocked(tasksApi.availableNodes).mockRejectedValue(
       // The REAL server message — status alone is not sufficient, because an
@@ -30,7 +41,7 @@ describe('useAvailableNodes with no hive', () => {
     );
 
     const { result } = renderHook(() => useAvailableNodes('task-1'), {
-      wrapper,
+      wrapper: makeWrapper(),
     });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -38,20 +49,25 @@ describe('useAvailableNodes with no hive', () => {
     // and an empty node list rather than undefined-dereference.
     expect(result.current.isError).toBe(false);
     expect(result.current.data?.nodes ?? []).toEqual([]);
+    // The queryFn resolved on the first call, so the (enabled) retry loop
+    // never fired. If the hook re-threw instead of resolving, this would be 3.
+    expect(vi.mocked(tasksApi.availableNodes)).toHaveBeenCalledTimes(1);
   });
 
-  it('still surfaces a real error (non-503) as an error state', async () => {
+  it('still surfaces a real error (non-503) as an error state, WITH retries', async () => {
     const { tasksApi } = await import('@/lib/api');
     vi.mocked(tasksApi.availableNodes).mockRejectedValue(
       new ApiError('server exploded', 500)
     );
 
     const { result } = renderHook(() => useAvailableNodes('task-1'), {
-      wrapper,
+      wrapper: makeWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.isError).toBe(true);
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    // Control: proves retries are actually enabled in this wrapper (initial
+    // attempt + 2 retries), so the 1-call assertion above is meaningful.
+    expect(vi.mocked(tasksApi.availableNodes)).toHaveBeenCalledTimes(3);
   });
 });
 

@@ -7,8 +7,17 @@ import { cn } from '@/lib/utils';
 import { VariantSelector } from '@/components/tasks/VariantSelector';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { AlertCircle, Image as ImageIcon, Send, X, FileText } from 'lucide-react';
-import { TemplatePicker, type Template as PickerTemplate } from '@/components/tasks/TemplatePicker';
+import {
+  AlertCircle,
+  Image as ImageIcon,
+  Send,
+  X,
+  FileText,
+} from 'lucide-react';
+import {
+  TemplatePicker,
+  type Template as PickerTemplate,
+} from '@/components/tasks/TemplatePicker';
 import { templatesApi } from '@/lib/api';
 import { useDraftEditor } from '@/hooks/follow-up/useDraftEditor';
 import { useDraftStream } from '@/hooks/follow-up/useDraftStream';
@@ -379,10 +388,15 @@ export function RetryEditorInline({
             onClick={onCancel}
             disabled={isSending || !!isFinalizing}
           >
-            <X className="h-3 w-3 mr-1" /> {t('buttons.cancel', { ns: 'common' })}
+            <X className="h-3 w-3 mr-1" />{' '}
+            {t('buttons.cancel', { ns: 'common' })}
           </Button>
-          <Button onClick={onSend} disabled={!canSend || isSending || !!isFinalizing}>
-            <Send className="h-3 w-3 mr-1" /> {t('buttons.send', { ns: 'common', defaultValue: 'Send' })}
+          <Button
+            onClick={onSend}
+            disabled={!canSend || isSending || !!isFinalizing}
+          >
+            <Send className="h-3 w-3 mr-1" />{' '}
+            {t('buttons.send', { ns: 'common', defaultValue: 'Send' })}
           </Button>
         </div>
       </div>

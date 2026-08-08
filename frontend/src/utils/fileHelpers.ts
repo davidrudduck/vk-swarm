@@ -31,9 +31,24 @@ export function getClaudeRelativePath(path: string): string | null {
  * - isAbsolutePath: absolute path outside the worktree and ~/.claude/ (e.g. project docs)
  */
 export type FilePreviewRouting =
-  | { path: string; attemptId: string; relativePath?: undefined; isAbsolutePath?: undefined }
-  | { path: string; relativePath: string; attemptId?: undefined; isAbsolutePath?: undefined }
-  | { path: string; isAbsolutePath: true; attemptId?: undefined; relativePath?: undefined };
+  | {
+      path: string;
+      attemptId: string;
+      relativePath?: undefined;
+      isAbsolutePath?: undefined;
+    }
+  | {
+      path: string;
+      relativePath: string;
+      attemptId?: undefined;
+      isAbsolutePath?: undefined;
+    }
+  | {
+      path: string;
+      isAbsolutePath: true;
+      attemptId?: undefined;
+      relativePath?: undefined;
+    };
 
 /**
  * Options for determining file preview routing.
@@ -70,7 +85,8 @@ export function getFilePreviewRouting(
   // This handles AI agents referencing plan/doc files outside the worktree.
   // Must come before the attemptId check so these never hit the worktree route
   // (Path::join with an absolute path discards the base on Unix, causing traversal errors).
-  const isAbsoluteNonClaudePath = path.startsWith('/') && claudeRelativePath === null;
+  const isAbsoluteNonClaudePath =
+    path.startsWith('/') && claudeRelativePath === null;
   if (isAbsoluteNonClaudePath) {
     return { path, isAbsolutePath: true as const };
   }
@@ -78,7 +94,8 @@ export function getFilePreviewRouting(
   // Priority 2: attemptId takes precedence for worktree files (relative paths).
   // Exception: absolute paths to ~/.claude/ are home-dir files, not worktree files —
   // an absolute path can never be inside a worktree, so route via relativePath instead.
-  const isAbsoluteClaudePath = path.startsWith('/') && claudeRelativePath !== null;
+  const isAbsoluteClaudePath =
+    path.startsWith('/') && claudeRelativePath !== null;
   if (attemptId && !isAbsoluteClaudePath) {
     return { path, attemptId };
   }

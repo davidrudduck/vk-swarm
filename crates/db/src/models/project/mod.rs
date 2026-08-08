@@ -103,7 +103,7 @@ pub struct SearchResult {
     pub match_type: SearchMatchType,
 }
 
-/// Task counts for a project (used in merged projects view)
+/// Task counts for a project (used in project stats)
 #[derive(Debug, Clone, Default)]
 pub struct ProjectTaskCounts {
     pub todo: i32,

@@ -223,8 +223,7 @@ export function Navbar() {
                   onClick={handleCreateTask}
                   aria-label="Create new task"
                 >
-                  {/* TODO(i18n): vk-swarm-node-ui-localize */}
-                  + Task
+                  {/* TODO(i18n): vk-swarm-node-ui-localize */}+ Task
                 </Button>
                 <NavDivider />
               </>

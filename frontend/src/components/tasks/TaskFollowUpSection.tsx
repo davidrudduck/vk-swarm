@@ -87,10 +87,10 @@ export function TaskFollowUpSection({
 
   // Message queue for adding messages with live injection support
   // Note: Queue UI is now in MobileConversationLayout via MessageQueueBadge
-  const {
-    queueMessage,
-    isAdding: isAddingToQueue,
-  } = useMessageQueueInjection(selectedAttemptId, runningProcessId);
+  const { queueMessage, isAdding: isAddingToQueue } = useMessageQueueInjection(
+    selectedAttemptId,
+    runningProcessId
+  );
   const { comments, generateReviewMarkdown, clearComments } = useReview();
   const {
     generateMarkdown: generateClickedMarkdown,
@@ -432,10 +432,10 @@ export function TaskFollowUpSection({
     }
     return !(
       conflictResolutionInstructions ||
-        reviewMarkdown ||
-        clickedMarkdown ||
-        followUpMessage.trim() ||
-        images.length > 0
+      reviewMarkdown ||
+      clickedMarkdown ||
+      followUpMessage.trim() ||
+      images.length > 0
     );
   }, [
     runtimeCapabilities?.supports_review,
