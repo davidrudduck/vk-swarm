@@ -15,7 +15,7 @@ covers_criteria: []
 covers_tests: []
 ---
 ## Failing test (write first)
-In the existing crates/services container test module (or a new #[cfg(test)] block colocated in container.rs if none covers this trait): a unit test asserting should_finalize returns false for an ExecutionContext whose run_reason is Breakdown (build the ctx the way existing should_finalize tests do; if NO test constructs an ExecutionContext today, record the harness gap in the decisions ledger and rely on the compile-time exhaustiveness of the added guard + 701's live SC evidence).
+In the existing crates/services container test module (or a new #[cfg(test)] block colocated in container.rs if none covers this trait): a unit test asserting should_finalize returns false for an ExecutionContext whose run_reason is Breakdown — implement the guard's run_reason check as a small pure fn `fn run_reason_skips_finalize(run_reason: &ExecutionProcessRunReason) -> bool` called from should_finalize, and unit-test THAT for all variants (true for DevServer, SetupScript-equivalent exclusions as today, and Breakdown; false for CodingAgent). `matches!` is not omission-checked by the compiler, so a runtime test is REQUIRED here — no ledger-only fallback (CodeRabbit PR470 R2).
 
 
 ## Change

@@ -56,3 +56,27 @@ Declined (with evidence):
 - reviews/find-prompt.md Phase-6 coverage: tournament artifacts are immutable records of the
   prompt actually dispatched; retro-editing would falsify the audit trail. Adopted for future
   rounds' prompts instead.
+
+## CodeRabbit PR #470 review round 2 (2026-08-08)
+
+Accepted (envelope resubmit, plan-lint re-PASS): 202 BreakdownError::TooFew declared in the enum
+(round-1 amendment referenced it without declaring it — would not compile); 204 runtime test via a
+pure run_reason_skips_finalize helper (matches! is not omission-checked; ledger-only fallback
+removed); 301 single no-proposal contract (200 + data:null, never HTTP 204) and deterministic
+spawn-failure test (call spawn_breakdown_run directly, awaited); 602 auto-trigger test asserts row
+EXISTENCE not status='draft' (detached stage 2 can fast-fail before response); 701 step 15 live
+evidence for the side-effect invariants (parent status unchanged, zero commits on the attempt
+branch); reviews/*.jsonl host-local paths redacted to <worktree>/<home>/<repo>/<scratch>
+placeholders (metadata, not evidence content).
+
+Declined (with evidence):
+- Enforced no-commit sandbox for breakdown runs (spec:84): the blast radius is already bounded —
+  204 excludes Breakdown from should_finalize (no InReview flip, no hive push), 203 excludes the
+  commit/next-action path, nothing merges the attempt branch, and the worktree is disposable via
+  normal attempt cleanup. An agent-side rogue commit strands on an unmerged branch. A dedicated
+  sandbox/discard mode is heavy-lift infrastructure not warranted by that residual; 701 step 15
+  now live-proves both invariants.
+- Editing reviews/find-claude.md, find-codex2.md (pipe escapes), judge-*.md link/table cosmetics,
+  judge-prompt-of-codex.md: these are verbatim competitor/judge submissions and dispatched
+  prompts — immutable tournament records; cosmetic rendering fixes would alter the audit trail.
+  Table-escape hygiene adopted for future rounds' report templates.

@@ -2,7 +2,7 @@
   "argv": [
     "agy",
     "--add-dir",
-    "/data/Code/vk-swarm-worktrees/p3-p4-specs",
+    "<worktree>",
     "--model",
     "gemini-3.5-flash-high",
     "--print-timeout",
@@ -13,15 +13,15 @@
     "-p",
     "<prompt>"
   ],
-  "cwd": "/data/Code/vk-swarm-worktrees/p3-p4-specs",
+  "cwd": "<worktree>",
   "exit_code": 1,
   "finished_at": "2026-08-07T13:11:33.380990+00:00",
   "notes": [
     "model=gemini-3.5-flash-high"
   ],
-  "prompt_file": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-prompt.md",
-  "raw_log": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-agy.raw.log",
-  "report": "/data/Code/vk-swarm-worktrees/p3-p4-specs/docs/plans/vk-swarm-task-breakdown/reviews/find-agy.md",
+  "prompt_file": "<worktree>/docs/plans/vk-swarm-task-breakdown/reviews/find-prompt.md",
+  "raw_log": "<worktree>/docs/plans/vk-swarm-task-breakdown/reviews/find-agy.raw.log",
+  "report": "<worktree>/docs/plans/vk-swarm-task-breakdown/reviews/find-agy.md",
   "safety": "read-only",
   "schema_version": "dr.executor.panel.v1",
   "started_at": "2026-08-07T13:11:18.518958+00:00",

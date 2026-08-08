@@ -42,6 +42,7 @@ Live on a running node (operator evidence):
 12. SC6: stop the hive (or disconnect network), repeat SC1→SC3 end-to-end; paste evidence + post-reconnect hive task list showing the children synced.
 13. SC7: point the project's executor profile at a bad binary, trigger a breakdown; paste the failed-proposal JSON (status failed, error set) and the retry succeeding after restoring the profile.
 14. SC7b (malformed completion; CodeRabbit PR470): point the executor profile at a stub that prints non-JSON prose and exits 0; trigger; paste the failed-proposal JSON (error from the parser's NoResult path), confirm zero proposal items and zero child tasks, then a successful retry after restoring the profile.
+15. Breakdown side-effect invariants (CodeRabbit PR470 R2): after the SC1 run, paste the parent task's status showing it UNCHANGED (never InReview) and `git log --oneline` of the breakdown attempt's branch showing zero commits from the run (the read-only prompt + 203's commit-path exclusion + 204's finalize exclusion under live proof).
 
 
 ## Done when

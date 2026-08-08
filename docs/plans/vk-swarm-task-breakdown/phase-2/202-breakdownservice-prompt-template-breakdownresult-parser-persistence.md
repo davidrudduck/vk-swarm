@@ -29,7 +29,7 @@ In crates/services/src/services/breakdown.rs `#[cfg(test)] mod tests` (unit test
 ## Change
 **File:** crates/services/src/services/breakdown.rs (new) — stateless `#[derive(Clone)] pub struct BreakdownService;` per CLAUDE.md service conventions (read sibling git.rs for the shape). Contents:
 - `#[derive(Debug, Deserialize, Serialize)] pub struct BreakdownResult { pub subtasks: Vec<BreakdownSubtask> }` and `BreakdownSubtask { pub title: String, pub description: Option<String>, #[serde(default)] pub depends_on: Vec<usize> }`.
-- `#[derive(Debug, thiserror::Error)] pub enum BreakdownError { NoResult, Empty, EmptyTitle, InvalidDependency, Db(#[from] sqlx::Error), Json(#[from] serde_json::Error) }` (thiserror per CLAUDE.md).
+- `#[derive(Debug, thiserror::Error)] pub enum BreakdownError { NoResult, Empty, TooFew, EmptyTitle, InvalidDependency, Db(#[from] sqlx::Error), Json(#[from] serde_json::Error) }` (thiserror per CLAUDE.md).
 - `pub fn breakdown_prompt(title: &str, description: &str) -> String` — exact template:
 ```text
 You are decomposing a development goal into independently executable subtasks.\nGOAL TITLE: {title}\nGOAL DESCRIPTION: {description}\n\nRules: propose 2-10 subtasks, each independently executable; use depends_on (array of zero-based indices into your own list) only for true prerequisites; DO NOT modify, create, or delete any files — this is read-only analysis.\n\nRespond with EXACTLY ONE fenced json code block as the FINAL element of your reply, matching:\n{\"subtasks\":[{\"title\":\"...\",\"description\":\"...\",\"depends_on\":[0]}]}

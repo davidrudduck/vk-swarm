@@ -15,7 +15,7 @@ covers_criteria: []
 covers_tests: []
 ---
 ## Failing test (write first)
-In the tasks-handler test module (mirror existing create_task tests). Deterministic by construction (tournament R1 F10): the hook AWAITS stage 1 of start_breakdown_for_task (draft insert — see 301's two-stage structure) before detaching stage 2, so: with auto_breakdown_enabled=false, POST create → NO task_breakdown_proposals row (byte-for-byte unchanged path); with it true + description + no parent_task_id → a proposal row with status='draft' EXISTS at handler return (no polling, no status-race — stage 2 may later mark it failed but that is not asserted here; live end-to-end proof is 701/SC5); with it true but empty description or parent_task_id set → no proposal.
+In the tasks-handler test module (mirror existing create_task tests). Deterministic by construction (tournament R1 F10): the hook AWAITS stage 1 of start_breakdown_for_task (draft insert — see 301's two-stage structure) before detaching stage 2, so: with auto_breakdown_enabled=false, POST create → NO task_breakdown_proposals row (byte-for-byte unchanged path); with it true + description + no parent_task_id → a proposal ROW EXISTS at handler return — assert existence only, NOT status: the detached stage 2 can fail fast and legitimately mark it 'failed' before the response completes (CodeRabbit PR470 R2; no polling; live end-to-end proof is 701/SC5); with it true but empty description or parent_task_id set → no proposal.
 
 
 ## Change
