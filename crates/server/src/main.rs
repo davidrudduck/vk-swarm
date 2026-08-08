@@ -279,8 +279,9 @@ async fn main() -> Result<(), VibeKanbanError> {
     // This ensures all database writes are flushed before any child processes are killed.
     perform_cleanup_actions(&deployment).await;
 
-    // Unregister this instance from the registry
-    if let Err(e) = InstanceRegistry::unregister(&project_root).await {
+    // Unregister this instance from the registry — ownership-checked so an
+    // older server shutting down never deletes a newer instance's record.
+    if let Err(e) = InstanceRegistry::unregister_if_owner(&project_root, std::process::id()).await {
         tracing::warn!("Failed to unregister instance: {}", e);
     }
 

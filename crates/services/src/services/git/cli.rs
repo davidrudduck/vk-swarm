@@ -630,7 +630,13 @@ impl GitCli {
     /// Used by cleanup safety guards where untracked work must also be
     /// preserved.
     pub fn has_uncommitted_changes(&self, worktree_path: &Path) -> Result<bool, GitCliError> {
-        let out = self.git(worktree_path, ["status", "--porcelain"])?;
+        // --untracked-files=normal overrides a status.showUntrackedFiles=no
+        // repo/global config, which would otherwise hide untracked work from
+        // this guard and let cleanup delete it.
+        let out = self.git(
+            worktree_path,
+            ["status", "--porcelain", "--untracked-files=normal"],
+        )?;
         Ok(out.lines().any(|l| !l.trim().is_empty()))
     }
 

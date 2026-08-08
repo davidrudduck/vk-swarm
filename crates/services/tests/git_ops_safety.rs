@@ -1406,3 +1406,45 @@ fn merge_base_ahead_of_task_should_error() {
         "Merge should error when base branch is ahead of task branch"
     );
 }
+
+#[test]
+fn has_uncommitted_changes_sees_untracked_despite_show_untracked_files_no() {
+    // status.showUntrackedFiles=no would hide untracked files from a bare
+    // `git status --porcelain`; the dirty guard must override it so cleanup
+    // never deletes a worktree holding untracked work (CodeRabbit PR#472).
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+    {
+        let mut cfg = repo.config().unwrap();
+        cfg.set_str("user.name", "t").unwrap();
+        cfg.set_str("user.email", "t@t").unwrap();
+        cfg.set_str("status.showUntrackedFiles", "no").unwrap();
+    }
+    write_file(tmp.path(), "tracked.txt", "committed");
+    // Commit directly with update_ref "HEAD" — commit_all() passes None on an
+    // unborn branch, which leaves HEAD unborn and everything showing as staged.
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = repo.signature().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+    }
+
+    let git = GitCli::new();
+    assert!(
+        !git.has_uncommitted_changes(tmp.path()).unwrap(),
+        "clean tree must report no changes"
+    );
+
+    write_file(tmp.path(), "untracked.txt", "precious uncommitted work");
+    assert!(
+        git.has_uncommitted_changes(tmp.path()).unwrap(),
+        "untracked file must be detected even with status.showUntrackedFiles=no"
+    );
+}

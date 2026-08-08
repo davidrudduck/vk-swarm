@@ -155,18 +155,31 @@ impl InstanceRegistry {
 
         // Collision guard: another *running* instance is already registered for
         // this project root under a different PID.
-        if let Ok(existing) = Self::get(&info.project_root).await
-            && existing.pid != info.pid
-            && existing.is_running()
-        {
-            tracing::warn!(
-                project = %info.project_root.display(),
-                existing_pid = existing.pid,
-                new_pid = info.pid,
-                "Another running vibe-kanban instance is already registered for this \
-                 project root; superseding its registry entry. `pnpm run stop` will \
-                 only see the newest instance — stop the old one by PID if needed"
-            );
+        match Self::get(&info.project_root).await {
+            Ok(existing) => {
+                if existing.pid != info.pid && existing.is_running() {
+                    tracing::warn!(
+                        project = %info.project_root.display(),
+                        existing_pid = existing.pid,
+                        new_pid = info.pid,
+                        "Another running vibe-kanban instance is already registered for this \
+                         project root; superseding its registry entry. `pnpm run stop` will \
+                         only see the newest instance — stop the old one by PID if needed"
+                    );
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // A malformed or unreadable record must not silently bypass the
+            // collision check; surface it loudly, then deliberately overwrite —
+            // a corrupt registry entry should self-heal, not block registration.
+            Err(e) => {
+                tracing::warn!(
+                    project = %info.project_root.display(),
+                    error = %e,
+                    "Existing instance registry record is unreadable; overwriting it \
+                     (collision check skipped for this registration)"
+                );
+            }
         }
 
         // Read dev_root_pid from temp file if present (dev mode only)
@@ -216,7 +229,28 @@ impl InstanceRegistry {
         Ok(())
     }
 
-    /// Unregister an instance (on shutdown).
+    /// Unregister an instance on shutdown, but only if the stored record still
+    /// belongs to `owner_pid`. When a newer instance has superseded this one's
+    /// registration (same project root, different PID), the record is left
+    /// untouched so the survivor stays discoverable.
+    pub async fn unregister_if_owner(project_root: &Path, owner_pid: u32) -> std::io::Result<()> {
+        match Self::get(project_root).await {
+            Ok(existing) if existing.pid == owner_pid => Self::unregister(project_root).await,
+            Ok(existing) => {
+                tracing::debug!(
+                    project = %project_root.display(),
+                    stored_pid = existing.pid,
+                    owner_pid,
+                    "Skipping unregister: registry record belongs to a newer instance"
+                );
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Unregister an instance unconditionally (stale-record cleanup paths).
     pub async fn unregister(project_root: &Path) -> std::io::Result<()> {
         let path = Self::instance_path(project_root);
         if path.exists() {
@@ -532,6 +566,41 @@ mod tests {
         assert_eq!(stored.pid, second.pid, "newest registration must win");
 
         InstanceRegistry::unregister(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unregister_if_owner_preserves_newer_registration() {
+        // Sequence: A registers, B supersedes, A shuts down. A's
+        // ownership-checked unregister must leave B's record intact
+        // (CodeRabbit PR#472).
+        let root = PathBuf::from(format!("/test/owner-{}", uuid_like()));
+
+        let mut a = InstanceInfo::new(root.clone());
+        a.pid = process::id();
+        InstanceRegistry::register(&a).await.unwrap();
+
+        let mut b = InstanceInfo::new(root.clone());
+        b.pid = process::id().wrapping_add(1);
+        InstanceRegistry::register(&b).await.unwrap();
+
+        // A's shutdown: record now belongs to B, so nothing is deleted.
+        InstanceRegistry::unregister_if_owner(&root, a.pid)
+            .await
+            .unwrap();
+        let stored = InstanceRegistry::get(&root).await.unwrap();
+        assert_eq!(
+            stored.pid, b.pid,
+            "B's registration must survive A's shutdown"
+        );
+
+        // B's shutdown: owner matches, record removed; second call is a no-op.
+        InstanceRegistry::unregister_if_owner(&root, b.pid)
+            .await
+            .unwrap();
+        assert!(InstanceRegistry::get(&root).await.is_err());
+        InstanceRegistry::unregister_if_owner(&root, b.pid)
+            .await
+            .unwrap();
     }
 
     /// Cheap unique suffix without pulling in uuid.

@@ -68,10 +68,17 @@ pub fn credentials_path() -> std::path::PathBuf {
 pub fn database_path() -> std::path::PathBuf {
     // Trim-then-filter like asset_dir(): a set-but-blank (or whitespace-only)
     // override must be treated as unset, not resolved relative to the CWD.
-    let override_path = std::env::var("VK_DATABASE_PATH")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let override_path = match std::env::var("VK_DATABASE_PATH") {
+        Ok(s) => Some(s),
+        Err(std::env::VarError::NotPresent) => None,
+        // Falling back to the default here would silently open a different
+        // database than the one configured; refuse to start instead.
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            panic!("VK_DATABASE_PATH is set but not valid UTF-8 ({raw:?})")
+        }
+    }
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
 
     if let Some(path) = override_path {
         let expanded = crate::path::expand_tilde(&path);
@@ -99,10 +106,17 @@ pub fn database_path() -> std::path::PathBuf {
 pub fn backup_dir() -> std::path::PathBuf {
     // Trim-then-filter like asset_dir(): a set-but-blank (or whitespace-only)
     // override must be treated as unset, not resolved relative to the CWD.
-    let override_dir = std::env::var("VK_BACKUP_DIR")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let override_dir = match std::env::var("VK_BACKUP_DIR") {
+        Ok(s) => Some(s),
+        Err(std::env::VarError::NotPresent) => None,
+        // Same rationale as VK_DATABASE_PATH: a mangled override must never
+        // silently redirect backups to the default location.
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            panic!("VK_BACKUP_DIR is set but not valid UTF-8 ({raw:?})")
+        }
+    }
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
 
     if let Some(path) = override_dir {
         let expanded = crate::path::expand_tilde(&path);
