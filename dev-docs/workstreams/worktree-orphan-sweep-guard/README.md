@@ -33,4 +33,15 @@ Storage-safety fixes on destructive/relocating paths.
   `backup_dir()` / `VK_BACKUP_DIR` was fixed in the same commit. Tests cover blank, whitespace-only,
   and padded overrides.
 
+- 2026-08-08 — **CodeRabbit PR #472 follow-up DECLINED**: suggestion to serialize all instance-registry
+  mutations (`crates/utils/src/port_file.rs` `register`/`unregister_if_owner`) behind a per-project
+  cross-process file lock. The registry under `/tmp/vibe-kanban/instances/` is an advisory discovery
+  index for dev tooling (`pnpm run stop`), not a correctness-critical store: the ownership check in
+  `unregister_if_owner` already eliminates the realistic failure (a long-dead instance's shutdown
+  deleting its successor's record), and the residual TOCTOU requires a new instance to register in the
+  microseconds between the old owner's read and delete during graceful shutdown. Worst case is a
+  transiently missing registry record — self-healed by the next `register()` — and the stop tooling
+  has a port-based `lsof` fallback for undiscoverable instances. A cross-process lock dependency in
+  `utils` is disproportionate to that exposure; rationale preserved in the PR thread.
+
 Status: both findings in this workstream are fixed; workstream complete pending merge.
