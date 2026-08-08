@@ -13,25 +13,27 @@
 | error-handling-and-dialog-a11y | shipped | Shared error parsing, dialog accessibility, mutation guard tests | - | - | 2 |
 | fix-nonloopback-signin | shipped | fix-nonloopback-signin | - | - | 2 |
 | foundations-followup1 | shipped | foundations-followup1 | - | - | 2 |
-| frontend-prettier-debt | active |  | - | - | 0 |
+| frontend-prettier-debt | shipped |  | - | - | 0 |
 | frontend-test-debt-2026-08 | active |  | - | - | 0 |
 | hive-node-api-key-ui | shipped | Hive node API key management UI — generate/revoke/unblock keys on the Nodes page | - | - | 2 |
 | hive-oauth-sw-bypass | shipped |  | - | - | 2 |
-| node-task-delete-dangling-shared-id | active |  | - | - | 0 |
-| node-ui-localize-followups | active |  | - | - | 0 |
+| node-task-delete-dangling-shared-id | active |  | - | - | 1 |
+| node-ui-localize-followups | shipped |  | - | - | 0 |
 | remote-docker-build-fix | shipped | Fix crates/remote Docker build — unblock remote/hive standup | - | - | 2 |
 | remote-services-doctest-revival | active | Bring 32 rust,ignore'd doctests in remote + services crates back to live | - | - | 0 |
 | services-normalize-flaky-test | active |  | - | - | 0 |
 | terminal-session-pty-tests | active | Bring 5 #[ignore]'d PTY-spawning tests in terminal_session back to live | - | - | 0 |
 | ui-overhaul | shipped | ui-overhaul | - | - | 2 |
 | vk-swarm-design-system | shipped | VK-Swarm design system — Midnight Terminal component vocabulary + hive app UI kit | - | - | 1 |
+| vk-swarm-event-bus | draft | vk-swarm-event-bus | - | - | 1 |
 | vk-swarm-hive-redesign | shipped | Phase 2b — rebuild hive as hub-and-spoke central management (after node) | - | - | 2 |
 | vk-swarm-hive-ui | shipped | Hive central-management web UI — host the cross-node console (SC1 UI half) | - | - | 2 |
 | vk-swarm-hive-ui-polish | shipped | Hive UI polish — error resilience, offline-first PWA, E2E test suite | - | - | 2 |
 | vk-swarm-node-foundations | shipped | Phase 2a — node correct, durable, crash-resumable (ships first) | - | - | 2 |
 | vk-swarm-node-ui-localize | shipped | Localize the node frontend — proxy swarm management to the hive, make the board local-only | - | - | 2 |
 | vk-swarm-refactor | draft | vk-swarm orchestration platform — 8-phase program umbrella | - | - | 1 |
-| worktree-orphan-sweep-guard | active |  | - | - | 0 |
+| vk-swarm-task-breakdown | draft | vk-swarm-task-breakdown | - | - | 1 |
+| worktree-orphan-sweep-guard | done |  | - | - | 0 |
 
 <!-- WAI:STATUS:END -->
 
@@ -53,21 +55,8 @@ _None._
 
 | id | title | severity | status | location |
 |---|---|---|---|---|
-| F-2026-07-22-01 | NodeCard references undefined vks tokens (vks-pulse, --vks-text-dim) | low | open | remote-frontend/src/components/swarm/NodeCard.tsx:48-53 |
 | F-2026-07-29-03 | hive drawer and navbar actions disabled pending hive APIs, no assign or delete E2E | medium | open | remote-frontend/src/ui/panels/TaskDrawer.tsx |
 | F-2026-07-29-04 | remote-frontend vitest flaky when run concurrently with vite build in same dir | low | open | remote-frontend/ |
-| F-2026-07-30-01 | `cargo test -p db` fails to compile: integration test needs the test-utils feature | medium | open | crates/db/tests/task_visibility_discriminator.rs:9 |
-| F-2026-07-30-02 | Empty VK_DATABASE_PATH silently relocates the database to CWD | low | open | crates/utils/src/assets.rs:61 |
-| F-2026-07-30-03 | Orphan worktree cleanup deletes worktrees with uncommitted changes (no dirty guard) | high | open | crates/local-deployment/src/container.rs:319-383 |
-| F-2026-07-30-04 | WAL diagnostics hardcode asset_dir()/db.sqlite, ignoring VK_DATABASE_PATH | low | open | crates/server/src/routes/diagnostics.rs:109 |
-| F-2026-07-30-05 | Instance registry keyed on project_root only; two instances collide | low | open | crates/utils/src/port_file.rs:123-141 |
-| F-2026-07-31-04 | LinkToLocalFolderDialog orphaned by task 302; its API client, hook and server route are still live | medium | open | frontend/src/components/dialogs/projects/LinkToLocalFolderDialog.tsx |
-| F-2026-07-31-05 | Stale query key ['mergedProjects'] invalidated in linkLocalFolder onSuccess is now a no-op | low | open | frontend/src/hooks/useProjectMutations.ts:79 |
-| F-2026-07-31-06 | Stale doc comment references the removed merged projects view | low | open | crates/db/src/models/project/mod.rs:106 |
-| F-2026-07-31-07 | remote-frontend/src/types/shared/types.ts is a hand-copied duplicate that has drifted from generated shared/types.ts | medium | open | remote-frontend/src/types/shared/types.ts |
-| F-2026-07-31-08 | i18n key settings.swarm.hiveNotConnected undefined in all locales; ja/ko/es fall back to English | low | open | frontend/src/i18n/locales/*/settings.json |
-| F-2026-08-01-01 | useDiffStream and useRemoteConnectionStatus 503 discrimination is unpinned; an unconditional guard survives the suite | low | open | frontend/src/hooks/useDiffStream.ts:86, frontend/src/hooks/useRemoteConnectionStatus.ts:68 |
-| F-2026-08-01-02 | useAvailableNodes retry suppression is unpinned; test wrapper sets retry:false so retry behaviour cannot be observed | low | open | frontend/src/hooks/useAvailableNodes.test.ts |
 | F-2026-08-03-01 | Node OAuth handoff does not complete; user cannot sign in on a node and has no permissions | high | triaged | crates/server/src/routes/oauth.rs:80-119 |
 | F-2026-08-03-02 | Hive SW intercepts /v1/oauth/* OAuth navigations; blocks node AND hive sign-in until unregistered | high | triaged | remote-frontend/vite.config.ts:19-20 |
 | F-2026-08-04-01 | OAuthDialog polls /api/auth/status forever with no timeout or error branch, so auth failures present as an endless spinner | medium | open | frontend/src/components/dialogs/global/OAuthDialog.tsx:95-113 |
