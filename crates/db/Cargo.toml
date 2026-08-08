@@ -30,6 +30,10 @@ version = "3.10"
 optional = true
 
 [dev-dependencies]
+# Self dev-dependency: enables the `test-utils` feature when building this
+# crate's own tests (integration tests link the lib WITHOUT cfg(test), so the
+# feature must be turned on explicitly for `cargo test -p db` to compile).
+db = { path = ".", features = ["test-utils"] }
 serial_test = "3.0"
 tempfile = "3.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

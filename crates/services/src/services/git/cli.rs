@@ -624,6 +624,22 @@ impl GitCli {
 
     /// Get list of modified/dirty files in the working tree.
     /// Returns file paths that have uncommitted changes (both staged and unstaged).
+    /// Check whether the worktree has any uncommitted changes, **including
+    /// untracked files** (unlike `get_dirty_files`, which skips them).
+    ///
+    /// Used by cleanup safety guards where untracked work must also be
+    /// preserved.
+    pub fn has_uncommitted_changes(&self, worktree_path: &Path) -> Result<bool, GitCliError> {
+        // --untracked-files=normal overrides a status.showUntrackedFiles=no
+        // repo/global config, which would otherwise hide untracked work from
+        // this guard and let cleanup delete it.
+        let out = self.git(
+            worktree_path,
+            ["status", "--porcelain", "--untracked-files=normal"],
+        )?;
+        Ok(out.lines().any(|l| !l.trim().is_empty()))
+    }
+
     pub fn get_dirty_files(&self, worktree_path: &Path) -> Result<Vec<String>, GitCliError> {
         let out = self.git(worktree_path, ["status", "--porcelain"])?;
         let mut files = Vec::new();
