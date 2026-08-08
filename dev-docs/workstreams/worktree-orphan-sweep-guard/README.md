@@ -1,6 +1,6 @@
 ---
 workstream: worktree-orphan-sweep-guard
-status: done
+status: shipped
 created: 2026-08-05
 parent_session: vk-swarm-node-ui-localize close-out
 ---

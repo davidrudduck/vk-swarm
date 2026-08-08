@@ -33,7 +33,7 @@
 | vk-swarm-node-ui-localize | shipped | Localize the node frontend — proxy swarm management to the hive, make the board local-only | - | - | 2 |
 | vk-swarm-refactor | draft | vk-swarm orchestration platform — 8-phase program umbrella | - | - | 1 |
 | vk-swarm-task-breakdown | draft | vk-swarm-task-breakdown | - | - | 1 |
-| worktree-orphan-sweep-guard | done |  | - | - | 0 |
+| worktree-orphan-sweep-guard | shipped |  | - | - | 0 |
 
 <!-- WAI:STATUS:END -->
 
