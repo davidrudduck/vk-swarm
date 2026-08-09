@@ -1383,8 +1383,8 @@ pub trait ContainerService {
         executor_profile_id: ExecutorProfileId,
         prompt: String,
     ) -> Result<ExecutionProcess, ContainerError> {
-        // Create container (always required for breakdown runs)
-        self.create(task_attempt).await?;
+        // Ensure the container exists (idempotent; safe for existing attempts)
+        self.ensure_container_exists(task_attempt).await?;
 
         // Get parent task
         let task = task_attempt
@@ -2352,12 +2352,22 @@ mod tests {
     #[test]
     fn test_run_reason_skips_finalize() {
         // Variants that should skip finalization
-        assert!(run_reason_skips_finalize(&ExecutionProcessRunReason::DevServer));
-        assert!(run_reason_skips_finalize(&ExecutionProcessRunReason::Breakdown));
+        assert!(run_reason_skips_finalize(
+            &ExecutionProcessRunReason::DevServer
+        ));
+        assert!(run_reason_skips_finalize(
+            &ExecutionProcessRunReason::Breakdown
+        ));
 
         // Variants that should NOT skip finalization
-        assert!(!run_reason_skips_finalize(&ExecutionProcessRunReason::CodingAgent));
-        assert!(!run_reason_skips_finalize(&ExecutionProcessRunReason::SetupScript));
-        assert!(!run_reason_skips_finalize(&ExecutionProcessRunReason::CleanupScript));
+        assert!(!run_reason_skips_finalize(
+            &ExecutionProcessRunReason::CodingAgent
+        ));
+        assert!(!run_reason_skips_finalize(
+            &ExecutionProcessRunReason::SetupScript
+        ));
+        assert!(!run_reason_skips_finalize(
+            &ExecutionProcessRunReason::CleanupScript
+        ));
     }
 }

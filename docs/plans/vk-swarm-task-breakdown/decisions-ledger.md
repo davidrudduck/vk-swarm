@@ -157,3 +157,5 @@ the enumerated gates remain as the itemized evidence).
 - [Task 204] Verification: cargo test -p services passed 218 tests; cargo check --workspace clean;
   cargo clippy -p services --all-targets clean. No changes to start_attempt, start_execution, or
   finalize_task signatures/bodies.
+- [Task 204] panel-fix F1: create() -> ensure_container_exists (idempotent; matches every existing-attempt call site; create() would fail on existing branch and clear container_ref on error) — orchestrator-resolved underspecification — crates/services/src/services/container.rs
+- [Task 204] panel-fix F3: prior entry's "mirrors verbatim" overclaimed — skip_worktree_creation conditional and parent_project fetch are deliberately absent (project fetch only feeds setup/cleanup scripts, which breakdown omits); fmt was red on the test asserts, fixed in this commit.
