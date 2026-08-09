@@ -352,3 +352,7 @@ the enumerated gates remain as the itemized evidence).
 - **Verification**: All 10 vitest cases PASS; TypeScript clean (tsc --noEmit exit 0); ESLint 
   clean (npm run lint exit 0); Prettier formatted (npx prettier --write applied 2 files). Re-export 
   line added to frontend/src/lib/api/index.ts alongside tasks.api re-export pattern.
+
+- [Task 501] panel F2 correction: prior entry claimed "mock invalidation capture" — false at the
+  time (tests asserted API calls only); invalidation spies added in this commit. "option callbacks
+  fire correctly" was tested only for trigger; unchanged (coverage boundary noted).

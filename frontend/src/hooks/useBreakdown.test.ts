@@ -66,8 +66,9 @@ function createWrapper() {
       mutations: { retry: false },
     },
   });
-  return ({ children }: { children: ReactNode }) =>
+  const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
+  return { wrapper, queryClient };
 }
 
 describe('useBreakdownProposal', () => {
@@ -83,7 +84,7 @@ describe('useBreakdownProposal', () => {
     });
 
     const { result } = renderHook(() => useBreakdownProposal('task-1'), {
-      wrapper: createWrapper(),
+      wrapper: createWrapper().wrapper,
     });
 
     expect(result.current.isLoading).toBe(true);
@@ -101,7 +102,7 @@ describe('useBreakdownProposal', () => {
     vi.mocked(api.get).mockResolvedValue(null);
 
     const { result } = renderHook(() => useBreakdownProposal('task-2'), {
-      wrapper: createWrapper(),
+      wrapper: createWrapper().wrapper,
     });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -116,7 +117,7 @@ describe('useBreakdownProposal', () => {
     vi.mocked(api.get).mockRejectedValue(error);
 
     const { result } = renderHook(() => useBreakdownProposal('task-1'), {
-      wrapper: createWrapper(),
+      wrapper: createWrapper().wrapper,
     });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -136,9 +137,12 @@ describe('useBreakdownMutations', () => {
     const { breakdownApi: api } = await import('@/lib/api/breakdown');
     vi.mocked(api.trigger).mockResolvedValue(mockProposal);
 
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
     const { result } = renderHook(
       () => useBreakdownMutations('task-1', 'project-1'),
-      { wrapper: createWrapper() }
+      { wrapper }
     );
 
     result.current.trigger.mutate(undefined);
@@ -146,15 +150,21 @@ describe('useBreakdownMutations', () => {
     await waitFor(() => expect(result.current.trigger.isSuccess).toBe(true));
 
     expect(vi.mocked(api.trigger)).toHaveBeenCalledWith('task-1');
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['breakdown', 'task-1'],
+    });
   });
 
   it('putItems mutation invalidates breakdown cache', async () => {
     const { breakdownApi: api } = await import('@/lib/api/breakdown');
     vi.mocked(api.putItems).mockResolvedValue(mockItems);
 
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
     const { result } = renderHook(
       () => useBreakdownMutations('task-1', 'project-1'),
-      { wrapper: createWrapper() }
+      { wrapper }
     );
 
     const itemInputs: ProposalItemInput[] = [
@@ -177,15 +187,21 @@ describe('useBreakdownMutations', () => {
     await waitFor(() => expect(result.current.putItems.isSuccess).toBe(true));
 
     expect(vi.mocked(api.putItems)).toHaveBeenCalledWith('proposal-1', payload);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['breakdown', 'task-1'],
+    });
   });
 
   it('discard mutation invalidates breakdown cache', async () => {
     const { breakdownApi: api } = await import('@/lib/api/breakdown');
     vi.mocked(api.discard).mockResolvedValue(mockProposal);
 
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
     const { result } = renderHook(
       () => useBreakdownMutations('task-1', 'project-1'),
-      { wrapper: createWrapper() }
+      { wrapper }
     );
 
     result.current.discard.mutate('proposal-1');
@@ -193,15 +209,21 @@ describe('useBreakdownMutations', () => {
     await waitFor(() => expect(result.current.discard.isSuccess).toBe(true));
 
     expect(vi.mocked(api.discard)).toHaveBeenCalledWith('proposal-1');
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['breakdown', 'task-1'],
+    });
   });
 
   it('retry mutation invalidates breakdown cache', async () => {
     const { breakdownApi: api } = await import('@/lib/api/breakdown');
     vi.mocked(api.retry).mockResolvedValue(mockProposal);
 
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
     const { result } = renderHook(
       () => useBreakdownMutations('task-1', 'project-1'),
-      { wrapper: createWrapper() }
+      { wrapper }
     );
 
     result.current.retry.mutate('proposal-1');
@@ -209,15 +231,21 @@ describe('useBreakdownMutations', () => {
     await waitFor(() => expect(result.current.retry.isSuccess).toBe(true));
 
     expect(vi.mocked(api.retry)).toHaveBeenCalledWith('proposal-1');
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['breakdown', 'task-1'],
+    });
   });
 
   it('accept mutation invalidates breakdown and tasks caches', async () => {
     const { breakdownApi: api } = await import('@/lib/api/breakdown');
     vi.mocked(api.accept).mockResolvedValue([mockTask]);
 
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
     const { result } = renderHook(
       () => useBreakdownMutations('task-1', 'project-1'),
-      { wrapper: createWrapper() }
+      { wrapper }
     );
 
     result.current.accept.mutate('proposal-1');
@@ -225,6 +253,12 @@ describe('useBreakdownMutations', () => {
     await waitFor(() => expect(result.current.accept.isSuccess).toBe(true));
 
     expect(vi.mocked(api.accept)).toHaveBeenCalledWith('proposal-1');
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['breakdown', 'task-1'],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['tasks', 'project-1'],
+    });
   });
 
   it('mutations call onSuccess callbacks', async () => {
@@ -238,7 +272,7 @@ describe('useBreakdownMutations', () => {
         useBreakdownMutations('task-1', 'project-1', {
           onTriggerSuccess,
         }),
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper().wrapper }
     );
 
     result.current.trigger.mutate(undefined);
@@ -260,7 +294,7 @@ describe('useBreakdownMutations', () => {
         useBreakdownMutations('task-1', 'project-1', {
           onTriggerError,
         }),
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper().wrapper }
     );
 
     result.current.trigger.mutate(undefined);
