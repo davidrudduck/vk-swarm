@@ -496,3 +496,35 @@ the enumerated gates remain as the itemized evidence).
   `aria-disabled="true"` when `usesSharedWorktree` is true — verifying the disabled state is applied,
   not the runtime click-suppression (which is Radix's own behavior, exercised by Radix's test suite,
   not this app's).
+
+## Task 601 — Project auto_breakdown_enabled: migration + model + typegen (2026-08-09)
+
+- **CreateProject untouched**: per task instructions, `auto_breakdown_enabled` was NOT added to
+  `CreateProject`. New projects always start with the column at its `DEFAULT 0` (SQLite migration
+  default), i.e. `false`. Opting in happens via `UpdateProject` (602/603 own the UI for this).
+- **`Project::update` gained a new positional parameter** (`auto_breakdown_enabled: bool`) rather than
+  an `Option`, mirroring the pre-existing `parallel_setup_script: bool` parameter exactly — the
+  `Option<bool>` unwrap-with-existing-value pattern lives in the handler
+  (`routes/projects/handlers/core.rs::update_project`), not in the model fn.
+- **Materialization sites** (found via `grep -rn parallel_setup_script crates/` and confirmed
+  exhaustive by `cargo check --workspace`): `crates/db/src/models/project/{queries.rs (find_all,
+  find_most_active, find_by_id, find_by_git_repo_path, find_remote_by_path_and_node,
+  find_by_git_repo_path_excluding_id, create, update), stats.rs (2 raw queries + 2 struct literals),
+  github.rs (find_github_enabled), sync.rs (find_by_remote_project_id, find_unlinked,
+  find_remote_projects, find_local_projects, upsert_remote_project, find_all_with_remote_id)}`,
+  `crates/server/src/routes/projects/handlers/core.rs` (swarm-project→`Project` conversion literal +
+  `update_project` handler destructure/call), `crates/server/src/routes/tasks/handlers/streams.rs`
+  (test-only `Project` literal). No site outside the dictated file list was found — `cargo check
+  --workspace` was clean after threading the column through exactly those files.
+- **Frontend `tsc --noEmit` broke on two pre-existing `UpdateProject` object literals** that don't use
+  the spread operator: `frontend/src/components/tasks/TaskDetails/preview/NoServerContent.tsx`
+  (dev-script quick-save) and `frontend/src/pages/settings/ProjectSettings.tsx` (project settings
+  save). Both were outside task 601's dictated touch-list, but the VERIFY step mandates `cd frontend
+  && npx tsc --noEmit` exit 0 for *this* task, and per "No Deferred Remediation" the resulting
+  breakage cannot be carried to 602/603. Fixed minimally by adding `auto_breakdown_enabled:
+  <existing value> ?? false` to both literals — preserving the current value on save (no behavior
+  change, no new UI surface), exactly mirroring how `parallel_setup_script` is already
+  preserved at each site. 602/603 remain free to build the actual toggle UI on top of this.
+- **sqlx offline metadata regenerated** via `node scripts/prepare-db.js` (migration applied to a throwaway
+  db, `cargo sqlx prepare` run under the hood) — `crates/db/.sqlx/*.json` changed (additions/deletions)
+  and are committed alongside the code per task instructions.

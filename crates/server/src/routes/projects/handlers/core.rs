@@ -99,6 +99,7 @@ pub async fn get_project(
             cleanup_script: None,
             copy_files: None,
             parallel_setup_script: false,
+            auto_breakdown_enabled: false,
             remote_project_id: Some(swarm_project.id),
             created_at: swarm_project.created_at,
             updated_at: swarm_project.updated_at,
@@ -556,6 +557,7 @@ pub async fn update_project(
         cleanup_script,
         copy_files,
         parallel_setup_script,
+        auto_breakdown_enabled,
     } = payload;
     // If git_repo_path is being changed, check if the new path is already used by another project
     let git_repo_path = if let Some(new_git_repo_path) = git_repo_path.map(|s| expand_tilde(&s))
@@ -593,6 +595,7 @@ pub async fn update_project(
         cleanup_script,
         copy_files,
         parallel_setup_script.unwrap_or(existing_project.parallel_setup_script),
+        auto_breakdown_enabled.unwrap_or(existing_project.auto_breakdown_enabled),
     )
     .await
     {

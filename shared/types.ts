@@ -34,7 +34,11 @@ export type Project = { id: string, name: string, git_repo_path: string, setup_s
 /**
  * When true, setup script runs concurrently with the coding agent
  */
-parallel_setup_script: boolean, remote_project_id: string | null, created_at: Date, updated_at: Date, is_remote: boolean, source_node_id: string | null, source_node_name: string | null, source_node_public_url: string | null, source_node_status: string | null, remote_last_synced_at: Date | null, 
+parallel_setup_script: boolean, 
+/**
+ * When true, the P3 auto-trigger may automatically break down tasks for this project
+ */
+auto_breakdown_enabled: boolean, remote_project_id: string | null, created_at: Date, updated_at: Date, is_remote: boolean, source_node_id: string | null, source_node_name: string | null, source_node_public_url: string | null, source_node_status: string | null, remote_last_synced_at: Date | null, 
 /**
  * Whether GitHub integration is enabled for this project
  */
@@ -66,7 +70,7 @@ export type CreateProject = { name: string, git_repo_path: string, use_existing_
  */
 clone_url: string | null, setup_script: string | null, dev_script: string | null, cleanup_script: string | null, copy_files: string | null, };
 
-export type UpdateProject = { name: string | null, git_repo_path: string | null, setup_script: string | null, dev_script: string | null, cleanup_script: string | null, copy_files: string | null, parallel_setup_script: boolean | null, };
+export type UpdateProject = { name: string | null, git_repo_path: string | null, setup_script: string | null, dev_script: string | null, cleanup_script: string | null, copy_files: string | null, parallel_setup_script: boolean | null, auto_breakdown_enabled: boolean | null, };
 
 export type SearchResult = { path: string, is_file: boolean, match_type: SearchMatchType, };
 

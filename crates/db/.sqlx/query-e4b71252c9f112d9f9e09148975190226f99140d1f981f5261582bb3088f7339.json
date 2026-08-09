@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO projects (\n                    id,\n                    name,\n                    git_repo_path,\n                    setup_script,\n                    dev_script,\n                    cleanup_script,\n                    copy_files\n                ) VALUES (\n                    $1, $2, $3, $4, $5, $6, $7\n                )\n                RETURNING id as \"id!: Uuid\",\n                          name,\n                          git_repo_path,\n                          setup_script,\n                          dev_script,\n                          cleanup_script,\n                          copy_files,\n                          parallel_setup_script as \"parallel_setup_script!: bool\",\n                          remote_project_id as \"remote_project_id: Uuid\",\n                          created_at as \"created_at!: DateTime<Utc>\",\n                          updated_at as \"updated_at!: DateTime<Utc>\",\n                          is_remote as \"is_remote!: bool\",\n                          source_node_id as \"source_node_id: Uuid\",\n                          source_node_name,\n                          source_node_public_url,\n                          source_node_status,\n                          remote_last_synced_at as \"remote_last_synced_at: DateTime<Utc>\",\n                          github_enabled as \"github_enabled!: bool\",\n                          github_owner,\n                          github_repo,\n                          github_open_issues as \"github_open_issues!: i32\",\n                          github_open_prs as \"github_open_prs!: i32\",\n                          github_last_synced_at as \"github_last_synced_at: DateTime<Utc>\"",
+  "query": "UPDATE projects\n               SET name = $2,\n                   git_repo_path = $3,\n                   setup_script = $4,\n                   dev_script = $5,\n                   cleanup_script = $6,\n                   copy_files = $7,\n                   parallel_setup_script = $8,\n                   auto_breakdown_enabled = $9\n               WHERE id = $1\n               RETURNING id as \"id!: Uuid\",\n                         name,\n                         git_repo_path,\n                         setup_script,\n                         dev_script,\n                         cleanup_script,\n                         copy_files,\n                         parallel_setup_script as \"parallel_setup_script!: bool\",\n                         auto_breakdown_enabled as \"auto_breakdown_enabled!: bool\",\n                         remote_project_id as \"remote_project_id: Uuid\",\n                         created_at as \"created_at!: DateTime<Utc>\",\n                         updated_at as \"updated_at!: DateTime<Utc>\",\n                         is_remote as \"is_remote!: bool\",\n                         source_node_id as \"source_node_id: Uuid\",\n                         source_node_name,\n                         source_node_public_url,\n                         source_node_status,\n                         remote_last_synced_at as \"remote_last_synced_at: DateTime<Utc>\",\n                         github_enabled as \"github_enabled!: bool\",\n                         github_owner,\n                         github_repo,\n                         github_open_issues as \"github_open_issues!: i32\",\n                         github_open_prs as \"github_open_prs!: i32\",\n                         github_last_synced_at as \"github_last_synced_at: DateTime<Utc>\"",
   "describe": {
     "columns": [
       {
@@ -44,83 +44,88 @@
         "type_info": "Bool"
       },
       {
-        "name": "remote_project_id: Uuid",
+        "name": "auto_breakdown_enabled!: bool",
         "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "remote_project_id: Uuid",
+        "ordinal": 9,
         "type_info": "Blob"
       },
       {
         "name": "created_at!: DateTime<Utc>",
-        "ordinal": 9,
-        "type_info": "Text"
-      },
-      {
-        "name": "updated_at!: DateTime<Utc>",
         "ordinal": 10,
         "type_info": "Text"
       },
       {
-        "name": "is_remote!: bool",
+        "name": "updated_at!: DateTime<Utc>",
         "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_remote!: bool",
+        "ordinal": 12,
         "type_info": "Bool"
       },
       {
         "name": "source_node_id: Uuid",
-        "ordinal": 12,
+        "ordinal": 13,
         "type_info": "Blob"
       },
       {
         "name": "source_node_name",
-        "ordinal": 13,
-        "type_info": "Text"
-      },
-      {
-        "name": "source_node_public_url",
         "ordinal": 14,
         "type_info": "Text"
       },
       {
-        "name": "source_node_status",
+        "name": "source_node_public_url",
         "ordinal": 15,
         "type_info": "Text"
       },
       {
-        "name": "remote_last_synced_at: DateTime<Utc>",
+        "name": "source_node_status",
         "ordinal": 16,
         "type_info": "Text"
       },
       {
-        "name": "github_enabled!: bool",
+        "name": "remote_last_synced_at: DateTime<Utc>",
         "ordinal": 17,
+        "type_info": "Text"
+      },
+      {
+        "name": "github_enabled!: bool",
+        "ordinal": 18,
         "type_info": "Integer"
       },
       {
         "name": "github_owner",
-        "ordinal": 18,
-        "type_info": "Text"
-      },
-      {
-        "name": "github_repo",
         "ordinal": 19,
         "type_info": "Text"
       },
       {
-        "name": "github_open_issues!: i32",
+        "name": "github_repo",
         "ordinal": 20,
-        "type_info": "Integer"
+        "type_info": "Text"
       },
       {
-        "name": "github_open_prs!: i32",
+        "name": "github_open_issues!: i32",
         "ordinal": 21,
         "type_info": "Integer"
       },
       {
-        "name": "github_last_synced_at: DateTime<Utc>",
+        "name": "github_open_prs!: i32",
         "ordinal": 22,
+        "type_info": "Integer"
+      },
+      {
+        "name": "github_last_synced_at: DateTime<Utc>",
+        "ordinal": 23,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 7
+      "Right": 9
     },
     "nullable": [
       true,
@@ -131,6 +136,7 @@
       true,
       true,
       false,
+      false,
       true,
       false,
       false,
@@ -138,7 +144,7 @@
       true,
       true,
       true,
-      false,
+      true,
       true,
       false,
       true,
@@ -148,5 +154,5 @@
       true
     ]
   },
-  "hash": "16f840d5d8a99acb1ba2b2c69cd458a5cf2076891dce49318c42f332b2f3a468"
+  "hash": "e4b71252c9f112d9f9e09148975190226f99140d1f981f5261582bb3088f7339"
 }

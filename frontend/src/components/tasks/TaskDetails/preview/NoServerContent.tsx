@@ -95,6 +95,7 @@ export function NoServerContent({
           cleanup_script: project.cleanup_script ?? null,
           copy_files: project.copy_files ?? null,
           parallel_setup_script: project.parallel_setup_script ?? false,
+          auto_breakdown_enabled: project.auto_breakdown_enabled ?? false,
         },
       },
       {

@@ -43,6 +43,8 @@ pub struct Project {
     pub copy_files: Option<String>,
     /// When true, setup script runs concurrently with the coding agent
     pub parallel_setup_script: bool,
+    /// When true, the P3 auto-trigger may automatically break down tasks for this project
+    pub auto_breakdown_enabled: bool,
     pub remote_project_id: Option<Uuid>,
     #[ts(type = "Date")]
     pub created_at: DateTime<Utc>,
@@ -94,6 +96,7 @@ pub struct UpdateProject {
     pub cleanup_script: Option<String>,
     pub copy_files: Option<String>,
     pub parallel_setup_script: Option<bool>,
+    pub auto_breakdown_enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

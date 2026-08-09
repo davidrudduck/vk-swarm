@@ -221,6 +221,7 @@ export function ProjectSettings() {
         cleanup_script: draft.cleanup_script.trim() || null,
         copy_files: draft.copy_files.trim() || null,
         parallel_setup_script: draft.parallel_setup_script,
+        auto_breakdown_enabled: selectedProject.auto_breakdown_enabled,
       };
 
       updateProject.mutate({
