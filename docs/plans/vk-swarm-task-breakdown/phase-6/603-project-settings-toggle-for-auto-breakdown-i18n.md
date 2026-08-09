@@ -2,7 +2,7 @@
 id: "603"
 phase: 6
 title: "Project settings toggle for auto breakdown (+ i18n)"
-status: ready
+status: passed
 depends_on: ["601"]
 parallel: false
 conflicts_with: []
