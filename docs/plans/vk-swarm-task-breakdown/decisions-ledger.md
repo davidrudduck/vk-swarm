@@ -135,3 +135,8 @@ the enumerated gates remain as the itemized evidence).
 ## Task 103
 
 - [Task 103] Manual verification: generate-types:check exit 0; frontend tsc --noEmit exit 0. All 6 new types (TaskBreakdownProposal, TaskBreakdownProposalItem, BreakdownStatus, UpsertProposalItems, ProposalItemInput, TaskDependency) present in shared/types.ts.
+
+## Task 201
+- [Task 201 orchestrator] Expedited Stage-2: one-line enum addition verified directly with citations
+  (diff = single `+ Breakdown,`; types.ts:877 union gains "breakdown" matching existing lowercase
+  convention; cargo check --workspace clean — survey's "no exhaustive matches" claim held).
