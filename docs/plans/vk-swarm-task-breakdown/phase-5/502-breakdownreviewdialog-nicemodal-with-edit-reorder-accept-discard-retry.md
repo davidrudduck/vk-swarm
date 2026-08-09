@@ -2,7 +2,7 @@
 id: "502"
 phase: 5
 title: "BreakdownReviewDialog (NiceModal) with edit/reorder/accept/discard/retry"
-status: ready
+status: passed
 depends_on: ["501"]
 parallel: false
 conflicts_with: []

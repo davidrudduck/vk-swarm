@@ -402,3 +402,6 @@ the enumerated gates remain as the itemized evidence).
 - [Task 502] panel F1/F2 fixes: discriminating delete-index-0 remap test; Accept-disabled pinned for zero-items and save-in-flight.
 
 - [Task 502] panel F3 deferred to task 503 by design: tests assert English fallback strings because breakdown.* keys land in 503; 503 MUST add en keys matching the fallbacks byte-for-byte, then locale-parity tests take over.
+- [Task 502 orchestrator] Remediation commit d5474c98 spans 501's useBreakdown.ts + 502's test file, so
+  neither task's file-set gate covers it as a unit; validated instead by the full frontend suite
+  (22/22), tsc, eslint, prettier — recorded as a gating exception.
