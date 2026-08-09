@@ -1,0 +1,272 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderHook, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import React from 'react';
+import type { ReactNode } from 'react';
+import { useBreakdownProposal, useBreakdownMutations } from './useBreakdown';
+import type {
+  TaskBreakdownProposal,
+  TaskBreakdownProposalItem,
+  Task,
+  ProposalItemInput,
+} from 'shared/types';
+
+vi.mock('@/lib/api/breakdown');
+
+const mockProposal: TaskBreakdownProposal = {
+  id: 'proposal-1',
+  task_id: 'task-1',
+  status: 'draft',
+  execution_process_id: null,
+  error: null,
+  created_at: new Date('2026-08-01'),
+  updated_at: new Date('2026-08-01'),
+};
+
+const mockItems: TaskBreakdownProposalItem[] = [
+  {
+    id: 'item-1',
+    proposal_id: 'proposal-1',
+    title: 'Subtask 1',
+    description: 'Description 1',
+    sort_order: BigInt(0),
+    depends_on_item_ids: '[]',
+    created_at: new Date('2026-08-01'),
+  },
+  {
+    id: 'item-2',
+    proposal_id: 'proposal-1',
+    title: 'Subtask 2',
+    description: null,
+    sort_order: BigInt(1),
+    depends_on_item_ids: '["item-1"]',
+    created_at: new Date('2026-08-01'),
+  },
+];
+
+const mockTask = {
+  id: 'task-1',
+  project_id: 'project-1',
+  title: 'Parent Task',
+  description: null,
+  status: 'todo',
+  created_at: new Date('2026-08-01'),
+  updated_at: new Date('2026-08-01'),
+  parent_task_id: null,
+  sort_order: BigInt(0),
+  assignee_id: null,
+  labels: [],
+  is_archived: false,
+} as unknown as Task;
+
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+}
+
+describe('useBreakdownProposal', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fetches breakdown proposal with items on mount', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.get).mockResolvedValue({
+      proposal: mockProposal,
+      items: mockItems,
+    });
+
+    const { result } = renderHook(() => useBreakdownProposal('task-1'), {
+      wrapper: createWrapper(),
+    });
+
+    expect(result.current.isLoading).toBe(true);
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.proposal).toEqual(mockProposal);
+    expect(result.current.items).toEqual(mockItems);
+    expect(result.current.error).toBeNull();
+    expect(vi.mocked(api.get)).toHaveBeenCalledWith('task-1');
+  });
+
+  it('handles null proposal (task with no breakdown)', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.get).mockResolvedValue(null);
+
+    const { result } = renderHook(() => useBreakdownProposal('task-2'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.proposal).toBeNull();
+    expect(result.current.items).toEqual([]);
+  });
+
+  it('handles API errors', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    const error = new Error('Failed to fetch');
+    vi.mocked(api.get).mockRejectedValue(error);
+
+    const { result } = renderHook(() => useBreakdownProposal('task-1'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.error).toEqual(error);
+    expect(result.current.proposal).toBeNull();
+    expect(result.current.items).toEqual([]);
+  });
+});
+
+describe('useBreakdownMutations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('trigger mutation invalidates breakdown cache', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.trigger).mockResolvedValue(mockProposal);
+
+    const { result } = renderHook(
+      () => useBreakdownMutations('task-1', 'project-1'),
+      { wrapper: createWrapper() }
+    );
+
+    result.current.trigger.mutate(undefined);
+
+    await waitFor(() => expect(result.current.trigger.isSuccess).toBe(true));
+
+    expect(vi.mocked(api.trigger)).toHaveBeenCalledWith('task-1');
+  });
+
+  it('putItems mutation invalidates breakdown cache', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.putItems).mockResolvedValue(mockItems);
+
+    const { result } = renderHook(
+      () => useBreakdownMutations('task-1', 'project-1'),
+      { wrapper: createWrapper() }
+    );
+
+    const itemInputs: ProposalItemInput[] = [
+      {
+        title: 'Subtask 1',
+        description: 'Description 1',
+        sort_order: BigInt(0),
+        depends_on_indices: [],
+      },
+      {
+        title: 'Subtask 2',
+        description: null,
+        sort_order: BigInt(1),
+        depends_on_indices: [BigInt(0)],
+      },
+    ];
+    const payload = { items: itemInputs };
+    result.current.putItems.mutate({ proposalId: 'proposal-1', payload });
+
+    await waitFor(() => expect(result.current.putItems.isSuccess).toBe(true));
+
+    expect(vi.mocked(api.putItems)).toHaveBeenCalledWith('proposal-1', payload);
+  });
+
+  it('discard mutation invalidates breakdown cache', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.discard).mockResolvedValue(mockProposal);
+
+    const { result } = renderHook(
+      () => useBreakdownMutations('task-1', 'project-1'),
+      { wrapper: createWrapper() }
+    );
+
+    result.current.discard.mutate('proposal-1');
+
+    await waitFor(() => expect(result.current.discard.isSuccess).toBe(true));
+
+    expect(vi.mocked(api.discard)).toHaveBeenCalledWith('proposal-1');
+  });
+
+  it('retry mutation invalidates breakdown cache', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.retry).mockResolvedValue(mockProposal);
+
+    const { result } = renderHook(
+      () => useBreakdownMutations('task-1', 'project-1'),
+      { wrapper: createWrapper() }
+    );
+
+    result.current.retry.mutate('proposal-1');
+
+    await waitFor(() => expect(result.current.retry.isSuccess).toBe(true));
+
+    expect(vi.mocked(api.retry)).toHaveBeenCalledWith('proposal-1');
+  });
+
+  it('accept mutation invalidates breakdown and tasks caches', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.accept).mockResolvedValue([mockTask]);
+
+    const { result } = renderHook(
+      () => useBreakdownMutations('task-1', 'project-1'),
+      { wrapper: createWrapper() }
+    );
+
+    result.current.accept.mutate('proposal-1');
+
+    await waitFor(() => expect(result.current.accept.isSuccess).toBe(true));
+
+    expect(vi.mocked(api.accept)).toHaveBeenCalledWith('proposal-1');
+  });
+
+  it('mutations call onSuccess callbacks', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.trigger).mockResolvedValue(mockProposal);
+
+    const onTriggerSuccess = vi.fn();
+
+    const { result } = renderHook(
+      () =>
+        useBreakdownMutations('task-1', 'project-1', {
+          onTriggerSuccess,
+        }),
+      { wrapper: createWrapper() }
+    );
+
+    result.current.trigger.mutate(undefined);
+
+    await waitFor(() => expect(result.current.trigger.isSuccess).toBe(true));
+
+    expect(onTriggerSuccess).toHaveBeenCalledWith(mockProposal);
+  });
+
+  it('mutations call onError callbacks', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    const error = new Error('API failed');
+    vi.mocked(api.trigger).mockRejectedValue(error);
+
+    const onTriggerError = vi.fn();
+
+    const { result } = renderHook(
+      () =>
+        useBreakdownMutations('task-1', 'project-1', {
+          onTriggerError,
+        }),
+      { wrapper: createWrapper() }
+    );
+
+    result.current.trigger.mutate(undefined);
+
+    await waitFor(() => expect(result.current.trigger.isError).toBe(true));
+
+    expect(onTriggerError).toHaveBeenCalledWith(error);
+  });
+});

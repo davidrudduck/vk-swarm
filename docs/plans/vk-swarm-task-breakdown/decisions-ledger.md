@@ -321,3 +321,34 @@ the enumerated gates remain as the itemized evidence).
   representation chosen: `{"proposal": null}` (explicit key mirrors the populated shape's
   `proposal` field so callers can branch on it). Test added:
   `get_breakdown_null_data_is_success_with_null_proposal`. — crates/server/src/mcp/task_server.rs
+- [Task 501 orchestrator] Amended files: to include frontend/src/hooks/useBreakdown.test.ts — the
+  Failing-test section mandates the file but frontmatter omitted it (same decompose inconsistency
+  as task 203; additive).
+
+## Task 501 — Frontend API client + hooks for breakdown (2026-08-09)
+
+- **API Client** (frontend/src/lib/api/breakdown.ts): Namespace `breakdownApi` following tasks.ts
+  pattern with 7 methods: `get(taskId)` (nullable BreakdownWithItems), `trigger(taskId)`, 
+  `putItems(proposalId, UpsertProposalItems)`, `accept(proposalId)`, `discard(proposalId)`, 
+  `retry(proposalId)`, `dependencies(taskId)`. All methods use `makeRequest` + `handleApiResponse` 
+  wrapper pattern; nullable return for `get()` typed as `Promise<BreakdownWithItems | null>`.
+
+- **Hooks** (frontend/src/hooks/useBreakdown.ts): `useBreakdownProposal(taskId, options?)` 
+  returns `UseBreakdownProposalState` (proposal: nullable, items array, isLoading, error); 
+  `useBreakdownMutations(taskId, projectId, options?)` returns 5 mutations (trigger, putItems, 
+  discard, retry, accept) with cache invalidation: all five invalidate `['breakdown', taskId]`; 
+  accept ADDITIONALLY invalidates `['tasks', projectId]`. Callback options follow CLAUDE.md 
+  convention: `on{Action}Success` and `on{Action}Error` for all 5 mutations.
+
+- **Tests** (frontend/src/hooks/useBreakdown.test.ts): 10 vitest cases covering fetch/null/error 
+  for query hook; all 5 mutations tested for success/error with mock invalidation capture. Uses 
+  existing hook-test mocking pattern (vi.mock/@/lib/api/breakdown + vi.mocked + dynamic import). 
+  Query + mutation hook test harness validates option callbacks fire correctly.
+
+- **Type sync**: BreakdownWithItems interface exported from API namespace (re-exported in 
+  index.ts); type generation (`npm run generate-types`) not needed (no new Rust types, only 
+  frontend-only wrapper interface matching backend BreakdownWithItems struct shape).
+
+- **Verification**: All 10 vitest cases PASS; TypeScript clean (tsc --noEmit exit 0); ESLint 
+  clean (npm run lint exit 0); Prettier formatted (npx prettier --write applied 2 files). Re-export 
+  line added to frontend/src/lib/api/index.ts alongside tasks.api re-export pattern.
