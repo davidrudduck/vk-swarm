@@ -31,11 +31,14 @@ vi.mock('@/i18n/config', () => ({
 
 // Mock the aggregate hooks barrel used by both TaskCard and ActionsDropdown
 const mockUseIsMobile = vi.fn(() => false);
+const mockUseTaskUsesSharedWorktree = vi.fn(() => ({
+  usesSharedWorktree: false,
+}));
 vi.mock('@/hooks', () => ({
   useAuth: () => ({ userId: 'user-1' }),
   useIsOrgAdmin: () => false,
   useNavigateWithSearch: () => vi.fn(),
-  useTaskUsesSharedWorktree: () => ({ usesSharedWorktree: false }),
+  useTaskUsesSharedWorktree: () => mockUseTaskUsesSharedWorktree(),
   useIsMobile: () => mockUseIsMobile(),
 }));
 
@@ -90,7 +93,9 @@ vi.mock('@/components/ui/shadcn-io/kanban', () => ({
 
 // Draft breakdown proposal state — mutable so tests can toggle it
 const { proposalState, triggerMutate } = vi.hoisted(() => ({
-  proposalState: { proposal: null as { id: string } | null },
+  proposalState: {
+    proposal: null as { id: string; status: string } | null,
+  },
   triggerMutate: vi.fn().mockResolvedValue({ id: 'proposal-1' }),
 }));
 
@@ -188,6 +193,9 @@ describe('TaskCard - breakdown action & badge', () => {
     vi.clearAllMocks();
     proposalState.proposal = null;
     mockUseIsMobile.mockReturnValue(false);
+    mockUseTaskUsesSharedWorktree.mockReturnValue({
+      usesSharedWorktree: false,
+    });
   });
 
   const defaultProps = {
@@ -199,7 +207,7 @@ describe('TaskCard - breakdown action & badge', () => {
   };
 
   it('shows the proposed-subtasks badge when a draft proposal exists', () => {
-    proposalState.proposal = { id: 'proposal-1' };
+    proposalState.proposal = { id: 'proposal-1', status: 'draft' };
     const task = createMockTask();
 
     renderTaskCard(<TaskCard {...defaultProps} task={task} />);
@@ -216,9 +224,27 @@ describe('TaskCard - breakdown action & badge', () => {
     expect(screen.queryByText('Proposed subtasks')).not.toBeInTheDocument();
   });
 
+  it('does not show the badge when the latest proposal is accepted', () => {
+    proposalState.proposal = { id: 'proposal-1', status: 'accepted' };
+    const task = createMockTask();
+
+    renderTaskCard(<TaskCard {...defaultProps} task={task} />);
+
+    expect(screen.queryByText('Proposed subtasks')).not.toBeInTheDocument();
+  });
+
+  it('does not show the badge when the latest proposal is discarded', () => {
+    proposalState.proposal = { id: 'proposal-1', status: 'discarded' };
+    const task = createMockTask();
+
+    renderTaskCard(<TaskCard {...defaultProps} task={task} />);
+
+    expect(screen.queryByText('Proposed subtasks')).not.toBeInTheDocument();
+  });
+
   it('desktop dropdown contains the Break down item and opens the dialog on click (existing draft)', async () => {
     mockUseIsMobile.mockReturnValue(false);
-    proposalState.proposal = { id: 'proposal-1' };
+    proposalState.proposal = { id: 'proposal-1', status: 'draft' };
     const task = createMockTask();
 
     renderTaskCard(<TaskCard {...defaultProps} task={task} />);
@@ -232,6 +258,74 @@ describe('TaskCard - breakdown action & badge', () => {
 
     // A draft already exists, so trigger is skipped and the dialog opens directly.
     expect(triggerMutate).not.toHaveBeenCalled();
+    expect(mockBreakdownDialogShow).toHaveBeenCalledWith({
+      taskId: task.id,
+      projectId: 'project-1',
+    });
+  });
+
+  it('desktop dropdown shows the dialog without triggering when latest proposal failed', async () => {
+    mockUseIsMobile.mockReturnValue(false);
+    proposalState.proposal = { id: 'proposal-1', status: 'failed' };
+    const task = createMockTask();
+
+    renderTaskCard(<TaskCard {...defaultProps} task={task} />);
+
+    const trigger = screen.getByRole('button', { name: 'Actions' });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+
+    const breakdownItem = await screen.findByText('Break down');
+    fireEvent.click(breakdownItem);
+
+    // Failed proposal opens directly — the dialog offers Retry.
+    expect(triggerMutate).not.toHaveBeenCalled();
+    expect(mockBreakdownDialogShow).toHaveBeenCalledWith({
+      taskId: task.id,
+      projectId: 'project-1',
+    });
+  });
+
+  it('desktop dropdown re-triggers generation when the latest proposal is discarded', async () => {
+    mockUseIsMobile.mockReturnValue(false);
+    proposalState.proposal = { id: 'proposal-1', status: 'discarded' };
+    const task = createMockTask();
+
+    renderTaskCard(<TaskCard {...defaultProps} task={task} />);
+
+    const trigger = screen.getByRole('button', { name: 'Actions' });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+
+    const breakdownItem = await screen.findByText('Break down');
+    fireEvent.click(breakdownItem);
+
+    // Terminal (discarded) proposal re-triggers a fresh draft before opening.
+    expect(triggerMutate).toHaveBeenCalled();
+    await Promise.resolve();
+    expect(mockBreakdownDialogShow).toHaveBeenCalledWith({
+      taskId: task.id,
+      projectId: 'project-1',
+    });
+  });
+
+  it('desktop dropdown re-triggers generation when the latest proposal is accepted', async () => {
+    mockUseIsMobile.mockReturnValue(false);
+    proposalState.proposal = { id: 'proposal-1', status: 'accepted' };
+    const task = createMockTask();
+
+    renderTaskCard(<TaskCard {...defaultProps} task={task} />);
+
+    const trigger = screen.getByRole('button', { name: 'Actions' });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+
+    const breakdownItem = await screen.findByText('Break down');
+    fireEvent.click(breakdownItem);
+
+    // Terminal (accepted) proposal re-triggers a fresh draft before opening.
+    expect(triggerMutate).toHaveBeenCalled();
+    await Promise.resolve();
     expect(mockBreakdownDialogShow).toHaveBeenCalledWith({
       taskId: task.id,
       projectId: 'project-1',
@@ -262,7 +356,7 @@ describe('TaskCard - breakdown action & badge', () => {
 
   it('mobile bottom-sheet branch also renders the Break down action', async () => {
     mockUseIsMobile.mockReturnValue(true);
-    proposalState.proposal = { id: 'proposal-1' };
+    proposalState.proposal = { id: 'proposal-1', status: 'draft' };
     const task = createMockTask();
 
     renderTaskCard(<TaskCard {...defaultProps} task={task} />);
@@ -279,6 +373,34 @@ describe('TaskCard - breakdown action & badge', () => {
       taskId: task.id,
       projectId: 'project-1',
     });
+  });
+
+  it('desktop dropdown disables Break down for shared-worktree tasks', async () => {
+    mockUseIsMobile.mockReturnValue(false);
+    mockUseTaskUsesSharedWorktree.mockReturnValue({
+      usesSharedWorktree: true,
+    });
+    proposalState.proposal = null;
+    const task = createMockTask();
+
+    renderTaskCard(<TaskCard {...defaultProps} task={task} />);
+
+    const trigger = screen.getByRole('button', { name: 'Actions' });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+
+    const breakdownItem = await screen.findByText('Break down');
+    const breakdownMenuItem = breakdownItem.closest(
+      '[role="menuitem"]'
+    ) as HTMLElement;
+
+    // Radix marks disabled menu items via aria/data attributes rather than
+    // the native `disabled` attribute. Note: jsdom's fireEvent.click does
+    // not honor pointer-events:none, so we assert on these attributes
+    // rather than on click-handler suppression (see decisions-ledger F3
+    // for the documented coverage boundary).
+    expect(breakdownMenuItem).toHaveAttribute('data-disabled');
+    expect(breakdownMenuItem).toHaveAttribute('aria-disabled', 'true');
   });
 });
 

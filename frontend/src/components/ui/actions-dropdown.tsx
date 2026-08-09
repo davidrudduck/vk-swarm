@@ -231,7 +231,16 @@ export function ActionsDropdown({
   const handleBreakdown = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!task?.id || !projectId) return;
-    if (!breakdownProposal) {
+    // Trigger generation when there is no proposal yet, or the latest
+    // proposal is terminal (accepted/discarded) — the backend's one-draft
+    // unique index only blocks a second DRAFT, so re-triggering over a
+    // terminal proposal legitimately creates a fresh draft. A 'draft' or
+    // 'failed' proposal opens the dialog directly (failed → offers Retry).
+    const needsTrigger =
+      !breakdownProposal ||
+      breakdownProposal.status === 'accepted' ||
+      breakdownProposal.status === 'discarded';
+    if (needsTrigger) {
       try {
         await triggerBreakdown.mutateAsync();
       } catch {
@@ -610,7 +619,10 @@ export function ActionsDropdown({
                           label={t('breakdown.action', 'Break down')}
                           onClick={handleBreakdown}
                           disabled={
-                            !projectId || !task || triggerBreakdown.isPending
+                            !projectId ||
+                            !task ||
+                            triggerBreakdown.isPending ||
+                            usesSharedWorktree
                           }
                         />
                         <MobileSeparator />
@@ -845,8 +857,21 @@ export function ActionsDropdown({
               {t('actionsMenu.createSubtask')}
             </DropdownMenuItem>
             <DropdownMenuItem
-              disabled={!projectId || !task || triggerBreakdown.isPending}
+              disabled={
+                !projectId ||
+                !task ||
+                triggerBreakdown.isPending ||
+                usesSharedWorktree
+              }
               onClick={handleBreakdown}
+              title={
+                usesSharedWorktree
+                  ? t(
+                      'actionsMenu.sharedWorktreeNoSubtask',
+                      'Cannot create subtasks for tasks using a shared worktree'
+                    )
+                  : undefined
+              }
             >
               <Hammer className="mr-2 h-4 w-4" />
               {t('breakdown.action', 'Break down')}

@@ -450,3 +450,49 @@ the enumerated gates remain as the itemized evidence).
   31/31 green; `npx tsc --noEmit` exit 0; `npm run lint` exit 0; `npx prettier --write` reformatted
   `actions-dropdown.tsx` (wrapped `useBreakdownProposal` call), `--check` clean after on all seven
   touched files.
+
+### Corrections (adversarial panel, 2026-08-09)
+
+- **Key count correction**: the earlier "15-key `breakdown` object, 13 keys used by
+  `BreakdownReviewDialog` + 2 new" note was miscounted. Locale files (`en/ja/ko/es`) each carry
+  **14 keys** in the `breakdown` object; `BreakdownReviewDialog.tsx` consumes **12** of them
+  (`title`, `running`, `failedGeneric`, `retry`, `accept`, `discard`, `itemTitle`,
+  `itemDescription`, `dependencies`, `moveUp`, `moveDown`, `deleteItem`). The remaining 2
+  (`action`, `proposedBadge`) are consumed by `TaskCard`/`ActionsDropdown`. No key is orphaned; the
+  prior note's "13 keys used by the dialog" was off by one.
+
+- **F1 — badge visibility gated on status (BLOCKING, fixed)**: `TaskCard`'s proposed-subtasks badge
+  previously rendered whenever `breakdownProposal` was truthy — but the server returns the *latest*
+  proposal regardless of terminal state, so an accepted or discarded proposal left the badge
+  permanently stuck. Fixed to `breakdownProposal?.status === 'draft'`. Only a `draft` proposal shows
+  the badge; `accepted`/`discarded`/`failed` do not. Tests added: badge hidden for `status:
+  'accepted'` and `status: 'discarded'`; existing badge tests' mock proposals updated to carry
+  `status: 'draft'` explicitly.
+
+- **F2 — re-trigger over terminal proposals (BLOCKING, fixed)**: `handleBreakdown` in
+  `actions-dropdown.tsx` previously skipped `trigger.mutateAsync()` whenever *any* proposal existed,
+  including terminal ones — so clicking "Break down" after a discard/accept opened the review dialog
+  on a dead proposal with no controls and no recovery path. The backend's one-draft unique index
+  (`crates/db/migrations/20260807000000_add_task_breakdown.sql`, partial index `WHERE status =
+  'draft'`) only blocks a second concurrent `draft` row, so re-triggering over a terminal proposal is
+  legitimate and creates a fresh draft. Fixed rule: trigger first when there is **no** proposal, or
+  the latest proposal's `status` is `accepted` or `discarded`; skip the trigger and show the dialog
+  directly when `status` is `draft` or `failed` (a `failed` proposal's dialog offers Retry). Tests
+  added: discarded → trigger called; accepted → trigger called; failed → dialog shown without
+  triggering (existing draft-skips-trigger case unchanged).
+
+- **F3 — shared-worktree guard mirrored onto Break down**: the adjacent `createSubtask` action was
+  already disabled (with a tooltip) for tasks using a shared worktree
+  (`usesSharedWorktree` from `useTaskUsesSharedWorktree`), but `Break down` had no such guard even
+  though accepting a breakdown creates child tasks of the same parent — the frontend gate was the
+  only guard against that on the accept path. Mirrored the exact `createSubtask` idiom onto the
+  `Break down` `DropdownMenuItem` (desktop: `disabled` includes `usesSharedWorktree` +
+  `title` tooltip using `actionsMenu.sharedWorktreeNoSubtask`) and the mobile `MobileMenuItem`
+  (`disabled` includes `usesSharedWorktree`, matching `createSubtask`'s mobile branch which also has
+  no tooltip prop available). **Coverage boundary**: a click-behavior test (disabled item should not
+  invoke `trigger`/open the dialog) was attempted but `fireEvent.click` in jsdom does not honor
+  Radix's `pointer-events: none` disabled styling, so the handler still fires under `fireEvent`. The
+  added test instead asserts the rendered `DropdownMenuItem` carries `data-disabled` and
+  `aria-disabled="true"` when `usesSharedWorktree` is true — verifying the disabled state is applied,
+  not the runtime click-suppression (which is Radix's own behavior, exercised by Radix's test suite,
+  not this app's).

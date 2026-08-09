@@ -289,7 +289,7 @@ export function TaskCard({
             <CompactLabelList labels={labels} maxVisible={2} size="sm" />
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            {breakdownProposal && (
+            {breakdownProposal?.status === 'draft' && (
               <span
                 className={cn(
                   'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
