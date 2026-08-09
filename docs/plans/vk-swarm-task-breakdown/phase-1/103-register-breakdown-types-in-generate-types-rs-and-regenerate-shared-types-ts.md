@@ -2,7 +2,7 @@
 id: "103"
 phase: 1
 title: "Register breakdown types in generate_types.rs and regenerate shared/types.ts"
-status: ready
+status: passed
 depends_on: ["102"]
 parallel: false
 conflicts_with: []
