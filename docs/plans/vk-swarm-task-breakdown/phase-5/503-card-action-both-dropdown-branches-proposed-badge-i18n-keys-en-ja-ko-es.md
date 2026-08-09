@@ -2,7 +2,7 @@
 id: "503"
 phase: 5
 title: "Card action (both dropdown branches) + proposed badge + i18n keys (en/ja/ko/es)"
-status: ready
+status: passed
 depends_on: ["502"]
 parallel: false
 conflicts_with: []
