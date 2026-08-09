@@ -164,3 +164,38 @@ the enumerated gates remain as the itemized evidence).
   added @vitest/coverage-v8 without refreshing the npm lock; surfaced by this run's npm steps).
 - [orchestrator] Panel observation (not a 204 defect): has_running_processes_for_attempt still
   counts Breakdown as "running" — revisit at task 301 (API layer) whether that is desired.
+
+## Task 202
+
+- [Task 202] BreakdownService implemented as stateless `#[derive(Clone)]` struct with no fields,
+  mirroring CLAUDE.md conventions and the pattern established by GitService. — crates/services/src/services/breakdown.rs
+- [Task 202] BreakdownResult / BreakdownSubtask deserialization: subtasks vector contains title,
+  optional description, and zero-based depends_on indices (usize). Serialization derives Serialize
+  for JSON exchange. — crates/services/src/services/breakdown.rs
+- [Task 202] BreakdownError enum with #[from] on Db(sqlx::Error) and Json(serde_json::Error) for
+  transparent propagation; custom variants (NoResult, Empty, TooFew, EmptyTitle, InvalidDependency)
+  for parser validation failures. — crates/services/src/services/breakdown.rs
+- [Task 202] breakdown_prompt(title, description) generates exact template with GOAL TITLE,
+  GOAL DESCRIPTION, JSON schema, and read-only instruction; format string matches task spec verbatim
+  with literal newlines. — crates/services/src/services/breakdown.rs
+- [Task 202] parse_breakdown_result two-stage parsing: (1) iterate stdout lines, deserialize each
+  as serde_json::Value, substitute {"type":"result","result":"..."} with its result field (unwraps
+  stream-JSON format); (2) over the resulting text, scan for the LAST ```json...``` block and
+  deserialize as BreakdownResult. Validation gates: ≥2 subtasks (Empty if 0, TooFew if 1), non-empty
+  titles, all depends_on indices in range [0, len) and != self-index. Upper bound of 10 NOT enforced
+  (lenient, as mandated). — crates/services/src/services/breakdown.rs
+- [Task 202] persist_result maps each subtask to ProposalItemInput (sort_order = index as i64;
+  depends_on_indices = subtask.depends_on.iter().map(|&i| i as i64).collect()); calls
+  task_breakdown::replace_items. Does not mutate proposal status (remains Draft). Errors mapped via
+  map_err(BreakdownError::Db). — crates/services/src/services/breakdown.rs
+- [Task 202] fail_proposal calls task_breakdown::update_status with BreakdownStatus::Failed and the
+  provided error text. — crates/services/src/services/breakdown.rs
+- [Task 202] extract_stdout_lines retrieves ExecutionProcessLogs::find_by_execution_id records,
+  parses JSONL via parse_logs(), filters for LogMsg::Stdout, and returns Vec<String>. — crates/services/src/services/breakdown.rs
+- [Task 202] All 6 required tests implemented and passing: test_parse_last_fenced_json_block,
+  test_parse_missing_block_errs, test_parse_rejects_bad_indices, test_parse_rejects_empty,
+  test_prompt_contains_contract, test_parse_stream_json_stdout. — crates/services/src/services/breakdown.rs
+- [Task 202] pub mod breakdown; added alphabetically in services/mod.rs between auth and config
+  (per alphabetical ordering). — crates/services/src/services/mod.rs
+- [Task 202] Verification: cargo test -p services 224 passed; cargo clippy -p services --all-targets
+  clean; all breakdown tests green. — CLEAN
