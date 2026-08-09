@@ -379,6 +379,18 @@ export type CreateTask = { project_id: string, title: string, description: strin
 
 export type UpdateTask = { title: string | null, description: string | null, status: TaskStatus | null, parent_task_id: string | null, image_ids: Array<string> | null, };
 
+export type TaskBreakdownProposal = { id: string, task_id: string, status: BreakdownStatus, execution_process_id: string | null, error: string | null, created_at: Date, updated_at: Date, };
+
+export type TaskBreakdownProposalItem = { id: string, proposal_id: string, title: string, description: string | null, sort_order: bigint, depends_on_item_ids: string, created_at: Date, };
+
+export type BreakdownStatus = "draft" | "accepted" | "discarded" | "failed";
+
+export type UpsertProposalItems = { items: Array<ProposalItemInput>, };
+
+export type ProposalItemInput = { title: string, description: string | null, sort_order: bigint, depends_on_indices: Array<bigint>, };
+
+export type TaskDependency = { task_id: string, depends_on_task_id: string, created_at: Date, };
+
 export type Image = { id: string, file_path: string, original_name: string, mime_type: string | null, size_bytes: bigint, hash: string, created_at: string, updated_at: string, };
 
 export type CreateImage = { file_path: string, original_name: string, mime_type: string | null, size_bytes: bigint, hash: string, };
