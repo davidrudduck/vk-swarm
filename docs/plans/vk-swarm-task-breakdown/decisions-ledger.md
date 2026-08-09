@@ -102,3 +102,28 @@ the enumerated gates remain as the itemized evidence).
   Red-first discipline preserved inside each implementer dispatch; gate + panel remain unchanged.
 - [orchestrator] Task 101 human gate: approved by David 2026-08-09 (AskUserQuestion, full-loop
   authorization); token at reviews/101.approved.
+
+## Task 102
+
+- [Task 102] accept_proposal enqueues node_outbox `task.upsert` ops INSIDE its transaction with
+  errors propagated (aborting accept) — deliberate, pre-authorized divergence from Task::create's
+  documented best-effort post-insert enqueue; acceptance requires all-or-nothing. No refactor of
+  task/queries.rs; the INSERT columns/op_type/payload/idempotency-key derivation mirror
+  enqueue_task_upsert_op + OutboxRepository::enqueue_op. — mandated by task text —
+  crates/db/src/models/task_breakdown/queries.rs
+- [Task 102] Validation/business-rule failures (self/dangling depends_on_indices, non-draft
+  mutations, unresolvable item refs at accept) are surfaced as sqlx::Error::Protocol — the task
+  specified "error" without a type; module returns sqlx::Error everywhere like the task sibling,
+  and Protocol is the crate's existing pattern for non-DB failures (see enqueue_op payload
+  serialization). — crates/db/src/models/task_breakdown/queries.rs
+- [Task 102] Return types not specified by the task: replace_items returns
+  Result<Vec<TaskBreakdownProposalItem>>, update_status and link_execution_process return
+  Result<TaskBreakdownProposal> — RETURNING the touched row(s) matches the sibling's
+  create/update style. — crates/db/src/models/task_breakdown/queries.rs
+- [Task 102] sqlx offline metadata regenerated via the repo's existing `node scripts/prepare-db.js`
+  workflow; 15 new query-*.json files added under crates/db/.sqlx (no existing entries removed).
+  — crates/db/.sqlx/
+- [Task 102] Test 4's execution_processes/task_attempts fixture rows mirror the runtime-query
+  helpers in crates/db/src/models/execution_process/queries.rs tests (create_test_attempt /
+  execution INSERT shapes), as directed ("mirror however sibling tests create execution
+  processes"). — crates/db/src/models/task_breakdown/mod.rs

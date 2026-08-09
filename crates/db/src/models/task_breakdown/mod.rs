@@ -1,0 +1,404 @@
+//! Task breakdown proposals: node-local draft decompositions of a task.
+//!
+//! A proposal is a reviewable draft set of child-task items for a parent task.
+//! Proposals never sync to the hive; only acceptance creates real tasks (which
+//! sync via the existing `task.upsert` outbox path).
+
+mod queries;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+use ts_rs::TS;
+use uuid::Uuid;
+
+pub use queries::{
+    accept_proposal, create, find_by_execution_process_id, find_by_id, find_by_task_id,
+    find_dependencies, find_items, link_execution_process, replace_items, update_status,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "breakdown_status", rename_all = "lowercase")]
+pub enum BreakdownStatus {
+    Draft,
+    Accepted,
+    Discarded,
+    Failed,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, TS)]
+pub struct TaskBreakdownProposal {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub status: BreakdownStatus,
+    pub execution_process_id: Option<Uuid>,
+    pub error: Option<String>,
+    #[ts(type = "Date")]
+    pub created_at: DateTime<Utc>,
+    #[ts(type = "Date")]
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, TS)]
+pub struct TaskBreakdownProposalItem {
+    pub id: Uuid,
+    pub proposal_id: Uuid,
+    pub title: String,
+    pub description: Option<String>,
+    pub sort_order: i64,
+    pub depends_on_item_ids: String, // JSON array of item Uuids
+    #[ts(type = "Date")]
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct UpsertProposalItems {
+    pub items: Vec<ProposalItemInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ProposalItemInput {
+    pub title: String,
+    pub description: Option<String>,
+    pub sort_order: i64,
+    pub depends_on_indices: Vec<i64>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, TS)]
+pub struct TaskDependency {
+    pub task_id: Uuid,
+    pub depends_on_task_id: Uuid,
+    #[ts(type = "Date")]
+    pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        project::{CreateProject, Project},
+        task::{CreateTask, Task},
+    };
+    use crate::test_utils::create_test_pool;
+    use sqlx::SqlitePool;
+
+    async fn create_project(pool: &SqlitePool) -> Uuid {
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(pool, &project_data, project_id)
+            .await
+            .expect("Failed to create project");
+        project_id
+    }
+
+    async fn create_task(pool: &SqlitePool, project_id: Uuid) -> Uuid {
+        let task_id = Uuid::new_v4();
+        let task_data = CreateTask::from_title_description(
+            project_id,
+            "Parent Task".to_string(),
+            Some("Description".to_string()),
+        );
+        Task::create(pool, &task_data, task_id)
+            .await
+            .expect("Failed to create task");
+        task_id
+    }
+
+    async fn create_test_attempt(pool: &SqlitePool, task_id: Uuid) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref)
+               VALUES ($1, $2, 'CLAUDE_CODE', 'test-branch', 'main', '/tmp/test-worktree')"#,
+        )
+        .bind(id)
+        .bind(task_id)
+        .execute(pool)
+        .await
+        .expect("create attempt");
+        id
+    }
+
+    async fn create_execution_process(pool: &SqlitePool, attempt_id: Uuid) -> Uuid {
+        let exec_id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO execution_processes (id, task_attempt_id, status, run_reason, executor_action)
+               VALUES ($1, $2, 'completed', 'codingagent', '{}')"#,
+        )
+        .bind(exec_id)
+        .bind(attempt_id)
+        .execute(pool)
+        .await
+        .expect("create execution");
+        exec_id
+    }
+
+    fn item(title: &str, sort_order: i64, depends_on_indices: Vec<i64>) -> ProposalItemInput {
+        ProposalItemInput {
+            title: title.to_string(),
+            description: None,
+            sort_order,
+            depends_on_indices,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_proposal_crud_and_one_draft_constraint() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+        assert_eq!(proposal.task_id, task_id);
+        assert_eq!(proposal.status, BreakdownStatus::Draft);
+
+        let found = find_by_task_id(&pool, task_id)
+            .await
+            .expect("find_by_task_id")
+            .expect("proposal not found");
+        assert_eq!(found.id, proposal.id);
+
+        // Second draft for the same task violates the one-draft unique index.
+        let second = create(&pool, task_id).await;
+        assert!(second.is_err(), "second draft for same task must error");
+
+        // Discard the first; a new draft is then allowed.
+        update_status(&pool, proposal.id, BreakdownStatus::Discarded, None)
+            .await
+            .expect("update_status");
+        let new_draft = create(&pool, task_id)
+            .await
+            .expect("new draft after discard");
+        assert_eq!(new_draft.status, BreakdownStatus::Draft);
+    }
+
+    #[tokio::test]
+    async fn test_cascade_delete() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+        replace_items(
+            &pool,
+            proposal.id,
+            vec![item("A", 0, vec![]), item("B", 1, vec![])],
+        )
+        .await
+        .expect("replace_items");
+        assert_eq!(find_items(&pool, proposal.id).await.unwrap().len(), 2);
+
+        // Delete the parent task row; cascade removes proposal and items.
+        Task::delete(&pool, task_id).await.expect("delete task");
+
+        let gone = find_by_id(&pool, proposal.id).await.expect("find_by_id");
+        assert!(gone.is_none(), "proposal must be cascade-deleted");
+        assert!(
+            find_items(&pool, proposal.id).await.unwrap().is_empty(),
+            "items must be cascade-deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accept_transaction_atomic() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+        replace_items(
+            &pool,
+            proposal.id,
+            vec![item("A", 0, vec![]), item("B", 1, vec![0])],
+        )
+        .await
+        .expect("replace_items");
+
+        let children = accept_proposal(&pool, proposal.id)
+            .await
+            .expect("accept_proposal");
+        assert_eq!(children.len(), 2);
+        for child in &children {
+            assert_eq!(child.parent_task_id, Some(task_id));
+            assert_eq!(child.project_id, project_id);
+        }
+        let a_task = children.iter().find(|t| t.title == "A").unwrap();
+        let b_task = children.iter().find(|t| t.title == "B").unwrap();
+
+        // Exactly one dependency edge: B -> A.
+        let deps = find_dependencies(&pool, b_task.id)
+            .await
+            .expect("find_dependencies");
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].task_id, b_task.id);
+        assert_eq!(deps[0].depends_on_task_id, a_task.id);
+        assert!(
+            find_dependencies(&pool, a_task.id).await.unwrap().is_empty(),
+            "A has no dependencies"
+        );
+
+        let accepted = find_by_id(&pool, proposal.id)
+            .await
+            .unwrap()
+            .expect("proposal exists");
+        assert_eq!(accepted.status, BreakdownStatus::Accepted);
+
+        // node_outbox contains a task.upsert row for EACH child (filtered by
+        // entity_id; parent task setup also enqueues a row — no absolute count).
+        for child in &children {
+            let count: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM node_outbox WHERE op_type = 'task.upsert' AND entity_id = ?",
+            )
+            .bind(child.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(count.0, 1, "one task.upsert outbox row per child");
+        }
+
+        // Rollback proof: a proposal whose item references a NON-EXISTENT item id.
+        let bad_proposal = create(&pool, task_id).await.expect("new draft");
+        let bad_item_id = Uuid::new_v4();
+        let dangling_ref = serde_json::to_string(&vec![Uuid::new_v4()]).unwrap();
+        sqlx::query(
+            r#"INSERT INTO task_breakdown_proposal_items (id, proposal_id, title, sort_order, depends_on_item_ids)
+               VALUES ($1, $2, 'Dangling', 0, $3)"#,
+        )
+        .bind(bad_item_id)
+        .bind(bad_proposal.id)
+        .bind(&dangling_ref)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let tasks_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tasks")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let edges_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM task_dependencies")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let outbox_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM node_outbox")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let result = accept_proposal(&pool, bad_proposal.id).await;
+        assert!(result.is_err(), "dangling item ref must abort accept");
+
+        let tasks_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tasks")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let edges_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM task_dependencies")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let outbox_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM node_outbox")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(tasks_before.0, tasks_after.0, "no new tasks (rollback)");
+        assert_eq!(edges_before.0, edges_after.0, "no new edges (rollback)");
+        assert_eq!(outbox_before.0, outbox_after.0, "no new outbox rows (rollback)");
+    }
+
+    #[tokio::test]
+    async fn test_find_by_execution_process_id_exact() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let attempt_id = create_test_attempt(&pool, task_id).await;
+        let p1 = create_execution_process(&pool, attempt_id).await;
+        let p2 = create_execution_process(&pool, attempt_id).await;
+
+        // Historical discarded proposal linked to P1.
+        let historical = create(&pool, task_id).await.expect("create historical");
+        link_execution_process(&pool, historical.id, p1)
+            .await
+            .expect("link P1");
+        update_status(&pool, historical.id, BreakdownStatus::Discarded, None)
+            .await
+            .expect("discard");
+
+        // Current draft linked to P2.
+        let draft = create(&pool, task_id).await.expect("create draft");
+        link_execution_process(&pool, draft.id, p2)
+            .await
+            .expect("link P2");
+
+        let by_p2 = find_by_execution_process_id(&pool, p2)
+            .await
+            .unwrap()
+            .expect("P2 proposal");
+        assert_eq!(by_p2.id, draft.id);
+        assert_eq!(by_p2.status, BreakdownStatus::Draft);
+
+        let by_p1 = find_by_execution_process_id(&pool, p1)
+            .await
+            .unwrap()
+            .expect("P1 proposal");
+        assert_eq!(by_p1.id, historical.id);
+        assert_eq!(by_p1.status, BreakdownStatus::Discarded);
+
+        let none = find_by_execution_process_id(&pool, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(none.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_replace_items_rejects_self_and_dangling_refs() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+
+        // Seed valid items.
+        replace_items(
+            &pool,
+            proposal.id,
+            vec![item("A", 0, vec![]), item("B", 1, vec![0])],
+        )
+        .await
+        .expect("initial replace_items");
+        let before = find_items(&pool, proposal.id).await.unwrap();
+        assert_eq!(before.len(), 2);
+
+        // Self-reference: item 0 depends on index 0.
+        let result = replace_items(&pool, proposal.id, vec![item("Selfish", 0, vec![0])]).await;
+        assert!(result.is_err(), "self-reference must be rejected");
+        let after_self = find_items(&pool, proposal.id).await.unwrap();
+        assert_eq!(after_self.len(), 2, "previous items remain after self-ref rejection");
+        assert_eq!(after_self[0].title, "A");
+        assert_eq!(after_self[1].title, "B");
+
+        // Out-of-range index.
+        let result = replace_items(&pool, proposal.id, vec![item("Dangler", 0, vec![5])]).await;
+        assert!(result.is_err(), "out-of-range index must be rejected");
+        let after_dangling = find_items(&pool, proposal.id).await.unwrap();
+        assert_eq!(after_dangling.len(), 2, "previous items remain after dangling rejection");
+
+        // updated_at refreshes on a successful replace_items.
+        let updated_at_before = find_by_id(&pool, proposal.id).await.unwrap().unwrap().updated_at;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        replace_items(&pool, proposal.id, vec![item("C", 0, vec![])])
+            .await
+            .expect("successful replace_items");
+        let updated_at_after = find_by_id(&pool, proposal.id).await.unwrap().unwrap().updated_at;
+        assert!(
+            updated_at_after > updated_at_before,
+            "updated_at must refresh on replace_items"
+        );
+    }
+}
