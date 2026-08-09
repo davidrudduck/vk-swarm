@@ -680,3 +680,17 @@ satisfied by conditioning: `container_ref.is_none() → create(), else ensure_co
 (mirrors `start_attempt` container.rs:1207-1209). Fixed same-session; fmt/clippy/`cargo test -p
 services` green (normalize_sync_test full-suite flake re-passed isolated, as ledgered at 204).
 This is precisely the failure class the `## Deploy verification` gate exists to catch.
+
+## Deploy-verification finding DV-2 (2026-08-09) — run_reason CHECK constraint missing 'breakdown'
+
+After DV-1's fix, the live re-trigger failed at process insert: `CHECK constraint failed:
+run_reason IN ('setupscript','cleanupscript','codingagent','devserver')`. Task 201 added the
+`Breakdown` variant to the Rust enum + TS union, but no migration widened the DB CHECK on
+`execution_processes.run_reason` — a plan gap (the decompose never anchored the CHECK
+constraint), invisible to every repo gate because tests build the schema via migrations and no
+test inserted run_reason='breakdown' through raw SQL with the CHECK enforced... it IS enforced;
+no test exercised an ExecutionProcess insert with the Breakdown reason (test-honesty gap at the
+DB seam). Fix: migration 20260809000000_add_breakdown_to_run_reason_constraint.sql, a column-swap
+mirroring 20250720000000 (SQLite cannot alter a CHECK), plus DROP/CREATE of v_workstream_state
+(projects ep.run_reason; DROP COLUMN refuses while the view exists — caught by cargo test -p db).
+.sqlx regenerated. `cargo test --workspace` fully green post-fix.
