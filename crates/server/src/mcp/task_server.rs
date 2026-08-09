@@ -1455,12 +1455,33 @@ impl TaskServer {
     ) -> Result<CallToolResult, ErrorData> {
         let url = self.url(&format!("/api/tasks/{}/breakdown", task_id));
 
-        let value: serde_json::Value = match self.send_json(self.client.get(&url)).await {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
+        // Local variant of `send_json`: the breakdown endpoint legitimately returns
+        // {"success": true, "data": null} when the task has no proposal yet, so a
+        // missing `data` field must not be treated as an error here.
+        let resp = match self.client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => return Self::err("Failed to connect to VK API", Some(&e.to_string())),
         };
 
-        TaskServer::success(&value)
+        if !resp.status().is_success() {
+            let status = resp.status();
+            return Self::err(format!("VK API returned error status: {}", status), None);
+        }
+
+        let api_response = match resp.json::<ApiResponseEnvelope<serde_json::Value>>().await {
+            Ok(v) => v,
+            Err(e) => return Self::err("Failed to parse VK API response", Some(&e.to_string())),
+        };
+
+        if !api_response.success {
+            let msg = api_response.message.as_deref().unwrap_or("Unknown error");
+            return Self::err("VK API returned error", Some(msg));
+        }
+
+        match api_response.data {
+            Some(value) => TaskServer::success(&value),
+            None => TaskServer::success(&serde_json::json!({ "proposal": null })),
+        }
     }
 
     #[tool(
@@ -1685,6 +1706,29 @@ mod tests {
         assert!(result.is_error.unwrap_or(false));
         let text = extract_text(&result);
         assert!(text.contains("no proposal exists"));
+    }
+
+    #[tokio::test]
+    async fn get_breakdown_null_data_is_success_with_null_proposal() {
+        let (base_url, _captured, canned) = spawn_mock_server().await;
+        *canned.lock().unwrap() = serde_json::json!({
+            "success": true,
+            "data": null,
+            "message": null,
+        });
+
+        let server = TaskServer::new(&base_url);
+        let result = server
+            .get_breakdown(Parameters(GetBreakdownRequest {
+                task_id: "task-123".to_string(),
+            }))
+            .await
+            .expect("tool call should not error");
+
+        assert!(!result.is_error.unwrap_or(false));
+        let text = extract_text(&result);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        assert!(value["proposal"].is_null());
     }
 
     #[tokio::test]

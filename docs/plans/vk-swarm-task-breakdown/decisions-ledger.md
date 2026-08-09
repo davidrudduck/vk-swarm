@@ -315,3 +315,9 @@ the enumerated gates remain as the itemized evidence).
 - [Task 401] Verification: `cargo test -p server` (7/7 new tests + full suite) green;
   `cargo clippy -p server --all-targets` clean; `cargo fmt -p server` then
   `cargo fmt --all -- --check` → 0 diffs. — CLEAN
+- [Task 401] panel F1 fix: get_breakdown tolerates data:null (task with no proposal) returning
+  success instead of "missing data field" error; implemented as a small local variant of the
+  send_json envelope handling inside get_breakdown only (send_json untouched); null payload
+  representation chosen: `{"proposal": null}` (explicit key mirrors the populated shape's
+  `proposal` field so callers can branch on it). Test added:
+  `get_breakdown_null_data_is_success_with_null_proposal`. — crates/server/src/mcp/task_server.rs
