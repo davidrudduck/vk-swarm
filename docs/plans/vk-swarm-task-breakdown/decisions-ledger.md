@@ -290,3 +290,28 @@ the enumerated gates remain as the itemized evidence).
   lib test that reads those vars would observe leakage. No other server lib test currently reads
   them, so this is latent, not active.
 - [Task 301] panel F1/F2 fixes: handler bodies deduplicated into pub(crate) *_impl fns so tests exercise the REAL code path (get_breakdown_impl, retry_impl); retry Failed-only gate now covered both directions.
+
+## Task 401
+- [Task 401] break_down_task/get_breakdown/accept_breakdown tools added to
+  crates/server/src/mcp/task_server.rs following the create_task/list_nodes pattern exactly
+  (request struct with schemars derive, self.url(...), self.send_json, TaskServer::success).
+  break_down_task/accept_breakdown POST with no request body (server-side reads task_id/
+  proposal_id from the path only, matching the existing stop_task_attempt-style no-body POSTs
+  in this file); get_breakdown GETs. All three deserialize the proxied response as
+  serde_json::Value (no local response DTOs) since the breakdown proposal/item/created-task
+  shapes are already defined server-side in routes::breakdown and re-serializing them locally
+  would duplicate that contract for no benefit — matches how list_nodes' peers avoid redefining
+  types where a passthrough suffices, but list_nodes itself does define a summary type, so this
+  is a deliberate deviation, noted here rather than guessed silently.
+  — crates/server/src/mcp/task_server.rs
+- [Task 401] Real-proxy test coverage: a `#[cfg(test)] mod tests` was added at file end, binding
+  an axum router on `127.0.0.1:0` via `TcpListener` per test, capturing method/path/body and
+  replying with a caller-configured canned ApiResponse envelope. Verifies exact method+path
+  (incl. id interpolation), that break_down_task/accept_breakdown send empty bodies, that a
+  success envelope's `data` surfaces in the CallToolResult content, and that a `success:false`
+  envelope's `message` propagates into an error CallToolResult (is_error=true) rather than being
+  swallowed. A supplementary `tool_router()` registration test confirms all three tool names are
+  registered. — crates/server/src/mcp/task_server.rs
+- [Task 401] Verification: `cargo test -p server` (7/7 new tests + full suite) green;
+  `cargo clippy -p server --all-targets` clean; `cargo fmt -p server` then
+  `cargo fmt --all -- --check` → 0 diffs. — CLEAN
