@@ -2,7 +2,7 @@
 id: "602"
 phase: 6
 title: "create_task auto-trigger hook (fire-and-forget, opt-in)"
-status: ready
+status: passed
 depends_on: ["601","301"]
 parallel: false
 conflicts_with: []
