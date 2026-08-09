@@ -2,7 +2,7 @@
 id: "102"
 phase: 1
 title: "db model module task_breakdown: structs, queries, accept transaction, tests"
-status: ready
+status: passed
 depends_on: ["101"]
 parallel: false
 conflicts_with: []
@@ -10,6 +10,21 @@ files:
   - "crates/db/src/models/task_breakdown/mod.rs"
   - "crates/db/src/models/task_breakdown/queries.rs"
   - "crates/db/src/models/mod.rs"
+  - "crates/db/.sqlx/query-0bb9ead0e0e3820b77fa20400f179a167f7de364afbe0ffb2241a731468b8fff.json"
+  - "crates/db/.sqlx/query-108969fc6a6dd7be4ca43daf811827153f98cacf8d716cf67596eb8e86ac31d2.json"
+  - "crates/db/.sqlx/query-136d82bd62df6963ac1cfd32ec6d1307375802b886cc490ab0e3437bbefe4b53.json"
+  - "crates/db/.sqlx/query-3f4aca696664a6b33beb2eb00dde5fae10055c9fe2643a16709d895d0749b294.json"
+  - "crates/db/.sqlx/query-3fa7af7dfc29b4c985804e2b5e6ca37a49c195aac01793a5e021b46564e617d4.json"
+  - "crates/db/.sqlx/query-498c82eeb5730d9a5d4b6b6067fd214515717562b7ed01d66b9e750fa6bbc349.json"
+  - "crates/db/.sqlx/query-5b42033dc4fa1e0481e08b9c059d5f3ded542bb7cd5fc9d439356588b7f33a1b.json"
+  - "crates/db/.sqlx/query-6d409da081468120ef812a5a263d998dcb6889cf1c83bd0f73a3e8f90647905a.json"
+  - "crates/db/.sqlx/query-ac7a7ce390a91df610e1aa9918378235cb322a6993ae5c4d87ac557172aee233.json"
+  - "crates/db/.sqlx/query-b5d61df8b6f9110ab51b753dc3dbc2d0e5f3ee495c9af1a6e8edee5ee085cf35.json"
+  - "crates/db/.sqlx/query-d288dfac333b6b78db647fd3ce59fc272a9fb24b07bbd22f9d147e701316671b.json"
+  - "crates/db/.sqlx/query-d5f07b38d7bb0201a2e17491bfab6775e601702992c254e74dfd2a7c055f3e80.json"
+  - "crates/db/.sqlx/query-d9756beb1a856cc0ca520913a7751112520ba6e8079c34b26bc6963a809113da.json"
+  - "crates/db/.sqlx/query-e4eaaaac91b7cf15f1d23f34a0736c63092c334fd6f53c6d4858677d38b37071.json"
+  - "crates/db/.sqlx/query-f902b5d6f2b9d31e07f2166b808e0a8addd5e79dabf5eb886215946ef66ef9f9.json"
 siblings: ["crates/db/src/models/task/mod.rs","crates/db/src/models/task/queries.rs"]
 irreversible: false
 scope_test: "crates/db"
