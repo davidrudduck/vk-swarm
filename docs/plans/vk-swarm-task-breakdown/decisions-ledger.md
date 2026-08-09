@@ -159,3 +159,8 @@ the enumerated gates remain as the itemized evidence).
   finalize_task signatures/bodies.
 - [Task 204] panel-fix F1: create() -> ensure_container_exists (idempotent; matches every existing-attempt call site; create() would fail on existing branch and clear container_ref on error) — orchestrator-resolved underspecification — crates/services/src/services/container.rs
 - [Task 204] panel-fix F3: prior entry's "mirrors verbatim" overclaimed — skip_worktree_creation conditional and parent_project fetch are deliberately absent (project fetch only feeds setup/cleanup scripts, which breakdown omits); fmt was red on the test asserts, fixed in this commit.
+- [orchestrator hygiene] cargo fmt --all applied (task 102/103 commits left rustfmt red in
+  crates/db task_breakdown files); frontend/package-lock.json synced to package.json (PR #471
+  added @vitest/coverage-v8 without refreshing the npm lock; surfaced by this run's npm steps).
+- [orchestrator] Panel observation (not a 204 defect): has_running_processes_for_attempt still
+  counts Breakdown as "running" — revisit at task 301 (API layer) whether that is desired.

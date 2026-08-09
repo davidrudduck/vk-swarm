@@ -335,8 +335,8 @@ pub async fn accept_proposal(
 
     // Second pass: resolve depends_on_item_ids (JSON of item ids) to task_dependencies edges.
     for item in &items {
-        let dep_item_ids: Vec<Uuid> = serde_json::from_str(&item.depends_on_item_ids)
-            .map_err(|e| {
+        let dep_item_ids: Vec<Uuid> =
+            serde_json::from_str(&item.depends_on_item_ids).map_err(|e| {
                 sqlx::Error::Protocol(format!(
                     "item {}: invalid depends_on_item_ids JSON: {e}",
                     item.id

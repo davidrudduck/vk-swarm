@@ -242,7 +242,10 @@ mod tests {
         assert_eq!(deps[0].task_id, b_task.id);
         assert_eq!(deps[0].depends_on_task_id, a_task.id);
         assert!(
-            find_dependencies(&pool, a_task.id).await.unwrap().is_empty(),
+            find_dependencies(&pool, a_task.id)
+                .await
+                .unwrap()
+                .is_empty(),
             "A has no dependencies"
         );
 
@@ -310,7 +313,10 @@ mod tests {
             .unwrap();
         assert_eq!(tasks_before.0, tasks_after.0, "no new tasks (rollback)");
         assert_eq!(edges_before.0, edges_after.0, "no new edges (rollback)");
-        assert_eq!(outbox_before.0, outbox_after.0, "no new outbox rows (rollback)");
+        assert_eq!(
+            outbox_before.0, outbox_after.0,
+            "no new outbox rows (rollback)"
+        );
     }
 
     #[tokio::test]
@@ -473,7 +479,11 @@ mod tests {
         let result = replace_items(&pool, proposal.id, vec![item("Selfish", 0, vec![0])]).await;
         assert!(result.is_err(), "self-reference must be rejected");
         let after_self = find_items(&pool, proposal.id).await.unwrap();
-        assert_eq!(after_self.len(), 2, "previous items remain after self-ref rejection");
+        assert_eq!(
+            after_self.len(),
+            2,
+            "previous items remain after self-ref rejection"
+        );
         assert_eq!(after_self[0].title, "A");
         assert_eq!(after_self[1].title, "B");
 
@@ -481,15 +491,27 @@ mod tests {
         let result = replace_items(&pool, proposal.id, vec![item("Dangler", 0, vec![5])]).await;
         assert!(result.is_err(), "out-of-range index must be rejected");
         let after_dangling = find_items(&pool, proposal.id).await.unwrap();
-        assert_eq!(after_dangling.len(), 2, "previous items remain after dangling rejection");
+        assert_eq!(
+            after_dangling.len(),
+            2,
+            "previous items remain after dangling rejection"
+        );
 
         // updated_at refreshes on a successful replace_items.
-        let updated_at_before = find_by_id(&pool, proposal.id).await.unwrap().unwrap().updated_at;
+        let updated_at_before = find_by_id(&pool, proposal.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at;
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         replace_items(&pool, proposal.id, vec![item("C", 0, vec![])])
             .await
             .expect("successful replace_items");
-        let updated_at_after = find_by_id(&pool, proposal.id).await.unwrap().unwrap().updated_at;
+        let updated_at_after = find_by_id(&pool, proposal.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at;
         assert!(
             updated_at_after > updated_at_before,
             "updated_at must refresh on replace_items"
