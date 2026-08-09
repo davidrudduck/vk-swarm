@@ -89,16 +89,41 @@ impl BreakdownService {
     pub fn parse_breakdown_result(
         stdout_lines: &[String],
     ) -> Result<BreakdownResult, BreakdownError> {
-        // Stage 1: Substitute stream-JSON lines
+        // Stage 1: Substitute stream-JSON lines.
+        // The Claude executor's protocol reader breaks on the final {"type":"result"} line
+        // WITHOUT forwarding it to the log store (protocol.rs), so in production the fenced
+        // JSON block is only reachable inside {"type":"assistant"} events, JSON-escaped in
+        // message.content[].text. Substitute both shapes (DV-4).
         let mut text = String::new();
         for line in stdout_lines {
-            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(line)
-                && obj.get("type").and_then(|v| v.as_str()) == Some("result")
-                && let Some(result) = obj.get("result").and_then(|v| v.as_str())
-            {
-                text.push_str(result);
-                text.push('\n');
-                continue;
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) {
+                match obj.get("type").and_then(|v| v.as_str()) {
+                    Some("result") => {
+                        if let Some(result) = obj.get("result").and_then(|v| v.as_str()) {
+                            text.push_str(result);
+                            text.push('\n');
+                            continue;
+                        }
+                    }
+                    Some("assistant") => {
+                        if let Some(content) = obj
+                            .get("message")
+                            .and_then(|m| m.get("content"))
+                            .and_then(|c| c.as_array())
+                        {
+                            for part in content {
+                                if part.get("type").and_then(|v| v.as_str()) == Some("text")
+                                    && let Some(t) = part.get("text").and_then(|v| v.as_str())
+                                {
+                                    text.push_str(t);
+                                    text.push('\n');
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
             }
             text.push_str(line);
             text.push('\n');
@@ -428,6 +453,25 @@ mod tests {
         assert_eq!(result.subtasks.len(), 2);
         assert_eq!(result.subtasks[0].title, "Task1");
         assert_eq!(result.subtasks[1].title, "Task2");
+        assert_eq!(result.subtasks[1].depends_on, vec![0]);
+    }
+
+    #[test]
+    fn test_parse_assistant_event_without_result_line() {
+        // Real production seam (DV-4): the executor's protocol reader breaks on the final
+        // result line without logging it, so the ONLY place the fenced block appears is
+        // JSON-escaped inside {"type":"assistant"} message content. Shape captured from a
+        // live claude-code 2.1.114 breakdown run on 2026-08-09.
+        let lines = vec![
+            r#"{"type":"system","subtype":"init","session_id":"s1"}"#.to_string(),
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"```json"}}}"#.to_string(),
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Here is the breakdown.\n\n```json\n{\"subtasks\":[{\"title\":\"TaskA\",\"description\":null,\"depends_on\":[]},{\"title\":\"TaskB\",\"description\":null,\"depends_on\":[0]}]}\n```\n"}]},"session_id":"s1"}"#.to_string(),
+            r#"{"type":"stream_event","event":{"type":"message_stop"},"session_id":"s1"}"#.to_string(),
+        ];
+
+        let result = BreakdownService::parse_breakdown_result(&lines).unwrap();
+        assert_eq!(result.subtasks.len(), 2);
+        assert_eq!(result.subtasks[0].title, "TaskA");
         assert_eq!(result.subtasks[1].depends_on, vec![0]);
     }
 }

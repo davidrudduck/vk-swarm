@@ -694,3 +694,28 @@ DB seam). Fix: migration 20260809000000_add_breakdown_to_run_reason_constraint.s
 mirroring 20250720000000 (SQLite cannot alter a CHECK), plus DROP/CREATE of v_workstream_state
 (projects ep.run_reason; DROP COLUMN refuses while the view exists — caught by cargo test -p db).
 .sqlx regenerated. `cargo test --workspace` fully green post-fix.
+
+## Deploy-verification findings DV-3 + DV-4 (2026-08-09)
+
+**DV-3 (pre-existing, node-wide, NOT this branch):** every server-spawned Claude Code run on the
+node stalls after SessionStart hooks, before `system:init` — a normal codingagent control run
+stalled identically (no coding run had executed on this node since 2026-01-27). Isolated by manual
+repro: `npx @anthropic-ai/claude-code@2.1.114` with the executor's exact flags responds normally
+with `hooks:null` in the initialize control_request, but HANGS when sent the merged
+`~/.claude/settings.json` hooks payload (get_hooks_merged, crates/executors claude.rs:175) —
+protocol drift between the executor's initialize hooks shape and CLI 2.1.114. Workaround for this
+evidence run: hooks key temporarily removed from ~/.claude/settings.json (backup
+settings.json.bak-dv3, restored after capture). Filed as a backlog finding — executor fix is out
+of this workstream's scope.
+
+**DV-4 (real branch defect — parser dead on the real seam):** with DV-3 worked around, the agent
+ran to completion (exit 0) but the proposal failed with "No JSON result block found". The Claude
+protocol reader (crates/executors/src/executors/claude/protocol.rs:142-147) BREAKS on the final
+`{"type":"result"}` line without forwarding it to the log client, so parse stage A (result-line
+substitution) can never fire in production, and the fenced block exists only JSON-escaped inside
+`{"type":"assistant"}` events, invisible to stage B. Task 202's tests fed fabricated logs
+containing result lines — hollow-green at exactly this seam. Fix (contained to
+crates/services/src/services/breakdown.rs, no shared-executor change): stage 1 now also
+substitutes assistant-event `message.content[].text` blocks; new test
+`test_parse_assistant_event_without_result_line` pins the production shape (assistant events, NO
+result line) captured from the live 2026-08-09 run.
