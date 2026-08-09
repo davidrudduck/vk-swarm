@@ -2,7 +2,7 @@
 id: "204"
 phase: 2
 title: "Services-layer start_breakdown_attempt + finalize exclusion for Breakdown runs"
-status: ready
+status: passed
 depends_on: ["201"]
 parallel: false
 conflicts_with: []
