@@ -356,3 +356,43 @@ the enumerated gates remain as the itemized evidence).
 - [Task 501] panel F2 correction: prior entry claimed "mock invalidation capture" — false at the
   time (tests asserted API calls only); invalidation spies added in this commit. "option callbacks
   fire correctly" was tested only for trigger; unchanged (coverage boundary noted).
+
+## Task 502
+
+- [Task 502] BreakdownReviewDialog (frontend/src/components/dialogs/tasks/BreakdownReviewDialog.tsx)
+  — NiceModal.create + defineModal registration exactly per TaskFormSheet.tsx / DeleteTaskConfirmationDialog.tsx
+  precedent. Props `{ taskId, projectId }`. Uses `Dialog`/`DialogContent`/`DialogFooter` from
+  components/ui/dialog (same primitives as OAuthDialog).
+
+- [Task 502] No drag primitive available in the repo — used up/down icon buttons (ArrowUp/ArrowDown
+  from lucide-react) for reorder, as explicitly permitted by the task spec.
+
+- [Task 502] Dependency selection UI: no multi-select primitive exists in components/ui, so used a
+  checkbox list (existing `Checkbox` component) of sibling items, one row per other item.
+
+- [Task 502] Local edit model tracks dependencies by stable item key (the original proposal-item id)
+  rather than by array index. Reorder/delete therefore never need to walk and rewrite existing
+  dependency lists — the index-based `ProposalItemInput.depends_on_indices` payload is computed only
+  at commit time, from final array order. This was the simplest correct way to satisfy "delete remaps
+  surviving indices" and "reorder remaps indices" without a separate index-patching pass.
+
+- [Task 502] "Save" is implicit, not a separate footer button (footer only specifies
+  Discard/Accept per the task spec): title/description edits commit on blur; delete/reorder/dependency
+  toggle commit immediately. All commits call `putItems.mutate({ proposalId, payload })` via a single
+  `commit()` helper.
+
+- [Task 502] Running state condition: `status === 'draft' && items.length === 0 &&
+  !!execution_process_id` (proposal exists, stage-2 execution spawned, no items yet). Failed state
+  takes precedence when `status === 'failed'`.
+
+- [Task 502] i18n: all strings routed through `useTranslation('tasks')` under the `breakdown.` key
+  namespace, using the existing `t(key, fallback)` convention (see TaskFormSheet.tsx). The
+  `en/tasks.json` fallback-key exception was NOT invoked — the vitest run against the real
+  `I18nextProvider`/`@/i18n` harness passed cleanly using fallback strings only (missing keys
+  resolve to their fallback in react-i18next, they do not fail the test). No locale file was
+  touched.
+
+- [Task 502] Verification: 8/8 vitest cases pass first run (BreakdownReviewDialog.test.tsx);
+  `npx tsc --noEmit` exit 0; `npm run lint` exit 0 (one initial `no-use` eslint-comment error
+  fixed by removing an unneeded eslint-disable, then clean); `npx prettier --write` applied to
+  the component file, `--check` clean after.
