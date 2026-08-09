@@ -396,3 +396,9 @@ the enumerated gates remain as the itemized evidence).
   `npx tsc --noEmit` exit 0; `npm run lint` exit 0 (one initial `no-use` eslint-comment error
   fixed by removing an unneeded eslint-disable, then clean); `npx prettier --write` applied to
   the component file, `--check` clean after.
+
+- [Task 502] panel F4 fix (cross-task, touches 501's useBreakdown.ts): stable EMPTY_ITEMS reference — fresh [] identity caused an unbounded effect loop in the dialog while loading.
+
+- [Task 502] panel F1/F2 fixes: discriminating delete-index-0 remap test; Accept-disabled pinned for zero-items and save-in-flight.
+
+- [Task 502] panel F3 deferred to task 503 by design: tests assert English fallback strings because breakdown.* keys land in 503; 503 MUST add en keys matching the fallbacks byte-for-byte, then locale-parity tests take over.

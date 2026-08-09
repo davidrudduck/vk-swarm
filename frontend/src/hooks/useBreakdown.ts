@@ -42,6 +42,13 @@ export interface UseBreakdownMutationsOptions {
 }
 
 /**
+ * Stable empty-array reference so `items` keeps referential identity across
+ * renders while the query has no data (a fresh `[]` each render caused an
+ * unbounded effect loop in consumers that depend on `items` identity).
+ */
+const EMPTY_ITEMS: TaskBreakdownProposalItem[] = [];
+
+/**
  * Fetch the latest breakdown proposal (with items) for a task.
  * Returns null if no proposal exists.
  */
@@ -58,7 +65,7 @@ export function useBreakdownProposal(
 
   return {
     proposal: data?.proposal ?? null,
-    items: data?.items ?? [],
+    items: data?.items ?? EMPTY_ITEMS,
     isLoading,
     error: error instanceof Error ? error : null,
   };

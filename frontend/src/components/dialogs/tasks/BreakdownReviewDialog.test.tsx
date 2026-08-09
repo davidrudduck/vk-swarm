@@ -35,11 +35,13 @@ const {
   retryMutate,
   acceptMutate,
   capturedOptions,
+  pendingState,
 } = vi.hoisted(() => ({
   proposalState: {
     proposal: null as TaskBreakdownProposal | null,
     items: [] as TaskBreakdownProposalItem[],
   },
+  pendingState: { putItems: false, accept: false },
   putItemsMutate: vi.fn(),
   discardMutate: vi.fn(),
   retryMutate: vi.fn(),
@@ -68,7 +70,7 @@ vi.mock('@/hooks/useBreakdown', () => ({
   ) => {
     capturedOptions.current = options;
     return {
-      putItems: { mutate: putItemsMutate, isPending: false },
+      putItems: { mutate: putItemsMutate, isPending: pendingState.putItems },
       discard: {
         mutate: (proposalId: string) => {
           discardMutate(proposalId);
@@ -82,7 +84,7 @@ vi.mock('@/hooks/useBreakdown', () => ({
           acceptMutate(proposalId);
           options.onAcceptSuccess?.();
         },
-        isPending: false,
+        isPending: pendingState.accept,
       },
     };
   },
@@ -134,6 +136,8 @@ describe('BreakdownReviewDialog', () => {
     modalState.visible = true;
     proposalState.proposal = makeProposal();
     proposalState.items = [];
+    pendingState.putItems = false;
+    pendingState.accept = false;
   });
 
   it('renders items with titles and dependency chips', () => {
@@ -228,6 +232,52 @@ describe('BreakdownReviewDialog', () => {
     expect(screen.queryByDisplayValue('Item B')).not.toBeInTheDocument();
   });
 
+  it('remaps depends_on_indices when index 0 is deleted (shift-sensitive case)', () => {
+    // c depends on both a and b. Deleting a (index 0) forces every surviving
+    // index to shift: b becomes 0, so c's deps must be [0n]. A naive
+    // non-remapping implementation would emit [1n] (b's old index).
+    proposalState.items = [
+      makeItem({ id: 'a', title: 'Item A', sort_order: 0n }),
+      makeItem({
+        id: 'b',
+        title: 'Item B',
+        sort_order: 1n,
+      }),
+      makeItem({
+        id: 'c',
+        title: 'Item C',
+        sort_order: 2n,
+        depends_on_item_ids: '["a","b"]',
+      }),
+    ];
+
+    renderDialog();
+
+    const deleteButtons = screen.getAllByLabelText('Delete item');
+    // Delete Item A (index 0)
+    fireEvent.click(deleteButtons[0]);
+
+    expect(putItemsMutate).toHaveBeenCalledWith({
+      proposalId: 'proposal-1',
+      payload: {
+        items: [
+          {
+            title: 'Item B',
+            description: null,
+            sort_order: 0n,
+            depends_on_indices: [],
+          },
+          {
+            title: 'Item C',
+            description: null,
+            sort_order: 1n,
+            depends_on_indices: [0n],
+          },
+        ],
+      },
+    });
+  });
+
   it('produces an updated sort_order + remapped depends_on_indices on reorder', () => {
     proposalState.items = [
       makeItem({ id: 'a', title: 'Item A', sort_order: 0n }),
@@ -290,6 +340,53 @@ describe('BreakdownReviewDialog', () => {
 
     expect(discardMutate).toHaveBeenCalledWith('proposal-1');
     expect(mockRemove).toHaveBeenCalled();
+  });
+
+  it('disables Accept when the proposal has zero items (draft, no live run)', () => {
+    proposalState.proposal = makeProposal({
+      status: 'draft',
+      execution_process_id: null,
+    });
+    proposalState.items = [];
+
+    renderDialog();
+
+    const acceptButton = screen.getByText('Accept');
+    expect(acceptButton).toBeDisabled();
+
+    fireEvent.click(acceptButton);
+    expect(acceptMutate).not.toHaveBeenCalled();
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  it('disables Accept while a save (putItems) is in flight', () => {
+    proposalState.items = [
+      makeItem({ id: 'a', title: 'Item A', sort_order: 0n }),
+    ];
+    pendingState.putItems = true;
+
+    renderDialog();
+
+    const acceptButton = screen.getByText('Accept');
+    expect(acceptButton).toBeDisabled();
+
+    fireEvent.click(acceptButton);
+    expect(acceptMutate).not.toHaveBeenCalled();
+  });
+
+  it('disables Accept while the accept mutation is pending', () => {
+    proposalState.items = [
+      makeItem({ id: 'a', title: 'Item A', sort_order: 0n }),
+    ];
+    pendingState.accept = true;
+
+    renderDialog();
+
+    const acceptButton = screen.getByText('Accept');
+    expect(acceptButton).toBeDisabled();
+
+    fireEvent.click(acceptButton);
+    expect(acceptMutate).not.toHaveBeenCalled();
   });
 
   it("renders the localized error and a wired Retry button when status is 'failed'", () => {
