@@ -207,3 +207,27 @@ the enumerated gates remain as the itemized evidence).
 - [Task 202] panel F1/F2 fixes: chunks_to_lines buffering (chunk boundaries != line boundaries) and
   last-DESERIALIZING-block fallback (blocks exist but none parse → Json error from last attempted
   block; no blocks → NoResult).
+
+## Task 203
+
+- [Task 203] Exit-monitor breakdown-completion hook implementation: inserted after normalization
+  completion (line 882 in container.rs) and after log_batcher.finish (line 831). Reloads ExecutionContext
+  for status (unchanged since process exit) to check if run_reason is Breakdown. Recomputes success flag
+  from status/exit_code (process state immutable after exit). — crates/local-deployment/src/container.rs
+- [Task 203] handle_breakdown_completion private async fn added to LocalContainerService impl (after
+  try_commit_changes, before copy_project_files): retrieves TaskBreakdownProposal via
+  find_by_execution_process_id; if proposal not found, returns silently; if success=false, marks
+  proposal Failed with "executor run failed"; if success=true, chains extract_stdout_lines → parse_breakdown_result
+  → persist_result; on parse/persist error, marks proposal Failed with error text. Error logging on
+  each internal step per tracing idiom. — crates/local-deployment/src/container.rs
+- [Task 203] Condition modification: line 772 changed from `if success || cleanup_done` to
+  `if (success || cleanup_done) && !matches!(ctx.execution_process.run_reason, ExecutionProcessRunReason::Breakdown)`.
+  Rationale: Breakdown runs skip the commit/next-action/finalize path (delegated to 203's
+  handle_breakdown_completion and 204's should_finalize exclusion). — crates/local-deployment/src/container.rs
+- [Task 203] BreakdownService import added to services::services block (alphabetically before config).
+  Local-deployment already depends on services crate (Cargo.toml line 10). — crates/local-deployment/src/container.rs
+- [Task 203] No exit-monitor unit harness exists (would require process spawning); breakdown completion
+  covered by task 202's unit tests + live SC7 evidence from task 701. Follow-up recorded in workstream
+  README under Follow-ups section. — docs/plans/vk-swarm-task-breakdown/decisions-ledger.md
+- [Task 203] Verification: cargo test -p local-deployment passed; cargo check --workspace clean;
+  cargo clippy -p local-deployment --all-targets clean; cargo fmt -p local-deployment check clean. — CLEAN

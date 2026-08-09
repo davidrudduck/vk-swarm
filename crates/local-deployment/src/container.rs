@@ -42,6 +42,7 @@ use executors::{
 use futures::{FutureExt, StreamExt, TryStreamExt, stream::select};
 use services::services::{
     approvals::{Approvals, executor_approvals::ExecutorApprovalBridge},
+    breakdown::BreakdownService,
     config::Config,
     container::{ContainerError, ContainerRef, ContainerService},
     diff_stream::{self, DiffStreamHandle},
@@ -769,7 +770,12 @@ impl LocalContainerService {
                     ExecutionProcessStatus::Running
                 );
 
-                if success || cleanup_done {
+                if (success || cleanup_done)
+                    && !matches!(
+                        ctx.execution_process.run_reason,
+                        ExecutionProcessRunReason::Breakdown
+                    )
+                {
                     tracing::info!(
                         exec_id = %exec_id,
                         success = success,
@@ -877,6 +883,22 @@ impl LocalContainerService {
                             "Normalization timed out. Raw logs preserved in execution_process_logs."
                         );
                     }
+                }
+            }
+
+            // Process breakdown completion after logs are fully persisted (flushed and normalized)
+            if let Ok(ctx) = ExecutionProcess::load_context(&db.pool, exec_id).await {
+                // Recompute success after normalization; process status unchanged since exit
+                let success = matches!(
+                    ctx.execution_process.status,
+                    ExecutionProcessStatus::Completed
+                ) && exit_code == Some(0);
+
+                if matches!(
+                    ctx.execution_process.run_reason,
+                    ExecutionProcessRunReason::Breakdown
+                ) {
+                    container.handle_breakdown_completion(&ctx, success).await;
                 }
             }
 
@@ -1565,6 +1587,60 @@ RUST_LOG=info
         );
 
         Ok(())
+    }
+
+    /// Handle breakdown completion by parsing the execution output into proposal items.
+    ///
+    /// Extracts stdout from the execution process logs, parses the breakdown result,
+    /// and persists it to the database. On parse or persistence failure, marks the
+    /// proposal as failed.
+    async fn handle_breakdown_completion(&self, ctx: &ExecutionContext, success: bool) {
+        let pool = &self.db().pool;
+        let proposal = match db::models::task_breakdown::find_by_execution_process_id(
+            pool,
+            ctx.execution_process.id,
+        )
+        .await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::error!(execution_process_id = %ctx.execution_process.id, error = ?e, "breakdown proposal lookup failed");
+                return;
+            }
+        };
+        if !success {
+            if let Err(fe) =
+                BreakdownService::fail_proposal(pool, proposal.id, "executor run failed".into())
+                    .await
+            {
+                tracing::error!(proposal_id = %proposal.id, error = ?fe, "failed to mark breakdown proposal failed");
+            }
+            return;
+        }
+        match BreakdownService::extract_stdout_lines(pool, ctx.execution_process.id)
+            .await
+            .and_then(|lines| BreakdownService::parse_breakdown_result(&lines).map(|r| (lines, r)))
+        {
+            Ok((_lines, result)) => {
+                if let Err(e) = BreakdownService::persist_result(pool, proposal.id, &result).await {
+                    tracing::error!(proposal_id = %proposal.id, error = ?e, "breakdown persist failed");
+                    if let Err(fe) =
+                        BreakdownService::fail_proposal(pool, proposal.id, e.to_string()).await
+                    {
+                        tracing::error!(proposal_id = %proposal.id, error = ?fe, "failed to mark breakdown proposal failed");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(proposal_id = %proposal.id, error = ?e, "breakdown output unusable");
+                if let Err(fe) =
+                    BreakdownService::fail_proposal(pool, proposal.id, e.to_string()).await
+                {
+                    tracing::error!(proposal_id = %proposal.id, error = ?fe, "failed to mark breakdown proposal failed");
+                }
+            }
+        }
     }
 }
 
