@@ -128,6 +128,15 @@ pub fn build_resume_action(
 /// operator-facing escalation warning for a process stuck in D-state. See ADR-0005.
 const FENCE_ESCALATION_THRESHOLD: i64 = 5;
 
+/// Pure function to check if a run_reason should skip finalization.
+/// Returns true if the run reason is one that does not trigger task finalization (e.g., DevServer, Breakdown).
+fn run_reason_skips_finalize(run_reason: &ExecutionProcessRunReason) -> bool {
+    matches!(
+        run_reason,
+        ExecutionProcessRunReason::DevServer | ExecutionProcessRunReason::Breakdown
+    )
+}
+
 #[async_trait]
 pub trait ContainerService {
     fn msg_stores(&self) -> &Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>;
@@ -230,14 +239,12 @@ pub trait ContainerService {
 
     /// A context is finalized when
     /// - Always when the execution process has failed or been killed
-    /// - Never when the run reason is DevServer
+    /// - Never when the run reason is DevServer or Breakdown
     /// - Never when the run reason is SetupScript with no next_action (parallel mode)
     /// - The next action is None (no follow-up actions)
     fn should_finalize(&self, ctx: &ExecutionContext) -> bool {
-        if matches!(
-            ctx.execution_process.run_reason,
-            ExecutionProcessRunReason::DevServer
-        ) {
+        // Skip finalization for run reasons that don't require it (DevServer, Breakdown, etc.)
+        if run_reason_skips_finalize(&ctx.execution_process.run_reason) {
             return false;
         }
 
@@ -1353,6 +1360,112 @@ pub trait ContainerService {
         Ok(execution_process)
     }
 
+    /// Start a breakdown execution for a task attempt.
+    ///
+    /// A breakdown execution is a read-only analysis run (no setup/cleanup scripts) that uses
+    /// the Breakdown run_reason to prevent task finalization.
+    ///
+    /// The function ensures the container/worktree exists, expands image paths and task variables
+    /// in the provided prompt, and starts a coding-agent initial request with Breakdown run_reason.
+    ///
+    /// # Parameters
+    ///
+    /// - `task_attempt`: The task attempt to run the breakdown for
+    /// - `executor_profile_id`: Identifier of the executor profile to use
+    /// - `prompt`: The breakdown prompt (task variables will be expanded)
+    ///
+    /// # Returns
+    ///
+    /// `ExecutionProcess` representing the started breakdown execution
+    async fn start_breakdown_attempt(
+        &self,
+        task_attempt: &TaskAttempt,
+        executor_profile_id: ExecutorProfileId,
+        prompt: String,
+    ) -> Result<ExecutionProcess, ContainerError> {
+        // Create container (always required for breakdown runs)
+        self.create(task_attempt).await?;
+
+        // Get parent task
+        let task = task_attempt
+            .parent_task(&self.db().pool)
+            .await?
+            .ok_or(SqlxError::RowNotFound)?;
+
+        // Get latest version of task attempt
+        let task_attempt = TaskAttempt::find_by_id(&self.db().pool, task_attempt.id)
+            .await?
+            .ok_or(SqlxError::RowNotFound)?;
+
+        // Canonicalise image paths in the prompt
+        let worktree_path = PathBuf::from(
+            task_attempt
+                .container_ref
+                .as_ref()
+                .ok_or_else(|| ContainerError::Other(anyhow!("Container ref not found")))?,
+        );
+        let prompt = ImageService::canonicalise_image_paths(&prompt, &worktree_path);
+
+        // Expand task variables ($VAR and ${VAR} syntax) in the prompt
+        let prompt = {
+            // Get resolved variables for this task (including inherited from parent chain)
+            let variables = TaskVariable::get_variable_map_with_system(&self.db().pool, task.id)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(task_id = %task.id, error = ?e, "Failed to fetch task variables");
+                    std::collections::HashMap::new()
+                });
+
+            if variables.is_empty() {
+                prompt
+            } else {
+                // Convert (String, Uuid) to (String, Option<Uuid>) for variable_expander
+                let variables: HashMap<String, (String, Option<Uuid>)> = variables
+                    .into_iter()
+                    .map(|(k, (v, id))| (k, (v, Some(id))))
+                    .collect();
+
+                let result = variable_expander::expand_variables(&prompt, &variables);
+
+                // Log warning if there are undefined variables
+                if !result.undefined_vars.is_empty() {
+                    tracing::warn!(
+                        task_id = %task.id,
+                        undefined_vars = ?result.undefined_vars,
+                        "Breakdown prompt contains undefined variables that were not expanded"
+                    );
+                }
+
+                if !result.expanded_vars.is_empty() {
+                    tracing::info!(
+                        task_id = %task.id,
+                        expanded_count = result.expanded_vars.len(),
+                        "Expanded task variables in breakdown prompt"
+                    );
+                }
+
+                result.text
+            }
+        };
+
+        // Build a bare breakdown action (no setup/cleanup scripts)
+        let breakdown_action = ExecutorAction::new(
+            ExecutorActionType::CodingAgentInitialRequest(CodingAgentInitialRequest {
+                prompt,
+                executor_profile_id,
+            }),
+            None, // No next_action or cleanup - breakdown is read-only analysis
+        );
+
+        // Start execution with Breakdown run reason
+        self.start_execution(
+            &task_attempt,
+            &breakdown_action,
+            &ExecutionProcessRunReason::Breakdown,
+        )
+        .await
+    }
+
     async fn start_execution(
         &self,
         task_attempt: &TaskAttempt,
@@ -2234,5 +2347,17 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(proc.status, ExecutionProcessStatus::Running);
+    }
+
+    #[test]
+    fn test_run_reason_skips_finalize() {
+        // Variants that should skip finalization
+        assert!(run_reason_skips_finalize(&ExecutionProcessRunReason::DevServer));
+        assert!(run_reason_skips_finalize(&ExecutionProcessRunReason::Breakdown));
+
+        // Variants that should NOT skip finalization
+        assert!(!run_reason_skips_finalize(&ExecutionProcessRunReason::CodingAgent));
+        assert!(!run_reason_skips_finalize(&ExecutionProcessRunReason::SetupScript));
+        assert!(!run_reason_skips_finalize(&ExecutionProcessRunReason::CleanupScript));
     }
 }

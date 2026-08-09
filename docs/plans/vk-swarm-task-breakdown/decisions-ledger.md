@@ -140,3 +140,20 @@ the enumerated gates remain as the itemized evidence).
 - [Task 201 orchestrator] Expedited Stage-2: one-line enum addition verified directly with citations
   (diff = single `+ Breakdown,`; types.ts:877 union gains "breakdown" matching existing lowercase
   convention; cargo check --workspace clean — survey's "no exhaustive matches" claim held).
+
+## Task 204
+
+- [Task 204] `run_reason_skips_finalize` pure function implemented as a separate helper outside the trait,
+  called from `should_finalize` to check for DevServer and Breakdown variants. Design rationale: pure fn
+  allows unit testing the exhaustive match logic independently, verifying all 5 ExecutionProcessRunReason
+  variants. — crates/services/src/services/container.rs
+- [Task 204] Test added to verify run_reason_skips_finalize: true for DevServer and Breakdown, false for
+  CodingAgent, SetupScript, and CleanupScript. Unit test named test_run_reason_skips_finalize, runs
+  in the #[cfg(test)] module. — crates/services/src/services/container.rs
+- [Task 204] `start_breakdown_attempt` trait method (default impl) added as async fn, mirrors start_attempt's
+  worktree creation, image-path canonicalisation, and task-variable expansion logic verbatim. Builds bare
+  ExecutorAction with CodingAgentInitialRequest, no next_action or cleanup scripts. Calls start_execution
+  with ExecutionProcessRunReason::Breakdown. — crates/services/src/services/container.rs
+- [Task 204] Verification: cargo test -p services passed 218 tests; cargo check --workspace clean;
+  cargo clippy -p services --all-targets clean. No changes to start_attempt, start_execution, or
+  finalize_task signatures/bodies.
