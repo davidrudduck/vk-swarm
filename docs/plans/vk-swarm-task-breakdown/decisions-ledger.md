@@ -572,3 +572,36 @@ the enumerated gates remain as the itemized evidence).
 - Verification: `cargo test -p server` → 87 passed (lib) + integration suites all green + doctests
   7 passed/3 ignored (pre-existing ignores, untouched); `cargo clippy -p server --all-targets` →
   clean, zero warnings; `cargo fmt -p server -- --check` → 0 diffs.
+
+## Task 603
+
+- **Anchors matched, superseded 601's minimal line**: `ProjectSettings.tsx` pre-flight anchors
+  (parallel_setup_script checkbox, `ProjectFormState`/`projectToFormState`, save payload,
+  `useTranslation('settings')`) were all present at the described locations (line numbers shifted
+  slightly from 601's addition but same idiom). Replaced 601's `auto_breakdown_enabled:
+  selectedProject.auto_breakdown_enabled` preserve-value line with `draft.auto_breakdown_enabled`,
+  threaded through `ProjectFormState`/`projectToFormState` exactly like `parallel_setup_script`.
+- **i18n key nesting**: mirrored `parallelSetup`'s actual nesting — `settings.projects.scripts.*`
+  (both locale-file key path and `t()` call use the doubled `settings.` prefix already present
+  throughout the file, since `useTranslation('settings')` + `t('settings.projects...')` is the
+  existing — if redundant-looking — convention). Task's suggested key path
+  (`settings:projects.autoBreakdown.label`, no `.scripts.`) did not match the sibling's real
+  location, so adjusted to `settings.projects.scripts.autoBreakdown.{label,help}` per the pre-flight
+  instruction to mirror wherever the sibling's keys actually nest. Added to all 4 locales
+  (en/ja/ko/es) with the dictated copy, positioned directly after `parallelSetup` in each file.
+- **No disabled-prop mirror**: unlike `parallel_setup_script`'s checkbox (which is
+  `disabled={!draft.setup_script}`), the `auto_breakdown_enabled` checkbox has no such gating
+  condition — it's independent of the setup script field, so no `disabled` prop was added.
+- **Test file did not exist — created new**: no `ProjectSettings.test.tsx` and no existing test
+  covering `parallel_setup_script` to mirror directly (grepped; none found). Modeled on
+  `__tests__/SystemSettings.test.tsx`'s pattern (I18nextProvider + real i18n instance, hook mocks
+  via `vi.mock`) since it's the nearest tested sibling settings page, and used `MemoryRouter` (not
+  present in SystemSettings) because `ProjectSettings` reads `useSearchParams`. Placed the file at
+  `frontend/src/pages/settings/ProjectSettings.test.tsx` (co-located, not under `__tests__/`) since
+  the task explicitly named that path. Mocked `useProjects`, `useProjectMutations`,
+  `useScriptPlaceholders`, and `WebhooksSettings` (avoids pulling in `useUserSystem`/`ConfigProvider`
+  and webhook-fetching dependencies unrelated to this toggle).
+- Verification: `npx vitest run src/pages/settings` → 3 files / 15 tests passed; `npx tsc --noEmit`
+  → exit 0; `npm run lint` → clean (0 warnings); `npx prettier --check` on all 6 touched files →
+  clean (after one `--write` pass on the new test file, which had default-formatting drift on
+  creation).
