@@ -11,6 +11,22 @@
   "badges": {
     "archived": "아카이브됨"
   },
+  "breakdown": {
+    "action": "작업 분해",
+    "proposedBadge": "제안된 하위 작업",
+    "title": "제안된 하위 작업 검토",
+    "failedGeneric": "분해에 실패했습니다.",
+    "retry": "다시 시도",
+    "running": "분해 중…",
+    "itemTitle": "항목 제목",
+    "moveUp": "위로 이동",
+    "moveDown": "아래로 이동",
+    "deleteItem": "항목 삭제",
+    "itemDescription": "항목 설명",
+    "dependencies": "종속성",
+    "discard": "폐기",
+    "accept": "수락"
+  },
   "actionsMenu": {
     "attempt": "시도",
     "createNewAttempt": "새 시도 생성",

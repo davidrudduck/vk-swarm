@@ -11,6 +11,22 @@
   "badges": {
     "archived": "アーカイブ済み"
   },
+  "breakdown": {
+    "action": "タスクを分解",
+    "proposedBadge": "提案されたサブタスク",
+    "title": "提案されたサブタスクの確認",
+    "failedGeneric": "分解に失敗しました。",
+    "retry": "再試行",
+    "running": "分解中…",
+    "itemTitle": "項目タイトル",
+    "moveUp": "上へ移動",
+    "moveDown": "下へ移動",
+    "deleteItem": "項目を削除",
+    "itemDescription": "項目の説明",
+    "dependencies": "依存関係",
+    "discard": "破棄",
+    "accept": "承認"
+  },
   "actionsMenu": {
     "attempt": "試行",
     "createNewAttempt": "新しい試行を作成",

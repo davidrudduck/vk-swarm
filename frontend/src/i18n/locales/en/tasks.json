@@ -343,6 +343,22 @@
     "title": "View Mode",
     "logs": "Logs"
   },
+  "breakdown": {
+    "action": "Break down",
+    "proposedBadge": "Proposed subtasks",
+    "title": "Review task breakdown",
+    "failedGeneric": "Breakdown failed.",
+    "retry": "Retry",
+    "running": "Generating breakdown...",
+    "itemTitle": "Item title",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "deleteItem": "Delete item",
+    "itemDescription": "Item description",
+    "dependencies": "Dependencies",
+    "discard": "Discard",
+    "accept": "Accept"
+  },
   "actionsMenu": {
     "attempt": "Attempt",
     "openInIde": "Open attempt in IDE",

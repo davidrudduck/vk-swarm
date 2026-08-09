@@ -15,6 +15,7 @@ import { ArchiveToggleIcon } from './ArchiveToggleIcon';
 import { CompactLabelList } from './CompactLabelList';
 import { DaysInColumnBadge } from './DaysInColumnBadge';
 import { tasksApi } from '@/lib/api';
+import { useBreakdownProposal } from '@/hooks/useBreakdown';
 import {
   useTaskOptimistic,
   getArchivedCallback,
@@ -93,6 +94,9 @@ export function TaskCard({
 
   // Fetch labels for this task
   const { data: labels } = useTaskLabels(task.id, true);
+
+  // Draft breakdown proposal (shows the "proposed subtasks" badge)
+  const { proposal: breakdownProposal } = useBreakdownProposal(task.id);
 
   // Get owner name from remote task
   const ownerName =
@@ -285,6 +289,16 @@ export function TaskCard({
             <CompactLabelList labels={labels} maxVisible={2} size="sm" />
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            {breakdownProposal && (
+              <span
+                className={cn(
+                  'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
+                  'bg-secondary text-secondary-foreground'
+                )}
+              >
+                {t('breakdown.proposedBadge', 'Proposed subtasks')}
+              </span>
+            )}
             <DaysInColumnBadge activityAt={task.activity_at} />
             <ArchiveToggleIcon
               isArchived={isArchived}

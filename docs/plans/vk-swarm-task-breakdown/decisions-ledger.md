@@ -405,3 +405,48 @@ the enumerated gates remain as the itemized evidence).
 - [Task 502 orchestrator] Remediation commit d5474c98 spans 501's useBreakdown.ts + 502's test file, so
   neither task's file-set gate covers it as a unit; validated instead by the full frontend suite
   (22/22), tsc, eslint, prettier — recorded as a gating exception.
+
+## Task 503
+- [Task 503 orchestrator] STOP resolved: the task's mandated breakdown.dialog.* nesting was authored
+  before 502 existed; 502 shipped FLAT breakdown.* keys (title, running, failedGeneric, retry, accept,
+  discard, itemTitle, itemDescription, dependencies, moveUp, moveDown, deleteItem). Amended 503:
+  locale files use the FLAT shipped key set + action + proposedBadge; en values byte-identical to the
+  component fallbacks (F3 contract); ja/ko/es reuse the mandated translations re-keyed where they
+  correspond and translate the extra keys in the same register; mandated "dialog.empty" key is
+  referenced by no component and is dropped. Spec dictates locale coverage, not key nesting — no
+  frozen-spec collision.
+
+- [Task 503] Card action wiring: `ActionsDropdown` (both mobile bottom-sheet and desktop dropdown
+  branches) calls `useBreakdownProposal(task?.id ?? '', { enabled: Boolean(task?.id) })` to know
+  whether a draft already exists. `handleBreakdown` skips `useBreakdownMutations(...).trigger` when
+  a proposal is present and opens `BreakdownReviewDialog.show({ taskId, projectId })` directly;
+  otherwise it awaits `trigger.mutateAsync()` first, then opens the dialog (errors from trigger are
+  swallowed — the mutation's own `onError` already logs, matching the existing `handleArchive`/
+  `handleDelete` try/catch idiom in this file). Item placed immediately after "Create subtask" in
+  each branch, using a new `Hammer` lucide icon (not previously imported in this file).
+
+- [Task 503] Badge idiom: `TaskCard`'s proposed-subtasks badge is a plain `<span>` styled to match
+  `DaysInColumnBadge`'s exact class list (`bg-secondary text-secondary-foreground`, `rounded text-xs
+  font-medium px-1.5 py-0.5`) rather than importing a shared `Badge` component — there isn't one in
+  this cluster; `DaysInColumnBadge` itself doesn't wrap a shared primitive.
+
+- [Task 503] No extra breakdown.* keys were needed beyond the amended task's flat list — grepped
+  `BreakdownReviewDialog.tsx` for every `t('breakdown....'` call and it matches exactly (13 keys),
+  plus the 2 new keys (`action`, `proposedBadge`) added for 503's own UI. All four locales carry the
+  same 15-key `breakdown` object.
+
+- [Task 503] Test file placed at `frontend/src/components/tasks/TaskCard.breakdown.test.tsx` (not
+  under `__tests__/`, per dispatch) with full independent mocking (react-i18next fallback-string
+  passthrough, `@/hooks` barrel, dialogs, `@/lib/api`, `KanbanCard` simplified to a plain div since
+  dnd-kit's `useDraggable` needs no `DndContext` mock but the surrounding drag chrome isn't under
+  test). Desktop dropdown interaction required `fireEvent.pointerDown` immediately before
+  `fireEvent.click` on the trigger button — Radix's `DropdownMenuTrigger` did not open on a bare
+  `click` event in jsdom without a preceding `pointerdown` (no `@testing-library/user-event`
+  dependency in this repo, so this is the direct-fireEvent workaround). `MemoryRouter` wraps every
+  render — `ActionsDropdown` calls `useNavigate()` unconditionally.
+
+- [Task 503] Verification: 9/9 new vitest cases pass; full targeted run
+  (`TaskCard.breakdown.test.tsx` + `BreakdownReviewDialog.test.tsx` + `useBreakdown.test.ts`) is
+  31/31 green; `npx tsc --noEmit` exit 0; `npm run lint` exit 0; `npx prettier --write` reformatted
+  `actions-dropdown.tsx` (wrapped `useBreakdownProposal` call), `--check` clean after on all seven
+  touched files.
