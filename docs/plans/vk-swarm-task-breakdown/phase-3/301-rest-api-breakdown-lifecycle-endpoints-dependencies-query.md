@@ -2,7 +2,7 @@
 id: "301"
 phase: 3
 title: "REST API: breakdown lifecycle endpoints + dependencies query"
-status: ready
+status: passed
 depends_on: ["103","203","204"]
 parallel: false
 conflicts_with: []
