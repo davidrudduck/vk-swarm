@@ -661,9 +661,13 @@ for proposal/items AND unchanged entity_type='task' outbox count) and the rollba
 test_accept_transaction_atomic; the SC5 opt-in invariant by 602's disabled-path test (zero
 proposal rows).
 
-Remaining for run close: `## Deploy verification` live evidence (SC1-SC7, ledger items 7-15) —
-operator-gated: requires a deployed feature-branch build, real executor runs, hive stop/reconnect,
-and executor-profile sabotage. NOT yet recorded; wai-evidence.sh will fail closed until it lands.
+Update 2026-08-09 (later same day): the `## Deploy verification` evidence below has now been
+captured live on the deployed feature-branch build (SC1–SC7 + side-effect invariants), including
+real executor runs, hive stop/reconnect, and observed failure paths. The (b) real-seam coverage
+was further hardened by DV-4's `test_parse_assistant_event_without_result_line`, which pins the
+ACTUAL production stream shape captured from the live run.
+
+VERDICT: PASS
 
 ## Deploy-verification finding DV-1 (2026-08-09) — dead trigger path on fresh attempts
 
@@ -719,3 +723,103 @@ crates/services/src/services/breakdown.rs, no shared-executor change): stage 1 n
 substitutes assistant-event `message.content[].text` blocks; new test
 `test_parse_assistant_event_without_result_line` pins the production shape (assistant events, NO
 result line) captured from the live 2026-08-09 run.
+
+## Deploy verification
+
+Feature-branch build deployed to the production node (host 10.69.96.233, db ~/.vkswarm/db/db.sqlite,
+hive https://vkswarm.thedoctor.raverx.net) on 2026-08-09. All outputs below are verbatim from the
+deployed system. Build under test:
+
+```text
+$ curl -s http://10.69.96.233:9001/api/health
+{"status":"ok","version":"0.0.125","git_commit":"1757424b","git_branch":"wai/vk-swarm-task-breakdown","build_timestamp":"2026-08-09T21:28+Z","database_ready":true}
+```
+
+**SC1 — trigger produces a reviewable draft (real Claude Code run, end to end):**
+
+```text
+$ curl -s -X POST .../api/tasks/6d6fc3df.../breakdown   → {"status":"draft","id":"fe14674f-..."}
+# after the live agent run (claude-code 2.1.114, run_reason='breakdown'):
+proposal: fe14674f-e4a8-45c6-beb5-71e3a2c1bb54 draft
+  [0] 'Extend /api/health to return version and git commit' deps=[]
+  [1] 'Add healthApi client function and useHealth polling hook' deps=["ab602c22-..."]
+  [2] 'Build HealthBadge component and mount in settings dialog' deps=["47af20d3-..."]
+  [3] 'E2E browser verification and finalization' deps=["25a37879-..."]
+```
+
+**SC2 — review gate: edit persists, stays draft, updated_at refreshes, NO outbox rows pre-accept:**
+
+```text
+before: draft 2026-08-09 21:30:52.894
+$ curl -X PUT .../breakdown-proposals/fe14674f.../items   (4→3 items, retitled item 0)
+after:  draft 2026-08-09 21:31:24.109
+0|Extend /api/health to return version and git commit (EDITED-SC2)|[]
+1|Add healthApi client function and useHealth polling hook|["fded5706-..."]   ← deps remapped to fresh item ids
+outbox task.upsert since trigger: 0
+```
+
+**SC3 — accept: atomic children + dependency edges + in-transaction outbox enqueue:**
+
+```text
+$ curl -X POST .../breakdown-proposals/fe14674f.../accept
+accept success: True | children: 3
+proposal: accepted
+child: Extend /api/health ... (EDITED-SC2) | status=todo   (parent_task_id = 6d6fc3df...)
+child: Add healthApi client function ... | status=todo
+child: Build HealthBadge component ... | status=todo
+dep-edges: 2
+outbox rows for children: 3   (idempotency keys task:{child}:{uuid}, all acked=1 after hive sync)
+```
+
+**SC4 — MCP tools (vks-mcp-server, port 9003): 23 tools listed incl. break_down_task /
+get_breakdown / accept_breakdown; all three round-tripped:**
+
+```text
+tools/list → 23 tools: "accept_breakdown","break_down_task","get_breakdown", ...
+get_breakdown(6d6fc3df...) → {"proposal":{"id":"fe14674f-...","status":"accepted",...},"items":[...]}
+accept_breakdown(fc9b14eb-...) → 4 child tasks created; proposal: accepted
+break_down_task(6d6fc3df...) → {"id":"b236791f-...","status":"draft",...}   (re-trigger over accepted OK)
+```
+
+**SC5 — auto-trigger honours the project toggle:**
+
+```text
+PUT /api/projects/c8809147... {"auto_breakdown_enabled":true}  → auto_breakdown: True
+POST /api/tasks (with description) → task 8999929a...; 3s later: auto proposal: draft
+  (draft fc9b14eb populated by its own agent run, later accepted via MCP)
+PUT ... {"auto_breakdown_enabled":false} → False
+POST /api/tasks (with description) → GET breakdown → data: null   (no proposal — correct)
+```
+
+**SC6 — offline-first + resync (hive container stopped, then restarted):**
+
+```text
+$ docker stop remote-remote-server-1        # hive DOWN 21:35
+trigger (via MCP) → agent run → draft 5 items   — fully node-local while offline
+$ curl -X POST .../breakdown-proposals/b236791f.../accept → success, 5 children
+unacked outbox rows (hive down): 5
+$ docker start remote-remote-server-1       # hive UP 21:36:29
+unacked outbox rows (after reconnect): 0
+acked in last 2 min: 5
+```
+
+**SC7/SC7b — failure paths observed live:**
+
+```text
+# stopped run → failed with error (exit-monitor failure path):
+proposal 13e4a1d1: status='failed', error='Container ref not found for task attempt'   (DV-1 era)
+proposal ef4fe0ce: status='failed', error='No JSON result block found in Claude's output' (DV-4 era)
+# stop of an in-flight run:
+proposal fe77dbb1 → status='failed', error='executor run failed'
+# retry over a terminal (failed) proposal creates a fresh draft that then succeeded:
+POST .../breakdown → new draft fe14674f (→ SC1 PASS above)
+```
+
+**Side-effect invariants:** breakdown runs made zero commits in the attempt worktrees
+(run_reason_skips_finalize covers Breakdown); parent task status was changed only by the
+deliberate normal-attempt control experiment, never by breakdown runs; proposals/items never
+produced node_outbox rows before accept (SC2 fence: count 0).
+
+Findings DV-1..DV-5 discovered by this verification are recorded above; DV-1/DV-2/DV-4 fixed on
+this branch (29464845, 64729f1d, 1757424b), DV-3/DV-5 filed as backlog findings
+F-2026-08-09-01/-02 (pre-existing, out of workstream scope).
