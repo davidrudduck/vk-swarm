@@ -2,7 +2,7 @@
 id: "401"
 phase: 4
 title: "MCP tools: break_down_task, get_breakdown, accept_breakdown"
-status: ready
+status: passed
 depends_on: ["301"]
 parallel: false
 conflicts_with: []
