@@ -199,3 +199,11 @@ the enumerated gates remain as the itemized evidence).
   (per alphabetical ordering). — crates/services/src/services/mod.rs
 - [Task 202] Verification: cargo test -p services 224 passed; cargo clippy -p services --all-targets
   clean; all breakdown tests green. — CLEAN
+- [Task 202] panel F3: stage A's "result" field name is an external assumption about the Claude CLI
+  stream-json result message — protocol.rs's ResultMessage struct does not carry it in-repo; verified
+  only against live CLI behavior. Anchor gap noted.
+- [Task 202] panel F5: undictated — Clone derive on BreakdownSubtask (unused, kept), fail_proposal
+  returns TaskBreakdownProposal (spec silent), #[error] wording author-invented.
+- [Task 202] panel F1/F2 fixes: chunks_to_lines buffering (chunk boundaries != line boundaries) and
+  last-DESERIALIZING-block fallback (blocks exist but none parse → Json error from last attempted
+  block; no blocks → NoResult).

@@ -78,7 +78,8 @@ impl BreakdownService {
     /// Two-stage parsing:
     /// 1. Substitute lines: each line that is a JSON object with "type":"result" is replaced
     ///    with its "result" field (unwrapping stream-JSON format).
-    /// 2. Scan for fenced block: find the LAST ```json...``` block and deserialize it.
+    /// 2. Scan for fenced blocks: collect ALL ```json...``` blocks and deserialize the
+    ///    LAST one that successfully parses into a BreakdownResult.
     ///
     /// Validation:
     /// - ≥2 subtasks (0 → Empty, 1 → TooFew)
@@ -103,8 +104,8 @@ impl BreakdownService {
             text.push('\n');
         }
 
-        // Stage 2: Find and parse the LAST fenced ```json block
-        let mut last_block: Option<String> = None;
+        // Stage 2: Collect ALL fenced ```json blocks; use the LAST one that deserializes
+        let mut blocks: Vec<String> = Vec::new();
         let mut in_block = false;
         let mut current_block = String::new();
 
@@ -112,13 +113,13 @@ impl BreakdownService {
             if line.trim().starts_with("```json") {
                 if in_block {
                     // Close current block if we encounter another opening (shouldn't happen, but defensive)
-                    last_block = Some(current_block.clone());
+                    blocks.push(current_block.clone());
                     current_block.clear();
                 }
                 in_block = true;
             } else if in_block && line.trim().starts_with("```") {
                 in_block = false;
-                last_block = Some(current_block.clone());
+                blocks.push(current_block.clone());
                 current_block.clear();
             } else if in_block {
                 current_block.push_str(line);
@@ -126,8 +127,31 @@ impl BreakdownService {
             }
         }
 
-        let json_str = last_block.ok_or(BreakdownError::NoResult)?;
-        let result: BreakdownResult = serde_json::from_str(&json_str)?;
+        if blocks.is_empty() {
+            return Err(BreakdownError::NoResult);
+        }
+
+        // Iterate from the last block backwards, taking the first that deserializes.
+        // If none deserializes, surface the Json error from the last attempted block.
+        let mut last_err: Option<serde_json::Error> = None;
+        let mut parsed: Option<BreakdownResult> = None;
+        for block in blocks.iter().rev() {
+            match serde_json::from_str::<BreakdownResult>(block) {
+                Ok(r) => {
+                    parsed = Some(r);
+                    break;
+                }
+                Err(e) => {
+                    if last_err.is_none() {
+                        last_err = Some(e);
+                    }
+                }
+            }
+        }
+        let result = match parsed {
+            Some(r) => r,
+            None => return Err(BreakdownError::Json(last_err.expect("blocks is non-empty"))),
+        };
 
         // Validate
         if result.subtasks.is_empty() {
@@ -194,10 +218,23 @@ impl BreakdownService {
             .map_err(BreakdownError::Db)
     }
 
+    /// Convert raw stdout CHUNKS into logical lines.
+    ///
+    /// LogMsg::Stdout payloads are arbitrary chunks whose boundaries need not align
+    /// with line boundaries, so we concatenate everything and split on '\n'.
+    pub fn chunks_to_lines(chunks: Vec<String>) -> Vec<String> {
+        let mut buffer = String::new();
+        for chunk in chunks {
+            buffer.push_str(&chunk);
+        }
+        buffer.split('\n').map(|s| s.to_string()).collect()
+    }
+
     /// Extract and parse stdout lines from an execution process's logs.
     ///
     /// Retrieves logs via ExecutionProcessLogs::find_by_execution_id, parses them
-    /// into LogMsg entries, and collects all Stdout payloads into a Vec<String>.
+    /// into LogMsg entries, concatenates all Stdout chunk payloads, and splits the
+    /// combined buffer on '\n' (chunk boundaries need not align with line boundaries).
     pub async fn extract_stdout_lines(
         pool: &SqlitePool,
         execution_process_id: Uuid,
@@ -210,14 +247,14 @@ impl BreakdownService {
 
         let messages = ExecutionProcessLogs::parse_logs(&records)?;
 
-        let mut stdout_lines = Vec::new();
+        let mut chunks = Vec::new();
         for msg in messages {
-            if let LogMsg::Stdout(line) = msg {
-                stdout_lines.push(line);
+            if let LogMsg::Stdout(chunk) = msg {
+                chunks.push(chunk);
             }
         }
 
-        Ok(stdout_lines)
+        Ok(Self::chunks_to_lines(chunks))
     }
 }
 
@@ -327,9 +364,55 @@ mod tests {
         let prompt = BreakdownService::breakdown_prompt("Goal Title", "Goal Description");
         assert!(prompt.contains("GOAL TITLE: Goal Title"));
         assert!(prompt.contains("GOAL DESCRIPTION: Goal Description"));
-        assert!(prompt.contains("DO NOT modify, create, or delete any files"));
-        assert!(prompt.contains("{\"subtasks\""));
-        assert!(prompt.contains("depends_on"));
+        assert!(
+            prompt.contains(
+                "DO NOT modify, create, or delete any files — this is read-only analysis"
+            )
+        );
+        assert!(prompt.contains(
+            "{\"subtasks\":[{\"title\":\"...\",\"description\":\"...\",\"depends_on\":[0]}]}"
+        ));
+        assert!(prompt.contains("propose 2-10 subtasks"));
+    }
+
+    #[test]
+    fn test_valid_block_followed_by_malformed_block_still_ok() {
+        // A VALID block followed by a MALFORMED one: the last-deserializing-block
+        // fallback must still succeed.
+        let lines = vec![
+            "```json".to_string(),
+            "{\"subtasks\":[{\"title\":\"A\",\"description\":\"a\",\"depends_on\":[]},{\"title\":\"B\",\"description\":null,\"depends_on\":[0]}]}".to_string(),
+            "```".to_string(),
+            "Trailing prose".to_string(),
+            "```json".to_string(),
+            "{\"malformed\": invalid json}".to_string(),
+            "```".to_string(),
+        ];
+
+        let result = BreakdownService::parse_breakdown_result(&lines).unwrap();
+        assert_eq!(result.subtasks.len(), 2);
+        assert_eq!(result.subtasks[0].title, "A");
+        assert_eq!(result.subtasks[1].depends_on, vec![0]);
+    }
+
+    #[test]
+    fn test_chunks_to_lines_handles_split_line_boundaries() {
+        // Chunk boundaries deliberately do NOT align with line boundaries: the first
+        // chunk ends mid-line, the second completes it and carries a full result line.
+        let chunks = vec![
+            "part-of-line".to_string(),
+            "-completed\n{\"type\":\"result\",\"result\":\"```json\\n{\\\"subtasks\\\":[{\\\"title\\\":\\\"T1\\\",\\\"description\\\":null,\\\"depends_on\\\":[]},{\\\"title\\\":\\\"T2\\\",\\\"description\\\":null,\\\"depends_on\\\":[0]}]}\\n```\"}\n".to_string(),
+        ];
+
+        let lines = BreakdownService::chunks_to_lines(chunks);
+        assert_eq!(lines[0], "part-of-line-completed");
+        assert!(lines[1].starts_with("{\"type\":\"result\""));
+
+        let result = BreakdownService::parse_breakdown_result(&lines).unwrap();
+        assert_eq!(result.subtasks.len(), 2);
+        assert_eq!(result.subtasks[0].title, "T1");
+        assert_eq!(result.subtasks[1].title, "T2");
+        assert_eq!(result.subtasks[1].depends_on, vec![0]);
     }
 
     #[test]
