@@ -2,7 +2,7 @@
 id: "701"
 phase: 7
 title: "Full repo gates (exit 0) + live deploy acceptance evidence (SC1–SC7)"
-status: ready
+status: in-progress
 depends_on: ["401","503","602","603"]
 parallel: false
 conflicts_with: []
