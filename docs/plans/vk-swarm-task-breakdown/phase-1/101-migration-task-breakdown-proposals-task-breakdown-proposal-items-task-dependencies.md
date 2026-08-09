@@ -2,7 +2,7 @@
 id: "101"
 phase: 1
 title: "Migration: task_breakdown_proposals, task_breakdown_proposal_items, task_dependencies"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

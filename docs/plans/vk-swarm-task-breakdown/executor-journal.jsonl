@@ -1,0 +1,2 @@
+{"task_id":"101","run_id":"20260809T120023Z-da97cb29-2901281","requested_executor":"default","actual_executor":"none","model":"","status":"human-gate-skipped","attempts":0,"fail_check":"none","timestamp":"2026-08-09T12:00:33Z"}
+{"task_id":"102","run_id":"20260809T120023Z-da97cb29-2901281","requested_executor":"default","actual_executor":"haiku","model":"haiku","status":"halted","attempts":1,"fail_check":"red-commit","timestamp":"2026-08-09T12:08:35Z"}

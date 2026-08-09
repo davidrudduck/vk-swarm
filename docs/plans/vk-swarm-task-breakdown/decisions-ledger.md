@@ -90,3 +90,15 @@ internally); 301 get_breakdown loads the task first and 404s unknown task ids (2
 reserved for existing-task-no-proposal, with test 8); 701 gains gate 0 `npm run check` recorded
 literally (reverses the round-1 decline: guideline-sourced, trivially cheap, ends the ambiguity —
 the enumerated gates remain as the itemized evidence).
+
+## Run 2026-08-09 (manual loop)
+
+- [orchestrator] Workflow runner (execute-tasks.mjs) abandoned for this run: its --red-commit gate
+  whitelists only *.test.*/*.spec.*/python/mjs test files, but tasks 102/202/301/401 prescribe Rust
+  inline `#[cfg(test)]` tests (repo convention, tournament-reviewed) — a tests-only red commit is
+  structurally impossible in Rust without module registration. Attempt 1 halted exactly there
+  (task 102, RED-COMMIT REJECT on models/mod.rs). Switched to the skill's manual loop:
+  fresh Haiku implementer -> task-gate.sh --commit -> Stage-2 adversarial panel, per task.
+  Red-first discipline preserved inside each implementer dispatch; gate + panel remain unchanged.
+- [orchestrator] Task 101 human gate: approved by David 2026-08-09 (AskUserQuestion, full-loop
+  authorization); token at reviews/101.approved.
