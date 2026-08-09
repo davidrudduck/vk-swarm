@@ -240,3 +240,46 @@ the enumerated gates remain as the itemized evidence).
   helper is `&self` method using self.db().pool (snippet had free-associated fn with pool param);
   parse_breakdown_result is an associated fn on BreakdownService (snippet showed a free fn). No code
   changes required — panel confirmed zero functional deviations.
+
+## Task 301
+- [Task 301 orchestrator] Dispatched at tier-2 (sonnet) rather than tier-1 (haiku): heaviest task in
+  the plan (two-stage trigger + 8 tests) and tier-1 failed on the previous complex Rust task (102).
+- [Task 301] `create_draft_proposal` (STAGE 1) takes `pool: &SqlitePool` instead of
+  `&DeploymentImpl` as the spec text suggested. It never touches `deployment.git()`/
+  `.container()` — only `Task::find_by_id`/`Project::find_by_id`/`task_breakdown::create`, all
+  pool-only. This decouples 7 of the 8 required tests from needing a full `DeploymentImpl`
+  (there is no existing lightweight test-double for it: `Deployment::container()`/`::git()`
+  return `impl Trait`, not `dyn`, so they aren't mockable, and constructing a real
+  `LocalDeployment` is a heavyweight, env-var-isolated operation). Handlers still call it as
+  `create_draft_proposal(&deployment.db().pool, task_id)`, so the HTTP contract is unchanged.
+  — crates/server/src/routes/breakdown.rs
+- [Task 301] `test_spawn_failure_marks_failed` is the ONE test that constructs a real
+  `LocalDeployment` (env-var-isolated into a `tempfile::TempDir`, `#[serial_test::serial]`,
+  mirroring `crates/server/tests/common::HiveHarness::hive_absent`) because `spawn_breakdown_run`
+  needs `deployment.git()`/`.container()`. It does NOT spawn a real CLI/executor: the seeded
+  project's `git_repo_path` is intentionally a nonexistent path, so
+  `GitService::get_current_branch` fails deterministically before `start_breakdown_attempt`
+  (and therefore any executor) would ever run — that failure is what exercises the
+  Failed-marking path and is asserted via `execution_process_id.is_none()`. This is the
+  documented boundary the task text pre-authorized ("exercise the trigger's attempt-spawn only
+  as far as the harness allows without a real executor"). — crates/server/src/routes/breakdown.rs
+- [Task 301] Test-module-only raw `sqlx::query!`/`query_scalar!` macro calls (outbox/proposal
+  row-count assertions) were written as runtime `sqlx::query()`/`query_scalar()` with `.bind()`
+  instead of the compile-time-checked macros. Reason: those macros require `.sqlx` offline
+  cache entries, and this workspace's `remote` crate (Postgres-only queries) cannot be
+  recompiled against the sqlite `DATABASE_URL` needed to prepare new sqlite entries — every
+  `cargo sqlx prepare` attempt (workspace-wide or scoped to `crates/server`) forced `remote`
+  back into online-checking mode against the wrong database engine and failed with `E0282` on
+  its unrelated queries. Production handler code needed ZERO new macros (it only calls
+  pre-existing, already-prepared `db::models::task_breakdown`/`Task`/`Project`/`TaskAttempt`
+  queries), so no `.sqlx` files were added or modified; confirmed by a clean
+  `cargo check --workspace` afterward. Do not re-attempt an unscoped `cargo sqlx prepare`
+  without first isolating the `remote` crate's Postgres DATABASE_URL — an earlier in-session
+  attempt to do so mutated dozens of unrelated `.sqlx` entries under `.sqlx/` and
+  `crates/server/.sqlx/`, which were restored via `git show HEAD:<path>` (git
+  checkout/restore/stash/reset/clean are prohibited in this session) before this commit.
+  — crates/server/src/routes/breakdown.rs
+- [Task 301] Verification: `cargo test -p server` (8/8 breakdown tests + full suite) green;
+  `cargo test --workspace` green; `cargo check --workspace` clean; `cargo clippy --all
+  --all-targets --all-features -- -D warnings` clean; `cargo fmt --all -- --check` 0 diffs.
+  — CLEAN
