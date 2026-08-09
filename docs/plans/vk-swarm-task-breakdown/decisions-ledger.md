@@ -231,3 +231,12 @@ the enumerated gates remain as the itemized evidence).
   README under Follow-ups section. — docs/plans/vk-swarm-task-breakdown/decisions-ledger.md
 - [Task 203] Verification: cargo test -p local-deployment passed; cargo check --workspace clean;
   cargo clippy -p local-deployment --all-targets clean; cargo fmt -p local-deployment check clean. — CLEAN
+- [Task 203 orchestrator] Amended files: to include dev-docs/workstreams/vk-swarm-task-breakdown/README.md —
+  the task BODY mandates the follow-up entry there but frontmatter omitted it (decompose inconsistency,
+  additive fix).
+- [Task 203 orchestrator] Panel F1/F2 ledger corrections: handle_breakdown_completion actually sits at
+  container.rs:1597 (~600 lines BEFORE try_commit_changes:2211/copy_project_files:2280, not between
+  them); hook/finish/condition lines are 889/836/773. Undeclared-but-correct adaptations now declared:
+  helper is `&self` method using self.db().pool (snippet had free-associated fn with pool param);
+  parse_breakdown_result is an associated fn on BreakdownService (snippet showed a free fn). No code
+  changes required — panel confirmed zero functional deviations.

@@ -2,12 +2,13 @@
 id: "203"
 phase: 2
 title: "Exit-monitor completion hook: parse breakdown runs into proposal items"
-status: ready
+status: passed
 depends_on: ["202","204"]
 parallel: false
 conflicts_with: []
 files:
   - "crates/local-deployment/src/container.rs"
+  - "dev-docs/workstreams/vk-swarm-task-breakdown/README.md"
 irreversible: false
 scope_test: "crates/local-deployment"
 allowed_change: edit
