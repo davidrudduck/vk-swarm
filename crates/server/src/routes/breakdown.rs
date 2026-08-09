@@ -169,8 +169,8 @@ async fn spawn_breakdown_run_inner(
     Ok(())
 }
 
-/// Runs stage 1 (awaited) then detaches stage 2 via `tokio::spawn`. Shared by the trigger
-/// and retry handlers.
+/// Runs stage 1 (awaited) then detaches stage 2 via `tokio::spawn`. Used by the trigger
+/// handler.
 async fn trigger_and_spawn(
     deployment: DeploymentImpl,
     task_id: Uuid,
@@ -183,6 +183,44 @@ async fn trigger_and_spawn(
         }
     });
     Ok(proposal)
+}
+
+/// Pool-level body of the `get_breakdown` handler: 404 on unknown task, `None` when the
+/// task has no proposal, otherwise the latest proposal with its items. The HTTP handler is
+/// a thin State-unwrap wrapper over EXACTLY this fn so tests exercise the real code path.
+pub(crate) async fn get_breakdown_impl(
+    pool: &SqlitePool,
+    task_id: Uuid,
+) -> Result<Option<BreakdownWithItems>, ApiError> {
+    Task::find_by_id(pool, task_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Task not found".to_string()))?;
+
+    let Some(proposal) = task_breakdown::find_by_task_id(pool, task_id).await? else {
+        return Ok(None);
+    };
+    let items = task_breakdown::find_items(pool, proposal.id).await?;
+    Ok(Some(BreakdownWithItems { proposal, items }))
+}
+
+/// Pool-level status gate + fresh-draft creation for the `retry` handler: 404 on unknown
+/// proposal, 409 unless the proposal is Failed, then creates a fresh draft for the same
+/// task. The HTTP handler calls EXACTLY this fn, then detaches the stage-2 spawn.
+pub(crate) async fn retry_impl(
+    pool: &SqlitePool,
+    proposal_id: Uuid,
+) -> Result<TaskBreakdownProposal, ApiError> {
+    let proposal = task_breakdown::find_by_id(pool, proposal_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Breakdown proposal not found".to_string()))?;
+
+    if proposal.status != BreakdownStatus::Failed {
+        return Err(ApiError::Conflict(
+            "Only a failed proposal can be retried".to_string(),
+        ));
+    }
+
+    create_draft_proposal(pool, proposal.task_id).await
 }
 
 fn map_proposal_error(e: sqlx::Error) -> ApiError {
@@ -211,19 +249,8 @@ pub async fn get_breakdown(
     State(deployment): State<DeploymentImpl>,
     Path(task_id): Path<Uuid>,
 ) -> Result<ResponseJson<ApiResponse<Option<BreakdownWithItems>>>, ApiError> {
-    let pool = &deployment.db().pool;
-
-    Task::find_by_id(pool, task_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Task not found".to_string()))?;
-
-    let Some(proposal) = task_breakdown::find_by_task_id(pool, task_id).await? else {
-        return Ok(ResponseJson(ApiResponse::success(None)));
-    };
-    let items = task_breakdown::find_items(pool, proposal.id).await?;
-    Ok(ResponseJson(ApiResponse::success(Some(
-        BreakdownWithItems { proposal, items },
-    ))))
+    let result = get_breakdown_impl(&deployment.db().pool, task_id).await?;
+    Ok(ResponseJson(ApiResponse::success(result)))
 }
 
 /// PUT /breakdown-proposals/{id}/items - Replace a draft proposal's items.
@@ -271,17 +298,13 @@ pub async fn retry(
     State(deployment): State<DeploymentImpl>,
     Path(proposal_id): Path<Uuid>,
 ) -> Result<ResponseJson<ApiResponse<TaskBreakdownProposal>>, ApiError> {
-    let proposal = task_breakdown::find_by_id(&deployment.db().pool, proposal_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Breakdown proposal not found".to_string()))?;
-
-    if proposal.status != BreakdownStatus::Failed {
-        return Err(ApiError::Conflict(
-            "Only a failed proposal can be retried".to_string(),
-        ));
-    }
-
-    let new_proposal = trigger_and_spawn(deployment, proposal.task_id).await?;
+    let new_proposal = retry_impl(&deployment.db().pool, proposal_id).await?;
+    let spawn_proposal = new_proposal.clone();
+    tokio::spawn(async move {
+        if let Err(err) = spawn_breakdown_run(deployment, spawn_proposal).await {
+            tracing::error!(error = ?err, "breakdown run failed");
+        }
+    });
     Ok(ResponseJson(ApiResponse::success(new_proposal)))
 }
 
@@ -597,31 +620,55 @@ mod tests {
         let (pool, _tmp) = create_test_pool().await;
 
         let unknown_task_id = Uuid::new_v4();
-        let result = get_breakdown_for_test(&pool, unknown_task_id).await;
+        let result = get_breakdown_impl(&pool, unknown_task_id).await;
         assert!(matches!(result, Err(ApiError::NotFound(_))));
 
         let (_project, task) = seed_task(&pool, false).await;
-        let ok = get_breakdown_for_test(&pool, task.id).await.unwrap();
+        let ok = get_breakdown_impl(&pool, task.id).await.unwrap();
         assert!(
             ok.is_none(),
             "existing task with no proposal returns data: null"
         );
     }
 
-    /// Pool-only stand-in for the `get_breakdown` handler's body (avoids needing a
-    /// `State<DeploymentImpl>` extractor in a unit test).
-    async fn get_breakdown_for_test(
-        pool: &SqlitePool,
-        task_id: Uuid,
-    ) -> Result<Option<BreakdownWithItems>, ApiError> {
-        Task::find_by_id(pool, task_id)
-            .await?
-            .ok_or_else(|| ApiError::NotFound("Task not found".to_string()))?;
+    #[tokio::test]
+    async fn test_retry_gate() {
+        let (pool, _tmp) = create_test_pool().await;
+        let (_project, task) = seed_task(&pool, false).await;
 
-        let Some(proposal) = task_breakdown::find_by_task_id(pool, task_id).await? else {
-            return Ok(None);
-        };
-        let items = task_breakdown::find_items(pool, proposal.id).await?;
-        Ok(Some(BreakdownWithItems { proposal, items }))
+        // Unknown proposal -> 404.
+        let missing = retry_impl(&pool, Uuid::new_v4()).await;
+        assert!(matches!(missing, Err(ApiError::NotFound(_))));
+
+        // Draft proposal -> 409 Conflict (Failed-only gate).
+        let draft = create_draft_proposal(&pool, task.id).await.unwrap();
+        let on_draft = retry_impl(&pool, draft.id).await;
+        assert!(matches!(on_draft, Err(ApiError::Conflict(_))));
+
+        // Accepted proposal -> 409 Conflict too.
+        task_breakdown::replace_items(&pool, draft.id, vec![item("A", 0, vec![])])
+            .await
+            .unwrap();
+        task_breakdown::accept_proposal(&pool, draft.id)
+            .await
+            .unwrap();
+        let on_accepted = retry_impl(&pool, draft.id).await;
+        assert!(matches!(on_accepted, Err(ApiError::Conflict(_))));
+
+        // Failed proposal -> Ok fresh draft for the same task.
+        let failed_src = create_draft_proposal(&pool, task.id).await.unwrap();
+        let failed = task_breakdown::update_status(
+            &pool,
+            failed_src.id,
+            BreakdownStatus::Failed,
+            Some("boom".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let fresh = retry_impl(&pool, failed.id).await.unwrap();
+        assert_eq!(fresh.status, BreakdownStatus::Draft);
+        assert_eq!(fresh.task_id, task.id);
+        assert_ne!(fresh.id, failed.id);
     }
 }

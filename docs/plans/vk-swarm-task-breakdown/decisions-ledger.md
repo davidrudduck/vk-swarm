@@ -283,3 +283,10 @@ the enumerated gates remain as the itemized evidence).
   `cargo test --workspace` green; `cargo check --workspace` clean; `cargo clippy --all
   --all-targets --all-features -- -D warnings` clean; `cargo fmt --all -- --check` 0 diffs.
   — CLEAN
+- [Task 301] Correction (panel F3): an earlier entry claimed test 6 (test_spawn_failure_marks_failed)
+  is "env-var-isolated into a tempfile::TempDir" — that phrasing is inaccurate. VK_ASSET_DIR and
+  VK_DATABASE_PATH are set process-globally via unsafe `std::env::set_var` and are never restored
+  after the test; `serial_test` only serializes `#[serial]` tests, so any future non-serial server
+  lib test that reads those vars would observe leakage. No other server lib test currently reads
+  them, so this is latent, not active.
+- [Task 301] panel F1/F2 fixes: handler bodies deduplicated into pub(crate) *_impl fns so tests exercise the REAL code path (get_breakdown_impl, retry_impl); retry Failed-only gate now covered both directions.
