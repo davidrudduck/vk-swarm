@@ -2,7 +2,7 @@
 id: "501"
 phase: 5
 title: "Frontend api client + hooks for breakdown"
-status: ready
+status: passed
 depends_on: ["301"]
 parallel: false
 conflicts_with: []
@@ -10,6 +10,7 @@ files:
   - "frontend/src/lib/api/breakdown.ts"
   - "frontend/src/lib/api/index.ts"
   - "frontend/src/hooks/useBreakdown.ts"
+  - "frontend/src/hooks/useBreakdown.test.ts"
 siblings: ["frontend/src/lib/api/tasks.ts","frontend/src/hooks/useTaskMutations.ts"]
 irreversible: false
 scope_test: "frontend/src/hooks"
