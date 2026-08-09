@@ -664,3 +664,19 @@ proposal rows).
 Remaining for run close: `## Deploy verification` live evidence (SC1-SC7, ledger items 7-15) —
 operator-gated: requires a deployed feature-branch build, real executor runs, hive stop/reconnect,
 and executor-profile sabotage. NOT yet recorded; wai-evidence.sh will fail closed until it lands.
+
+## Deploy-verification finding DV-1 (2026-08-09) — dead trigger path on fresh attempts
+
+Live SC1 attempt on the deployed branch (node 4653baa7, http://10.69.96.233:9001) failed:
+proposal `13e4a1d1` landed `status='failed', error='Container ref not found for task attempt'`.
+Root cause: `start_breakdown_attempt` (crates/services/src/services/container.rs:1387) called
+`ensure_container_exists` unconditionally, but the local-deployment impl
+(crates/local-deployment/src/container.rs:1843) REQUIRES `container_ref` to already be set —
+it never creates one. A fresh breakdown attempt always has `container_ref = None`, so the
+trigger path was dead in production despite a fully-green pipeline. The 204-F1 panel fix
+(create → ensure) introduced this; the panel's concern (create() force-recreates the branch /
+clears container_ref on error for EXISTING attempts) and the fresh-attempt case are both
+satisfied by conditioning: `container_ref.is_none() → create(), else ensure_container_exists()`
+(mirrors `start_attempt` container.rs:1207-1209). Fixed same-session; fmt/clippy/`cargo test -p
+services` green (normalize_sync_test full-suite flake re-passed isolated, as ledgered at 204).
+This is precisely the failure class the `## Deploy verification` gate exists to catch.

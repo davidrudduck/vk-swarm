@@ -1383,8 +1383,14 @@ pub trait ContainerService {
         executor_profile_id: ExecutorProfileId,
         prompt: String,
     ) -> Result<ExecutionProcess, ContainerError> {
-        // Ensure the container exists (idempotent; safe for existing attempts)
-        self.ensure_container_exists(task_attempt).await?;
+        // A fresh breakdown attempt has no container yet — create it (mirrors start_attempt).
+        // For an existing attempt, ensure_container_exists avoids create()'s force-recreate
+        // of the branch and its container_ref-clearing error path (204-F1).
+        if task_attempt.container_ref.is_none() {
+            self.create(task_attempt).await?;
+        } else {
+            self.ensure_container_exists(task_attempt).await?;
+        }
 
         // Get parent task
         let task = task_attempt
