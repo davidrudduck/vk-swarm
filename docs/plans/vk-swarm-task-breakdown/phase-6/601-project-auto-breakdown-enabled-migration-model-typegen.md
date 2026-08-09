@@ -2,7 +2,7 @@
 id: "601"
 phase: 6
 title: "Project auto_breakdown_enabled: migration + model + typegen"
-status: ready
+status: passed
 depends_on: ["103"]
 parallel: false
 conflicts_with: []
@@ -17,6 +17,27 @@ files:
   - "crates/server/src/routes/tasks/handlers/streams.rs"
   - "crates/server/src/bin/generate_types.rs"
   - "shared/types.ts"
+  - "crates/db/.sqlx/query-188d4124d3b360b111a7d5fa038a736f0b5c818fb9d99203683a610e2699e684.json"
+  - "crates/db/.sqlx/query-22d49a9268477c822e031b9c18ca278283cbfc2843b8111a7c101d6cc7cf4c91.json"
+  - "crates/db/.sqlx/query-426fd871dfadc5e927637343c30dac801afee4e8d81076d734f477e8ab0054ba.json"
+  - "crates/db/.sqlx/query-5246b2001c06d312446a1be5fc3c559d8c6be15445c91fbd8c1013e95b5ca4d2.json"
+  - "crates/db/.sqlx/query-52cb1f53a47a79f90738a36a72329eb06b21608b9a08006b2dd356b4fd345c08.json"
+  - "crates/db/.sqlx/query-64d5489956117c27cfeb27680a3e7c824e495ceb86cdf3309c4d908637ebb481.json"
+  - "crates/db/.sqlx/query-69b7da2baeaae86174972a29e0917a9ecf13ac6cc358c3b0d0a6abf764aa8bc6.json"
+  - "crates/db/.sqlx/query-6c446efaf402c3cff9246bb199192640b7775df830774505e07ebff61afb6f02.json"
+  - "crates/db/.sqlx/query-82edb464e8095c7cc5bed649c71171acd6278c2f30a3adcd963540449a702518.json"
+  - "crates/db/.sqlx/query-99af7434117d6694e1008112d6d04df4042a5aea9f0083956bed25c39a014594.json"
+  - "crates/db/.sqlx/query-9ee8ed41875c5acac9c4865950952268e6e4b68aff53e7efeb57520bf1c280d0.json"
+  - "crates/db/.sqlx/query-a30f13ff548e884125c3fc7c87b44cb1b3bb3c29f90bfc54e26fefc6d5e919c4.json"
+  - "crates/db/.sqlx/query-afaeb58539c13d77124ce8fcb27ccb14d1b4cd6dc858ac545b429f9fcb48b072.json"
+  - "crates/db/.sqlx/query-b46ea36ab332ac2b19f6fff06c7dc6934e362e5d4c66cf9b67e72d16389bd3d7.json"
+  - "crates/db/.sqlx/query-b585c64fc315b2dacf75496446c7d46ae8285bc71b99768fad35b230b568b358.json"
+  - "crates/db/.sqlx/query-bc754f652a9f61425d8872d2ac982d89308c33f64d557618f68ecb4ddc2e794e.json"
+  - "crates/db/.sqlx/query-c398ed006d7286e8fdbf17b646e306a2f6d9038a63242cc65661846d555920f6.json"
+  - "crates/db/.sqlx/query-df585a83d980b20eeba1a9e63eb497ae25be7200bebb0e6a6bce491d2b8fe2fd.json"
+  - "crates/db/.sqlx/query-e4b71252c9f112d9f9e09148975190226f99140d1f981f5261582bb3088f7339.json"
+  - "frontend/src/components/tasks/TaskDetails/preview/NoServerContent.tsx"
+  - "frontend/src/pages/settings/ProjectSettings.tsx"
 irreversible: false
 scope_test: "crates/db"
 allowed_change: mixed

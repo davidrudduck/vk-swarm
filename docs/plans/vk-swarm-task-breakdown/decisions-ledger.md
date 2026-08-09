@@ -528,3 +528,7 @@ the enumerated gates remain as the itemized evidence).
 - **sqlx offline metadata regenerated** via `node scripts/prepare-db.js` (migration applied to a throwaway
   db, `cargo sqlx prepare` run under the hood) — `crates/db/.sqlx/*.json` changed (additions/deletions)
   and are committed alongside the code per task instructions.
+- [Task 601 orchestrator] Amended files: +19 regenerated crates/db/.sqlx metadata files (mechanical,
+  query column lists changed) and the 2 frontend UpdateProject literal sites (NoServerContent.tsx,
+  ProjectSettings.tsx) whose compile break was forced by the new required TS field — implementer's
+  minimal `?? false` preserve-value fix, already ledgered; additive amendment.
