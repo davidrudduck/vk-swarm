@@ -295,6 +295,35 @@ pub async fn create_task(
         }
     }
 
+    // Auto-trigger a breakdown proposal for opt-in projects (task 602). Stage 1
+    // (`create_draft_proposal`) is awaited so the proposal row exists at handler-return
+    // time; stage 2 (`spawn_breakdown_run`) is fully awaitable but performs no internal
+    // detachment, so we detach it here via `tokio::spawn` (fire-and-forget).
+    if project.auto_breakdown_enabled
+        && task.parent_task_id.is_none()
+        && task
+            .description
+            .as_deref()
+            .is_some_and(|d| !d.trim().is_empty())
+    {
+        let auto_breakdown_task_id = task.id;
+        match crate::routes::breakdown::create_draft_proposal(pool, auto_breakdown_task_id).await {
+            Ok(proposal) => {
+                let deployment = deployment.clone();
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        crate::routes::breakdown::spawn_breakdown_run(deployment, proposal).await
+                    {
+                        tracing::warn!(task_id = %auto_breakdown_task_id, error = ?e, "auto-breakdown run failed");
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::warn!(task_id = %auto_breakdown_task_id, error = ?e, "auto-breakdown trigger failed");
+            }
+        }
+    }
+
     Ok(ResponseJson(ApiResponse::success(task)))
 }
 
@@ -642,4 +671,192 @@ pub async fn delete_task(
 
     // Return 202 Accepted to indicate deletion was scheduled
     Ok((StatusCode::ACCEPTED, ResponseJson(ApiResponse::success(()))))
+}
+
+// ============================================================================
+// Tests: auto-breakdown trigger on create_task (task 602)
+// ============================================================================
+
+#[cfg(test)]
+mod auto_breakdown_trigger_tests {
+    use axum::extract::State;
+    use db::models::project::CreateProject;
+
+    use super::*;
+
+    /// BOUNDARY (ledgered, mirrors `routes/breakdown.rs::test_spawn_failure_marks_failed`):
+    /// `create_task` is called directly with a real `LocalDeployment` (env-var-isolated into
+    /// a tempdir) because the auto-trigger path calls into `create_draft_proposal`, which
+    /// needs a real pool, and the detached stage-2 spawn needs `deployment.git()`/
+    /// `deployment.container()` (`impl Trait`, not mockable via a lightweight pool-only
+    /// fixture).
+    async fn setup_deployment() -> local_deployment::LocalDeployment {
+        unsafe {
+            std::env::remove_var("VK_HIVE_URL");
+            std::env::remove_var("VK_NODE_API_KEY");
+            std::env::remove_var("VK_SHARED_API_BASE");
+            std::env::set_var("DISABLE_WORKTREE_ORPHAN_CLEANUP", "1");
+            std::env::set_var("DISABLE_WORKTREE_EXPIRED_CLEANUP", "1");
+        }
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("VK_ASSET_DIR", temp_dir.path());
+            std::env::set_var("VK_DATABASE_PATH", temp_dir.path().join("db.sqlite"));
+        }
+        // Leak the tempdir so it outlives the deployment for the duration of the test process;
+        // each test uses its own tempdir via VK_ASSET_DIR/VK_DATABASE_PATH set immediately above.
+        std::mem::forget(temp_dir);
+
+        local_deployment::LocalDeployment::new().await.unwrap()
+    }
+
+    async fn seed_project(
+        pool: &sqlx::SqlitePool,
+        auto_breakdown_enabled: bool,
+    ) -> db::models::project::Project {
+        let project = db::models::project::Project::create(
+            pool,
+            &CreateProject {
+                name: "auto-breakdown-proj".to_string(),
+                git_repo_path: "/tmp/auto-breakdown-test-repo".to_string(),
+                use_existing_repo: true,
+                clone_url: None,
+                setup_script: None,
+                dev_script: None,
+                cleanup_script: None,
+                copy_files: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap();
+
+        if auto_breakdown_enabled {
+            sqlx::query("UPDATE projects SET auto_breakdown_enabled = 1 WHERE id = ?")
+                .bind(project.id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+
+        db::models::project::Project::find_by_id(pool, project.id)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn proposal_count(pool: &sqlx::SqlitePool, task_id: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM task_breakdown_proposals WHERE task_id = ?")
+            .bind(task_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn disabled_project_no_proposal() {
+        let deployment = setup_deployment().await;
+        let pool = deployment.db().pool.clone();
+        let project = seed_project(&pool, false).await;
+
+        let payload = CreateTask {
+            project_id: project.id,
+            title: "t".to_string(),
+            description: Some("do the thing".to_string()),
+            status: None,
+            parent_task_id: None,
+            image_ids: None,
+            shared_task_id: None,
+        };
+
+        let result = create_task(State(deployment), Json(payload)).await.unwrap();
+        let task = result.0.into_data().unwrap();
+        assert_eq!(proposal_count(&pool, task.id).await, 0);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn enabled_project_with_description_creates_proposal() {
+        let deployment = setup_deployment().await;
+        let pool = deployment.db().pool.clone();
+        let project = seed_project(&pool, true).await;
+
+        let payload = CreateTask {
+            project_id: project.id,
+            title: "t".to_string(),
+            description: Some("do the thing".to_string()),
+            status: None,
+            parent_task_id: None,
+            image_ids: None,
+            shared_task_id: None,
+        };
+
+        let result = create_task(State(deployment), Json(payload)).await.unwrap();
+        let task = result.0.into_data().unwrap();
+        // Assert existence only -- the detached stage-2 spawn may already have marked the
+        // proposal Failed (invalid git_repo_path), which is fine: this test only proves the
+        // trigger fired.
+        assert_eq!(proposal_count(&pool, task.id).await, 1);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn enabled_project_empty_description_no_proposal() {
+        let deployment = setup_deployment().await;
+        let pool = deployment.db().pool.clone();
+        let project = seed_project(&pool, true).await;
+
+        let payload = CreateTask {
+            project_id: project.id,
+            title: "t".to_string(),
+            description: Some("   ".to_string()),
+            status: None,
+            parent_task_id: None,
+            image_ids: None,
+            shared_task_id: None,
+        };
+
+        let result = create_task(State(deployment), Json(payload)).await.unwrap();
+        let task = result.0.into_data().unwrap();
+        assert_eq!(proposal_count(&pool, task.id).await, 0);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn enabled_project_with_parent_task_no_proposal() {
+        let deployment = setup_deployment().await;
+        let pool = deployment.db().pool.clone();
+        let project = seed_project(&pool, true).await;
+
+        let parent_payload = CreateTask {
+            project_id: project.id,
+            title: "parent".to_string(),
+            description: Some("parent desc".to_string()),
+            status: None,
+            parent_task_id: None,
+            image_ids: None,
+            shared_task_id: None,
+        };
+        let parent_result = create_task(State(deployment.clone()), Json(parent_payload))
+            .await
+            .unwrap();
+        let parent_task = parent_result.0.into_data().unwrap();
+
+        let child_payload = CreateTask {
+            project_id: project.id,
+            title: "child".to_string(),
+            description: Some("child desc".to_string()),
+            status: None,
+            parent_task_id: Some(parent_task.id),
+            image_ids: None,
+            shared_task_id: None,
+        };
+        let child_result = create_task(State(deployment), Json(child_payload))
+            .await
+            .unwrap();
+        let child_task = child_result.0.into_data().unwrap();
+
+        assert_eq!(proposal_count(&pool, child_task.id).await, 0);
+    }
 }

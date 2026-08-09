@@ -532,3 +532,43 @@ the enumerated gates remain as the itemized evidence).
   query column lists changed) and the 2 frontend UpdateProject literal sites (NoServerContent.tsx,
   ProjectSettings.tsx) whose compile break was forced by the new required TS field — implementer's
   minimal `?? false` preserve-value fix, already ledgered; additive amendment.
+
+## Task 602
+
+- **Insertion point**: added the auto-breakdown trigger block in `create_task`
+  (`crates/server/src/routes/tasks/handlers/core.rs`) immediately after the existing
+  auto-share-to-Hive block and before the final `Ok(ResponseJson(ApiResponse::success(task)))`,
+  exactly as dictated. Guard conditions kept verbatim: `project.auto_breakdown_enabled &&
+  task.parent_task_id.is_none() && task.description.as_deref().is_some_and(|d|
+  !d.trim().is_empty())`.
+- **API adaptation (as pre-authorized by the task prompt)**: `create_draft_proposal(pool:
+  &SqlitePool, task_id: Uuid)` (stage 1) is awaited directly on `&deployment.db().pool` via
+  `crate::routes::breakdown::create_draft_proposal` — both fns are `pub(crate)` in
+  `routes/breakdown.rs` and `routes::breakdown` is already `pub mod` in `routes/mod.rs`, so no
+  visibility change was needed (the task's conditional `pub(crate)` bump was not required).
+  `spawn_breakdown_run(deployment, proposal)` (stage 2) is awaitable-but-non-detaching per its own
+  doc comment, so the caller wraps it in `tokio::spawn` — matching the same pattern
+  `trigger_and_spawn` already uses in `breakdown.rs` for the manual-trigger HTTP handler.
+- **Local var to dodge a partial-move**: captured `task.id` into `auto_breakdown_task_id: Uuid`
+  before entering the `tokio::spawn(async move { ... })` block, because the closure needs to log
+  `task_id` on error and `task` itself is still needed afterward for the handler's own return
+  value (`Ok(ResponseJson(ApiResponse::success(task)))`). `Uuid` is `Copy` so this is a zero-cost
+  local, not a functional change.
+- **Failing-test-first**: added `mod auto_breakdown_trigger_tests` at the bottom of `core.rs`,
+  mirroring the `LocalDeployment`-boundary pattern already established and ledgered in
+  `routes/breakdown.rs::test_spawn_failure_marks_failed` (env-var-isolated tempdir, real
+  `LocalDeployment::new()`) — required because `create_task` needs a full `DeploymentImpl` for
+  `deployment.share_publisher()` / `deployment.git()` / `deployment.container()`, none of which are
+  mockable via a pool-only fixture. All 4 dictated cases implemented as separate `#[tokio::test]`
+  fns, each `#[serial_test::serial]` (env-var isolation) exactly like the boundary test it mirrors:
+  disabled-project → 0 proposal rows; enabled+description+no-parent → 1 proposal row (existence
+  only, not status — the detached stage-2 spawn against an invalid `git_repo_path` may already have
+  marked it Failed by the time the test asserts, which is expected and does not indicate a bug);
+  enabled+empty/whitespace description → 0 rows; enabled+parent_task_id → 0 rows (created via a real
+  parent `create_task` call first, since `parent_task_id` must reference an existing task).
+- **`ApiResponse<T>` accessor**: fields are private; used the existing `into_data()` consuming
+  accessor (already present in `crates/utils/src/response.rs`) rather than reaching into private
+  fields — no `ApiResponse` change needed.
+- Verification: `cargo test -p server` → 87 passed (lib) + integration suites all green + doctests
+  7 passed/3 ignored (pre-existing ignores, untouched); `cargo clippy -p server --all-targets` →
+  clean, zero warnings; `cargo fmt -p server -- --check` → 0 diffs.
