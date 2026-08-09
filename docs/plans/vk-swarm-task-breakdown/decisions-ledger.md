@@ -605,3 +605,62 @@ the enumerated gates remain as the itemized evidence).
   → exit 0; `npm run lint` → clean (0 warnings); `npx prettier --check` on all 6 touched files →
   clean (after one `--write` pass on the new test file, which had default-formatting drift on
   creation).
+
+## Task 701 — repo gate evidence (2026-08-09)
+
+All commands run from the worktree root at commit cf4eeac9 (+ evidence commits); every gate exit 0.
+
+```text
+gate 0  npm run check                    -> "Finished `dev` profile ... 15.08s"; CHECK_EXIT=0
+gate 1  cargo fmt --all -- --check       -> 0 "Diff in" lines (clean)
+gate 2  cargo clippy --all --all-targets --all-features -- -D warnings
+                                         -> "Finished `dev` profile"; CLIPPY_EXIT=0
+gate 3  cargo test --workspace           -> 58 x "test result: ok", 0 FAILED
+gate 4  frontend: eslint --max-warnings 0 clean; tsc --noEmit exit 0 (TSC_OK);
+        vitest "Tests 500 passed (500)"
+gate 5  remote-frontend: eslint clean; tsc --noEmit exit 0 (TSC_OK);
+        vitest "Test Files 54 passed (54) / Tests 426 passed (426)"
+gate 6  npm run generate-types:check     -> "shared/types.ts is up to date."
+```
+
+## Reachability gate
+
+**(a) Call-path trace (cited against the merged branch code):**
+Production entry points and the path to every changed unit:
+1. UI: TaskCard "Break down" action (frontend/src/components/ui/actions-dropdown.tsx, both
+   branches — mobile :608-614, desktop :847-853) -> useBreakdownMutations.trigger
+   (frontend/src/hooks/useBreakdown.ts) -> breakdownApi.trigger -> POST /api/tasks/{id}/breakdown.
+2. Server: routes/mod.rs:11 `pub mod breakdown;` + :57 `.merge(breakdown::router(&deployment))`
+   (nested under /api at mod.rs:85) -> trigger_breakdown (routes/breakdown.rs:239) ->
+   create_draft_proposal (:56, stage 1 awaited) -> spawn_breakdown_run (:90, detached by handler)
+   -> TaskAttempt creation -> ContainerService::start_breakdown_attempt
+   (crates/services/src/services/container.rs:1380, task 204; ensure_container_exists at :1387)
+   -> start_execution with ExecutionProcessRunReason::Breakdown.
+3. Executor exit: LocalContainerService exit monitor -> post-flush hook
+   (crates/local-deployment/src/container.rs:901) -> handle_breakdown_completion (:1597) ->
+   BreakdownService::extract_stdout_lines/parse_breakdown_result/persist_result
+   (crates/services/src/services/breakdown.rs, task 202) -> draft items.
+4. Review/accept: BreakdownReviewDialog -> PUT items / POST accept -> accept_proposal
+   (crates/db/src/models/task_breakdown/queries.rs:237) -> child tasks + task_dependencies +
+   in-transaction node_outbox task.upsert rows.
+5. Auto-trigger: create_task handler hook (crates/server/src/routes/tasks/handlers/core.rs, task
+   602, guarded by project.auto_breakdown_enabled from task 601).
+6. MCP: task_server.rs break_down_task/get_breakdown/accept_breakdown -> the same REST routes
+   (paths verified against router in the 401 panel).
+Every changed unit sits on a path reachable from a production entry point; no dead code.
+
+**(b) Real-seam tests:** 602's four tests drive the REAL create_task axum handler through to
+proposal-row existence; 301's test_spawn_failure_marks_failed constructs a real LocalDeployment
+and awaits spawn_breakdown_run; 401's proxy tests bind a real TcpListener and assert exact
+method/path/body against the router-registered paths; 503's tests drive the real dropdown branch
+switch. These cross the HTTP/deployment seams, not mocks past them.
+
+**(c) Symptom-mapped assertions:** the spec's core invariant (review gate: nothing real before
+acceptance) is asserted live-shaped in test_review_gate_no_outbox_before_accept (zero outbox rows
+for proposal/items AND unchanged entity_type='task' outbox count) and the rollback-proof
+test_accept_transaction_atomic; the SC5 opt-in invariant by 602's disabled-path test (zero
+proposal rows).
+
+Remaining for run close: `## Deploy verification` live evidence (SC1-SC7, ledger items 7-15) —
+operator-gated: requires a deployed feature-branch build, real executor runs, hive stop/reconnect,
+and executor-profile sabotage. NOT yet recorded; wai-evidence.sh will fail closed until it lands.
