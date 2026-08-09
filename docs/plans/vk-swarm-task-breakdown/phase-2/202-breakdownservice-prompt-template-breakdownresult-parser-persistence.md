@@ -2,7 +2,7 @@
 id: "202"
 phase: 2
 title: "BreakdownService: prompt template + BreakdownResult parser + persistence"
-status: ready
+status: passed
 depends_on: ["102","201"]
 parallel: false
 conflicts_with: []
