@@ -358,6 +358,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_replace_items_rejects_non_draft() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+
+        update_status(&pool, proposal.id, BreakdownStatus::Accepted, None)
+            .await
+            .expect("update_status to accepted");
+
+        let result = replace_items(&pool, proposal.id, vec![item("A", 0, vec![])]).await;
+        assert!(
+            result.is_err(),
+            "replace_items on a non-draft proposal must error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accept_rejects_non_draft() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+        replace_items(&pool, proposal.id, vec![item("A", 0, vec![])])
+            .await
+            .expect("replace_items");
+
+        let children = accept_proposal(&pool, proposal.id)
+            .await
+            .expect("first accept succeeds");
+        assert_eq!(children.len(), 1);
+
+        let tasks_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tasks")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let second = accept_proposal(&pool, proposal.id).await;
+        assert!(second.is_err(), "second accept on same proposal must error");
+
+        let tasks_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tasks")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            tasks_before.0, tasks_after.0,
+            "no double child creation on re-accept"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accept_outbox_row_shape() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+        replace_items(&pool, proposal.id, vec![item("A", 0, vec![])])
+            .await
+            .expect("replace_items");
+
+        let children = accept_proposal(&pool, proposal.id)
+            .await
+            .expect("accept_proposal");
+        let child_id = children[0].id;
+
+        // Mirror the literal values enqueue_task_upsert_op writes (task/queries.rs):
+        // op_type='task.upsert', entity_type='task', idempotency_key="task:{id}:{uuid}",
+        // payload = serde_json::to_value(&task).
+        let row: (String, String, String) = sqlx::query_as(
+            "SELECT entity_type, idempotency_key, payload FROM node_outbox
+             WHERE op_type = 'task.upsert' AND entity_id = ?",
+        )
+        .bind(child_id)
+        .fetch_one(&pool)
+        .await
+        .expect("outbox row for accepted child");
+
+        assert_eq!(row.0, "task", "entity_type mirrors enqueue_task_upsert_op");
+        assert!(
+            row.1.starts_with(&format!("task:{}:", child_id)),
+            "idempotency_key must start with task:{{child_id}}:, got {}",
+            row.1
+        );
+        assert!(!row.2.is_empty(), "payload must be non-empty");
+        let payload: serde_json::Value =
+            serde_json::from_str(&row.2).expect("payload parses as JSON");
+        assert_eq!(
+            payload["id"].as_str(),
+            Some(child_id.to_string().as_str()),
+            "payload id field is the serialized child task id"
+        );
+    }
+
+    #[tokio::test]
     async fn test_replace_items_rejects_self_and_dangling_refs() {
         let (pool, _temp_dir) = create_test_pool().await;
         let project_id = create_project(&pool).await;
