@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: vk-swarm-task-breakdown
 change_kind: behaviour
 verify_cmd: "sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} 'select status from task_breakdown_proposals' | grep -q accepted"

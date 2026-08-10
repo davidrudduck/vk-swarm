@@ -1,9 +1,10 @@
 ---
 workstream: vk-swarm-task-breakdown
 doc_type: readme
-status: draft
+status: shipped
 title: "vk-swarm-task-breakdown"
 staging_pointers:
+  - docs/plans/vk-swarm-task-breakdown
   - docs/superpowers/specs/2026-08-07-vk-swarm-task-breakdown.md
 ---
 

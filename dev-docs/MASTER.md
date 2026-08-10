@@ -35,7 +35,7 @@
 | vk-swarm-node-foundations | shipped | Phase 2a — node correct, durable, crash-resumable (ships first) | - | - | 2 |
 | vk-swarm-node-ui-localize | shipped | Localize the node frontend — proxy swarm management to the hive, make the board local-only | - | - | 2 |
 | vk-swarm-refactor | draft | vk-swarm orchestration platform — 8-phase program umbrella | - | - | 1 |
-| vk-swarm-task-breakdown | draft | vk-swarm-task-breakdown | - | - | 1 |
+| vk-swarm-task-breakdown | shipped | vk-swarm-task-breakdown | - | - | 2 |
 | worktree-orphan-sweep-guard | shipped |  | - | - | 0 |
 
 <!-- WAI:STATUS:END -->
