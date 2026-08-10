@@ -1,0 +1,69 @@
+---
+title: "AI Task Breakdown"
+description: "Turn a high-level goal card into a reviewed set of correctly-scoped, independently-executable child tasks using an AI coding agent"
+---
+
+Task breakdown lets you point an AI coding agent at a goal-level task card and get back a **proposed** set of subtasks — each with a title, description, and dependency references — which you review, edit, and explicitly accept before anything becomes real work on the board.
+
+Nothing a breakdown produces is actionable until you accept it: proposals cannot host task attempts, and they never sync to the hive.
+
+## Triggering a breakdown
+
+There are three ways to trigger a breakdown. All three converge on the same endpoint and the same review gate.
+
+### From the task card
+
+1. Open the actions menu on a task card (available on both desktop and mobile).
+2. Choose **Break down**.
+3. The node spawns your configured coding agent against the task's title and description. The card shows *Generating breakdown...* while the run is in flight.
+4. When the run completes, the card shows a **Proposed subtasks** badge.
+
+The task needs a description that states a multi-part goal — the agent decomposes what the card actually says.
+
+### Via MCP
+
+External agents can drive the same flow programmatically with three MCP tools: `break_down_task`, `get_breakdown`, and `accept_breakdown`. They are pure proxies for the REST endpoints, so the semantics — including the review gate — are identical to the UI path. See the [MCP Tools Reference](/features/mcp-tools#task-breakdown).
+
+### Automatically on task creation
+
+Projects have an **Auto-breakdown new tasks** setting (default: off). When enabled, creating a top-level task with a non-empty description queues a draft proposal for your review automatically. Auto-breakdown never lands child tasks directly — it only produces drafts, exactly as if you had clicked **Break down** yourself.
+
+Enable it in **Project Settings**.
+
+## Reviewing a proposal
+
+Clicking the **Proposed subtasks** badge opens the **Review task breakdown** dialog, where you can:
+
+- **Edit** each item's title and description inline
+- **Reorder** items (move up / move down)
+- **Delete** items you don't want
+- **Inspect dependencies** — items can depend on other items in the same set, shown as dependency chips
+
+While a proposal is in draft:
+
+- No task attempt can be started from a proposed item
+- Nothing reaches the hive — proposals are node-local only
+
+## Accepting, discarding, and retrying
+
+- **Accept** converts the (possibly edited) set into real child tasks under the parent, in a single transaction. Each child is an ordinary task that can immediately host a task attempt. Dependency edges between the new tasks are persisted and queryable via `GET /api/tasks/{id}/dependencies`. Accepted tasks sync to the hive through the normal outbox path.
+- **Discard** throws the proposal away. The task is unchanged.
+- **Retry** appears when a run fails (agent error or unparseable output). The failed proposal shows a visible error on the card; retrying starts a fresh run. A failed run never leaves partial items or child tasks behind.
+
+Only one draft proposal can exist per task at a time — triggering a breakdown while a draft exists returns a conflict.
+
+## Offline behaviour
+
+Breakdown is fully offline-first: triggering, reviewing, editing, and accepting all work with the hive unreachable. Accepted child tasks queue in the node's outbox and reconcile to the hive when the connection returns, with no loss.
+
+## Limits
+
+- Breakdown runs only on the task's **origin node** — tasks of remote/mirrored projects are rejected, the same rule as starting an attempt.
+- Breakdown is single-level: generated subtasks are not themselves auto-decomposed.
+- Acceptance creates *ready* tasks; nothing auto-starts them.
+
+## Related
+
+- [Creating Subtasks](/core-features/subtasks) — manual subtask creation from a task attempt
+- [MCP Tools Reference](/features/mcp-tools) — programmatic access
+- [Task Breakdown Architecture](/architecture/task-breakdown) — how it works internally
