@@ -11,7 +11,7 @@ import type {
   BaseCodingAgent,
 } from 'shared/types';
 import type { AgentRuntimeCapabilities } from '@/lib/agentRuntimeCapabilities';
-import { makeRequest, handleApiResponse } from './utils';
+import { makeRequest, handleApiResponse, jsonBody } from './utils';
 
 export interface SlashCommandItem {
   name: string;
@@ -47,8 +47,10 @@ export const configApi = {
    */
   saveConfig: async (config: Config): Promise<Config> => {
     const response = await makeRequest('/api/config', {
+      // `config.pagination.initial_load` / `max_limit` are `bigint` (ts-rs maps
+      // Rust i64), which plain JSON.stringify throws on.
       method: 'PUT',
-      body: JSON.stringify(config),
+      body: jsonBody(config),
     });
     return handleApiResponse<Config>(response);
   },

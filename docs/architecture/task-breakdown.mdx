@@ -69,6 +69,11 @@ check-then-act and the last writer wins. `handle_breakdown_completion` (`crates/
 
 `start_execution` flips the parent task to `InProgress` for most run reasons, but `flips_task_to_in_progress` excludes `Breakdown` alongside `DevServer`. This is not cosmetic: `Breakdown` has no path back *out* of `InProgress` — `should_finalize` is false for it, `crates/local-deployment/src/container.rs` excludes it from the commit and next-action block, and `mark_process_failed_with_task_update` only updates the task for `CodingAgent`, `SetupScript`, and `CleanupScript`. Flipping the status would strand the parent permanently, which with auto-breakdown meant every newly created task.
 
+The predicate governs **both** lifecycle writes in `start_execution`, not just the flip on start:
+the start-error path also sets the parent to `InReview`, and gating only the first left a
+Breakdown run that failed to start moving a Todo parent to `InReview` — the same stranding, one
+path further along. `DevServer` is gated there for the same reason.
+
 The predicate is a free function rather than an inline `matches!` specifically so it can be unit-tested — `start_execution` itself needs a full deployment to exercise.
 
 ## Dependency validation
@@ -95,9 +100,9 @@ The cycle check is not redundant with the range and self-reference checks: a mut
 | `POST /api/tasks/{task_id}/breakdown` | Create draft + start run; 409 on existing draft; rejects tasks of remote/mirrored projects (origin-node only). |
 | `GET /api/tasks/{task_id}/breakdown` | Current proposal + items; 404 for unknown task; 200 with `data: null` for a task with no proposal (one contract — never 204). |
 | `PUT /api/breakdown-proposals/{id}/items` | Replace the item set (edits, deletions, reorder). Rejects out-of-range indices, self-references, and cycles before writing. |
-| `POST /api/breakdown-proposals/{id}/accept` | Single transaction: create child tasks via `Task::create` (`parent_task_id` = parent; outbox sync fires here and only here), map intra-set `depends_on` indices to `task_dependencies` rows, flip status to `accepted`. Returns the created tasks. Emits a `tracing` event with `proposal_id`, `parent_task_id`, and `child_count`. |
+| `POST /api/breakdown-proposals/{id}/accept` | Single transaction: insert child tasks with SQLx directly (`parent_task_id` = parent) and enqueue their `task.upsert` outbox rows on the same transaction — **not** via `Task::create`, whose post-insert enqueue is best-effort; acceptance needs all-or-nothing, so the divergence is deliberate and documented at `queries.rs:351`. Outbox sync fires here and only here. Then map intra-set `depends_on` indices to `task_dependencies` rows and flip status to `accepted`. Returns the created tasks. Emits a `tracing` event with `proposal_id`, `parent_task_id`, and `child_count`. |
 | `POST /api/breakdown-proposals/{id}/discard` | Discard the proposal. 409 if it is already accepted (terminal). |
-| `POST /api/breakdown-proposals/{id}/retry` | Failed → new run (`Failed -> Draft` is the one re-entry into the draft state). |
+| `POST /api/breakdown-proposals/{id}/retry` | Asserts the proposal is `Failed`, then creates a **new** draft proposal and starts a new run. The failed row is left as it is — retry does not re-draft in place, so no `Failed -> Draft` transition occurs. |
 | `GET /api/tasks/{task_id}/dependencies` | Dependency edges for downstream consumers. |
 
 All three triggers share one review gate and one pair of stage functions — `create_draft_proposal` then `spawn_breakdown_run` — so the semantics are identical everywhere. They do not all share a REST call path: the card action and the MCP tool go through `POST /api/tasks/{task_id}/breakdown`, while auto-on-create calls the same two stage functions in-process from the task-create handler (`crates/server/src/routes/tasks/handlers/core.rs`), awaiting stage 1 so the proposal row exists at handler-return time and detaching stage 2 via `tokio::spawn`.

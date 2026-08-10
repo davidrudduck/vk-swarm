@@ -1585,7 +1585,14 @@ pub trait ContainerService {
                     update_error
                 );
             }
-            Task::update_status(&self.db().pool, task.id, TaskStatus::InReview).await?;
+            // Gated by the same predicate as the InProgress flip above. A run reason
+            // that never moves the task INTO the lifecycle must not move it on the way
+            // out either: without this, a Breakdown run that fails to start flips a Todo
+            // parent to InReview — the exact stranding the predicate was introduced to
+            // prevent, one path further along. Applies to DevServer for the same reason.
+            if flips_task_to_in_progress(run_reason) {
+                Task::update_status(&self.db().pool, task.id, TaskStatus::InReview).await?;
+            }
 
             // Emit stderr error message
             let log_message = LogMsg::Stderr(format!("Failed to start execution: {start_error}"));
@@ -2693,6 +2700,10 @@ mod tests {
         // should_finalize is false for it, the commit/next-action block excludes it, and
         // mark_process_failed_with_task_update ignores it. Flipping the status here would
         // strand the parent task — visibly so for auto-breakdown on task create.
+        //
+        // The predicate governs BOTH lifecycle writes in `start_execution`: the InProgress
+        // flip on start, and the InReview flip on the start-error path. Gating only the
+        // first left a failed-to-start Breakdown run moving a Todo parent to InReview.
         assert!(!flips_task_to_in_progress(
             &ExecutionProcessRunReason::Breakdown
         ));

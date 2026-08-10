@@ -94,6 +94,7 @@ import {
   BreakdownReviewDialog,
   runningPollInterval,
 } from './BreakdownReviewDialog';
+import type { BreakdownWithItems } from '@/lib/api/breakdown';
 
 function renderDialog() {
   return render(
@@ -423,53 +424,37 @@ describe('BreakdownReviewDialog', () => {
 });
 
 describe('runningPollInterval', () => {
-  const proposal = (over: Record<string, unknown> = {}) => ({
-    id: 'p1',
-    task_id: 't1',
-    status: 'draft',
-    execution_process_id: 'e1',
-    error: null,
-    created_at: new Date(),
-    updated_at: new Date(),
-    ...over,
+  const running = (
+    over: Partial<TaskBreakdownProposal> = {},
+    items: TaskBreakdownProposalItem[] = []
+  ): BreakdownWithItems => ({
+    proposal: makeProposal({ execution_process_id: 'exec-1', ...over }),
+    items,
   });
 
   it('polls while a run is in flight', () => {
     // A draft with an execution process and no items yet IS the running state.
     // The run completes server-side with nothing pushed to the client, so
     // without this the spinner never resolves.
-    expect(
-      runningPollInterval({ proposal: proposal(), items: [] } as never)
-    ).toBe(3000);
+    expect(runningPollInterval(running())).toBe(3000);
   });
 
   it('stops as soon as items arrive', () => {
-    expect(
-      runningPollInterval({
-        proposal: proposal(),
-        items: [{ id: 'i1' }],
-      } as never)
-    ).toBe(false);
+    expect(runningPollInterval(running({}, [makeItem({ id: 'a' })]))).toBe(
+      false
+    );
   });
 
   it('does not poll a draft that was never spawned', () => {
-    expect(
-      runningPollInterval({
-        proposal: proposal({ execution_process_id: null }),
-        items: [],
-      } as never)
-    ).toBe(false);
+    expect(runningPollInterval(running({ execution_process_id: null }))).toBe(
+      false
+    );
   });
 
-  it.each(['failed', 'accepted', 'discarded'])(
+  it.each(['failed', 'accepted', 'discarded'] as const)(
     'does not poll a %s proposal',
     (status) => {
-      expect(
-        runningPollInterval({
-          proposal: proposal({ status }),
-          items: [],
-        } as never)
-      ).toBe(false);
+      expect(runningPollInterval(running({ status }))).toBe(false);
     }
   );
 

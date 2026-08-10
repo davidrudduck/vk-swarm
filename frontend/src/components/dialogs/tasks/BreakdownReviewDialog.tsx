@@ -419,7 +419,11 @@ const BreakdownReviewDialogImpl = NiceModal.create<BreakdownReviewDialogProps>(
             <Button
               variant="destructive"
               onClick={handleDiscard}
-              disabled={discard.isPending}
+              // `handleDiscard` returns early when `proposal` is null, so an
+              // enabled button during loading or a query error does nothing at
+              // all when clicked. Gate on the same settled-with-a-proposal
+              // condition Accept uses.
+              disabled={!isQuerySettled || !proposal || discard.isPending}
             >
               {t('breakdown.discard', 'Discard')}
             </Button>
