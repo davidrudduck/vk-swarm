@@ -823,3 +823,84 @@ produced node_outbox rows before accept (SC2 fence: count 0).
 Findings DV-1..DV-5 discovered by this verification are recorded above; DV-1/DV-2/DV-4 fixed on
 this branch (29464845, 64729f1d, 1757424b), DV-3/DV-5 filed as backlog findings
 F-2026-08-09-01/-02 (pre-existing, out of workstream scope).
+
+## Post-ship unit-test coverage pass (2026-08-10)
+
+Requested after the run closed. Scope: raise coverage and reliability on the breakdown
+feature's own code. 23 frontend + 17 Rust tests added; commits `637c8911`, `e112ff2c`.
+
+### Real defect found and fixed: bigint request bodies (frontend)
+
+`BreakdownReviewDialog.toPayload` builds `sort_order`/`depends_on_indices` with `BigInt(...)`
+(ts-rs maps Rust `i64` → TS `bigint`), and `breakdownApi.putItems` passed the payload to
+`JSON.stringify`, which **throws** `TypeError: Do not know how to serialize a BigInt`. Every
+edit in the review dialog — retitle, description, delete, reorder — therefore failed silently
+(mutation rejected, `console.error`, no persistence).
+
+Why every existing gate missed it:
+- all three consumer suites (`useBreakdown.test.ts`, `BreakdownReviewDialog.test.tsx`,
+  `TaskCard.breakdown.test.tsx`) do `vi.mock('@/lib/api/breakdown')`, so no test ever
+  serialised a request body — `lib/api/breakdown.ts` sat at **6.66%** with 500 tests green;
+- SC2's live deploy evidence exercised the edit over `curl` with plain JSON numbers, never
+  through the UI, so the operator-gated check did not reach the defect either.
+
+Fix: `jsonBody()` in `frontend/src/lib/api/utils.ts` — emits bigints as JSON numbers, and
+throws `RangeError` outside the safe-integer range rather than silently losing precision or
+emitting a quoted string (serde rejects a JSON string for an `i64` field). Test-first: the
+assertion was confirmed RED with the exact production error before the fix landed.
+
+### Coverage (measured, `cargo llvm-cov` / vitest v8)
+
+Breakdown-owned Rust files:
+
+| File | Region | Line |
+|---|---|---|
+| `db/src/models/task_breakdown/mod.rs` | 100.00% | 100.00% |
+| `db/src/models/task_breakdown/queries.rs` | 89.43% | 97.34% |
+| `services/src/services/breakdown.rs` | 97.61% | 98.81% |
+| `server/src/routes/breakdown.rs` | 78.04% | 75.10% |
+| **aggregate** | **91.59%** | **91.75%** |
+
+Frontend: `lib/api/breakdown.ts` 6.66% → **100%** (stmts/branch/funcs/lines);
+`hooks/useBreakdown.ts` 79.48% → **100%**; `BreakdownReviewDialog.tsx` 75.22% (unchanged,
+already covered by task 502/503).
+
+Shared files are dominated by non-breakdown code, so whole-file numbers are not meaningful
+for this component; what changed is that their breakdown-specific fns went from zero to
+covered: `start_breakdown_attempt` (`services/container.rs`) and
+`handle_breakdown_completion` (`local-deployment/container.rs`, previously 0%).
+
+Deliberately left uncovered in `routes/breakdown.rs`: `spawn_breakdown_run_inner`'s live
+executor-spawn body (lines ~135–186) and the thin axum State-unwrap handlers. The logic they
+wrap is already tested through the `*_impl` fns (task 301's panel fix exists precisely so
+tests hit the real code path). Covering the remainder would require constructing a full
+`DeploymentImpl` with a real git repo, or forcing a contrived non-unique sqlx failure — i.e.
+testing the framework, not this feature.
+
+### Anti-hollow verification (orchestrator-run, not self-reported)
+
+Tests were validated by mutating production code and confirming RED, then reverting:
+- disabling the `Some("assistant")` arm of `parse_breakdown_result` stage 1 (the DV-4 fix)
+  turned **both** `test_parse_assistant_event_without_result_line` **and**
+  `test_handle_breakdown_completion_success_persists_items` RED — the integration test is a
+  genuine seam test, not a fixture agreeing with itself;
+- inverting `container_ref.is_none()` in `start_breakdown_attempt` (the DV-1 fix) turned all
+  five new branch tests RED;
+- `accept` POST→PUT and a misspelled `discard` path turned the frontend wiring tests RED.
+
+All mutations reverted; `git show e112ff2c --unified=0` confirms every hunk is
+`@@ -N,0 +M,K @@ mod tests` (zero lines removed) — production code byte-identical.
+
+Note for future parallel runs: agents mutation-testing shared crates concurrently can capture
+a **peer's** in-flight mutation in their backup/restore. The reliable check is the committed
+diff shape, not any agent's account of its own revert.
+
+### Gates
+
+`cargo fmt --all -- --check`, `cargo clippy --all --all-targets --all-features -- -D warnings`,
+`cargo test --workspace` all green; `frontend` lint/tsc/prettier/vitest (523 passed) and
+`remote-frontend` lint/tsc/vitest (426 passed) all green.
+
+**Outstanding:** end-to-end tests not yet re-run for this pass. The bigint defect sat exactly
+in the UI-path gap that E2E covers and unit tests do not, so `remote-frontend/scripts/e2e-test.sh`
+plus a manual pass through the review dialog is the check that would have caught it.
