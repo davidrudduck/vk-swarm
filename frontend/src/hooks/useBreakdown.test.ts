@@ -303,4 +303,75 @@ describe('useBreakdownMutations', () => {
 
     expect(onTriggerError).toHaveBeenCalledWith(error);
   });
+
+  /**
+   * Only `trigger`'s error path was covered above, so a mutation whose onError
+   * forgot to invoke its callback (or invoked the wrong one) stayed invisible.
+   * Each mutation is exercised here through its own rejection.
+   */
+  describe('every mutation surfaces its own failure', () => {
+    const cases = [
+      {
+        name: 'putItems',
+        method: 'putItems',
+        option: 'onPutItemsError',
+        run: (m: ReturnType<typeof useBreakdownMutations>) =>
+          m.putItems.mutate({
+            proposalId: 'proposal-1',
+            payload: { items: [] },
+          }),
+        pending: (m: ReturnType<typeof useBreakdownMutations>) => m.putItems,
+      },
+      {
+        name: 'discard',
+        method: 'discard',
+        option: 'onDiscardError',
+        run: (m: ReturnType<typeof useBreakdownMutations>) =>
+          m.discard.mutate('proposal-1'),
+        pending: (m: ReturnType<typeof useBreakdownMutations>) => m.discard,
+      },
+      {
+        name: 'retry',
+        method: 'retry',
+        option: 'onRetryError',
+        run: (m: ReturnType<typeof useBreakdownMutations>) =>
+          m.retry.mutate('proposal-1'),
+        pending: (m: ReturnType<typeof useBreakdownMutations>) => m.retry,
+      },
+      {
+        name: 'accept',
+        method: 'accept',
+        option: 'onAcceptError',
+        run: (m: ReturnType<typeof useBreakdownMutations>) =>
+          m.accept.mutate('proposal-1'),
+        pending: (m: ReturnType<typeof useBreakdownMutations>) => m.accept,
+      },
+    ] as const;
+
+    it.each(cases)(
+      '$name calls its onError callback with the rejection',
+      async ({ method, option, run, pending }) => {
+        const { breakdownApi: api } = await import('@/lib/api/breakdown');
+        const error = new Error(`${method} failed`);
+        vi.mocked(
+          api[method] as unknown as (...args: unknown[]) => Promise<unknown>
+        ).mockRejectedValue(error);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        const onError = vi.fn();
+
+        const { result } = renderHook(
+          () =>
+            useBreakdownMutations('task-1', 'project-1', { [option]: onError }),
+          { wrapper: createWrapper().wrapper }
+        );
+
+        run(result.current);
+
+        await waitFor(() => expect(pending(result.current).isError).toBe(true));
+
+        expect(onError).toHaveBeenCalledWith(error);
+      }
+    );
+  });
 });

@@ -9,7 +9,7 @@ import type {
   Task,
   TaskDependency,
 } from 'shared/types';
-import { makeRequest, handleApiResponse } from './utils';
+import { makeRequest, handleApiResponse, jsonBody } from './utils';
 
 export interface BreakdownWithItems {
   proposal: TaskBreakdownProposal;
@@ -53,7 +53,7 @@ export const breakdownApi = {
       `/api/breakdown-proposals/${proposalId}/items`,
       {
         method: 'PUT',
-        body: JSON.stringify(payload),
+        body: jsonBody(payload),
       }
     );
     return handleApiResponse<TaskBreakdownProposalItem[]>(response);

@@ -108,4 +108,56 @@ describe('ProjectSettings auto-breakdown toggle', () => {
       );
     });
   });
+
+  it('renders the checkbox checked when auto_breakdown_enabled is true', async () => {
+    mockUseProjects.mockReturnValue({
+      data: [{ ...baseProject, auto_breakdown_enabled: true }],
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useProjects>);
+
+    renderWithProviders(
+      <ProjectSettings />,
+      '/settings/projects?projectId=project-1'
+    );
+
+    const checkbox = await screen.findByRole('checkbox', {
+      name: /auto-breakdown new tasks/i,
+    });
+    expect(checkbox).toBeChecked();
+  });
+
+  /**
+   * The opt-in must be reversible. Only asserting the false→true direction would
+   * pass even if the handler hard-coded `true`.
+   */
+  it('un-toggles and saves auto_breakdown_enabled: false in the update payload', async () => {
+    mockUseProjects.mockReturnValue({
+      data: [{ ...baseProject, auto_breakdown_enabled: true }],
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useProjects>);
+
+    renderWithProviders(
+      <ProjectSettings />,
+      '/settings/projects?projectId=project-1'
+    );
+
+    const checkbox = await screen.findByRole('checkbox', {
+      name: /auto-breakdown new tasks/i,
+    });
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+
+    fireEvent.click(await screen.findByRole('button', { name: /save/i }));
+
+    await waitFor(() => {
+      expect(updateMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 'project-1',
+          data: expect.objectContaining({ auto_breakdown_enabled: false }),
+        })
+      );
+    });
+  });
 });

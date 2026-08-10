@@ -76,6 +76,34 @@ export function anySignal(signals: AbortSignal[]): AbortSignal {
 }
 
 /**
+ * Serialise a request body that may contain `bigint` values.
+ *
+ * ts-rs maps every Rust `i64` to a TypeScript `bigint`, so generated request
+ * types (e.g. `ProposalItemInput.sort_order`) legitimately hold BigInts —
+ * and plain `JSON.stringify` throws `TypeError: Do not know how to serialize
+ * a BigInt` on them. Serde deserialises a JSON number into `i64` fine, so
+ * emitting them as numbers is the correct wire form.
+ *
+ * A value outside the safe-integer range throws rather than being coerced:
+ * `Number()` would silently lose precision, and a quoted string would be
+ * rejected by serde (an `i64` field does not accept a JSON string), so both
+ * alternatives corrupt or fail further from the cause.
+ */
+export const jsonBody = (payload: unknown): string =>
+  JSON.stringify(payload, (_key, value) => {
+    if (typeof value !== 'bigint') return value;
+    if (
+      value < BigInt(Number.MIN_SAFE_INTEGER) ||
+      value > BigInt(Number.MAX_SAFE_INTEGER)
+    ) {
+      throw new RangeError(
+        `Cannot serialise ${value}n to JSON without losing precision`
+      );
+    }
+    return Number(value);
+  });
+
+/**
  * Make an HTTP request with timeout and default headers.
  */
 export const makeRequest = async (url: string, options: RequestInit = {}) => {
