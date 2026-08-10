@@ -22,6 +22,7 @@ impl Project {
                       cleanup_script,
                       copy_files,
                       parallel_setup_script as "parallel_setup_script!: bool",
+                      auto_breakdown_enabled as "auto_breakdown_enabled!: bool",
                       remote_project_id as "remote_project_id: Uuid",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>",

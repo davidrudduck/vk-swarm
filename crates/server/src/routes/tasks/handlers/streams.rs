@@ -173,6 +173,7 @@ mod tests {
             cleanup_script: None,
             copy_files: None,
             parallel_setup_script: false,
+            auto_breakdown_enabled: false,
             remote_project_id: Some(remote_project_id),
             created_at: Utc::now(),
             updated_at: Utc::now(),

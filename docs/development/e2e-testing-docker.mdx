@@ -44,12 +44,12 @@ These run against the **real server with real database** — no mocked API respo
 
 ## Architecture
 
-```
+```text
 ┌─────────────────┐
 │  Playwright     │  ← real Chromium browser
 │  (chromium)     │
 └────────┬────────┘
-         │ http://localhost:9000
+         │ http://localhost:9210
          ▼
 ┌─────────────────┐
 │  Hive Server    │  ← serves API + static frontend
@@ -88,7 +88,7 @@ test.describe('My feature', () => {
 });
 ```
 
-Tests are picked up automatically from `remote-frontend/e2e/`. The Docker config (`playwright.docker.config.ts`) uses `baseURL: http://localhost:9000`.
+Tests are picked up automatically from `remote-frontend/e2e/`. The Docker config (`playwright.docker.config.ts`) reads `baseURL` from `PLAYWRIGHT_BASE_URL`, which `e2e-test.sh` sets to the isolated E2E port (`http://localhost:9210` by default).
 
 ### Anti-patterns to avoid
 
@@ -98,24 +98,37 @@ Tests are picked up automatically from `remote-frontend/e2e/`. The Docker config
 
 ## Running tests manually
 
+<Warning>
+  Pass `-p vkswarm-e2e` on **every** `docker compose` command when driving the stack by hand —
+  including `logs`, `exec`, and especially `down -v`. Compose otherwise derives the project name
+  from the `crates/remote` directory, which is the **same project a deployed hive uses**: `up`
+  would adopt and recreate its containers, and `down -v` would destroy them along with the
+  `remote_remote-db-data` volume.
+
+  Use the `-p` flag rather than relying on an exported `COMPOSE_PROJECT_NAME` — the flag wins
+  Compose's precedence chain and cannot be lost to a new shell, a subshell, or a copied-and-pasted
+  command. `e2e-test.sh` passes `-p` on every invocation for exactly this reason.
+</Warning>
+
 ```bash
-# Start environment
+# Start environment (isolated project + ports; see the warning above)
 cd crates/remote
-docker compose -f docker-compose.dev.yml --env-file .env.dev up --build -d
+export SERVER_PORT=9210 POSTGRES_PORT=5540
+docker compose -p vkswarm-e2e -f docker-compose.dev.yml up --build -d
 
 # Wait for healthy
-until curl -sf http://localhost:9000/v1/health; do sleep 2; done
+until curl -sf http://localhost:9210/v1/health; do sleep 2; done
 
 # Seed (if not already seeded)
-docker compose -f docker-compose.dev.yml exec -T remote-db psql -U postgres -d vibe_remote -f scripts/seed-e2e-db.sql
+docker compose -p vkswarm-e2e -f docker-compose.dev.yml exec -T remote-db psql -U postgres -d vibe_remote -f scripts/seed-e2e-db.sql
 
 # Run specific test
 cd ../../remote-frontend
-PLAYWRIGHT_BASE_URL=http://localhost:9000 npx playwright test --config=playwright.docker.config.ts e2e/docker-e2e.spec.ts -g "health"
+PLAYWRIGHT_BASE_URL=http://localhost:9210 npx playwright test --config=playwright.docker.config.ts e2e/docker-e2e.spec.ts -g "health"
 
-# Stop environment
+# Stop environment (the -p is what keeps this off a deployed hive)
 cd ../crates/remote
-docker compose -f docker-compose.dev.yml --env-file .env.dev down -v
+docker compose -p vkswarm-e2e -f docker-compose.dev.yml down -v
 ```
 
 ## CI integration
@@ -135,8 +148,8 @@ The script handles Docker spin-up, seeding, and teardown automatically.
 
 | Problem | Solution |
 |---------|----------|
-| Port 9000 in use | `docker compose -f docker-compose.dev.yml down -v` then retry |
+| Port 9210 or 5540 in use | Something else is listening — most likely a previous E2E stack. Tear it down with `docker compose -p vkswarm-e2e -f docker-compose.dev.yml down -v`, then retry. If the listener is a **deployed hive** (it sits on 9000/5434, not these ports), do not tear anything down: re-run with `SERVER_PORT`/`POSTGRES_PORT` set to free values. |
 | Playwright browser not found | `npx playwright install chromium` |
-| Migrations timeout | Check PostgreSQL logs: `docker compose -f docker-compose.dev.yml logs remote-db` |
-| Seed fails (constraint violation) | Run `docker compose -f docker-compose.dev.yml down -v` to reset, then re-seed |
+| Migrations timeout | Check PostgreSQL logs: `docker compose -p vkswarm-e2e -f docker-compose.dev.yml logs remote-db` |
+| Seed fails (constraint violation) | Reset with `docker compose -p vkswarm-e2e -f docker-compose.dev.yml down -v`, then re-seed |
 | Test passes locally, fails in CI | Check `PLAYWRIGHT_BASE_URL` matches the deployed URL |

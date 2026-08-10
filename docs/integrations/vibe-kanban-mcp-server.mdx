@@ -50,7 +50,7 @@ Add the following configuration to your agent's MCP servers configuration:
 
 ## Available MCP Tools
 
-The Vibe Kanban MCP server provides 18 tools for managing projects, tasks, execution, labels, and nodes.
+The Vibe Kanban MCP server provides 23 tools for managing projects, tasks, execution, labels, nodes, and AI task breakdown.
 
 <Tip>
 For complete parameter details and response formats, see the [MCP Tools Reference](/features/mcp-tools).
@@ -108,9 +108,24 @@ For complete parameter details and response formats, see the [MCP Tools Referenc
 | Tool | Purpose | Required Parameters | Optional Parameters |
 |------|---------|-------------------|-------------------|
 | `get_context` | Get current attempt context | None | None |
+| `get_task_id` | Current task ID only (lighter than `get_context`) | None | None |
+| `get_project_id` | Current project ID only (lighter than `get_context`) | None | None |
+
+### AI Task Breakdown
+
+| Tool | Purpose | Required Parameters | Optional Parameters |
+|------|---------|-------------------|-------------------|
+| `break_down_task` | Start an AI breakdown; returns the draft proposal | `task_id` | None |
+| `get_breakdown` | Get the latest proposal (any status, not only `draft`) and its proposed subtasks | `task_id` | None |
+| `accept_breakdown` | Turn a proposal's subtasks into real tasks | `proposal_id` | None |
 
 <Note>
-The `get_context` tool is only available when running within a Vibe Kanban task attempt.
+A breakdown proposal is not actionable until it is accepted — see
+[Task breakdown](/core-features/task-breakdown).
+</Note>
+
+<Note>
+The `get_context`, `get_task_id`, and `get_project_id` tools are only available when running within a Vibe Kanban task attempt.
 </Note>
 
 ### Supported Executors

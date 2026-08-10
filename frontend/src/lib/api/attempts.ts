@@ -38,6 +38,7 @@ import {
   makeRequest,
   handleApiResponse,
   handleApiResponseAsResult,
+  jsonBody,
   type Result,
 } from './utils';
 
@@ -136,7 +137,9 @@ export const attemptsApi = {
       `/api/task-attempts/${attemptId}/draft?type=${encodeURIComponent(type)}`,
       {
         method: 'PUT',
-        body: JSON.stringify(data),
+        // `version` on both draft request types is `bigint | null` (ts-rs maps
+        // Rust i64), which plain JSON.stringify throws on.
+        body: jsonBody(data),
       }
     );
     return handleApiResponse<DraftResponse>(response);

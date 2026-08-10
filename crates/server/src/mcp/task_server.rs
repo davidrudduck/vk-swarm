@@ -474,6 +474,26 @@ pub struct ListNodesResponse {
     pub count: usize,
 }
 
+// ===== Task Breakdown MCP Types =====
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BreakDownTaskRequest {
+    #[schemars(description = "The ID of the task to break down")]
+    pub task_id: Uuid,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetBreakdownRequest {
+    #[schemars(description = "The ID of the task whose breakdown proposal should be fetched")]
+    pub task_id: Uuid,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AcceptBreakdownRequest {
+    #[schemars(description = "The ID of the breakdown proposal to accept")]
+    pub proposal_id: Uuid,
+}
+
 #[derive(Debug, Clone)]
 pub struct TaskServer {
     client: reqwest::Client,
@@ -1408,6 +1428,78 @@ impl TaskServer {
 
         TaskServer::success(&result)
     }
+
+    #[tool(
+        description = "Start an AI breakdown of a task into proposed subtasks; returns the draft proposal. The proposal must be reviewed and accepted before subtasks become real."
+    )]
+    async fn break_down_task(
+        &self,
+        Parameters(BreakDownTaskRequest { task_id }): Parameters<BreakDownTaskRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let url = self.url(&format!("/api/tasks/{}/breakdown", task_id));
+
+        let value: serde_json::Value = match self.send_json(self.client.post(&url)).await {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+
+        TaskServer::success(&value)
+    }
+
+    #[tool(
+        description = "Get the draft breakdown proposal (and its proposed subtasks) for a task."
+    )]
+    async fn get_breakdown(
+        &self,
+        Parameters(GetBreakdownRequest { task_id }): Parameters<GetBreakdownRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let url = self.url(&format!("/api/tasks/{}/breakdown", task_id));
+
+        // Local variant of `send_json`: the breakdown endpoint legitimately returns
+        // {"success": true, "data": null} when the task has no proposal yet, so a
+        // missing `data` field must not be treated as an error here.
+        let resp = match self.client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => return Self::err("Failed to connect to VK API", Some(&e.to_string())),
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            return Self::err(format!("VK API returned error status: {}", status), None);
+        }
+
+        let api_response = match resp.json::<ApiResponseEnvelope<serde_json::Value>>().await {
+            Ok(v) => v,
+            Err(e) => return Self::err("Failed to parse VK API response", Some(&e.to_string())),
+        };
+
+        if !api_response.success {
+            let msg = api_response.message.as_deref().unwrap_or("Unknown error");
+            return Self::err("VK API returned error", Some(msg));
+        }
+
+        match api_response.data {
+            Some(value) => TaskServer::success(&value),
+            None => TaskServer::success(&serde_json::json!({ "proposal": null })),
+        }
+    }
+
+    #[tool(
+        description = "Accept a breakdown proposal, turning its proposed subtasks into real tasks."
+    )]
+    async fn accept_breakdown(
+        &self,
+        Parameters(AcceptBreakdownRequest { proposal_id }): Parameters<AcceptBreakdownRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let url = self.url(&format!("/api/breakdown-proposals/{}/accept", proposal_id));
+
+        let value: serde_json::Value = match self.send_json(self.client.post(&url)).await {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+
+        TaskServer::success(&value)
+    }
 }
 
 #[tool_handler]
@@ -1424,5 +1516,291 @@ impl ServerHandler for TaskServer {
             },
             instructions: Some(instruction),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use axum::{
+        extract::{Request, State},
+        response::Response,
+        routing::any,
+    };
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    #[derive(Debug, Clone, Default)]
+    struct Captured {
+        method: String,
+        path: String,
+        body: String,
+    }
+
+    /// The breakdown MCP tools take typed `Uuid` identifiers, so the fixtures use
+    /// real UUIDs rather than opaque strings.
+    const TEST_TASK_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const TEST_PROPOSAL_ID: &str = "22222222-2222-4222-8222-222222222222";
+    const TEST_MISSING_TASK_ID: &str = "33333333-3333-4333-8333-333333333333";
+
+    #[derive(Clone)]
+    struct MockState {
+        captured: Arc<Mutex<Option<Captured>>>,
+        canned: Arc<Mutex<serde_json::Value>>,
+    }
+
+    async fn capture_handler(State(state): State<MockState>, request: Request) -> Response {
+        let method = request.method().to_string();
+        let path = request.uri().path().to_string();
+        let body_bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("mock request body should be readable");
+        let body = String::from_utf8_lossy(&body_bytes).to_string();
+
+        *state.captured.lock().unwrap() = Some(Captured { method, path, body });
+
+        let canned = state.canned.lock().unwrap().clone();
+        Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(canned.to_string()))
+            .unwrap()
+    }
+
+    /// Spawns a local mock HTTP server that records the last request it
+    /// received and replies with a caller-configured canned JSON body.
+    /// Returns the server's base URL plus handles to inspect/configure it.
+    async fn spawn_mock_server() -> (
+        String,
+        Arc<Mutex<Option<Captured>>>,
+        Arc<Mutex<serde_json::Value>>,
+    ) {
+        let captured = Arc::new(Mutex::new(None));
+        let canned = Arc::new(Mutex::new(serde_json::json!({
+            "success": true,
+            "data": serde_json::Value::Null,
+            "message": null,
+        })));
+
+        let state = MockState {
+            captured: captured.clone(),
+            canned: canned.clone(),
+        };
+
+        let app = axum::Router::new()
+            .fallback(any(capture_handler))
+            .with_state(state);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        (format!("http://{}", addr), captured, canned)
+    }
+
+    fn extract_text(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .flatten()
+            .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn break_down_task_posts_and_returns_data() {
+        let (base_url, captured, canned) = spawn_mock_server().await;
+        *canned.lock().unwrap() = serde_json::json!({
+            "success": true,
+            "data": {"proposal_id": TEST_PROPOSAL_ID, "status": "draft"},
+            "message": null,
+        });
+
+        let server = TaskServer::new(&base_url);
+        let result = server
+            .break_down_task(Parameters(BreakDownTaskRequest {
+                task_id: TEST_TASK_ID.parse().expect("valid uuid"),
+            }))
+            .await
+            .expect("tool call should not error");
+
+        let req = captured.lock().unwrap().clone().expect("request captured");
+        assert_eq!(req.method, "POST");
+        assert_eq!(req.path, format!("/api/tasks/{TEST_TASK_ID}/breakdown"));
+        assert!(req.body.is_empty(), "break_down_task should send no body");
+
+        assert!(!result.is_error.unwrap_or(false));
+        let text = extract_text(&result);
+        assert!(text.contains(TEST_PROPOSAL_ID));
+        assert!(text.contains("draft"));
+    }
+
+    #[tokio::test]
+    async fn break_down_task_propagates_error_message() {
+        let (base_url, _captured, canned) = spawn_mock_server().await;
+        *canned.lock().unwrap() = serde_json::json!({
+            "success": false,
+            "data": null,
+            "message": "task not found",
+        });
+
+        let server = TaskServer::new(&base_url);
+        let result = server
+            .break_down_task(Parameters(BreakDownTaskRequest {
+                // Well-formed but unknown: the API, not the type, rejects this one.
+                task_id: TEST_MISSING_TASK_ID.parse().expect("valid uuid"),
+            }))
+            .await
+            .expect("tool call should not return ErrorData");
+
+        assert!(result.is_error.unwrap_or(false));
+        let text = extract_text(&result);
+        assert!(text.contains("task not found"));
+    }
+
+    #[tokio::test]
+    async fn get_breakdown_gets_and_returns_data() {
+        let (base_url, captured, canned) = spawn_mock_server().await;
+        *canned.lock().unwrap() = serde_json::json!({
+            "success": true,
+            "data": {
+                "proposal": {"id": TEST_PROPOSAL_ID},
+                "items": [{"title": "Subtask A"}],
+            },
+            "message": null,
+        });
+
+        let server = TaskServer::new(&base_url);
+        let result = server
+            .get_breakdown(Parameters(GetBreakdownRequest {
+                task_id: TEST_TASK_ID.parse().expect("valid uuid"),
+            }))
+            .await
+            .expect("tool call should not error");
+
+        let req = captured.lock().unwrap().clone().expect("request captured");
+        assert_eq!(req.method, "GET");
+        assert_eq!(req.path, format!("/api/tasks/{TEST_TASK_ID}/breakdown"));
+
+        assert!(!result.is_error.unwrap_or(false));
+        let text = extract_text(&result);
+        assert!(text.contains("Subtask A"));
+    }
+
+    #[tokio::test]
+    async fn get_breakdown_propagates_error_message() {
+        let (base_url, _captured, canned) = spawn_mock_server().await;
+        *canned.lock().unwrap() = serde_json::json!({
+            "success": false,
+            "data": null,
+            "message": "no proposal exists",
+        });
+
+        let server = TaskServer::new(&base_url);
+        let result = server
+            .get_breakdown(Parameters(GetBreakdownRequest {
+                task_id: TEST_TASK_ID.parse().expect("valid uuid"),
+            }))
+            .await
+            .expect("tool call should not return ErrorData");
+
+        assert!(result.is_error.unwrap_or(false));
+        let text = extract_text(&result);
+        assert!(text.contains("no proposal exists"));
+    }
+
+    #[tokio::test]
+    async fn get_breakdown_null_data_is_success_with_null_proposal() {
+        let (base_url, _captured, canned) = spawn_mock_server().await;
+        *canned.lock().unwrap() = serde_json::json!({
+            "success": true,
+            "data": null,
+            "message": null,
+        });
+
+        let server = TaskServer::new(&base_url);
+        let result = server
+            .get_breakdown(Parameters(GetBreakdownRequest {
+                task_id: TEST_TASK_ID.parse().expect("valid uuid"),
+            }))
+            .await
+            .expect("tool call should not error");
+
+        assert!(!result.is_error.unwrap_or(false));
+        let text = extract_text(&result);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        assert!(value["proposal"].is_null());
+    }
+
+    #[tokio::test]
+    async fn accept_breakdown_posts_and_returns_data() {
+        let (base_url, captured, canned) = spawn_mock_server().await;
+        *canned.lock().unwrap() = serde_json::json!({
+            "success": true,
+            "data": {"created_task_ids": ["t-1", "t-2"]},
+            "message": null,
+        });
+
+        let server = TaskServer::new(&base_url);
+        let result = server
+            .accept_breakdown(Parameters(AcceptBreakdownRequest {
+                proposal_id: TEST_PROPOSAL_ID.parse().expect("valid uuid"),
+            }))
+            .await
+            .expect("tool call should not error");
+
+        let req = captured.lock().unwrap().clone().expect("request captured");
+        assert_eq!(req.method, "POST");
+        assert_eq!(
+            req.path,
+            format!("/api/breakdown-proposals/{TEST_PROPOSAL_ID}/accept")
+        );
+        assert!(req.body.is_empty(), "accept_breakdown should send no body");
+
+        assert!(!result.is_error.unwrap_or(false));
+        let text = extract_text(&result);
+        assert!(text.contains("t-1"));
+        assert!(text.contains("t-2"));
+    }
+
+    #[tokio::test]
+    async fn accept_breakdown_propagates_error_message() {
+        let (base_url, _captured, canned) = spawn_mock_server().await;
+        *canned.lock().unwrap() = serde_json::json!({
+            "success": false,
+            "data": null,
+            "message": "proposal already accepted",
+        });
+
+        let server = TaskServer::new(&base_url);
+        let result = server
+            .accept_breakdown(Parameters(AcceptBreakdownRequest {
+                proposal_id: TEST_PROPOSAL_ID.parse().expect("valid uuid"),
+            }))
+            .await
+            .expect("tool call should not return ErrorData");
+
+        assert!(result.is_error.unwrap_or(false));
+        let text = extract_text(&result);
+        assert!(text.contains("proposal already accepted"));
+    }
+
+    #[test]
+    fn breakdown_tools_are_registered_in_router() {
+        let router = TaskServer::tool_router();
+        let names: Vec<String> = router
+            .list_all()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        assert!(names.contains(&"break_down_task".to_string()));
+        assert!(names.contains(&"get_breakdown".to_string()));
+        assert!(names.contains(&"accept_breakdown".to_string()));
     }
 }

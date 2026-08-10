@@ -1,0 +1,157 @@
+---
+title: "Task Breakdown Architecture"
+description: "How the AI task breakdown pipeline works: data model, executor-driven runs, structured output parsing, the proposal state machine, and the accept transaction"
+audience: developer
+component: task-breakdown
+sources:
+  - crates/db/src/models/task_breakdown/mod.rs
+  - crates/db/src/models/task_breakdown/queries.rs
+  - crates/services/src/services/breakdown.rs
+  - crates/services/src/services/container.rs
+  - crates/local-deployment/src/container.rs
+  - crates/server/src/routes/breakdown.rs
+  - crates/server/src/routes/tasks/handlers/core.rs
+  - crates/server/src/mcp/task_server.rs
+generated: 2026-08-10
+---
+
+This page documents the internals of the [AI Task Breakdown](/core-features/task-breakdown) feature for developers. The authoritative design record is the spec (`docs/superpowers/specs/2026-08-07-vk-swarm-task-breakdown.md`) and ADR-0016 (`dev-docs/adr/0016-breakdown-proposals-separate-entity.md`).
+
+## Design principles
+
+- **Proposals are a separate entity.** `TaskStatus` is never extended; the proposal lifecycle lives in its own node-local tables (ADR-0016). Nothing becomes ready work without operator acceptance.
+- **Ride the existing executor machinery.** A breakdown run is a real executor invocation through the enum_dispatch CLI-agent layer — the same spawn/logging/durability path as a task attempt, with a dedicated `ExecutionProcessRunReason::Breakdown` run reason.
+- **Offline-first.** Proposals and dependency edges are node-local with no outbox ops; only acceptance creates real tasks, which sync through the proven `task.upsert` outbox path.
+
+## Data model (`crates/db/src/models/task_breakdown/`)
+
+| Table | Purpose |
+|---|---|
+| `task_breakdown_proposals` | One row per breakdown; `status` CHECK (`draft` \| `accepted` \| `discarded` \| `failed`), nullable `execution_process_id`, `error`. A partial unique index enforces **one active draft per task**. |
+| `task_breakdown_proposal_items` | Proposed subtasks: `title`, `description`, `sort_order`, `depends_on_item_ids` (JSON, intra-set references). |
+| `task_dependencies` | Real edges between accepted tasks: `pk(task_id, depends_on_task_id)`, both `ON DELETE CASCADE`. Written **only** at acceptance; consumed by P5. |
+
+Migration note: `execution_processes.run_reason` has a CHECK constraint; adding the `breakdown` value required a column-swap migration (`20260809000000_add_breakdown_to_run_reason_constraint.sql`) because SQLite cannot alter CHECK constraints — the migration also drops and recreates `v_workstream_state`, which projects the column.
+
+## Proposal state machine
+
+`task_breakdown::update_status` owns the only legal-transition check, so every caller — the discard endpoint, the retry path, the executor-completion handler, the service's failure path — shares one state machine rather than each re-deriving it:
+
+| From | To | Legal |
+|---|---|---|
+| `Draft` | `Accepted`, `Discarded`, `Failed` | yes |
+| `Failed` | `Draft`, `Discarded` | yes |
+| `Accepted`, `Discarded` | anything else | **no** — both are terminal |
+| any | itself | yes (no-op) |
+
+The `Failed → Draft` row is **not** exercised by the retry endpoint: `retry_impl`
+(`crates/server/src/routes/breakdown.rs:209-213`) asserts the proposal is `Failed` and then calls
+`create_draft_proposal`, which inserts a **new** row rather than re-drafting in place. The arm is
+kept because it is permissive in the safe direction, but no production caller performs it today.
+
+An illegal transition returns `sqlx::Error::Protocol`, which `map_proposal_error` surfaces as HTTP
+409. Two mechanisms together stop a late-arriving executor result from overwriting a user's
+discard with `Failed`: the transition table refuses `Discarded → Failed` outright, and the UPDATE
+carries an `AND status = $4` predicate naming the status the check was made against, so two callers
+that both read `Draft` cannot both write — the loser writes zero rows and gets a conflict rather
+than silently clobbering the winner. Without that predicate the check-and-write pair is
+check-then-act and the last writer wins. `handle_breakdown_completion` (`crates/local-deployment/src/container.rs`) belt-and-braces the same case by returning early with a debug log when the proposal it finds is no longer `Draft`, so the ordinary late-completion path is a quiet no-op rather than an error.
+
+## Execution flow
+
+1. `POST /api/tasks/{task_id}/breakdown` creates a `draft` proposal row (409 if a draft exists) and starts the run.
+2. `BreakdownService` (stateless, `Clone`, in `crates/services/src/services/breakdown.rs`) composes a prompt from the parent task's title/description plus a fixed instruction block demanding a final fenced JSON object matching `BreakdownResult { subtasks: [{ title, description, depends_on: [index] }] }`.
+3. The run rides a **dedicated task attempt** on the parent task via `start_breakdown_attempt` (`crates/services/src/services/container.rs`). A fresh attempt has no container yet, so the service calls `create()` for it; an existing attempt goes through `ensure_container_exists()`. The prompt is read-only analysis, so the completion path finds a clean tree and commits nothing.
+4. On process completion, `BreakdownService` parses the durable execution log (`ExecutionProcessLogs`). **Parser contract:** the Claude protocol reader breaks on the final `{"type":"result"}` line *without* forwarding it to logs, so the parser reads assistant-event text (`message.content[].text`) as well as plain lines, then extracts the last valid fenced ```json `BreakdownResult` block.
+5. Success writes proposal items atomically; any failure (non-zero exit, missing/malformed JSON, failed validation) marks the proposal `failed` with a stored error string — no partial items ever land.
+
+### The parent task's status is not touched
+
+`start_execution` flips the parent task to `InProgress` for most run reasons, but `flips_task_to_in_progress` excludes `Breakdown` alongside `DevServer`. This is not cosmetic: `Breakdown` has no path back *out* of `InProgress` — `should_finalize` is false for it, `crates/local-deployment/src/container.rs` excludes it from the commit and next-action block, and `mark_process_failed_with_task_update` only updates the task for `CodingAgent`, `SetupScript`, and `CleanupScript`. Flipping the status would strand the parent permanently, which with auto-breakdown meant every newly created task.
+
+The predicate governs **both** lifecycle writes in `start_execution`, not just the flip on start:
+the start-error path also sets the parent to `InReview`, and gating only the first left a
+Breakdown run that failed to start moving a Todo parent to `InReview` — the same stranding, one
+path further along. `DevServer` is gated there for the same reason.
+
+The predicate is a free function rather than an inline `matches!` specifically so it can be unit-tested — `start_execution` itself needs a full deployment to exercise.
+
+## Dependency validation
+
+Subtask dependencies must form a DAG. Two layers enforce it, and both perform the same three checks — in-range index, no self-reference, and no cycle (Kahn's algorithm over the `depends_on` edges):
+
+- `BreakdownService::parse_breakdown_result` validates what the agent produced, returning `BreakdownError::InvalidDependency` or `BreakdownError::CyclicDependency`.
+- `task_breakdown::replace_items` validates what a user's edit produced, before any write, returning `sqlx::Error::Protocol`.
+
+Both layers also **dedupe** each dependency list (preserving first-seen order) between the
+range/self checks and the cycle check. A repeated index expresses one edge, but `task_dependencies`
+is `PRIMARY KEY (task_id, depends_on_task_id)`, so a duplicate surviving to `accept_proposal` would
+abort the accept transaction on a UNIQUE violation. Kahn's in-degree is correspondingly seeded from
+the count of **distinct** dependencies — the decrement is driven by `.contains()`, which fires once
+per node however many times it is listed, so seeding from the raw length would leave a duplicate
+edge permanently outstanding and report an acyclic set as cyclic.
+
+The cycle check is not redundant with the range and self-reference checks: a mutual pair (`0 -> 1`, `1 -> 0`) satisfies both of those. Without it, `accept_proposal` writes both `task_dependencies` edges and the cycle lands on real tasks. Branching and merging (diamond) shapes are acyclic and must continue to pass — there are tests for exactly that.
+
+## API surface (`crates/server/src/routes/breakdown.rs`)
+
+| Endpoint | Behaviour |
+|---|---|
+| `POST /api/tasks/{task_id}/breakdown` | Create draft + start run; 409 on existing draft; rejects tasks of remote/mirrored projects (origin-node only). |
+| `GET /api/tasks/{task_id}/breakdown` | Current proposal + items; 404 for unknown task; 200 with `data: null` for a task with no proposal (one contract — never 204). |
+| `PUT /api/breakdown-proposals/{id}/items` | Replace the item set (edits, deletions, reorder). Rejects out-of-range indices, self-references, and cycles before writing. |
+| `POST /api/breakdown-proposals/{id}/accept` | Single transaction: insert child tasks with SQLx directly (`parent_task_id` = parent) and enqueue their `task.upsert` outbox rows on the same transaction — **not** via `Task::create`, whose post-insert enqueue is best-effort; acceptance needs all-or-nothing, so the divergence is deliberate and documented at `queries.rs:351`. Outbox sync fires here and only here. Then map intra-set `depends_on` indices to `task_dependencies` rows and flip status to `accepted`. Returns the created tasks. Emits a `tracing` event with `proposal_id`, `parent_task_id`, and `child_count`. |
+| `POST /api/breakdown-proposals/{id}/discard` | Discard the proposal. 409 if it is already accepted (terminal). |
+| `POST /api/breakdown-proposals/{id}/retry` | Asserts the proposal is `Failed`, then creates a **new** draft proposal and starts a new run. The failed row is left as it is — retry does not re-draft in place, so no `Failed -> Draft` transition occurs. |
+| `GET /api/tasks/{task_id}/dependencies` | Dependency edges for downstream consumers. |
+
+All three triggers share one review gate and one pair of stage functions — `create_draft_proposal` then `spawn_breakdown_run` — so the semantics are identical everywhere. They do not all share a REST call path: the card action and the MCP tool go through `POST /api/tasks/{task_id}/breakdown`, while auto-on-create calls the same two stage functions in-process from the task-create handler (`crates/server/src/routes/tasks/handlers/core.rs`), awaiting stage 1 so the proposal row exists at handler-return time and detaching stage 2 via `tokio::spawn`.
+
+## MCP tools (`crates/server/src/mcp/task_server.rs`)
+
+`break_down_task`, `get_breakdown`, and `accept_breakdown` are pure HTTP proxies over the REST endpoints (the established `#[tool]` + `send_json` envelope pattern, no direct DB access). `get_breakdown` tolerates `data: null` (task with no proposal).
+
+Their request types take typed `Uuid` fields, matching every other request type in the file. That is deliberate: these handlers interpolate the identifier straight into a same-origin URL, so an arbitrary `String` containing `?`, `#`, or a path separator could reshape the request the privileged MCP server issues. Typing the field rejects it at deserialization instead.
+
+Note that `vks-mcp-server` is a separate binary — see finding F-2026-08-09-02 (`dev-docs/workstreams/mcp-server-dev-loop-rebuild/`): the dev loop does not rebuild or restart it, so a stale binary can miss newly added tools.
+
+## Auto trigger
+
+`projects.auto_breakdown_enabled` (BOOLEAN, default 0). In the `create_task` handler, after insert: if enabled and the task has a non-empty description and no `parent_task_id`, fire the two stage functions — stage 1 awaited, stage 2 detached — with failures only logged. Toggled in project settings.
+
+The trigger lives in `create_task` **only**, per the spec's design section. `create_task_and_start`
+(`core.rs`) carries no trigger: that path immediately starts a coding-agent attempt, so a
+concurrent breakdown run on the same task is not wanted. A user with the toggle on who creates a
+task via **Create & Start** therefore gets no proposal — this is deliberate, and the user-facing
+docs say so.
+
+The detached stage 2 is **supervised**: its `JoinHandle` is awaited by an outer task, which logs a
+`JoinError` and marks the proposal `Failed`. Dropping the handle would swallow a panic with no log
+line and strand the proposal in `Draft`, where it can neither be re-triggered (409, one draft per
+task) nor retried (retry requires `Failed`). Two other routes to a stuck `Draft` remain open and
+are tracked in `task-breakdown-followups`: a restart between the committed `create_draft_proposal`
+and `link_execution_process`, and the silent `Err` arm of `ExecutionProcess::load_context` in
+`crates/local-deployment/src/container.rs`.
+
+## Frontend
+
+- `Break down` action in **both** branches of `frontend/src/components/ui/actions-dropdown.tsx` (desktop menu + mobile bottom sheet).
+- `BreakdownReviewDialog` via the NiceModal/defineModal convention; data via the `useBreakdownProposal(taskId)` react-query hook and the `breakdownApi` namespace in `frontend/src/lib/api/`. The hook returns `isLoading`, `error`, and `refetch` alongside the data; the dialog renders loading and error states and gates its actions on a settled query, since a pending fetch is otherwise indistinguishable from "no proposal exists".
+- Mutation-bound buttons (Retry, Discard) are disabled while their mutation is pending — Retry doubly so, since each invocation starts a new executor run.
+- Request bodies go through `jsonBody()` (`frontend/src/lib/api/utils.ts`), not `JSON.stringify`: ts-rs maps Rust `i64` to TypeScript `bigint`, which `JSON.stringify` refuses to serialize (`TypeError: Do not know how to serialize a BigInt`). `jsonBody` emits bigints as JSON numbers and throws a `RangeError` outside the safe-integer range rather than losing precision silently. Any new numeric field on a breakdown request type inherits this.
+- Mutations invalidate `['tasks', projectId]` and `['breakdown', taskId]`.
+- All strings under the `breakdown` key of `tasks.json` in all four locales (en, ja, ko, es); the settings toggle lives in `settings.json`.
+
+## Testing
+
+- DB: sqlx tests via `db::test_utils::create_test_pool()` — proposal CRUD, one-active-draft constraint, cascades, accept-transaction atomicity, cycle rejection in `replace_items`, and the state machine (`test_update_status_enforces_state_machine`).
+- Parser: JSONL fixtures including the real production stream shape (assistant events, **no** result line — `test_parse_assistant_event_without_result_line`), plus mutual-pair and three-node cycle rejection and a diamond-shaped DAG that must pass.
+- Run reason: `test_breakdown_does_not_flip_task_to_in_progress` pins both exclusions and asserts the other three run reasons still flip.
+- API: route tests for 409, review-gate invariants (no attempt from proposals, no outbox pre-accept), accept/discard/retry.
+- Frontend: vitest for api/hook/dialog. `frontend/src/lib/api/breakdown.test.ts` drives the **real** `makeRequest` against a stubbed `fetch` — every other consumer mocks the api namespace, which is how a bigint serialization bug reached production unnoticed.
+- MCP: proxy-faithfulness tests with real UUID fixtures.
+- Live: SC1–SC7 deploy-verification evidence is recorded in `docs/plans/vk-swarm-task-breakdown/decisions-ledger.md`.
+
+## Known limitations
+
+Deferred items — the N+1 proposal fetch per task card, typed `BreakdownDbError` in place of `sqlx::Error::Protocol`, a concurrency bound on detached runs, the route directory-module split, and prompt-preparation deduplication — are tracked with their reasoning in `dev-docs/workstreams/task-breakdown-followups/README.md`.

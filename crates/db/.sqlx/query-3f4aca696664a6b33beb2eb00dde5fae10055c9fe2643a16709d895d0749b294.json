@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT task_id as \"task_id!: Uuid\", depends_on_task_id as \"depends_on_task_id!: Uuid\", created_at as \"created_at!: DateTime<Utc>\"\n           FROM task_dependencies\n           WHERE task_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "name": "task_id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "depends_on_task_id!: Uuid",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "created_at!: DateTime<Utc>",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3f4aca696664a6b33beb2eb00dde5fae10055c9fe2643a16709d895d0749b294"
+}

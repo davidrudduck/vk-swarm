@@ -1,0 +1,100 @@
+---
+title: "AI Task Breakdown"
+description: "Turn a high-level goal card into a reviewed set of correctly-scoped, independently-executable child tasks using an AI coding agent"
+audience: user
+component: task-breakdown
+sources:
+  - frontend/src/components/dialogs/tasks/BreakdownReviewDialog.tsx
+  - frontend/src/components/ui/actions-dropdown.tsx
+  - frontend/src/hooks/useBreakdown.ts
+  - frontend/src/pages/settings/ProjectSettings.tsx
+  - crates/server/src/routes/breakdown.rs
+  - crates/server/src/routes/tasks/handlers/core.rs
+generated: 2026-08-10
+---
+
+Task breakdown lets you point an AI coding agent at a goal-level task card and get back a **proposed** set of subtasks — each with a title, description, and dependency references — which you review, edit, and explicitly accept before anything becomes real work on the board.
+
+Nothing a breakdown produces is actionable until you accept it: proposals cannot host task attempts, and they never sync to the hive.
+
+## Triggering a breakdown
+
+There are three ways to trigger a breakdown. All three produce the same kind of draft proposal and put it behind the same review gate — nothing becomes a real task without your acceptance.
+
+### From the task card
+
+1. Open the actions menu on a task card (available on both desktop and mobile).
+2. Choose **Break down**.
+3. The node spawns your configured coding agent against the task's title and description.
+4. The card shows a **Proposed subtasks** badge as soon as the draft proposal is created — that is, from the moment the run starts, not when it finishes. Open it while the run is in flight and the dialog itself shows the running state; the items appear when the agent completes.
+
+The task needs a description that states a multi-part goal — the agent decomposes what the card actually says.
+
+<Note>
+A breakdown run does **not** move the parent task to In Progress. The run is read-only analysis, so your task stays in whatever column it was already in.
+</Note>
+
+### Via MCP
+
+External agents can drive the same flow programmatically with three MCP tools: `break_down_task`, `get_breakdown`, and `accept_breakdown`. They are pure proxies for the REST endpoints, so the semantics — including the review gate — are identical to the UI path. See the [MCP Tools Reference](/features/mcp-tools#task-breakdown).
+
+### Automatically on task creation
+
+Projects have an **Auto-breakdown new tasks** setting (default: off). When enabled, creating a top-level task with a non-empty description queues a draft proposal for your review automatically. Auto-breakdown never lands child tasks directly — it only produces drafts, exactly as if you had clicked **Break down** yourself.
+
+<Note>
+This applies to ordinary task creation only. **Create & Start** does not auto-trigger a breakdown, because that path immediately starts a coding-agent attempt on the task. Use **Break down** from the card menu if you want a proposal for a task you started that way.
+</Note>
+
+Enable it in **Project Settings**. See [Task Breakdown Configuration](/configuration-customisation/task-breakdown-configuration) for what to weigh before turning it on across a busy project.
+
+## Reviewing a proposal
+
+Clicking the **Proposed subtasks** badge opens the **Review task breakdown** dialog, where you can:
+
+- **Edit** each item's title and description inline
+- **Reorder** items (move up / move down)
+- **Delete** items you don't want
+- **Inspect dependencies** — items can depend on other items in the same set, shown as dependency chips
+
+While the proposal is loading, the dialog shows a spinner. If it cannot be loaded, you get an error message with a **Reload** button rather than an empty dialog.
+
+While a proposal is in draft:
+
+- No task attempt can be started from a proposed item
+- Nothing reaches the hive — proposals are node-local only
+
+### Dependencies must not form a loop
+
+Items may depend on other items in the same set, but the dependency graph has to be acyclic. If your edits create a loop — item A depends on B while B depends on A, or any longer chain that closes back on itself — the save is rejected and the previous item set is left untouched.
+
+Branching and merging shapes are fine: several items may depend on the same predecessor, and one item may depend on several predecessors. Only an actual cycle is refused.
+
+## Accepting, discarding, and retrying
+
+- **Accept** converts the (possibly edited) set into real child tasks under the parent, in a single transaction. Each child is an ordinary task that can immediately host a task attempt. Dependency edges between the new tasks are persisted and queryable via `GET /api/tasks/{id}/dependencies`. Accepted tasks sync to the hive through the normal outbox path.
+- **Discard** throws the proposal away. The task is unchanged.
+- **Retry** appears when a run fails (agent error or unparseable output). The failed proposal shows a visible error on the card; retrying starts a fresh run. A failed run never leaves partial items or child tasks behind.
+
+Retry and Discard are disabled while their action is in flight, so a double-click cannot start two breakdown runs for the same proposal.
+
+Accepting and discarding are both final. Once you have accepted a proposal, it cannot be discarded — the child tasks already exist, so delete those instead if you have changed your mind. Once you have discarded one, a late-finishing agent run cannot reopen it or overwrite your decision with a failure.
+
+Only one draft proposal can exist per task at a time — triggering a breakdown while a draft exists returns a conflict.
+
+## Offline behaviour
+
+Breakdown is fully offline-first: triggering, reviewing, editing, and accepting all work with the hive unreachable. Accepted child tasks queue in the node's outbox and reconcile to the hive when the connection returns, with no loss.
+
+## Limits
+
+- Breakdown runs only on the task's **origin node** — tasks of remote/mirrored projects are rejected, the same rule as starting an attempt.
+- Breakdown is single-level: generated subtasks are not themselves auto-decomposed.
+- Acceptance creates *ready* tasks; nothing auto-starts them.
+
+## Related
+
+- [Creating Subtasks](/core-features/subtasks) — manual subtask creation from a task attempt
+- [Task Breakdown Configuration](/configuration-customisation/task-breakdown-configuration) — enabling auto-breakdown, agent selection, operational limits
+- [MCP Tools Reference](/features/mcp-tools) — programmatic access
+- [Task Breakdown Architecture](/architecture/task-breakdown) — how it works internally

@@ -24,6 +24,7 @@ impl Project {
                       cleanup_script,
                       copy_files,
                       parallel_setup_script as "parallel_setup_script!: bool",
+                      auto_breakdown_enabled as "auto_breakdown_enabled!: bool",
                       remote_project_id as "remote_project_id: Uuid",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>",
@@ -53,6 +54,7 @@ impl Project {
             r#"
             SELECT p.id as "id!: Uuid", p.name, p.git_repo_path, p.setup_script, p.dev_script, p.cleanup_script, p.copy_files,
                    p.parallel_setup_script as "parallel_setup_script!: bool",
+                   p.auto_breakdown_enabled as "auto_breakdown_enabled!: bool",
                    p.remote_project_id as "remote_project_id: Uuid",
                    p.created_at as "created_at!: DateTime<Utc>", p.updated_at as "updated_at!: DateTime<Utc>",
                    p.is_remote as "is_remote!: bool",
@@ -91,6 +93,7 @@ impl Project {
                       cleanup_script,
                       copy_files,
                       parallel_setup_script as "parallel_setup_script!: bool",
+                      auto_breakdown_enabled as "auto_breakdown_enabled!: bool",
                       remote_project_id as "remote_project_id: Uuid",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>",
@@ -135,6 +138,7 @@ impl Project {
                       cleanup_script,
                       copy_files,
                       parallel_setup_script as "parallel_setup_script!: bool",
+                      auto_breakdown_enabled as "auto_breakdown_enabled!: bool",
                       remote_project_id as "remote_project_id: Uuid",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>",
@@ -177,6 +181,7 @@ impl Project {
                       cleanup_script,
                       copy_files,
                       parallel_setup_script as "parallel_setup_script!: bool",
+                      auto_breakdown_enabled as "auto_breakdown_enabled!: bool",
                       remote_project_id as "remote_project_id: Uuid",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>",
@@ -220,6 +225,7 @@ impl Project {
                       cleanup_script,
                       copy_files,
                       parallel_setup_script as "parallel_setup_script!: bool",
+                      auto_breakdown_enabled as "auto_breakdown_enabled!: bool",
                       remote_project_id as "remote_project_id: Uuid",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>",
@@ -270,6 +276,7 @@ impl Project {
                           cleanup_script,
                           copy_files,
                           parallel_setup_script as "parallel_setup_script!: bool",
+                          auto_breakdown_enabled as "auto_breakdown_enabled!: bool",
                           remote_project_id as "remote_project_id: Uuid",
                           created_at as "created_at!: DateTime<Utc>",
                           updated_at as "updated_at!: DateTime<Utc>",
@@ -308,6 +315,7 @@ impl Project {
         cleanup_script: Option<String>,
         copy_files: Option<String>,
         parallel_setup_script: bool,
+        auto_breakdown_enabled: bool,
     ) -> Result<Self, sqlx::Error> {
         sqlx::query_as!(
             Project,
@@ -318,7 +326,8 @@ impl Project {
                    dev_script = $5,
                    cleanup_script = $6,
                    copy_files = $7,
-                   parallel_setup_script = $8
+                   parallel_setup_script = $8,
+                   auto_breakdown_enabled = $9
                WHERE id = $1
                RETURNING id as "id!: Uuid",
                          name,
@@ -328,6 +337,7 @@ impl Project {
                          cleanup_script,
                          copy_files,
                          parallel_setup_script as "parallel_setup_script!: bool",
+                         auto_breakdown_enabled as "auto_breakdown_enabled!: bool",
                          remote_project_id as "remote_project_id: Uuid",
                          created_at as "created_at!: DateTime<Utc>",
                          updated_at as "updated_at!: DateTime<Utc>",
@@ -351,6 +361,7 @@ impl Project {
             cleanup_script,
             copy_files,
             parallel_setup_script,
+            auto_breakdown_enabled,
         )
         .fetch_one(pool)
         .await
@@ -530,6 +541,7 @@ mod tests {
             None,
             None,
             true,
+            false,
         )
         .await
         .unwrap();
@@ -538,6 +550,50 @@ mod tests {
         assert_eq!(updated.setup_script, Some("new setup".to_string()));
         assert_eq!(updated.dev_script, Some("new dev".to_string()));
         assert!(updated.parallel_setup_script);
+    }
+
+    #[tokio::test]
+    async fn test_project_auto_breakdown_enabled_default_and_update() {
+        let (pool, _temp_dir) = create_test_pool().await;
+
+        let project_id = Uuid::new_v4();
+        let create_data = CreateProject {
+            name: "Auto Breakdown Test".to_string(),
+            git_repo_path: "/auto-breakdown/test".to_string(),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+
+        let created = Project::create(&pool, &create_data, project_id)
+            .await
+            .unwrap();
+        assert!(!created.auto_breakdown_enabled);
+
+        let updated = Project::update(
+            &pool,
+            project_id,
+            "Auto Breakdown Test".to_string(),
+            "/auto-breakdown/test".to_string(),
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(updated.auto_breakdown_enabled);
+
+        let refetched = Project::find_by_id(&pool, project_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(refetched.auto_breakdown_enabled);
     }
 
     #[tokio::test]

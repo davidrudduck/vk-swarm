@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ApiError, isHiveNotConfigured } from './utils';
+import { ApiError, isHiveNotConfigured, jsonBody } from './utils';
 
 /**
  * These tests exist because HTTP status alone CANNOT identify the hive-absent
@@ -49,5 +49,45 @@ describe('isHiveNotConfigured', () => {
     expect(isHiveNotConfigured(null)).toBe(false);
     expect(isHiveNotConfigured(undefined)).toBe(false);
     expect(isHiveNotConfigured({ status: 503 })).toBe(false);
+  });
+});
+
+/**
+ * ts-rs maps Rust `i64` to `bigint`, so generated request types carry BigInts
+ * that plain `JSON.stringify` refuses to serialise. `jsonBody` exists because
+ * that threw at runtime for every edit in the breakdown review dialog while the
+ * whole test suite stayed green (consumers mocked the api module out).
+ */
+describe('jsonBody', () => {
+  it('serialises bigint as a JSON number', () => {
+    expect(jsonBody({ sort_order: BigInt(3) })).toBe('{"sort_order":3}');
+  });
+
+  it('serialises nested bigints inside arrays', () => {
+    expect(jsonBody({ deps: [BigInt(0), BigInt(2)] })).toBe('{"deps":[0,2]}');
+  });
+
+  it('round-trips to numbers, not strings, within the safe range', () => {
+    const parsed = JSON.parse(jsonBody({ n: BigInt(Number.MAX_SAFE_INTEGER) }));
+    expect(typeof parsed.n).toBe('number');
+    expect(parsed.n).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('throws rather than silently losing precision beyond the safe range', () => {
+    // 2^53 + 2 cannot be represented exactly as a JS number. Coercing it would
+    // corrupt the value; quoting it would be rejected by serde on an i64 field.
+    const huge = BigInt(Number.MAX_SAFE_INTEGER) + BigInt(2);
+    expect(() => jsonBody({ n: huge })).toThrow(RangeError);
+  });
+
+  it('throws for a large negative bigint too', () => {
+    const tiny = BigInt(Number.MIN_SAFE_INTEGER) - BigInt(2);
+    expect(() => jsonBody({ n: tiny })).toThrow(RangeError);
+  });
+
+  it('leaves non-bigint values untouched', () => {
+    expect(jsonBody({ a: 1, b: 'two', c: null, d: [true] })).toBe(
+      '{"a":1,"b":"two","c":null,"d":[true]}'
+    );
   });
 });

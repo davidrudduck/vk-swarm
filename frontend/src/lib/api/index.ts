@@ -120,3 +120,7 @@ export { databaseApi } from './database';
 // Webhooks API
 export { webhooksApi } from './webhooks';
 export type { WebhookTestResult } from './webhooks';
+
+// Breakdown API
+export { breakdownApi } from './breakdown';
+export type { BreakdownWithItems } from './breakdown';

@@ -29,6 +29,7 @@ pub mod node_outbox;
 pub mod project;
 pub mod task;
 pub mod task_attempt;
+pub mod task_breakdown;
 pub mod task_variable;
 pub mod template;
 pub mod webhook;

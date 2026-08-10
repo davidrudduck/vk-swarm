@@ -31,6 +31,7 @@ import {
   HardDrive,
   FolderX,
   UserPlus,
+  Hammer,
 } from 'lucide-react';
 import type {
   TaskWithAttemptStatus,
@@ -46,9 +47,14 @@ import { ViewRelatedTasksDialog } from '@/components/dialogs/tasks/ViewRelatedTa
 import { CreateAttemptDialog } from '@/components/dialogs/tasks/CreateAttemptDialog';
 import { GitActionsDialog } from '@/components/dialogs/tasks/GitActionsDialog';
 import { EditBranchNameDialog } from '@/components/dialogs/tasks/EditBranchNameDialog';
+import { BreakdownReviewDialog } from '@/components/dialogs/tasks/BreakdownReviewDialog';
 import { useProject } from '@/contexts/ProjectContext';
 import { getStatusCallback } from '@/contexts/TaskOptimisticContext';
 import { openTaskForm } from '@/lib/openTaskForm';
+import {
+  useBreakdownProposal,
+  useBreakdownMutations,
+} from '@/hooks/useBreakdown';
 
 import { useNavigate } from 'react-router-dom';
 import { useAuth, useTaskUsesSharedWorktree, useIsMobile } from '@/hooks';
@@ -140,6 +146,16 @@ export function ActionsDropdown({
   // Check if this task uses a shared worktree (prevents subtask creation)
   const { usesSharedWorktree } = useTaskUsesSharedWorktree(task?.id);
 
+  // Breakdown proposal state (drives whether "Break down" opens the review
+  // dialog directly against an existing draft, or triggers generation first)
+  const { proposal: breakdownProposal } = useBreakdownProposal(task?.id ?? '', {
+    enabled: Boolean(task?.id),
+  });
+  const { trigger: triggerBreakdown } = useBreakdownMutations(
+    task?.id ?? '',
+    projectId ?? ''
+  );
+
   const handleEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!projectId || !task) return;
@@ -210,6 +226,29 @@ export function ActionsDropdown({
       parentTaskId: task.id,
       initialBaseBranch: attempt?.branch || attempt?.target_branch,
     });
+  };
+
+  const handleBreakdown = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!task?.id || !projectId) return;
+    // Trigger generation when there is no proposal yet, or the latest
+    // proposal is terminal (accepted/discarded) — the backend's one-draft
+    // unique index only blocks a second DRAFT, so re-triggering over a
+    // terminal proposal legitimately creates a fresh draft. A 'draft' or
+    // 'failed' proposal opens the dialog directly (failed → offers Retry).
+    const needsTrigger =
+      !breakdownProposal ||
+      breakdownProposal.status === 'accepted' ||
+      breakdownProposal.status === 'discarded';
+    if (needsTrigger) {
+      try {
+        await triggerBreakdown.mutateAsync();
+      } catch {
+        // Error already logged/handled by the mutation's onError
+        return;
+      }
+    }
+    BreakdownReviewDialog.show({ taskId: task.id, projectId });
   };
 
   const handleGitActions = (e: React.MouseEvent) => {
@@ -575,6 +614,17 @@ export function ActionsDropdown({
                           onClick={handleCreateSubtask}
                           disabled={!projectId || !task || usesSharedWorktree}
                         />
+                        <MobileMenuItem
+                          icon={Hammer}
+                          label={t('breakdown.action', 'Break down')}
+                          onClick={handleBreakdown}
+                          disabled={
+                            !projectId ||
+                            !task ||
+                            triggerBreakdown.isPending ||
+                            usesSharedWorktree
+                          }
+                        />
                         <MobileSeparator />
                         {!task?.archived_at && (
                           <MobileMenuItem
@@ -805,6 +855,26 @@ export function ActionsDropdown({
             >
               <GitBranch className="mr-2 h-4 w-4" />
               {t('actionsMenu.createSubtask')}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={
+                !projectId ||
+                !task ||
+                triggerBreakdown.isPending ||
+                usesSharedWorktree
+              }
+              onClick={handleBreakdown}
+              title={
+                usesSharedWorktree
+                  ? t(
+                      'actionsMenu.sharedWorktreeNoSubtask',
+                      'Cannot create subtasks for tasks using a shared worktree'
+                    )
+                  : undefined
+              }
+            >
+              <Hammer className="mr-2 h-4 w-4" />
+              {t('breakdown.action', 'Break down')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             {!task?.archived_at && (

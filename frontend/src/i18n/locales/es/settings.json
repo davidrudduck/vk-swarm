@@ -536,6 +536,10 @@
           "label": "Ejecutar script de instalación en paralelo con el agente",
           "helper": "Cuando está habilitado, el script de instalación se ejecuta simultáneamente con el agente de codificación en lugar de esperar a que se complete primero. Útil para procesos de configuración que tardan mucho tiempo."
         },
+        "autoBreakdown": {
+          "label": "Desglose automático de tareas nuevas",
+          "help": "Al activarlo, las tareas nuevas con descripción reciben subtareas propuestas por IA para tu revisión. No se crea nada sin aceptación."
+        },
         "dev": {
           "label": "Script del Servidor de Desarrollo",
           "helper": "Este script se puede ejecutar desde los intentos de tarea para iniciar un servidor de desarrollo. Úsalo para iniciar rápidamente el servidor de desarrollo de tu proyecto para probar cambios."

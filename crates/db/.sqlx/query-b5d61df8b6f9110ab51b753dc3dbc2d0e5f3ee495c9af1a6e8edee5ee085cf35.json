@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE task_breakdown_proposals SET updated_at = datetime('now','subsec') WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "b5d61df8b6f9110ab51b753dc3dbc2d0e5f3ee495c9af1a6e8edee5ee085cf35"
+}

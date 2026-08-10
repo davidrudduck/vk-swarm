@@ -343,6 +343,25 @@
     "title": "View Mode",
     "logs": "Logs"
   },
+  "breakdown": {
+    "action": "Break down",
+    "proposedBadge": "Proposed subtasks",
+    "title": "Review task breakdown",
+    "failedGeneric": "Breakdown failed.",
+    "retry": "Retry",
+    "running": "Generating breakdown...",
+    "loading": "Loading breakdown...",
+    "loadFailed": "Could not load the breakdown proposal.",
+    "reload": "Reload",
+    "itemTitle": "Item title",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "deleteItem": "Delete item",
+    "itemDescription": "Item description",
+    "dependencies": "Dependencies",
+    "discard": "Discard",
+    "accept": "Accept"
+  },
   "actionsMenu": {
     "attempt": "Attempt",
     "openInIde": "Open attempt in IDE",
@@ -370,8 +389,7 @@
     "cleanupWorktree": "Delete Worktree",
     "cleanupWorktreeDesc": "Delete worktree files from disk",
     "cleanupWorktreeConfirm": "Delete the worktree for this attempt? This cannot be undone.",
-    "worktreeAlreadyDeleted": "Worktree already deleted",
-    "sharedTask": "Shared Task"
+    "worktreeAlreadyDeleted": "Worktree already deleted"
   },
   "archiveDialog": {
     "title": "Archive Task",

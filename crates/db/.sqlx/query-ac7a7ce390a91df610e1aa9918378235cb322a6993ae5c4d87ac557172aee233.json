@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM task_breakdown_proposal_items WHERE proposal_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ac7a7ce390a91df610e1aa9918378235cb322a6993ae5c4d87ac557172aee233"
+}

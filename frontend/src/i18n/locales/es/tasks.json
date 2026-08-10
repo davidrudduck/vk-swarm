@@ -11,6 +11,25 @@
   "badges": {
     "archived": "Archivado"
   },
+  "breakdown": {
+    "action": "Desglosar",
+    "proposedBadge": "Subtareas propuestas",
+    "title": "Revisar el desglose de la tarea",
+    "failedGeneric": "El desglose falló.",
+    "retry": "Reintentar",
+    "running": "Generando desglose...",
+    "loading": "Cargando el desglose...",
+    "loadFailed": "No se pudo cargar la propuesta de desglose.",
+    "reload": "Recargar",
+    "itemTitle": "Título del elemento",
+    "moveUp": "Mover arriba",
+    "moveDown": "Mover abajo",
+    "deleteItem": "Eliminar elemento",
+    "itemDescription": "Descripción del elemento",
+    "dependencies": "Dependencias",
+    "discard": "Descartar",
+    "accept": "Aceptar"
+  },
   "actionsMenu": {
     "attempt": "Intento",
     "createNewAttempt": "Crear nuevo intento",

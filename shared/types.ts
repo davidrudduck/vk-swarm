@@ -34,7 +34,11 @@ export type Project = { id: string, name: string, git_repo_path: string, setup_s
 /**
  * When true, setup script runs concurrently with the coding agent
  */
-parallel_setup_script: boolean, remote_project_id: string | null, created_at: Date, updated_at: Date, is_remote: boolean, source_node_id: string | null, source_node_name: string | null, source_node_public_url: string | null, source_node_status: string | null, remote_last_synced_at: Date | null, 
+parallel_setup_script: boolean, 
+/**
+ * When true, the P3 auto-trigger may automatically break down tasks for this project
+ */
+auto_breakdown_enabled: boolean, remote_project_id: string | null, created_at: Date, updated_at: Date, is_remote: boolean, source_node_id: string | null, source_node_name: string | null, source_node_public_url: string | null, source_node_status: string | null, remote_last_synced_at: Date | null, 
 /**
  * Whether GitHub integration is enabled for this project
  */
@@ -66,7 +70,7 @@ export type CreateProject = { name: string, git_repo_path: string, use_existing_
  */
 clone_url: string | null, setup_script: string | null, dev_script: string | null, cleanup_script: string | null, copy_files: string | null, };
 
-export type UpdateProject = { name: string | null, git_repo_path: string | null, setup_script: string | null, dev_script: string | null, cleanup_script: string | null, copy_files: string | null, parallel_setup_script: boolean | null, };
+export type UpdateProject = { name: string | null, git_repo_path: string | null, setup_script: string | null, dev_script: string | null, cleanup_script: string | null, copy_files: string | null, parallel_setup_script: boolean | null, auto_breakdown_enabled: boolean | null, };
 
 export type SearchResult = { path: string, is_file: boolean, match_type: SearchMatchType, };
 
@@ -378,6 +382,18 @@ export type ActivityFeed = { items: Array<ActivityFeedItem>, counts: ActivityCou
 export type CreateTask = { project_id: string, title: string, description: string | null, status: TaskStatus | null, parent_task_id: string | null, image_ids: Array<string> | null, shared_task_id: string | null, };
 
 export type UpdateTask = { title: string | null, description: string | null, status: TaskStatus | null, parent_task_id: string | null, image_ids: Array<string> | null, };
+
+export type TaskBreakdownProposal = { id: string, task_id: string, status: BreakdownStatus, execution_process_id: string | null, error: string | null, created_at: Date, updated_at: Date, };
+
+export type TaskBreakdownProposalItem = { id: string, proposal_id: string, title: string, description: string | null, sort_order: bigint, depends_on_item_ids: string, created_at: Date, };
+
+export type BreakdownStatus = "draft" | "accepted" | "discarded" | "failed";
+
+export type UpsertProposalItems = { items: Array<ProposalItemInput>, };
+
+export type ProposalItemInput = { title: string, description: string | null, sort_order: bigint, depends_on_indices: Array<bigint>, };
+
+export type TaskDependency = { task_id: string, depends_on_task_id: string, created_at: Date, };
 
 export type Image = { id: string, file_path: string, original_name: string, mime_type: string | null, size_bytes: bigint, hash: string, created_at: string, updated_at: string, };
 
@@ -862,7 +878,7 @@ completion_message?: string, };
 
 export enum ExecutionProcessStatus { running = "running", completed = "completed", failed = "failed", killed = "killed" }
 
-export type ExecutionProcessRunReason = "setupscript" | "cleanupscript" | "codingagent" | "devserver";
+export type ExecutionProcessRunReason = "setupscript" | "cleanupscript" | "codingagent" | "devserver" | "breakdown";
 
 export type Merge = { "type": "direct" } & DirectMerge | { "type": "pr" } & PrMerge;
 

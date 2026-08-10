@@ -41,6 +41,7 @@ interface ProjectFormState {
   cleanup_script: string;
   copy_files: string;
   parallel_setup_script: boolean;
+  auto_breakdown_enabled: boolean;
 }
 
 function projectToFormState(project: Project): ProjectFormState {
@@ -52,6 +53,7 @@ function projectToFormState(project: Project): ProjectFormState {
     cleanup_script: project.cleanup_script ?? '',
     copy_files: project.copy_files ?? '',
     parallel_setup_script: project.parallel_setup_script ?? false,
+    auto_breakdown_enabled: project.auto_breakdown_enabled ?? false,
   };
 }
 
@@ -221,6 +223,7 @@ export function ProjectSettings() {
         cleanup_script: draft.cleanup_script.trim() || null,
         copy_files: draft.copy_files.trim() || null,
         parallel_setup_script: draft.parallel_setup_script,
+        auto_breakdown_enabled: draft.auto_breakdown_enabled,
       };
 
       updateProject.mutate({
@@ -446,6 +449,24 @@ export function ProjectSettings() {
                 </div>
                 <p className="text-sm text-muted-foreground">
                   {t('settings.projects.scripts.parallelSetup.helper')}
+                </p>
+                <div className="flex items-center gap-2 mt-2">
+                  <Checkbox
+                    id="auto-breakdown"
+                    checked={draft.auto_breakdown_enabled}
+                    onCheckedChange={(checked) =>
+                      updateDraft({ auto_breakdown_enabled: checked === true })
+                    }
+                  />
+                  <Label
+                    htmlFor="auto-breakdown"
+                    className="text-sm font-normal"
+                  >
+                    {t('settings.projects.scripts.autoBreakdown.label')}
+                  </Label>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {t('settings.projects.scripts.autoBreakdown.help')}
                 </p>
               </div>
 

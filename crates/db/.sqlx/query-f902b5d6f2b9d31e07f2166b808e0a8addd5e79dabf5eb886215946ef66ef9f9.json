@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO node_outbox (id, seq, op_type, entity_type, entity_id, payload, idempotency_key, fencing_token)\n               VALUES ($1, (SELECT COALESCE(MAX(seq),0)+1 FROM node_outbox), 'task.upsert', 'task', $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "f902b5d6f2b9d31e07f2166b808e0a8addd5e79dabf5eb886215946ef66ef9f9"
+}

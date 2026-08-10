@@ -8,6 +8,7 @@ use crate::DeploymentImpl;
 pub mod all_tasks;
 pub mod approvals;
 pub mod backups;
+pub mod breakdown;
 pub mod config;
 pub mod containers;
 pub mod dashboard;
@@ -53,6 +54,7 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(projects::router(&deployment))
         .merge(drafts::router(&deployment))
         .merge(tasks::router(&deployment))
+        .merge(breakdown::router(&deployment))
         .merge(all_tasks::router(&deployment))
         .merge(task_attempts::router(&deployment))
         .merge(execution_processes::router(&deployment))
