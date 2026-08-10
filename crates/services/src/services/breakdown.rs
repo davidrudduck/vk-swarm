@@ -29,14 +29,47 @@ pub struct BreakdownSubtask {
     pub depends_on: Vec<usize>,
 }
 
+/// Number of distinct values in `values`. Dependency lists are tiny (a handful
+/// of indices), so the quadratic scan is cheaper than allocating a set.
+fn distinct_count(values: &[usize]) -> usize {
+    values
+        .iter()
+        .enumerate()
+        .filter(|(i, v)| !values[..*i].contains(v))
+        .count()
+}
+
+/// Drop repeated indices from `values`, preserving first-seen order.
+fn dedupe_preserving_order(values: &mut Vec<usize>) {
+    let mut seen: Vec<usize> = Vec::with_capacity(values.len());
+    values.retain(|v| {
+        if seen.contains(v) {
+            false
+        } else {
+            seen.push(*v);
+            true
+        }
+    });
+}
+
 /// True when the `depends_on` edges contain a cycle.
 ///
 /// Kahn's algorithm: repeatedly remove a node with no outstanding dependencies.
 /// If any node is left unremoved, it sits on (or behind) a cycle. Assumes every
 /// index in `depends_on` is already in range — callers validate that first.
+///
+/// The in-degree is the count of DISTINCT dependencies, not `depends_on.len()`:
+/// the decrement below is driven by `.contains()`, which fires once per node
+/// however many times that node is listed. Seeding from the raw length would
+/// leave a duplicate edge (`[0, 0]`) permanently outstanding and report an
+/// acyclic set as cyclic. Callers dedupe before persisting, so this is the
+/// belt-and-braces half of that fix.
 fn has_dependency_cycle(subtasks: &[BreakdownSubtask]) -> bool {
     let len = subtasks.len();
-    let mut remaining: Vec<usize> = subtasks.iter().map(|s| s.depends_on.len()).collect();
+    let mut remaining: Vec<usize> = subtasks
+        .iter()
+        .map(|s| distinct_count(&s.depends_on))
+        .collect();
     let mut queue: Vec<usize> = (0..len).filter(|&i| remaining[i] == 0).collect();
     let mut resolved = 0usize;
 
@@ -203,7 +236,7 @@ impl BreakdownService {
                 }
             }
         }
-        let result = match parsed {
+        let mut result = match parsed {
             Some(r) => r,
             None => return Err(BreakdownError::Json(last_err.expect("blocks is non-empty"))),
         };
@@ -228,6 +261,16 @@ impl BreakdownService {
                 }
             }
         }
+        // Dedupe before the cycle check and before persistence. An agent listing
+        // the same dependency twice is expressing one edge, not a defect: rejecting
+        // the whole run would throw away a usable draft the operator could have
+        // edited. task_dependencies is PRIMARY KEY (task_id, depends_on_task_id),
+        // so a duplicate that reached accept_proposal would abort the accept
+        // transaction on a UNIQUE violation.
+        for subtask in &mut result.subtasks {
+            dedupe_preserving_order(&mut subtask.depends_on);
+        }
+
         // Range and self-reference checks above do not catch a mutual pair
         // (0 -> 1, 1 -> 0). accept_proposal writes every depends_on edge into
         // task_dependencies, so a cycle here becomes a cyclic graph on real tasks.
@@ -669,6 +712,50 @@ mod tests {
         ];
         let result = BreakdownService::parse_breakdown_result(&lines).expect("diamond is a DAG");
         assert_eq!(result.subtasks.len(), 4);
+    }
+
+    #[test]
+    fn test_parse_dedupes_duplicated_dependency() {
+        // An agent listing the same dependency twice is expressing one edge on an
+        // acyclic set. Seeding Kahn's in-degree from `depends_on.len()` while
+        // decrementing on `.contains()` left it permanently outstanding, so the whole
+        // run was rejected as cyclic — and a duplicate reaching accept_proposal would
+        // violate the task_dependencies primary key.
+        let lines = vec![
+            "```json".to_string(),
+            "{\"subtasks\":[{\"title\":\"A\",\"description\":null,\"depends_on\":[]},{\"title\":\"B\",\"description\":null,\"depends_on\":[0,0]}]}".to_string(),
+            "```".to_string(),
+        ];
+        let result = BreakdownService::parse_breakdown_result(&lines)
+            .expect("a duplicated dependency is not a cycle");
+        assert_eq!(
+            result.subtasks[1].depends_on,
+            vec![0],
+            "the duplicate is collapsed to a single edge before persistence"
+        );
+    }
+
+    #[test]
+    fn test_has_dependency_cycle_counts_distinct_dependencies() {
+        // Pins the in-degree fix directly: dedupe at ingest makes this unreachable
+        // from parse_breakdown_result, so without this test the counting change would
+        // be unpinned.
+        let subtasks = vec![
+            BreakdownSubtask {
+                title: "A".to_string(),
+                description: None,
+                depends_on: vec![],
+            },
+            BreakdownSubtask {
+                title: "B".to_string(),
+                description: None,
+                depends_on: vec![0, 0],
+            },
+        ];
+        assert!(
+            !has_dependency_cycle(&subtasks),
+            "a repeated edge on an acyclic set is not a cycle"
+        );
     }
 
     #[test]

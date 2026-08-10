@@ -45,6 +45,20 @@ evidence recorded under `## Post-review known issues` in the workstream's decisi
    Extract a shared helper so future changes to variable expansion apply to both paths.
    Anchor: `crates/services/src/services/container.rs:1406-1455` vs `1235-1277`.
 
+6. **Close the remaining routes to a stuck `Draft` proposal.** Code-review round 1 (finding 7)
+   fixed the swallowed panic in the detached auto-breakdown spawn — its `JoinHandle` is now
+   supervised and a panic marks the proposal `Failed`. Two routes to the same state remain, both
+   needing recovery design rather than a local fix:
+   - a process restart between the committed `create_draft_proposal` and `link_execution_process`
+     leaves a draft with no execution process (`crates/server/src/routes/breakdown.rs:167`);
+   - the silent `Err` arm of `if let Ok(ctx) = ExecutionProcess::load_context(...)`
+     (`crates/local-deployment/src/container.rs:889`) drops the completion handler entirely.
+
+   A stuck draft cannot be re-triggered (409, one draft per task) or retried (retry requires
+   `Failed`). It is recoverable by hand — the badge renders and Discard stays enabled — so this is
+   a robustness item, not a data-loss one. Likely shape: a startup sweep that fails drafts whose
+   execution process is absent or terminal.
+
 ## Status
 
-Not started. Filed 2026-08-10.
+Not started. Filed 2026-08-10; item 6 added from code-review round 1 (2026-08-10).

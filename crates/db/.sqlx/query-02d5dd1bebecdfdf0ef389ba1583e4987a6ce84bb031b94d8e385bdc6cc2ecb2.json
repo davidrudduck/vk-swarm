@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE task_breakdown_proposals\n           SET status = $2, error = $3, updated_at = datetime('now','subsec')\n           WHERE id = $1\n           RETURNING id as \"id!: Uuid\", task_id as \"task_id!: Uuid\", status as \"status!: BreakdownStatus\", execution_process_id as \"execution_process_id: Uuid\", error, created_at as \"created_at!: DateTime<Utc>\", updated_at as \"updated_at!: DateTime<Utc>\"",
+  "query": "UPDATE task_breakdown_proposals\n           SET status = $2, error = $3, updated_at = datetime('now','subsec')\n           WHERE id = $1 AND status = $4\n           RETURNING id as \"id!: Uuid\", task_id as \"task_id!: Uuid\", status as \"status!: BreakdownStatus\", execution_process_id as \"execution_process_id: Uuid\", error, created_at as \"created_at!: DateTime<Utc>\", updated_at as \"updated_at!: DateTime<Utc>\"",
   "describe": {
     "columns": [
       {
@@ -40,7 +40,7 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 4
     },
     "nullable": [
       true,
@@ -52,5 +52,5 @@
       false
     ]
   },
-  "hash": "0bb9ead0e0e3820b77fa20400f179a167f7de364afbe0ffb2241a731468b8fff"
+  "hash": "02d5dd1bebecdfdf0ef389ba1583e4987a6ce84bb031b94d8e385bdc6cc2ecb2"
 }

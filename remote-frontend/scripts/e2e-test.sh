@@ -37,7 +37,12 @@ SEED_FILE="$COMPOSE_DIR/scripts/seed-e2e-db.sql"
 # Pinning the project name and using non-default ports keeps an E2E run
 # completely disjoint from a deployment, so the two can coexist.
 # -----------------------------------------------------------------------------
-export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-vkswarm-e2e}"
+# ASSERTED, not defaulted. `${VAR:-default}` applies only when VAR is unset, so an
+# ambient COMPOSE_PROJECT_NAME (a deployment runbook shell, a CI job) would be
+# inherited and resolve to the production project. Project identity is the hazard
+# and is deliberately NOT caller-tunable; the ports below legitimately are.
+COMPOSE_PROJECT_NAME="vkswarm-e2e"
+export COMPOSE_PROJECT_NAME
 # Not 9100/5434: 9100 is Prometheus node_exporter's default and 5434 is the
 # deployed hive's Postgres. These are picked to avoid both.
 export SERVER_PORT="${SERVER_PORT:-9210}"
@@ -55,7 +60,10 @@ if [ -f "$ENV_FILE" ]; then
     COMPOSE_ENV_ARGS=(--env-file "$ENV_FILE")
 fi
 
-dc() { docker compose -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" "$@"; }
+# `-p` is the winner in Compose's precedence chain (-p > COMPOSE_PROJECT_NAME >
+# directory name), so pass it explicitly on every invocation rather than relying
+# on the exported variable surviving the environment.
+dc() { docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" "${COMPOSE_ENV_ARGS[@]}" "$@"; }
 
 SKIP_DOCKER=false
 KEEP_RUNNING=false
@@ -89,7 +97,7 @@ cleanup() {
         ok "Docker environment stopped."
     else
         log "Docker environment kept running (--keep)."
-        log "To stop: cd crates/remote && COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME docker compose -f docker-compose.dev.yml down -v"
+        log "To stop: cd crates/remote && docker compose -p $COMPOSE_PROJECT_NAME -f docker-compose.dev.yml down -v"
     fi
 }
 
@@ -151,6 +159,18 @@ if [ "$SKIP_DOCKER" = false ]; then
     # A port already in use means something else is listening — quite possibly a
     # deployed hive. Abort BEFORE `up`, while the trap has nothing to tear down,
     # rather than colliding and then cleaning up someone else's stack.
+    # Fail closed if the probe itself is missing. With `2>/dev/null` swallowing
+    # "command not found", an absent `ss` (minimal CI images, Debian-slim, macOS)
+    # turned the one guard between an aborted run and someone else's stack into a
+    # silent no-op. A guard that protects a live deployment must never pass by
+    # accident.
+    if ! command -v ss >/dev/null 2>&1; then
+        err "'ss' is not available — cannot verify that $SERVER_PORT/$POSTGRES_PORT are free."
+        err "Refusing to start the E2E stack without the port preflight. Install iproute2"
+        err "(or the platform equivalent) and re-run."
+        SKIP_DOCKER=true   # neutralise the teardown trap; we started nothing
+        exit 1
+    fi
     for port in "$SERVER_PORT" "$POSTGRES_PORT"; do
         if ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN; then
             err "Port $port is already in use — refusing to start the E2E stack."

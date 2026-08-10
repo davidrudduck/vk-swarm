@@ -14,7 +14,7 @@ The remote crate (hive) can be run locally in a Docker container alongside the l
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │  Local Machine (or accessible on network)                   │
 │                                                             │
@@ -47,6 +47,19 @@ All services bind on `0.0.0.0` — accessible from other machines on the network
 ## Setup
 
 ### 1. Start the hive (Docker)
+
+<Warning>
+  Unlike the [E2E stack](/development/e2e-testing-docker), this walkthrough deliberately uses
+  Compose's **default** project name (derived from the `crates/remote` directory) on the default
+  ports 9000/5434 — the same identity a **deployed hive** uses. On a host that is also running a
+  deployed hive, `up` adopts and recreates its containers and `down -v` destroys them along with
+  the `remote_remote-db-data` volume.
+
+  Before running any command in this page, confirm no deployed hive is on this host
+  (`docker compose ls` — look for a `remote` project, and check whether anything is listening on
+  9000/5434). If one is, do not follow this page as written: pick a distinct project name
+  (`-p <name>` on every command) and distinct `SERVER_PORT`/`POSTGRES_PORT`.
+</Warning>
 
 ```bash
 cd crates/remote
@@ -149,7 +162,7 @@ docker compose -f docker-compose.dev.yml restart remote-server
 # Stop everything
 docker compose -f docker-compose.dev.yml down
 
-# Stop and remove all data (reset)
+# Stop and remove all data (reset) — destroys the volume; re-read the warning above first
 docker compose -f docker-compose.dev.yml down -v
 ```
 

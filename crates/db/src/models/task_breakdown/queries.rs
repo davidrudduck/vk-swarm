@@ -94,14 +94,46 @@ pub async fn find_items(
     .await
 }
 
+/// Number of distinct values in `values`. Dependency lists are tiny, so the
+/// quadratic scan is cheaper than allocating a set.
+fn distinct_count(values: &[i64]) -> usize {
+    values
+        .iter()
+        .enumerate()
+        .filter(|(i, v)| !values[..*i].contains(v))
+        .count()
+}
+
+/// Drop repeated indices from `values`, preserving first-seen order.
+fn dedupe_preserving_order(values: &mut Vec<i64>) {
+    let mut seen: Vec<i64> = Vec::with_capacity(values.len());
+    values.retain(|v| {
+        if seen.contains(v) {
+            false
+        } else {
+            seen.push(*v);
+            true
+        }
+    });
+}
+
 /// True when the `depends_on_indices` edges contain a cycle.
 ///
 /// Kahn's algorithm: repeatedly remove a node with no outstanding dependencies;
 /// anything left over sits on (or behind) a cycle. Assumes indices are already
 /// range-validated by the caller.
+///
+/// The in-degree counts DISTINCT dependencies, not `depends_on_indices.len()`:
+/// the decrement is driven by `.contains()`, which fires once per node however
+/// many times that node is listed, so seeding from the raw length would leave a
+/// duplicate edge permanently outstanding and report an acyclic set as cyclic.
+/// `replace_items` dedupes before calling this; this is the belt-and-braces half.
 fn has_index_cycle(items: &[ProposalItemInput]) -> bool {
     let len = items.len();
-    let mut remaining: Vec<usize> = items.iter().map(|i| i.depends_on_indices.len()).collect();
+    let mut remaining: Vec<usize> = items
+        .iter()
+        .map(|i| distinct_count(&i.depends_on_indices))
+        .collect();
     let mut queue: Vec<usize> = (0..len).filter(|&i| remaining[i] == 0).collect();
     let mut resolved = 0usize;
 
@@ -129,7 +161,7 @@ fn has_index_cycle(items: &[ProposalItemInput]) -> bool {
 pub async fn replace_items(
     pool: &SqlitePool,
     proposal_id: Uuid,
-    items: Vec<ProposalItemInput>,
+    mut items: Vec<ProposalItemInput>,
 ) -> Result<Vec<TaskBreakdownProposalItem>, sqlx::Error> {
     // Validate references before any write.
     let len = items.len() as i64;
@@ -147,6 +179,14 @@ pub async fn replace_items(
             }
         }
     }
+    // Dedupe before the cycle check and before any write. A client sending the
+    // same index twice is expressing one edge; task_dependencies is
+    // PRIMARY KEY (task_id, depends_on_task_id), so a duplicate surviving to
+    // accept_proposal would abort the accept transaction on a UNIQUE violation.
+    for item in &mut items {
+        dedupe_preserving_order(&mut item.depends_on_indices);
+    }
+
     // Range and self-reference checks miss a mutual pair (0 -> 1, 1 -> 0).
     // accept_proposal turns every edge into a task_dependencies row, so a cycle
     // accepted here becomes a cyclic graph on real tasks.
@@ -259,18 +299,31 @@ pub async fn update_status(
         )));
     }
 
+    // Compare-and-swap on the status we just read. Reading and writing as two
+    // separate statements is check-then-act: a user's Discard and a late
+    // fail_proposal can both read Draft, both pass the check above, and the
+    // second write silently wins. The `status = $4` predicate makes the write
+    // conditional on nothing having moved in between, so the loser writes zero
+    // rows and gets RowNotFound rather than clobbering the winner's decision.
     sqlx::query_as!(
         TaskBreakdownProposal,
         r#"UPDATE task_breakdown_proposals
            SET status = $2, error = $3, updated_at = datetime('now','subsec')
-           WHERE id = $1
+           WHERE id = $1 AND status = $4
            RETURNING id as "id!: Uuid", task_id as "task_id!: Uuid", status as "status!: BreakdownStatus", execution_process_id as "execution_process_id: Uuid", error, created_at as "created_at!: DateTime<Utc>", updated_at as "updated_at!: DateTime<Utc>""#,
         id,
         status,
-        error
+        error,
+        current
     )
     .fetch_one(pool)
     .await
+    .map_err(|e| match e {
+        sqlx::Error::RowNotFound => sqlx::Error::Protocol(format!(
+            "breakdown proposal {id} changed status concurrently; {current:?} -> {status:?} was not applied"
+        )),
+        other => other,
+    })
 }
 
 /// Link the execution process that generated this proposal, refreshing updated_at.
@@ -400,13 +453,27 @@ pub async fn accept_proposal(
 
     // Second pass: resolve depends_on_item_ids (JSON of item ids) to task_dependencies edges.
     for item in &items {
-        let dep_item_ids: Vec<Uuid> =
+        let mut dep_item_ids: Vec<Uuid> =
             serde_json::from_str(&item.depends_on_item_ids).map_err(|e| {
                 sqlx::Error::Protocol(format!(
                     "item {}: invalid depends_on_item_ids JSON: {e}",
                     item.id
                 ))
             })?;
+        // task_dependencies is PRIMARY KEY (task_id, depends_on_task_id): a repeated
+        // id would abort the whole accept transaction on a UNIQUE violation. Ingest
+        // dedupes, so this is unreachable defence for rows written before that fix.
+        {
+            let mut seen: Vec<Uuid> = Vec::with_capacity(dep_item_ids.len());
+            dep_item_ids.retain(|id| {
+                if seen.contains(id) {
+                    false
+                } else {
+                    seen.push(*id);
+                    true
+                }
+            });
+        }
         let task_id = *item_to_task.get(&item.id).ok_or_else(|| {
             sqlx::Error::Protocol(format!("item {}: no child task was created", item.id))
         })?;

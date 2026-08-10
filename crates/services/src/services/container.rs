@@ -137,7 +137,6 @@ fn run_reason_skips_finalize(run_reason: &ExecutionProcessRunReason) -> bool {
     )
 }
 
-
 /// Whether starting this run should flip the parent task to `InProgress`.
 ///
 /// `DevServer` and `Breakdown` are both non-mutating with respect to the task's own

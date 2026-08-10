@@ -104,9 +104,9 @@ services:
             psql -h remote-db -U $${POSTGRES_USER} -d $${POSTGRES_DB} -f /seed.sql
             echo ""
             echo "=== DEV ENVIRONMENT READY ==="
-            echo "Hive frontend: http://localhost:9000"
-            echo "Hive API:      http://localhost:9000/v1/health"
-            echo "PostgreSQL:    localhost:5434"
+            echo "Hive frontend: http://localhost:${SERVER_PORT:-9000}"
+            echo "Hive API:      http://localhost:${SERVER_PORT:-9000}/v1/health"
+            echo "PostgreSQL:    localhost:${POSTGRES_PORT:-5434}"
             echo "Test API key:  vk_dev-test-key-secret-12345678"
             echo "=============================="
             exit 0

@@ -24,6 +24,8 @@ When on, creating a top-level task with a non-empty description automatically qu
 
 The condition is narrow by design: the task must have **no parent** and a **non-empty description**. Subtasks and bare title-only cards never auto-trigger, which keeps the common "quick capture" workflow free of background runs.
 
+The trigger is wired into ordinary task creation only. **Create & Start** does not auto-trigger — that path starts a coding-agent attempt immediately, and a concurrent breakdown run on the same task is not wanted. Operators enabling this setting should expect no proposal from Create & Start.
+
 ## Which agent runs a breakdown
 
 Breakdown uses the node's **global default executor profile** — `executor_profile` from the node config, the same one shown under [Default Agent Configuration](/configuration-customisation/global-settings). There is no per-project or breakdown-specific agent override.

@@ -310,11 +310,41 @@ pub async fn create_task(
         match crate::routes::breakdown::create_draft_proposal(pool, auto_breakdown_task_id).await {
             Ok(proposal) => {
                 let deployment = deployment.clone();
+                let inner_pool = pool.clone();
+                let proposal_id = proposal.id;
                 tokio::spawn(async move {
-                    if let Err(e) =
-                        crate::routes::breakdown::spawn_breakdown_run(deployment, proposal).await
+                    // Supervise the run rather than dropping its JoinHandle. A panic in
+                    // `spawn_breakdown_run` would otherwise be swallowed with no log line
+                    // at all, leaving the proposal stuck in Draft: it cannot be
+                    // re-triggered (409, one-draft-per-task) and cannot be retried
+                    // (retry requires Failed). Marking it Failed makes it recoverable.
+                    let inner_deployment = deployment.clone();
+                    let outcome = tokio::spawn(async move {
+                        crate::routes::breakdown::spawn_breakdown_run(inner_deployment, proposal)
+                            .await
+                    })
+                    .await;
+                    let failure = match outcome {
+                        Ok(Ok(())) => None,
+                        Ok(Err(e)) => {
+                            tracing::warn!(task_id = %auto_breakdown_task_id, error = ?e, "auto-breakdown run failed");
+                            None
+                        }
+                        Err(join_err) => {
+                            tracing::error!(task_id = %auto_breakdown_task_id, error = ?join_err, "auto-breakdown run panicked");
+                            Some(format!("breakdown run panicked: {join_err}"))
+                        }
+                    };
+                    if let Some(error_text) = failure
+                        && let Err(e) = db::models::task_breakdown::update_status(
+                            &inner_pool,
+                            proposal_id,
+                            db::models::task_breakdown::BreakdownStatus::Failed,
+                            Some(error_text),
+                        )
+                        .await
                     {
-                        tracing::warn!(task_id = %auto_breakdown_task_id, error = ?e, "auto-breakdown run failed");
+                        tracing::warn!(task_id = %auto_breakdown_task_id, error = ?e, "could not mark panicked auto-breakdown proposal failed");
                     }
                 });
             }

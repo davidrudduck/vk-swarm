@@ -40,11 +40,22 @@ Migration note: `execution_processes.run_reason` has a CHECK constraint; adding 
 | From | To | Legal |
 |---|---|---|
 | `Draft` | `Accepted`, `Discarded`, `Failed` | yes |
-| `Failed` | `Draft` (retry), `Discarded` | yes |
+| `Failed` | `Draft`, `Discarded` | yes |
 | `Accepted`, `Discarded` | anything else | **no** — both are terminal |
 | any | itself | yes (no-op) |
 
-An illegal transition returns `sqlx::Error::Protocol`, which `map_proposal_error` surfaces as HTTP 409. This is what stops a late-arriving executor result from overwriting a user's discard with `Failed`. `handle_breakdown_completion` (`crates/local-deployment/src/container.rs`) belt-and-braces the same case by returning early with a debug log when the proposal it finds is no longer `Draft`, so the ordinary late-completion path is a quiet no-op rather than an error.
+The `Failed → Draft` row is **not** exercised by the retry endpoint: `retry_impl`
+(`crates/server/src/routes/breakdown.rs:209-213`) asserts the proposal is `Failed` and then calls
+`create_draft_proposal`, which inserts a **new** row rather than re-drafting in place. The arm is
+kept because it is permissive in the safe direction, but no production caller performs it today.
+
+An illegal transition returns `sqlx::Error::Protocol`, which `map_proposal_error` surfaces as HTTP
+409. Two mechanisms together stop a late-arriving executor result from overwriting a user's
+discard with `Failed`: the transition table refuses `Discarded → Failed` outright, and the UPDATE
+carries an `AND status = $4` predicate naming the status the check was made against, so two callers
+that both read `Draft` cannot both write — the loser writes zero rows and gets a conflict rather
+than silently clobbering the winner. Without that predicate the check-and-write pair is
+check-then-act and the last writer wins. `handle_breakdown_completion` (`crates/local-deployment/src/container.rs`) belt-and-braces the same case by returning early with a debug log when the proposal it finds is no longer `Draft`, so the ordinary late-completion path is a quiet no-op rather than an error.
 
 ## Execution flow
 
@@ -66,6 +77,14 @@ Subtask dependencies must form a DAG. Two layers enforce it, and both perform th
 
 - `BreakdownService::parse_breakdown_result` validates what the agent produced, returning `BreakdownError::InvalidDependency` or `BreakdownError::CyclicDependency`.
 - `task_breakdown::replace_items` validates what a user's edit produced, before any write, returning `sqlx::Error::Protocol`.
+
+Both layers also **dedupe** each dependency list (preserving first-seen order) between the
+range/self checks and the cycle check. A repeated index expresses one edge, but `task_dependencies`
+is `PRIMARY KEY (task_id, depends_on_task_id)`, so a duplicate surviving to `accept_proposal` would
+abort the accept transaction on a UNIQUE violation. Kahn's in-degree is correspondingly seeded from
+the count of **distinct** dependencies — the decrement is driven by `.contains()`, which fires once
+per node however many times it is listed, so seeding from the raw length would leave a duplicate
+edge permanently outstanding and report an acyclic set as cyclic.
 
 The cycle check is not redundant with the range and self-reference checks: a mutual pair (`0 -> 1`, `1 -> 0`) satisfies both of those. Without it, `accept_proposal` writes both `task_dependencies` edges and the cycle lands on real tasks. Branching and merging (diamond) shapes are acyclic and must continue to pass — there are tests for exactly that.
 
@@ -94,6 +113,20 @@ Note that `vks-mcp-server` is a separate binary — see finding F-2026-08-09-02 
 ## Auto trigger
 
 `projects.auto_breakdown_enabled` (BOOLEAN, default 0). In the `create_task` handler, after insert: if enabled and the task has a non-empty description and no `parent_task_id`, fire the two stage functions — stage 1 awaited, stage 2 detached — with failures only logged. Toggled in project settings.
+
+The trigger lives in `create_task` **only**, per the spec's design section. `create_task_and_start`
+(`core.rs`) carries no trigger: that path immediately starts a coding-agent attempt, so a
+concurrent breakdown run on the same task is not wanted. A user with the toggle on who creates a
+task via **Create & Start** therefore gets no proposal — this is deliberate, and the user-facing
+docs say so.
+
+The detached stage 2 is **supervised**: its `JoinHandle` is awaited by an outer task, which logs a
+`JoinError` and marks the proposal `Failed`. Dropping the handle would swallow a panic with no log
+line and strand the proposal in `Draft`, where it can neither be re-triggered (409, one draft per
+task) nor retried (retry requires `Failed`). Two other routes to a stuck `Draft` remain open and
+are tracked in `task-breakdown-followups`: a restart between the committed `create_draft_proposal`
+and `link_execution_process`, and the silent `Err` arm of `ExecutionProcess::load_context` in
+`crates/local-deployment/src/container.rs`.
 
 ## Frontend
 

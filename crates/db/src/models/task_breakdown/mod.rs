@@ -401,6 +401,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_replace_items_dedupes_duplicate_dependencies() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+
+        // [0, 0] is one edge expressed twice on an acyclic set. Seeding Kahn's
+        // in-degree from the raw length made this unresolvable and reported it as a
+        // cycle; a duplicate surviving to accept would violate the
+        // task_dependencies primary key.
+        let stored = replace_items(
+            &pool,
+            proposal.id,
+            vec![item("A", 0, vec![]), item("B", 1, vec![0, 0])],
+        )
+        .await
+        .expect("a duplicated dependency is not a cycle");
+
+        let b = stored
+            .iter()
+            .find(|i| i.title == "B")
+            .expect("item B was stored");
+        let deps: Vec<uuid::Uuid> =
+            serde_json::from_str(&b.depends_on_item_ids).expect("depends_on_item_ids is JSON");
+        assert_eq!(deps.len(), 1, "the duplicate edge is collapsed to one");
+    }
+
+    #[tokio::test]
+    async fn test_accept_with_duplicated_dependency_writes_one_edge() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+
+        replace_items(
+            &pool,
+            proposal.id,
+            vec![item("A", 0, vec![]), item("B", 1, vec![0, 0])],
+        )
+        .await
+        .expect("replace_items accepts the duplicate");
+
+        let created = accept_proposal(&pool, proposal.id)
+            .await
+            .expect("accept must not abort on a UNIQUE violation");
+        assert_eq!(created.len(), 2, "both child tasks are created");
+
+        let child_b = created
+            .iter()
+            .find(|t| t.title == "B")
+            .expect("child task B exists");
+        let edges = find_dependencies(&pool, child_b.id)
+            .await
+            .expect("dependency edges are queryable");
+        assert_eq!(edges.len(), 1, "exactly one dependency edge is persisted");
+    }
+
+    #[tokio::test]
+    async fn test_update_status_is_compare_and_swap_under_concurrency() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+
+        // A user's Discard racing a late fail_proposal: both read Draft and both pass
+        // the legal-transition check. Without the status predicate on the UPDATE the
+        // second write silently wins, overwriting the user's decision.
+        let (discard, fail) = tokio::join!(
+            update_status(&pool, proposal.id, BreakdownStatus::Discarded, None),
+            update_status(
+                &pool,
+                proposal.id,
+                BreakdownStatus::Failed,
+                Some("late run result".into())
+            ),
+        );
+
+        let winners = [discard.is_ok(), fail.is_ok()]
+            .iter()
+            .filter(|ok| **ok)
+            .count();
+        assert_eq!(
+            winners, 1,
+            "exactly one concurrent transition out of Draft may succeed"
+        );
+
+        let final_status = find_by_id(&pool, proposal.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status;
+        let expected = if discard.is_ok() {
+            BreakdownStatus::Discarded
+        } else {
+            BreakdownStatus::Failed
+        };
+        assert_eq!(
+            final_status, expected,
+            "the stored status is the winner's, not the last writer's"
+        );
+    }
+
+    #[tokio::test]
     async fn test_update_status_enforces_state_machine() {
         let (pool, _temp_dir) = create_test_pool().await;
         let project_id = create_project(&pool).await;
@@ -408,9 +511,14 @@ mod tests {
         let proposal = create(&pool, task_id).await.expect("create proposal");
 
         // Draft -> Failed -> Draft (the retry path) is legal.
-        update_status(&pool, proposal.id, BreakdownStatus::Failed, Some("boom".into()))
-            .await
-            .expect("draft -> failed");
+        update_status(
+            &pool,
+            proposal.id,
+            BreakdownStatus::Failed,
+            Some("boom".into()),
+        )
+        .await
+        .expect("draft -> failed");
         update_status(&pool, proposal.id, BreakdownStatus::Draft, None)
             .await
             .expect("failed -> draft (retry)");
@@ -431,7 +539,11 @@ mod tests {
             "a discarded proposal must not be reopened by a late completion"
         );
         assert_eq!(
-            find_by_id(&pool, proposal.id).await.unwrap().unwrap().status,
+            find_by_id(&pool, proposal.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
             BreakdownStatus::Discarded,
             "the user's discard survives"
         );
