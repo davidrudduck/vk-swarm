@@ -286,6 +286,265 @@ impl BreakdownService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use db::models::execution_process_logs::ExecutionProcessLogs;
+    use db::models::project::{CreateProject, Project};
+    use db::models::task::{CreateTask, Task};
+    use db::test_utils::create_test_pool;
+
+    async fn create_project(pool: &SqlitePool) -> Uuid {
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(pool, &project_data, project_id)
+            .await
+            .expect("Failed to create project");
+        project_id
+    }
+
+    async fn create_task(pool: &SqlitePool, project_id: Uuid) -> Uuid {
+        let task_id = Uuid::new_v4();
+        let task_data = CreateTask::from_title_description(
+            project_id,
+            "Parent Task".to_string(),
+            Some("Description".to_string()),
+        );
+        Task::create(pool, &task_data, task_id)
+            .await
+            .expect("Failed to create task");
+        task_id
+    }
+
+    async fn create_proposal(pool: &SqlitePool) -> Uuid {
+        let project_id = create_project(pool).await;
+        let task_id = create_task(pool, project_id).await;
+        task_breakdown::create(pool, task_id)
+            .await
+            .expect("create proposal")
+            .id
+    }
+
+    async fn create_execution_process(pool: &SqlitePool) -> Uuid {
+        let project_id = create_project(pool).await;
+        let task_id = create_task(pool, project_id).await;
+        let attempt_id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref)
+               VALUES ($1, $2, 'CLAUDE_CODE', 'test-branch', 'main', '/tmp/test-worktree')"#,
+        )
+        .bind(attempt_id)
+        .bind(task_id)
+        .execute(pool)
+        .await
+        .expect("create attempt");
+
+        let exec_id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO execution_processes (id, task_attempt_id, status, run_reason, executor_action)
+               VALUES ($1, $2, 'completed', 'codingagent', '{}')"#,
+        )
+        .bind(exec_id)
+        .bind(attempt_id)
+        .execute(pool)
+        .await
+        .expect("create execution");
+        exec_id
+    }
+
+    fn subtask(title: &str, depends_on: Vec<usize>) -> BreakdownSubtask {
+        BreakdownSubtask {
+            title: title.to_string(),
+            description: Some(format!("{title} description")),
+            depends_on,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_persist_result_happy_path_preserves_order_and_deps() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let proposal_id = create_proposal(&pool).await;
+
+        let result = BreakdownResult {
+            subtasks: vec![
+                subtask("First", vec![]),
+                subtask("Second", vec![0]),
+                subtask("Third", vec![0, 1]),
+            ],
+        };
+
+        BreakdownService::persist_result(&pool, proposal_id, &result)
+            .await
+            .expect("persist_result");
+
+        let items = task_breakdown::find_items(&pool, proposal_id)
+            .await
+            .expect("find_items");
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].title, "First");
+        assert_eq!(items[0].description.as_deref(), Some("First description"));
+        assert_eq!(items[0].sort_order, 0);
+        assert_eq!(items[1].title, "Second");
+        assert_eq!(items[1].sort_order, 1);
+        assert_eq!(items[2].title, "Third");
+        assert_eq!(items[2].sort_order, 2);
+
+        // depends_on_item_ids stores resolved item UUIDs, not raw indices.
+        let dep_ids: Vec<Uuid> = serde_json::from_str(&items[1].depends_on_item_ids).unwrap();
+        assert_eq!(dep_ids, vec![items[0].id]);
+        let dep_ids_third: Vec<Uuid> = serde_json::from_str(&items[2].depends_on_item_ids).unwrap();
+        assert_eq!(dep_ids_third, vec![items[0].id, items[1].id]);
+    }
+
+    #[tokio::test]
+    async fn test_persist_result_replaces_existing_items() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let proposal_id = create_proposal(&pool).await;
+
+        let first = BreakdownResult {
+            subtasks: vec![subtask("Old A", vec![]), subtask("Old B", vec![])],
+        };
+        BreakdownService::persist_result(&pool, proposal_id, &first)
+            .await
+            .expect("first persist_result");
+        assert_eq!(
+            task_breakdown::find_items(&pool, proposal_id)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+
+        let second = BreakdownResult {
+            subtasks: vec![subtask("New A", vec![])],
+        };
+        BreakdownService::persist_result(&pool, proposal_id, &second)
+            .await
+            .expect("second persist_result replaces items");
+
+        let items = task_breakdown::find_items(&pool, proposal_id)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1, "old items are replaced, not appended");
+        assert_eq!(items[0].title, "New A");
+    }
+
+    #[tokio::test]
+    async fn test_persist_result_nonexistent_proposal_errors_row_not_found() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let result = BreakdownResult {
+            subtasks: vec![subtask("A", vec![])],
+        };
+
+        let err = BreakdownService::persist_result(&pool, Uuid::new_v4(), &result)
+            .await
+            .expect_err("nonexistent proposal must error");
+        assert!(matches!(err, BreakdownError::Db(sqlx::Error::RowNotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_fail_proposal_happy_path_stores_status_and_error() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let proposal_id = create_proposal(&pool).await;
+
+        let updated =
+            BreakdownService::fail_proposal(&pool, proposal_id, "Claude timed out".to_string())
+                .await
+                .expect("fail_proposal");
+
+        assert_eq!(updated.status, BreakdownStatus::Failed);
+        assert_eq!(updated.error.as_deref(), Some("Claude timed out"));
+
+        let reread = task_breakdown::find_by_id(&pool, proposal_id)
+            .await
+            .unwrap()
+            .expect("proposal exists");
+        assert_eq!(reread.status, BreakdownStatus::Failed);
+        assert_eq!(reread.error.as_deref(), Some("Claude timed out"));
+    }
+
+    #[tokio::test]
+    async fn test_fail_proposal_nonexistent_proposal_errors_row_not_found() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let err = BreakdownService::fail_proposal(&pool, Uuid::new_v4(), "boom".to_string())
+            .await
+            .expect_err("nonexistent proposal must error");
+        assert!(matches!(err, BreakdownError::Db(sqlx::Error::RowNotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_extract_stdout_lines_reassembles_split_line_across_chunks() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let execution_id = create_execution_process(&pool).await;
+
+        // Two log rows (as would be inserted by separate append_log_line calls),
+        // whose Stdout payloads split a logical line mid-way.
+        let first_chunk =
+            ExecutionProcessLogs::serialize_logs(&[LogMsg::Stdout("part-of-line".to_string())])
+                .unwrap();
+        ExecutionProcessLogs::append_log_line(&pool, execution_id, &first_chunk)
+            .await
+            .expect("append first chunk");
+
+        let second_chunk = ExecutionProcessLogs::serialize_logs(&[LogMsg::Stdout(
+            "-completed\nfull second line".to_string(),
+        )])
+        .unwrap();
+        ExecutionProcessLogs::append_log_line(&pool, execution_id, &second_chunk)
+            .await
+            .expect("append second chunk");
+
+        let lines = BreakdownService::extract_stdout_lines(&pool, execution_id)
+            .await
+            .expect("extract_stdout_lines");
+
+        assert_eq!(lines[0], "part-of-line-completed");
+        assert_eq!(lines[1], "full second line");
+    }
+
+    #[tokio::test]
+    async fn test_extract_stdout_lines_no_logs_returns_single_empty_line() {
+        let (pool, _temp_dir) = create_test_pool().await;
+
+        // No rows exist for this execution id: find_by_execution_id returns an
+        // empty Vec, so chunks are empty and "".split('\n') yields one empty
+        // element — extract_stdout_lines does NOT error, and does NOT return
+        // an empty Vec; it returns a single empty-string line.
+        let lines = BreakdownService::extract_stdout_lines(&pool, Uuid::new_v4())
+            .await
+            .expect("no logs is not an error");
+        assert_eq!(lines, vec!["".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_extract_stdout_lines_ignores_non_stdout_entries() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let execution_id = create_execution_process(&pool).await;
+
+        let chunk = ExecutionProcessLogs::serialize_logs(&[
+            LogMsg::Stdout("keep me\n".to_string()),
+            LogMsg::Stderr("drop me (stderr)".to_string()),
+            LogMsg::SessionId("sess-1".to_string()),
+            LogMsg::Finished,
+        ])
+        .unwrap();
+        ExecutionProcessLogs::append_log_line(&pool, execution_id, &chunk)
+            .await
+            .expect("append chunk");
+
+        let lines = BreakdownService::extract_stdout_lines(&pool, execution_id)
+            .await
+            .expect("extract_stdout_lines");
+
+        assert_eq!(lines, vec!["keep me".to_string(), "".to_string()]);
+        assert!(!lines.iter().any(|l| l.contains("drop me")));
+    }
 
     #[test]
     fn test_parse_last_fenced_json_block() {

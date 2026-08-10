@@ -2355,6 +2355,384 @@ mod tests {
         assert_eq!(proc.status, ExecutionProcessStatus::Running);
     }
 
+    /// Mock container for `start_breakdown_attempt` coverage. Records which of
+    /// `create` / `ensure_container_exists` was invoked (call-recording) so the
+    /// branch selection in start_breakdown_attempt can be asserted discriminatingly,
+    /// and lets tests inject a failure from either path.
+    struct BreakdownMockContainer {
+        db: DBService,
+        instance_id: String,
+        inspector: MockProcessInspector,
+        git: GitService,
+        msg_stores: Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        captured_action: Arc<Mutex<Option<ExecutorAction>>>,
+        fail_create: bool,
+        fail_ensure: bool,
+    }
+
+    #[async_trait]
+    impl ContainerService for BreakdownMockContainer {
+        fn db(&self) -> &DBService {
+            &self.db
+        }
+        fn instance_id(&self) -> &str {
+            &self.instance_id
+        }
+        fn make_process_inspector(&self) -> Box<dyn ProcessInspector + Send + Sync> {
+            Box::new(self.inspector.clone())
+        }
+        async fn start_execution_inner(
+            &self,
+            _task_attempt: &TaskAttempt,
+            _execution_process: &ExecutionProcess,
+            executor_action: &ExecutorAction,
+        ) -> Result<(), ContainerError> {
+            *self.captured_action.lock().unwrap() = Some(executor_action.clone());
+            Ok(())
+        }
+        fn msg_stores(&self) -> &Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>> {
+            &self.msg_stores
+        }
+        fn git(&self) -> &GitService {
+            &self.git
+        }
+        fn share_publisher(&self) -> Option<&SharePublisher> {
+            None
+        }
+        fn log_batcher(&self) -> Option<&LogBatcherHandle> {
+            None
+        }
+        fn normalization_metrics(&self) -> &NormalizationMetrics {
+            unimplemented!()
+        }
+        async fn store_normalization_handle(&self, _exec_id: Uuid, _handle: JoinHandle<()>) {
+            unimplemented!()
+        }
+        async fn take_normalization_handle(&self, _exec_id: &Uuid) -> Option<JoinHandle<()>> {
+            unimplemented!()
+        }
+        async fn get_entry_index_provider(
+            &self,
+            _exec_id: &Uuid,
+        ) -> Option<executors::logs::utils::EntryIndexProvider> {
+            unimplemented!()
+        }
+        async fn store_entry_index_provider(
+            &self,
+            _exec_id: Uuid,
+            _provider: executors::logs::utils::EntryIndexProvider,
+        ) {
+            unimplemented!()
+        }
+        fn task_attempt_to_current_dir(&self, _task_attempt: &TaskAttempt) -> PathBuf {
+            unimplemented!()
+        }
+        async fn create(&self, task_attempt: &TaskAttempt) -> Result<ContainerRef, ContainerError> {
+            self.calls.lock().unwrap().push("create");
+            if self.fail_create {
+                return Err(ContainerError::Other(anyhow!("create failed (mock)")));
+            }
+            let container_ref = format!("/tmp/breakdown-created-{}", task_attempt.id);
+            TaskAttempt::update_container_ref(&self.db.pool, task_attempt.id, &container_ref)
+                .await?;
+            Ok(container_ref)
+        }
+        async fn kill_all_running_processes(&self) -> Result<(), ContainerError> {
+            unimplemented!()
+        }
+        async fn delete_inner(&self, _task_attempt: &TaskAttempt) -> Result<(), ContainerError> {
+            unimplemented!()
+        }
+        async fn ensure_container_exists(
+            &self,
+            task_attempt: &TaskAttempt,
+        ) -> Result<ContainerRef, ContainerError> {
+            self.calls.lock().unwrap().push("ensure_container_exists");
+            if self.fail_ensure {
+                return Err(ContainerError::Other(anyhow!(
+                    "ensure_container_exists failed (mock)"
+                )));
+            }
+            // Existing attempt: container_ref must already be set; return it unchanged
+            // (mirrors the real invariant that ensure_container_exists must NOT force-recreate).
+            Ok(task_attempt
+                .container_ref
+                .clone()
+                .expect("ensure_container_exists called on attempt without container_ref"))
+        }
+        async fn is_container_clean(
+            &self,
+            _task_attempt: &TaskAttempt,
+        ) -> Result<bool, ContainerError> {
+            unimplemented!()
+        }
+        async fn stop_execution(
+            &self,
+            _execution_process: &ExecutionProcess,
+            _status: ExecutionProcessStatus,
+        ) -> Result<(), ContainerError> {
+            unimplemented!()
+        }
+        async fn try_commit_changes(
+            &self,
+            _ctx: &ExecutionContext,
+        ) -> Result<bool, ContainerError> {
+            unimplemented!()
+        }
+        async fn copy_project_files(
+            &self,
+            _source_dir: &Path,
+            _target_dir: &Path,
+            _copy_files: &str,
+        ) -> Result<(), ContainerError> {
+            unimplemented!()
+        }
+        async fn stream_diff(
+            &self,
+            _task_attempt: &TaskAttempt,
+            _stats_only: bool,
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<LogMsg, std::io::Error>>,
+            ContainerError,
+        > {
+            unimplemented!()
+        }
+        async fn git_branch_prefix(&self) -> String {
+            unimplemented!()
+        }
+    }
+
+    /// Seed a project/task/task_attempt row set for `start_breakdown_attempt` tests.
+    /// `container_ref` mirrors a fresh (`None`) vs. an already-materialised (`Some`) attempt.
+    async fn seed_breakdown_attempt(
+        pool: &sqlx::SqlitePool,
+        container_ref: Option<&str>,
+    ) -> TaskAttempt {
+        let project_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO projects (id, name, git_repo_path) VALUES ($1, 'p-breakdown', '/tmp/p-breakdown')",
+        )
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let task_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO tasks (id, project_id, title, status) VALUES ($1, $2, 't-breakdown', 'todo')",
+        )
+        .bind(task_id)
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let attempt_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref) VALUES ($1, $2, 'CLAUDE_CODE', 'b-breakdown', 'main', $3)",
+        )
+        .bind(attempt_id)
+        .bind(task_id)
+        .bind(container_ref)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        TaskAttempt::find_by_id(pool, attempt_id)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    fn breakdown_service(
+        pool: sqlx::SqlitePool,
+        fail_create: bool,
+        fail_ensure: bool,
+    ) -> (BreakdownMockContainer, Arc<Mutex<Vec<&'static str>>>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let service = BreakdownMockContainer {
+            db: DBService {
+                pool,
+                metrics: db::DbMetrics::new(),
+            },
+            instance_id: "test-instance".to_string(),
+            inspector: MockProcessInspector::new(),
+            git: GitService::new(),
+            msg_stores: Arc::new(RwLock::new(HashMap::new())),
+            calls: calls.clone(),
+            captured_action: Arc::new(Mutex::new(None)),
+            fail_create,
+            fail_ensure,
+        };
+        (service, calls)
+    }
+
+    #[tokio::test]
+    async fn test_start_breakdown_attempt_fresh_attempt_calls_create_not_ensure() {
+        use db::test_utils::create_test_pool;
+        use executors::executors::BaseCodingAgent;
+
+        let (pool, _tmp) = create_test_pool().await;
+        let task_attempt = seed_breakdown_attempt(&pool, None).await;
+        assert!(task_attempt.container_ref.is_none());
+
+        let (service, calls) = breakdown_service(pool, false, false);
+
+        service
+            .start_breakdown_attempt(
+                &task_attempt,
+                ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+                "breakdown this task".to_string(),
+            )
+            .await
+            .expect("fresh attempt breakdown must succeed");
+
+        let recorded = calls.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec!["create"],
+            "a container_ref: None attempt must call create() and must NOT call \
+             ensure_container_exists() (DV-1 regression coverage)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_breakdown_attempt_existing_attempt_calls_ensure_not_create() {
+        use db::test_utils::create_test_pool;
+        use executors::executors::BaseCodingAgent;
+
+        let (pool, _tmp) = create_test_pool().await;
+        let task_attempt = seed_breakdown_attempt(&pool, Some("/tmp/wt-breakdown-existing")).await;
+        assert!(task_attempt.container_ref.is_some());
+
+        let (service, calls) = breakdown_service(pool, false, false);
+
+        service
+            .start_breakdown_attempt(
+                &task_attempt,
+                ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+                "breakdown this task".to_string(),
+            )
+            .await
+            .expect("existing attempt breakdown must succeed");
+
+        let recorded = calls.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec!["ensure_container_exists"],
+            "a container_ref: Some(..) attempt must call ensure_container_exists() and must \
+             NOT call create() — calling create() would force-recreate the branch (DV-1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_breakdown_attempt_builds_bare_coding_agent_action_with_breakdown_run_reason()
+     {
+        use db::test_utils::create_test_pool;
+        use executors::executors::BaseCodingAgent;
+
+        let (pool, _tmp) = create_test_pool().await;
+        let task_attempt = seed_breakdown_attempt(&pool, None).await;
+        let (service, _calls) = breakdown_service(pool.clone(), false, false);
+
+        let profile = ExecutorProfileId::new(BaseCodingAgent::ClaudeCode);
+        let execution_process = service
+            .start_breakdown_attempt(
+                &task_attempt,
+                profile.clone(),
+                "please break this down".to_string(),
+            )
+            .await
+            .unwrap();
+
+        // The run reason recorded on the created execution process must be Breakdown.
+        assert_eq!(
+            execution_process.run_reason,
+            ExecutionProcessRunReason::Breakdown
+        );
+
+        // The action actually dispatched via start_execution_inner must be a bare
+        // CodingAgentInitialRequest with no next_action (no setup/cleanup script chaining).
+        let action = service
+            .captured_action
+            .lock()
+            .unwrap()
+            .take()
+            .expect("start_execution_inner must have been invoked");
+        assert!(
+            action.next_action().is_none(),
+            "breakdown action must have no next_action: it must not chain a setup or \
+             cleanup ScriptRequest"
+        );
+        match action.typ {
+            ExecutorActionType::CodingAgentInitialRequest(req) => {
+                assert_eq!(req.prompt, "please break this down");
+                assert_eq!(req.executor_profile_id.executor, profile.executor);
+            }
+            other => panic!("expected CodingAgentInitialRequest, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_breakdown_attempt_propagates_create_error() {
+        use db::test_utils::create_test_pool;
+        use executors::executors::BaseCodingAgent;
+
+        let (pool, _tmp) = create_test_pool().await;
+        let task_attempt = seed_breakdown_attempt(&pool, None).await;
+        let (service, calls) = breakdown_service(pool, true, false);
+
+        let result = service
+            .start_breakdown_attempt(
+                &task_attempt,
+                ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+                "prompt".to_string(),
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "create() failure must propagate as an error, not be swallowed"
+        );
+        assert_eq!(calls.lock().unwrap().clone(), vec!["create"]);
+        assert!(
+            service.captured_action.lock().unwrap().is_none(),
+            "no execution should have been dispatched after create() failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_breakdown_attempt_propagates_ensure_container_exists_error() {
+        use db::test_utils::create_test_pool;
+        use executors::executors::BaseCodingAgent;
+
+        let (pool, _tmp) = create_test_pool().await;
+        let task_attempt = seed_breakdown_attempt(&pool, Some("/tmp/wt-breakdown-err")).await;
+        let (service, calls) = breakdown_service(pool, false, true);
+
+        let result = service
+            .start_breakdown_attempt(
+                &task_attempt,
+                ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+                "prompt".to_string(),
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "ensure_container_exists() failure must propagate as an error, not be swallowed"
+        );
+        assert_eq!(
+            calls.lock().unwrap().clone(),
+            vec!["ensure_container_exists"]
+        );
+        assert!(
+            service.captured_action.lock().unwrap().is_none(),
+            "no execution should have been dispatched after ensure_container_exists() failed"
+        );
+    }
+
     #[test]
     fn test_run_reason_skips_finalize() {
         // Variants that should skip finalization

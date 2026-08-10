@@ -2887,4 +2887,246 @@ mod tests {
             "exactly one attempt should be drained"
         );
     }
+
+    // ── handle_breakdown_completion tests ───────────────────────────────────────
+
+    use db::models::{execution_process::CreateExecutionProcess, task_attempt::CreateTaskAttempt};
+    use executors::{
+        actions::{
+            ExecutorAction, ExecutorActionType, coding_agent_initial::CodingAgentInitialRequest,
+        },
+        profile::ExecutorProfileId,
+    };
+
+    /// Seed a full ExecutionContext (project, task, task_attempt, execution_process)
+    /// through the real model APIs, with run_reason = Breakdown.
+    async fn seed_breakdown_context(pool: &sqlx::SqlitePool) -> ExecutionContext {
+        let project_id = Uuid::new_v4();
+        let project_data = db::models::project::CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{project_id}"),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        db::models::project::Project::create(pool, &project_data, project_id)
+            .await
+            .expect("create project");
+
+        let task_id = Uuid::new_v4();
+        let task_data = db::models::task::CreateTask::from_title_description(
+            project_id,
+            "Parent Task".to_string(),
+            Some("Description".to_string()),
+        );
+        db::models::task::Task::create(pool, &task_data, task_id)
+            .await
+            .expect("create task");
+
+        let attempt_id = Uuid::new_v4();
+        let attempt_data = CreateTaskAttempt {
+            executor: BaseCodingAgent::ClaudeCode,
+            base_branch: "main".to_string(),
+            branch: "vk/breakdown".to_string(),
+            origin_node_id: None,
+        };
+        TaskAttempt::create(pool, &attempt_data, attempt_id, task_id)
+            .await
+            .expect("create task attempt");
+
+        let executor_action = ExecutorAction::new(
+            ExecutorActionType::CodingAgentInitialRequest(CodingAgentInitialRequest {
+                prompt: "decompose this".to_string(),
+                executor_profile_id: ExecutorProfileId {
+                    executor: BaseCodingAgent::ClaudeCode,
+                    variant: None,
+                },
+            }),
+            None,
+        );
+        let process_data = CreateExecutionProcess {
+            task_attempt_id: attempt_id,
+            executor_action,
+            run_reason: ExecutionProcessRunReason::Breakdown,
+        };
+        let process_id = Uuid::new_v4();
+        ExecutionProcess::create(pool, &process_data, process_id, None, None)
+            .await
+            .expect("create execution process");
+
+        ExecutionProcess::load_context(pool, process_id)
+            .await
+            .expect("load execution context")
+    }
+
+    /// Append one JSONL Stdout log line (real production wrapper shape) for the given line.
+    ///
+    /// Stdout chunks are concatenated and split on '\n' by extract_stdout_lines, so each
+    /// logical line must carry its own trailing newline or successive lines collapse into one.
+    async fn append_stdout_line(pool: &sqlx::SqlitePool, execution_id: Uuid, line: &str) {
+        let jsonl = ExecutionProcessLogs::serialize_logs(&[LogMsg::Stdout(format!("{line}\n"))])
+            .expect("serialize log line");
+        ExecutionProcessLogs::append_log_line(pool, execution_id, &jsonl)
+            .await
+            .expect("append log line");
+    }
+
+    #[tokio::test]
+    async fn test_handle_breakdown_completion_no_linked_proposal_is_noop() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let svc = LocalContainerService::new_for_drain_test(pool.clone()).await;
+        let ctx = seed_breakdown_context(&pool).await;
+
+        // No proposal is linked to this execution process id: must be a silent no-op,
+        // not a panic.
+        svc.handle_breakdown_completion(&ctx, true).await;
+
+        let found = db::models::task_breakdown::find_by_execution_process_id(
+            &pool,
+            ctx.execution_process.id,
+        )
+        .await
+        .unwrap();
+        assert!(found.is_none(), "still no proposal linked after the call");
+    }
+
+    #[tokio::test]
+    async fn test_handle_breakdown_completion_failure_marks_proposal_failed() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let svc = LocalContainerService::new_for_drain_test(pool.clone()).await;
+        let ctx = seed_breakdown_context(&pool).await;
+
+        let proposal = db::models::task_breakdown::create(&pool, ctx.task.id)
+            .await
+            .expect("create proposal");
+        db::models::task_breakdown::link_execution_process(
+            &pool,
+            proposal.id,
+            ctx.execution_process.id,
+        )
+        .await
+        .expect("link execution process");
+
+        svc.handle_breakdown_completion(&ctx, false).await;
+
+        let reread = db::models::task_breakdown::find_by_id(&pool, proposal.id)
+            .await
+            .unwrap()
+            .expect("proposal still exists");
+        assert_eq!(
+            reread.status,
+            db::models::task_breakdown::BreakdownStatus::Failed
+        );
+        assert_eq!(reread.error.as_deref(), Some("executor run failed"));
+
+        let items = db::models::task_breakdown::find_items(&pool, proposal.id)
+            .await
+            .unwrap();
+        assert!(items.is_empty(), "no items should exist on a failed run");
+    }
+
+    #[tokio::test]
+    async fn test_handle_breakdown_completion_success_persists_items() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let svc = LocalContainerService::new_for_drain_test(pool.clone()).await;
+        let ctx = seed_breakdown_context(&pool).await;
+
+        let proposal = db::models::task_breakdown::create(&pool, ctx.task.id)
+            .await
+            .expect("create proposal");
+        db::models::task_breakdown::link_execution_process(
+            &pool,
+            proposal.id,
+            ctx.execution_process.id,
+        )
+        .await
+        .expect("link execution process");
+
+        // REAL production log shape (DV-4, commit 1757424b): the Claude protocol reader
+        // breaks on the final {"type":"result"} line WITHOUT logging it, so in production
+        // the fenced ```json block is only reachable inside {"type":"assistant"} events,
+        // JSON-escaped in message.content[].text. NO result line here — deliberately.
+        let lines = [
+            r#"{"type":"system","subtype":"init","session_id":"s1"}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"```json"}}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Here is the breakdown.\n\n```json\n{\"subtasks\":[{\"title\":\"First\",\"description\":\"do first\",\"depends_on\":[]},{\"title\":\"Second\",\"description\":null,\"depends_on\":[0]}]}\n```\n"}]},"session_id":"s1"}"#,
+            r#"{"type":"stream_event","event":{"type":"message_stop"},"session_id":"s1"}"#,
+        ];
+        for line in lines {
+            append_stdout_line(&pool, ctx.execution_process.id, line).await;
+        }
+
+        svc.handle_breakdown_completion(&ctx, true).await;
+
+        let reread = db::models::task_breakdown::find_by_id(&pool, proposal.id)
+            .await
+            .unwrap()
+            .expect("proposal still exists");
+        assert_eq!(
+            reread.status,
+            db::models::task_breakdown::BreakdownStatus::Draft,
+            "success path leaves proposal status untouched (stays draft)"
+        );
+
+        let items = db::models::task_breakdown::find_items(&pool, proposal.id)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "First");
+        assert_eq!(items[0].sort_order, 0);
+        assert_eq!(items[1].title, "Second");
+        assert_eq!(items[1].sort_order, 1);
+    }
+
+    #[tokio::test]
+    async fn test_handle_breakdown_completion_unparseable_output_fails_with_zero_items() {
+        let (pool, _tmp) = db::test_utils::create_test_pool().await;
+        let svc = LocalContainerService::new_for_drain_test(pool.clone()).await;
+        let ctx = seed_breakdown_context(&pool).await;
+
+        let proposal = db::models::task_breakdown::create(&pool, ctx.task.id)
+            .await
+            .expect("create proposal");
+        db::models::task_breakdown::link_execution_process(
+            &pool,
+            proposal.id,
+            ctx.execution_process.id,
+        )
+        .await
+        .expect("link execution process");
+
+        // No fenced ```json block anywhere: unusable output.
+        append_stdout_line(
+            &pool,
+            ctx.execution_process.id,
+            "Sorry, I could not comply.",
+        )
+        .await;
+
+        svc.handle_breakdown_completion(&ctx, true).await;
+
+        let reread = db::models::task_breakdown::find_by_id(&pool, proposal.id)
+            .await
+            .unwrap()
+            .expect("proposal still exists");
+        assert_eq!(
+            reread.status,
+            db::models::task_breakdown::BreakdownStatus::Failed
+        );
+        assert_eq!(
+            reread.error.as_deref(),
+            Some("No JSON result block found in Claude's output")
+        );
+
+        let items = db::models::task_breakdown::find_items(&pool, proposal.id)
+            .await
+            .unwrap();
+        assert!(
+            items.is_empty(),
+            "atomic-failure contract: no partial items on parse failure"
+        );
+    }
 }
