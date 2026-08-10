@@ -3,7 +3,7 @@ doc_type: spec
 status: shipped
 workstream: vk-swarm-task-breakdown
 change_kind: behaviour
-verify_cmd: "sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} 'select status from task_breakdown_proposals' | grep -q accepted"
+verify_cmd: "sqlite3 -readonly ${VK_DATABASE_PATH:-$HOME/.vkswarm/db/db.sqlite} 'select status from task_breakdown_proposals' | grep -q accepted"
 ---
 
 # vk-swarm-task-breakdown — AI task breakdown harness (P3 / SC3)

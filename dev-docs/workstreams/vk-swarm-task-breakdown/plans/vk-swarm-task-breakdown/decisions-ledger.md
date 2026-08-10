@@ -1274,3 +1274,57 @@ unit test now documents that it governs both lifecycle writes.
 Gates: `cargo fmt`/`clippy`/`test --workspace` (1190), frontend lint/tsc/format:check/vitest (537),
 remote-frontend lint/tsc/vitest (426) — all green. PR reports `mergeable=MERGEABLE`; no rebase
 needed (branch is 1 commit behind `main` with zero conflicting paths).
+
+## Post-merge live verify (2026-08-10) — verify_cmd was pointed at the wrong database
+
+PR #475 squash-merged as `ac403b11`. The mandatory post-merge `wai-verify.sh` run **FAILED**, and
+the failure was in the gate, not the feature.
+
+The spec's `verify_cmd` resolved to `${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite}`.
+`VK_DATABASE_PATH` is set in the **node's** `.env` (`/home/david/Tools/vk-swarm/.env:47`), not in
+the environment `wai-verify.sh` runs in, so the fallback applied — and that path is not this
+deployment's database. The node's real DB is `/home/david/.vkswarm/db/db.sqlite` (confirmed via
+the running process's open file descriptors). The result was `no such table:
+task_breakdown_proposals` → VERIFY FAIL on a feature that was working.
+
+Worse, `sqlite3 <path>` **creates** a database when the file is absent, so the failing run left a
+0-byte `db.sqlite` in the platform data directory. That is not inert: a node started *without*
+`VK_DATABASE_PATH` resolves to exactly that path, would open the empty file, run migrations on it,
+and present as total data loss. The stray file was removed.
+
+Fix: `verify_cmd: "sqlite3 -readonly ${VK_DATABASE_PATH:-$HOME/.vkswarm/db/db.sqlite} 'select
+status from task_breakdown_proposals' | grep -q accepted"`. Two changes, both load-bearing:
+
+- **Correct default path** — the deployment's actual DB.
+- **`-readonly`** — a verification step must not be able to write to the production database, and
+  this repo operates under a read-only-on-prod rule after a prior `SQLITE_CORRUPT` incident. The
+  flag also makes the create-on-open behaviour impossible, so a future mispointed `verify_cmd`
+  fails loudly instead of silently manufacturing an empty database.
+
+  (A `file:...?mode=ro` URI was tried first and rejected: `wai-verify.sh` runs the frontmatter
+  value through `bash -c`, and the YAML double-quoted scalar's escaped inner quotes arrive as
+  literal backslashes. `-readonly` needs no inner quoting and no `?`, which would also glob.)
+
+**Live evidence (read-only, post-merge):**
+
+```
+$ sqlite3 -readonly /home/david/.vkswarm/db/db.sqlite \
+    'select status, count(*) from task_breakdown_proposals group by status;'
+accepted|3
+failed|4
+
+$ sqlite3 -readonly /home/david/.vkswarm/db/db.sqlite 'select count(*) from task_dependencies;'
+12
+
+$ bash wai-verify.sh vk-swarm-task-breakdown
+VERIFY PASS: 'vk-swarm-task-breakdown' — verify_cmd exited 0; the live system shows the shipped behaviour.
+```
+
+Three accepted proposals and twelve persisted dependency edges on real tasks: the accept
+transaction has executed end-to-end in production, which is the SC the gate exists to observe.
+
+**Deploy caveat, stated rather than implied:** the running node was last built from a
+feature-branch build during the SC1–SC7 deploy verification; its checkout is at `383f3eb6`, one
+commit behind the squash merge. The observed evidence therefore proves the *feature* is live and
+working, not that the exact merged commit is the running binary. Restarting the node was not done
+— it is the user's live instance and a restart interrupts any attempt in flight.
