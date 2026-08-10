@@ -1,0 +1,99 @@
+---
+title: "Task Breakdown Configuration"
+description: "Enabling auto-breakdown, choosing the agent that runs breakdowns, and the operational characteristics to plan for"
+audience: admin
+component: task-breakdown
+sources:
+  - crates/server/src/routes/breakdown.rs
+  - crates/db/src/models/project/mod.rs
+  - crates/services/src/services/container.rs
+  - crates/services/src/services/worktree_manager.rs
+  - frontend/src/pages/settings/ProjectSettings.tsx
+generated: 2026-08-10
+---
+
+Operational guidance for running [AI Task Breakdown](/core-features/task-breakdown) on a node. Breakdown has no dedicated environment variables — it inherits the node's existing executor, worktree, and database configuration. What it *does* have is a per-project toggle and a set of resource characteristics worth understanding before you enable it widely.
+
+## The one setting
+
+| Setting | Scope | Default | Where |
+|---|---|---|---|
+| **Auto-breakdown new tasks** (`projects.auto_breakdown_enabled`) | per project | off | Project Settings |
+
+When on, creating a top-level task with a non-empty description automatically queues a draft breakdown proposal. It never creates child tasks on its own — the review gate is unchanged, so every proposal still waits for a human to accept it.
+
+The condition is narrow by design: the task must have **no parent** and a **non-empty description**. Subtasks and bare title-only cards never auto-trigger, which keeps the common "quick capture" workflow free of background runs.
+
+## Which agent runs a breakdown
+
+Breakdown uses the node's **global default executor profile** — `executor_profile` from the node config, the same one shown under [Default Agent Configuration](/configuration-customisation/global-settings). There is no per-project or breakdown-specific agent override.
+
+Two consequences worth planning around:
+
+- Changing the node's default agent changes what runs breakdowns, for every project at once.
+- The agent needs to be one that reliably emits a final fenced JSON block. The parser takes the last valid ```json block matching the expected shape; an agent that summarises in prose without it produces a `failed` proposal with a stored error, not a partial result.
+
+See [Agent Configurations](/configuration-customisation/agent-configurations) for profile and variant setup.
+
+## Resource characteristics
+
+Each breakdown run is a real executor invocation, not a lightweight API call. Per run, the node:
+
+1. Creates a task attempt on the parent task.
+2. Creates a **git worktree** for that attempt, under `VK_WORKTREE_DIR` (default `/var/tmp/vibe-kanban/worktrees` — see [Storage Configuration](/configuration-customisation/storage-configuration)).
+3. Spawns a detached coding-agent process.
+
+<Warning>
+Nothing currently bounds the number of concurrent breakdown runs. With **Auto-breakdown new tasks** enabled on a project, every eligible task creation starts one worktree and one detached executor. Bulk-importing or scripting task creation against such a project will start that many agent processes at once.
+
+A concurrency limit and an in-flight metric are tracked in `dev-docs/workstreams/task-breakdown-followups/README.md`. Until then, treat auto-breakdown as unsuitable for projects that receive tasks in bulk.
+</Warning>
+
+The run itself is read-only analysis — it commits nothing and leaves a clean tree — so worktrees are reclaimed by the ordinary worktree cleanup path. The prompt is bounded by the parent task's title and description, so cost per run scales with how much your team writes on a card.
+
+Breakdown runs only on a task's **origin node**. Tasks belonging to remote or mirrored projects are rejected, the same rule that governs starting an attempt.
+
+## Storage and sync
+
+- Proposals and proposal items live in node-local tables and **never sync to the hive**. Only accepted child tasks sync, through the normal `task.upsert` outbox path.
+- This makes breakdown fully offline-capable: triggering, reviewing, editing, and accepting all work with the hive unreachable, and accepted tasks reconcile when the connection returns.
+- A discarded or failed proposal leaves no child tasks and no dependency edges behind.
+
+## Migrations
+
+Enabling this feature applies three migrations. The third is the one to know about:
+
+| Migration | Effect |
+|---|---|
+| `20260807000000_add_task_breakdown.sql` | Proposal and item tables, plus `task_dependencies`. |
+| `20260807000100_add_project_auto_breakdown.sql` | Adds `projects.auto_breakdown_enabled`. |
+| `20260809000000_add_breakdown_to_run_reason_constraint.sql` | Adds `breakdown` to the `execution_processes.run_reason` CHECK constraint. SQLite cannot alter a CHECK constraint, so this is a column-swap migration that also **drops and recreates the `v_workstream_state` view**, which projects that column. |
+
+A pre-migration backup is taken automatically on startup (see [Database Maintenance](/features/database-maintenance)). If you have local objects depending on `v_workstream_state`, verify them after upgrading.
+
+## Observability
+
+- Accepting a proposal emits a structured `tracing` event at info level carrying `proposal_id`, `parent_task_id`, and `child_count` — the multi-table write (child tasks, dependency edges, outbox rows, status transition) is otherwise silent.
+- A breakdown run's logs are ordinary durable execution-process logs, viewable like any attempt's.
+- A failed proposal stores its error string and surfaces it on the task card, so a systematically failing agent is visible from the board rather than only in logs.
+
+## Troubleshooting
+
+**Every breakdown run hangs before starting, and so does every other agent run.**
+If the node's `~/.claude/settings.json` declares `hooks`, the Claude executor's `initialize` payload is never answered by claude-code 2.1.114 and the process stalls pre-init. This affects **all** server-spawned agent runs on that node, not just breakdown. Workaround: remove the hooks block from that file. Tracked as finding F-2026-08-09-01 in `dev-docs/workstreams/claude-executor-hooks-hang/README.md`.
+
+**The MCP breakdown tools are missing from a node's tool list.**
+`vks-mcp-server` is a separate binary and the dev loop does not rebuild or restart it, so a node can serve a stale MCP binary after a backend update. Rebuild and restart it manually. Tracked as F-2026-08-09-02 in `dev-docs/workstreams/mcp-server-dev-loop-rebuild/README.md`.
+
+**"A draft proposal already exists" (409) on trigger.**
+Only one draft is allowed per task, enforced by a partial unique index. Accept or discard the existing one first.
+
+**A proposal is stuck showing failed after the agent looked successful.**
+The parser needs a final fenced ```json block matching the expected shape. Check the run's execution logs for what the agent actually emitted; the stored error string on the proposal names the parse failure.
+
+## Related
+
+- [AI Task Breakdown](/core-features/task-breakdown) — the user-facing workflow
+- [Task Breakdown Architecture](/architecture/task-breakdown) — internals, state machine, validation
+- [Global Settings](/configuration-customisation/global-settings) — default agent configuration
+- [Storage Configuration](/configuration-customisation/storage-configuration) — worktree and database locations

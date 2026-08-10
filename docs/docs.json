@@ -82,6 +82,7 @@
           "configuration-customisation/global-settings",
           "configuration-customisation/storage-configuration",
           "configuration-customisation/agent-configurations",
+          "configuration-customisation/task-breakdown-configuration",
           "configuration-customisation/creating-task-tags",
           "configuration-customisation/keyboard-shortcuts",
           "configuration-customisation/database-performance",

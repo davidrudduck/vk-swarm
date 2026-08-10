@@ -1,6 +1,16 @@
 ---
 title: "AI Task Breakdown"
 description: "Turn a high-level goal card into a reviewed set of correctly-scoped, independently-executable child tasks using an AI coding agent"
+audience: user
+component: task-breakdown
+sources:
+  - frontend/src/components/dialogs/tasks/BreakdownReviewDialog.tsx
+  - frontend/src/components/ui/actions-dropdown.tsx
+  - frontend/src/hooks/useBreakdown.ts
+  - frontend/src/pages/settings/ProjectSettings.tsx
+  - crates/server/src/routes/breakdown.rs
+  - crates/server/src/routes/tasks/handlers/core.rs
+generated: 2026-08-10
 ---
 
 Task breakdown lets you point an AI coding agent at a goal-level task card and get back a **proposed** set of subtasks — each with a title, description, and dependency references — which you review, edit, and explicitly accept before anything becomes real work on the board.
@@ -20,6 +30,10 @@ There are three ways to trigger a breakdown. All three produce the same kind of 
 
 The task needs a description that states a multi-part goal — the agent decomposes what the card actually says.
 
+<Note>
+A breakdown run does **not** move the parent task to In Progress. The run is read-only analysis, so your task stays in whatever column it was already in. (Earlier builds did flip it, and because a breakdown run has no completion path back out, the task then stayed stuck in In Progress — that is fixed.)
+</Note>
+
 ### Via MCP
 
 External agents can drive the same flow programmatically with three MCP tools: `break_down_task`, `get_breakdown`, and `accept_breakdown`. They are pure proxies for the REST endpoints, so the semantics — including the review gate — are identical to the UI path. See the [MCP Tools Reference](/features/mcp-tools#task-breakdown).
@@ -28,7 +42,7 @@ External agents can drive the same flow programmatically with three MCP tools: `
 
 Projects have an **Auto-breakdown new tasks** setting (default: off). When enabled, creating a top-level task with a non-empty description queues a draft proposal for your review automatically. Auto-breakdown never lands child tasks directly — it only produces drafts, exactly as if you had clicked **Break down** yourself.
 
-Enable it in **Project Settings**.
+Enable it in **Project Settings**. See [Task Breakdown Configuration](/configuration-customisation/task-breakdown-configuration) for what to weigh before turning it on across a busy project.
 
 ## Reviewing a proposal
 
@@ -39,16 +53,28 @@ Clicking the **Proposed subtasks** badge opens the **Review task breakdown** dia
 - **Delete** items you don't want
 - **Inspect dependencies** — items can depend on other items in the same set, shown as dependency chips
 
+While the proposal is loading, the dialog shows a spinner. If it cannot be loaded, you get an error message with a **Reload** button rather than an empty dialog.
+
 While a proposal is in draft:
 
 - No task attempt can be started from a proposed item
 - Nothing reaches the hive — proposals are node-local only
+
+### Dependencies must not form a loop
+
+Items may depend on other items in the same set, but the dependency graph has to be acyclic. If your edits create a loop — item A depends on B while B depends on A, or any longer chain that closes back on itself — the save is rejected and the previous item set is left untouched.
+
+Branching and merging shapes are fine: several items may depend on the same predecessor, and one item may depend on several predecessors. Only an actual cycle is refused.
 
 ## Accepting, discarding, and retrying
 
 - **Accept** converts the (possibly edited) set into real child tasks under the parent, in a single transaction. Each child is an ordinary task that can immediately host a task attempt. Dependency edges between the new tasks are persisted and queryable via `GET /api/tasks/{id}/dependencies`. Accepted tasks sync to the hive through the normal outbox path.
 - **Discard** throws the proposal away. The task is unchanged.
 - **Retry** appears when a run fails (agent error or unparseable output). The failed proposal shows a visible error on the card; retrying starts a fresh run. A failed run never leaves partial items or child tasks behind.
+
+Retry and Discard are disabled while their action is in flight, so a double-click cannot start two breakdown runs for the same proposal.
+
+Accepting and discarding are both final. Once you have accepted a proposal, it cannot be discarded — the child tasks already exist, so delete those instead if you have changed your mind. Once you have discarded one, a late-finishing agent run cannot reopen it or overwrite your decision with a failure.
 
 Only one draft proposal can exist per task at a time — triggering a breakdown while a draft exists returns a conflict.
 
@@ -65,5 +91,6 @@ Breakdown is fully offline-first: triggering, reviewing, editing, and accepting 
 ## Related
 
 - [Creating Subtasks](/core-features/subtasks) — manual subtask creation from a task attempt
+- [Task Breakdown Configuration](/configuration-customisation/task-breakdown-configuration) — enabling auto-breakdown, agent selection, operational limits
 - [MCP Tools Reference](/features/mcp-tools) — programmatic access
 - [Task Breakdown Architecture](/architecture/task-breakdown) — how it works internally

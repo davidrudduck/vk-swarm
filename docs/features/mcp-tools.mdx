@@ -505,7 +505,9 @@ Accepts a draft proposal, converting its items into real child tasks under the p
 |-----------|------|----------|-------------|
 | `proposal_id` | UUID | Yes | The draft proposal to accept |
 
-**Response:** the created child tasks. Only `draft` proposals can be accepted.
+**Response:** the created child tasks. Only `draft` proposals can be accepted — an already-accepted or discarded proposal is terminal and returns a conflict.
+
+All three tools take UUIDs. A non-UUID value is rejected before the request is issued.
 
 ## Context
 
