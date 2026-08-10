@@ -641,9 +641,14 @@ cd remote-frontend && ./scripts/e2e-test.sh
 - API key authentication (node WebSocket)
 - Error handling (404, API errors)
 
+**Isolation:** the E2E stack runs as Compose project `vkswarm-e2e` on ports 9210/5540, so it
+never collides with a deployed hive (project `remote`, ports 9000/5434) on the same machine.
+`e2e-test.sh` aborts before starting anything if either port is already in use — override with
+`SERVER_PORT` / `POSTGRES_PORT`.
+
 **Manual testing after `--keep`:**
-- Hive frontend: http://localhost:9000
-- PostgreSQL: localhost:5434 (postgres/postgres/vibe_remote)
+- Hive frontend: http://localhost:9210
+- PostgreSQL: localhost:5540 (postgres/postgres/vibe_remote)
 - Test API key: `vk_e2e-primary-key-12345678`
 - Blocked API key: `vk_e2e-blocked-key-xyz`
 - Revocable API key: `vk_e2e-revocable-key-abcdef`

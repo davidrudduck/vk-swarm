@@ -44,12 +44,12 @@ These run against the **real server with real database** — no mocked API respo
 
 ## Architecture
 
-```
+```text
 ┌─────────────────┐
 │  Playwright     │  ← real Chromium browser
 │  (chromium)     │
 └────────┬────────┘
-         │ http://localhost:9000
+         │ http://localhost:9210
          ▼
 ┌─────────────────┐
 │  Hive Server    │  ← serves API + static frontend
@@ -88,7 +88,7 @@ test.describe('My feature', () => {
 });
 ```
 
-Tests are picked up automatically from `remote-frontend/e2e/`. The Docker config (`playwright.docker.config.ts`) uses `baseURL: http://localhost:9000`.
+Tests are picked up automatically from `remote-frontend/e2e/`. The Docker config (`playwright.docker.config.ts`) reads `baseURL` from `PLAYWRIGHT_BASE_URL`, which `e2e-test.sh` sets to the isolated E2E port (`http://localhost:9210` by default).
 
 ### Anti-patterns to avoid
 
@@ -98,24 +98,32 @@ Tests are picked up automatically from `remote-frontend/e2e/`. The Docker config
 
 ## Running tests manually
 
+<Warning>
+  Always export `COMPOSE_PROJECT_NAME=vkswarm-e2e` when driving the stack by hand. Compose
+  otherwise derives the project name from the `crates/remote` directory, which is the **same
+  project a deployed hive uses** — `up` would adopt and recreate its containers, and the
+  `down -v` below would destroy them. `e2e-test.sh` sets this for you; a manual run does not.
+</Warning>
+
 ```bash
-# Start environment
+# Start environment (isolated project + ports; see the warning above)
 cd crates/remote
-docker compose -f docker-compose.dev.yml --env-file .env.dev up --build -d
+export COMPOSE_PROJECT_NAME=vkswarm-e2e SERVER_PORT=9210 POSTGRES_PORT=5540
+docker compose -f docker-compose.dev.yml up --build -d
 
 # Wait for healthy
-until curl -sf http://localhost:9000/v1/health; do sleep 2; done
+until curl -sf http://localhost:9210/v1/health; do sleep 2; done
 
 # Seed (if not already seeded)
 docker compose -f docker-compose.dev.yml exec -T remote-db psql -U postgres -d vibe_remote -f scripts/seed-e2e-db.sql
 
 # Run specific test
 cd ../../remote-frontend
-PLAYWRIGHT_BASE_URL=http://localhost:9000 npx playwright test --config=playwright.docker.config.ts e2e/docker-e2e.spec.ts -g "health"
+PLAYWRIGHT_BASE_URL=http://localhost:9210 npx playwright test --config=playwright.docker.config.ts e2e/docker-e2e.spec.ts -g "health"
 
 # Stop environment
 cd ../crates/remote
-docker compose -f docker-compose.dev.yml --env-file .env.dev down -v
+docker compose -f docker-compose.dev.yml down -v
 ```
 
 ## CI integration
