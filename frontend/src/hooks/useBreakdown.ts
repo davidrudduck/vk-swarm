@@ -23,6 +23,8 @@ export interface UseBreakdownProposalState {
   items: TaskBreakdownProposalItem[];
   isLoading: boolean;
   error: Error | null;
+  /** Re-run the proposal query — the recovery action for a failed load. */
+  refetch: () => void;
 }
 
 /**
@@ -56,7 +58,7 @@ export function useBreakdownProposal(
   taskId: string,
   options?: UseBreakdownProposalOptions
 ): UseBreakdownProposalState {
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['breakdown', taskId],
     queryFn: () => breakdownApi.get(taskId),
     enabled: options?.enabled !== false,
@@ -68,6 +70,7 @@ export function useBreakdownProposal(
     items: data?.items ?? EMPTY_ITEMS,
     isLoading,
     error: error instanceof Error ? error : null,
+    refetch,
   };
 }
 

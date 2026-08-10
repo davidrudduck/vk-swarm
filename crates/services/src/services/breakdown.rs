@@ -29,6 +29,32 @@ pub struct BreakdownSubtask {
     pub depends_on: Vec<usize>,
 }
 
+/// True when the `depends_on` edges contain a cycle.
+///
+/// Kahn's algorithm: repeatedly remove a node with no outstanding dependencies.
+/// If any node is left unremoved, it sits on (or behind) a cycle. Assumes every
+/// index in `depends_on` is already in range — callers validate that first.
+fn has_dependency_cycle(subtasks: &[BreakdownSubtask]) -> bool {
+    let len = subtasks.len();
+    let mut remaining: Vec<usize> = subtasks.iter().map(|s| s.depends_on.len()).collect();
+    let mut queue: Vec<usize> = (0..len).filter(|&i| remaining[i] == 0).collect();
+    let mut resolved = 0usize;
+
+    while let Some(node) = queue.pop() {
+        resolved += 1;
+        for (i, subtask) in subtasks.iter().enumerate() {
+            if subtask.depends_on.contains(&node) {
+                remaining[i] -= 1;
+                if remaining[i] == 0 {
+                    queue.push(i);
+                }
+            }
+        }
+    }
+
+    resolved != len
+}
+
 /// Errors that can occur during breakdown operations.
 #[derive(Debug, Error)]
 pub enum BreakdownError {
@@ -46,6 +72,9 @@ pub enum BreakdownError {
 
     #[error("Invalid dependency reference in subtask")]
     InvalidDependency,
+
+    #[error("Subtask dependencies form a cycle")]
+    CyclicDependency,
 
     #[error("Database error: {0}")]
     Db(#[from] sqlx::Error),
@@ -85,6 +114,7 @@ impl BreakdownService {
     /// - ≥2 subtasks (0 → Empty, 1 → TooFew)
     /// - Non-empty titles (→ EmptyTitle)
     /// - All depends_on indices in range and != self (→ InvalidDependency)
+    /// - No dependency cycles (→ CyclicDependency)
     /// - >10 subtasks allowed (lenient upper bound)
     pub fn parse_breakdown_result(
         stdout_lines: &[String],
@@ -197,6 +227,12 @@ impl BreakdownService {
                     return Err(BreakdownError::InvalidDependency);
                 }
             }
+        }
+        // Range and self-reference checks above do not catch a mutual pair
+        // (0 -> 1, 1 -> 0). accept_proposal writes every depends_on edge into
+        // task_dependencies, so a cycle here becomes a cyclic graph on real tasks.
+        if has_dependency_cycle(&result.subtasks) {
+            return Err(BreakdownError::CyclicDependency);
         }
 
         Ok(result)
@@ -596,6 +632,43 @@ mod tests {
         ];
         let result = BreakdownService::parse_breakdown_result(&lines);
         assert!(matches!(result, Err(BreakdownError::InvalidDependency)));
+    }
+
+    #[test]
+    fn test_parse_rejects_dependency_cycle() {
+        // A mutual pair: every index is in range and none is self-referential, so the
+        // range/self checks pass. Only the cycle check catches this.
+        let lines = vec![
+            "```json".to_string(),
+            "{\"subtasks\":[{\"title\":\"A\",\"description\":null,\"depends_on\":[1]},{\"title\":\"B\",\"description\":null,\"depends_on\":[0]}]}".to_string(),
+            "```".to_string(),
+        ];
+        let result = BreakdownService::parse_breakdown_result(&lines);
+        assert!(matches!(result, Err(BreakdownError::CyclicDependency)));
+    }
+
+    #[test]
+    fn test_parse_rejects_longer_dependency_cycle() {
+        // 0 -> 1 -> 2 -> 0, plus an acyclic node that must not mask the cycle.
+        let lines = vec![
+            "```json".to_string(),
+            "{\"subtasks\":[{\"title\":\"A\",\"description\":null,\"depends_on\":[2]},{\"title\":\"B\",\"description\":null,\"depends_on\":[0]},{\"title\":\"C\",\"description\":null,\"depends_on\":[1]},{\"title\":\"D\",\"description\":null,\"depends_on\":[]}]}".to_string(),
+            "```".to_string(),
+        ];
+        let result = BreakdownService::parse_breakdown_result(&lines);
+        assert!(matches!(result, Err(BreakdownError::CyclicDependency)));
+    }
+
+    #[test]
+    fn test_parse_accepts_diamond_dependencies() {
+        // A diamond (0 -> 1, 0 -> 2, 1&2 -> 3) is a DAG, not a cycle: it must pass.
+        let lines = vec![
+            "```json".to_string(),
+            "{\"subtasks\":[{\"title\":\"A\",\"description\":null,\"depends_on\":[]},{\"title\":\"B\",\"description\":null,\"depends_on\":[0]},{\"title\":\"C\",\"description\":null,\"depends_on\":[0]},{\"title\":\"D\",\"description\":null,\"depends_on\":[1,2]}]}".to_string(),
+            "```".to_string(),
+        ];
+        let result = BreakdownService::parse_breakdown_result(&lines).expect("diamond is a DAG");
+        assert_eq!(result.subtasks.len(), 4);
     }
 
     #[test]

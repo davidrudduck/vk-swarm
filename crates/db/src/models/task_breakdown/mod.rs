@@ -364,6 +364,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_replace_items_rejects_dependency_cycle() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+
+        // Every index is in range and none is self-referential, so the range and
+        // self-reference checks pass. Only the cycle check rejects this pair —
+        // accept_proposal would otherwise write both task_dependencies edges.
+        let result = replace_items(
+            &pool,
+            proposal.id,
+            vec![item("A", 0, vec![1]), item("B", 1, vec![0])],
+        )
+        .await;
+        assert!(result.is_err(), "a mutual dependency pair must be rejected");
+        assert!(
+            find_items(&pool, proposal.id).await.unwrap().is_empty(),
+            "nothing is written when validation rejects the batch"
+        );
+
+        // A diamond is a DAG, not a cycle, and must still be accepted.
+        replace_items(
+            &pool,
+            proposal.id,
+            vec![
+                item("A", 0, vec![]),
+                item("B", 1, vec![0]),
+                item("C", 2, vec![0]),
+                item("D", 3, vec![1, 2]),
+            ],
+        )
+        .await
+        .expect("a diamond dependency graph is acyclic");
+    }
+
+    #[tokio::test]
+    async fn test_update_status_enforces_state_machine() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+
+        // Draft -> Failed -> Draft (the retry path) is legal.
+        update_status(&pool, proposal.id, BreakdownStatus::Failed, Some("boom".into()))
+            .await
+            .expect("draft -> failed");
+        update_status(&pool, proposal.id, BreakdownStatus::Draft, None)
+            .await
+            .expect("failed -> draft (retry)");
+
+        // Discard is terminal: a late executor completion must not overwrite it.
+        update_status(&pool, proposal.id, BreakdownStatus::Discarded, None)
+            .await
+            .expect("draft -> discarded");
+        let late = update_status(
+            &pool,
+            proposal.id,
+            BreakdownStatus::Failed,
+            Some("late run result".into()),
+        )
+        .await;
+        assert!(
+            late.is_err(),
+            "a discarded proposal must not be reopened by a late completion"
+        );
+        assert_eq!(
+            find_by_id(&pool, proposal.id).await.unwrap().unwrap().status,
+            BreakdownStatus::Discarded,
+            "the user's discard survives"
+        );
+    }
+
+    #[tokio::test]
     async fn test_replace_items_rejects_non_draft() {
         let (pool, _temp_dir) = create_test_pool().await;
         let project_id = create_project(&pool).await;

@@ -79,7 +79,13 @@ const BreakdownReviewDialogImpl = NiceModal.create<BreakdownReviewDialogProps>(
   ({ taskId, projectId }) => {
     const modal = useModal();
     const { t } = useTranslation('tasks');
-    const { proposal, items: remoteItems } = useBreakdownProposal(taskId, {
+    const {
+      proposal,
+      items: remoteItems,
+      isLoading: isProposalLoading,
+      error: proposalError,
+      refetch: refetchProposal,
+    } = useBreakdownProposal(taskId, {
       enabled: modal.visible,
     });
     const { putItems, discard, retry, accept } = useBreakdownMutations(
@@ -184,14 +190,19 @@ const BreakdownReviewDialogImpl = NiceModal.create<BreakdownReviewDialogProps>(
       [items]
     );
 
-    const isFailed = proposal?.status === 'failed';
+    // Until the query settles, `proposal` is null and `remoteItems` is empty —
+    // indistinguishable from "no proposal" unless the query state is consulted.
+    const isQuerySettled = !isProposalLoading && !proposalError;
+    const isFailed = isQuerySettled && proposal?.status === 'failed';
     const isRunning =
+      isQuerySettled &&
       !isFailed &&
       proposal?.status === 'draft' &&
       items.length === 0 &&
       !!proposal?.execution_process_id;
 
-    const acceptDisabled = items.length === 0 || isSaving || isAccepting;
+    const acceptDisabled =
+      !isQuerySettled || items.length === 0 || isSaving || isAccepting;
 
     return (
       <Dialog
@@ -207,6 +218,36 @@ const BreakdownReviewDialogImpl = NiceModal.create<BreakdownReviewDialogProps>(
             </DialogTitle>
           </DialogHeader>
 
+          {isProposalLoading && (
+            <div
+              className="flex items-center gap-2 py-8 justify-center text-muted-foreground"
+              data-testid="breakdown-loading-state"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{t('breakdown.loading', 'Loading breakdown...')}</span>
+            </div>
+          )}
+
+          {!isProposalLoading && proposalError && (
+            <Alert variant="destructive" data-testid="breakdown-load-error">
+              <div className="space-y-2">
+                <p>
+                  {t(
+                    'breakdown.loadFailed',
+                    'Could not load the breakdown proposal.'
+                  )}
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => refetchProposal()}
+                >
+                  {t('breakdown.reload', 'Reload')}
+                </Button>
+              </div>
+            </Alert>
+          )}
+
           {isFailed && (
             <Alert variant="destructive" data-testid="breakdown-failed-banner">
               <div className="space-y-2">
@@ -214,7 +255,12 @@ const BreakdownReviewDialogImpl = NiceModal.create<BreakdownReviewDialogProps>(
                   {proposal?.error ||
                     t('breakdown.failedGeneric', 'Breakdown failed.')}
                 </p>
-                <Button size="sm" variant="outline" onClick={handleRetry}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleRetry}
+                  disabled={retry.isPending}
+                >
                   {t('breakdown.retry', 'Retry')}
                 </Button>
               </div>
@@ -231,7 +277,7 @@ const BreakdownReviewDialogImpl = NiceModal.create<BreakdownReviewDialogProps>(
             </div>
           )}
 
-          {!isFailed && !isRunning && (
+          {isQuerySettled && !isFailed && !isRunning && (
             <div className="space-y-4 max-h-[60vh] overflow-y-auto">
               {items.map((item, index) => (
                 <div
@@ -339,7 +385,11 @@ const BreakdownReviewDialogImpl = NiceModal.create<BreakdownReviewDialogProps>(
           )}
 
           <DialogFooter>
-            <Button variant="destructive" onClick={handleDiscard}>
+            <Button
+              variant="destructive"
+              onClick={handleDiscard}
+              disabled={discard.isPending}
+            >
               {t('breakdown.discard', 'Discard')}
             </Button>
             <Button onClick={handleAccept} disabled={acceptDisabled}>

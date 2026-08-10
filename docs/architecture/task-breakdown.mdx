@@ -41,7 +41,7 @@ Migration note: `execution_processes.run_reason` has a CHECK constraint; adding 
 | `POST /api/breakdown-proposals/{id}/retry` | Failed → new run. |
 | `GET /api/tasks/{task_id}/dependencies` | Dependency edges for downstream consumers. |
 
-All three triggers (card action, MCP tool, auto-on-create) converge on the same POST endpoint, so semantics are identical everywhere.
+All three triggers share one review gate and one pair of stage functions — `create_draft_proposal` then `spawn_breakdown_run` — so the semantics are identical everywhere. They do not all share a REST call path: the card action and the MCP tool go through `POST /api/tasks/{task_id}/breakdown`, while auto-on-create calls the same two stage functions in-process from the task-create handler (`crates/server/src/routes/tasks/handlers/core.rs`), awaiting stage 1 so the proposal row exists at handler-return time and detaching stage 2 via `tokio::spawn`.
 
 ## MCP tools (`crates/server/src/mcp/task_server.rs`)
 

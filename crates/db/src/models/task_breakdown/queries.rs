@@ -94,6 +94,32 @@ pub async fn find_items(
     .await
 }
 
+/// True when the `depends_on_indices` edges contain a cycle.
+///
+/// Kahn's algorithm: repeatedly remove a node with no outstanding dependencies;
+/// anything left over sits on (or behind) a cycle. Assumes indices are already
+/// range-validated by the caller.
+fn has_index_cycle(items: &[ProposalItemInput]) -> bool {
+    let len = items.len();
+    let mut remaining: Vec<usize> = items.iter().map(|i| i.depends_on_indices.len()).collect();
+    let mut queue: Vec<usize> = (0..len).filter(|&i| remaining[i] == 0).collect();
+    let mut resolved = 0usize;
+
+    while let Some(node) = queue.pop() {
+        resolved += 1;
+        for (i, item) in items.iter().enumerate() {
+            if item.depends_on_indices.contains(&(node as i64)) {
+                remaining[i] -= 1;
+                if remaining[i] == 0 {
+                    queue.push(i);
+                }
+            }
+        }
+    }
+
+    resolved != len
+}
+
 /// Replace a draft proposal's items (delete + reinsert) in one transaction.
 ///
 /// Validates BEFORE any write: every `depends_on_indices` element must be in
@@ -120,6 +146,14 @@ pub async fn replace_items(
                 )));
             }
         }
+    }
+    // Range and self-reference checks miss a mutual pair (0 -> 1, 1 -> 0).
+    // accept_proposal turns every edge into a task_dependencies row, so a cycle
+    // accepted here becomes a cyclic graph on real tasks.
+    if has_index_cycle(&items) {
+        return Err(sqlx::Error::Protocol(
+            "depends_on indices form a cycle".to_string(),
+        ));
     }
 
     let mut tx = pool.begin().await?;
@@ -188,12 +222,43 @@ pub async fn replace_items(
 }
 
 /// Update a proposal's status (and error), refreshing updated_at.
+/// The proposal status state machine.
+///
+/// `Accepted` and `Discarded` are terminal — child tasks already exist for the
+/// former, and the latter is an explicit user decision that a late-arriving
+/// executor result must not overwrite. A repeat of the current status is a no-op
+/// and stays legal so a retried failure path is not itself an error.
+fn is_legal_transition(from: BreakdownStatus, to: BreakdownStatus) -> bool {
+    use BreakdownStatus::*;
+    match (from, to) {
+        (a, b) if a == b => true,
+        (Draft, Accepted | Discarded | Failed) => true,
+        // Retry re-drafts a failed proposal; a failed run may also be discarded.
+        (Failed, Draft | Discarded) => true,
+        (Accepted | Discarded, _) => false,
+        _ => false,
+    }
+}
+
 pub async fn update_status(
     pool: &SqlitePool,
     id: Uuid,
     status: BreakdownStatus,
     error: Option<String>,
 ) -> Result<TaskBreakdownProposal, sqlx::Error> {
+    // One state machine for every caller. Without this, a late executor completion
+    // can overwrite a user's Discard with Failed, and a discard can be applied to an
+    // already-Accepted proposal whose child tasks exist.
+    let current = find_by_id(pool, id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?
+        .status;
+    if !is_legal_transition(current, status) {
+        return Err(sqlx::Error::Protocol(format!(
+            "illegal breakdown status transition {current:?} -> {status:?}"
+        )));
+    }
+
     sqlx::query_as!(
         TaskBreakdownProposal,
         r#"UPDATE task_breakdown_proposals
@@ -342,7 +407,9 @@ pub async fn accept_proposal(
                     item.id
                 ))
             })?;
-        let task_id = item_to_task[&item.id];
+        let task_id = *item_to_task.get(&item.id).ok_or_else(|| {
+            sqlx::Error::Protocol(format!("item {}: no child task was created", item.id))
+        })?;
         for dep_item_id in dep_item_ids {
             let depends_on_task_id = *item_to_task.get(&dep_item_id).ok_or_else(|| {
                 sqlx::Error::Protocol(format!(
@@ -368,6 +435,12 @@ pub async fn accept_proposal(
     .await?;
 
     tx.commit().await?;
+    tracing::info!(
+        proposal_id = %proposal_id,
+        parent_task_id = %proposal.task_id,
+        child_count = created_tasks.len(),
+        "Accepted task breakdown proposal"
+    );
     Ok(created_tasks)
 }
 

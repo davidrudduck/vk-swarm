@@ -137,6 +137,22 @@ fn run_reason_skips_finalize(run_reason: &ExecutionProcessRunReason) -> bool {
     )
 }
 
+
+/// Whether starting this run should flip the parent task to `InProgress`.
+///
+/// `DevServer` and `Breakdown` are both non-mutating with respect to the task's own
+/// lifecycle — neither produces a diff to review. `Breakdown` in particular has no path
+/// back OUT of `InProgress`: `should_finalize` is false for it, the commit/next-action
+/// block excludes it, and `mark_process_failed_with_task_update` only touches
+/// `CodingAgent`/`SetupScript`/`CleanupScript`. Flipping the status here would strand the
+/// parent task in `InProgress` forever — visibly so with auto-breakdown on task create.
+fn flips_task_to_in_progress(run_reason: &ExecutionProcessRunReason) -> bool {
+    !matches!(
+        run_reason,
+        ExecutionProcessRunReason::DevServer | ExecutionProcessRunReason::Breakdown
+    )
+}
+
 #[async_trait]
 pub trait ContainerService {
     fn msg_stores(&self) -> &Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>;
@@ -1483,9 +1499,7 @@ pub trait ContainerService {
             .parent_task(&self.db().pool)
             .await?
             .ok_or(SqlxError::RowNotFound)?;
-        if task.status != TaskStatus::InProgress
-            && run_reason != &ExecutionProcessRunReason::DevServer
-        {
+        if task.status != TaskStatus::InProgress && flips_task_to_in_progress(run_reason) {
             Task::update_status(&self.db().pool, task.id, TaskStatus::InProgress).await?;
 
             if let Some(publisher) = self.share_publisher()
@@ -2672,6 +2686,31 @@ mod tests {
             }
             other => panic!("expected CodingAgentInitialRequest, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_breakdown_does_not_flip_task_to_in_progress() {
+        // Breakdown is a read-only analysis run with no path back out of InProgress:
+        // should_finalize is false for it, the commit/next-action block excludes it, and
+        // mark_process_failed_with_task_update ignores it. Flipping the status here would
+        // strand the parent task — visibly so for auto-breakdown on task create.
+        assert!(!flips_task_to_in_progress(
+            &ExecutionProcessRunReason::Breakdown
+        ));
+        assert!(!flips_task_to_in_progress(
+            &ExecutionProcessRunReason::DevServer
+        ));
+
+        // Every other run reason still flips it.
+        assert!(flips_task_to_in_progress(
+            &ExecutionProcessRunReason::CodingAgent
+        ));
+        assert!(flips_task_to_in_progress(
+            &ExecutionProcessRunReason::SetupScript
+        ));
+        assert!(flips_task_to_in_progress(
+            &ExecutionProcessRunReason::CleanupScript
+        ));
     }
 
     #[tokio::test]

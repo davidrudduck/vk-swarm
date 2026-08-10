@@ -479,19 +479,19 @@ pub struct ListNodesResponse {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BreakDownTaskRequest {
     #[schemars(description = "The ID of the task to break down")]
-    pub task_id: String,
+    pub task_id: Uuid,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetBreakdownRequest {
     #[schemars(description = "The ID of the task whose breakdown proposal should be fetched")]
-    pub task_id: String,
+    pub task_id: Uuid,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct AcceptBreakdownRequest {
     #[schemars(description = "The ID of the breakdown proposal to accept")]
-    pub proposal_id: String,
+    pub proposal_id: Uuid,
 }
 
 #[derive(Debug, Clone)]
@@ -1539,6 +1539,12 @@ mod tests {
         body: String,
     }
 
+    /// The breakdown MCP tools take typed `Uuid` identifiers, so the fixtures use
+    /// real UUIDs rather than opaque strings.
+    const TEST_TASK_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const TEST_PROPOSAL_ID: &str = "22222222-2222-4222-8222-222222222222";
+    const TEST_MISSING_TASK_ID: &str = "33333333-3333-4333-8333-333333333333";
+
     #[derive(Clone)]
     struct MockState {
         captured: Arc<Mutex<Option<Captured>>>,
@@ -1550,7 +1556,7 @@ mod tests {
         let path = request.uri().path().to_string();
         let body_bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
             .await
-            .unwrap_or_default();
+            .expect("mock request body should be readable");
         let body = String::from_utf8_lossy(&body_bytes).to_string();
 
         *state.captured.lock().unwrap() = Some(Captured { method, path, body });
@@ -1612,26 +1618,26 @@ mod tests {
         let (base_url, captured, canned) = spawn_mock_server().await;
         *canned.lock().unwrap() = serde_json::json!({
             "success": true,
-            "data": {"proposal_id": "prop-1", "status": "draft"},
+            "data": {"proposal_id": TEST_PROPOSAL_ID, "status": "draft"},
             "message": null,
         });
 
         let server = TaskServer::new(&base_url);
         let result = server
             .break_down_task(Parameters(BreakDownTaskRequest {
-                task_id: "task-123".to_string(),
+                task_id: TEST_TASK_ID.parse().expect("valid uuid"),
             }))
             .await
             .expect("tool call should not error");
 
         let req = captured.lock().unwrap().clone().expect("request captured");
         assert_eq!(req.method, "POST");
-        assert_eq!(req.path, "/api/tasks/task-123/breakdown");
+        assert_eq!(req.path, format!("/api/tasks/{TEST_TASK_ID}/breakdown"));
         assert!(req.body.is_empty(), "break_down_task should send no body");
 
         assert!(!result.is_error.unwrap_or(false));
         let text = extract_text(&result);
-        assert!(text.contains("prop-1"));
+        assert!(text.contains(TEST_PROPOSAL_ID));
         assert!(text.contains("draft"));
     }
 
@@ -1647,7 +1653,8 @@ mod tests {
         let server = TaskServer::new(&base_url);
         let result = server
             .break_down_task(Parameters(BreakDownTaskRequest {
-                task_id: "missing".to_string(),
+                // Well-formed but unknown: the API, not the type, rejects this one.
+                task_id: TEST_MISSING_TASK_ID.parse().expect("valid uuid"),
             }))
             .await
             .expect("tool call should not return ErrorData");
@@ -1663,7 +1670,7 @@ mod tests {
         *canned.lock().unwrap() = serde_json::json!({
             "success": true,
             "data": {
-                "proposal": {"id": "prop-1"},
+                "proposal": {"id": TEST_PROPOSAL_ID},
                 "items": [{"title": "Subtask A"}],
             },
             "message": null,
@@ -1672,14 +1679,14 @@ mod tests {
         let server = TaskServer::new(&base_url);
         let result = server
             .get_breakdown(Parameters(GetBreakdownRequest {
-                task_id: "task-123".to_string(),
+                task_id: TEST_TASK_ID.parse().expect("valid uuid"),
             }))
             .await
             .expect("tool call should not error");
 
         let req = captured.lock().unwrap().clone().expect("request captured");
         assert_eq!(req.method, "GET");
-        assert_eq!(req.path, "/api/tasks/task-123/breakdown");
+        assert_eq!(req.path, format!("/api/tasks/{TEST_TASK_ID}/breakdown"));
 
         assert!(!result.is_error.unwrap_or(false));
         let text = extract_text(&result);
@@ -1698,7 +1705,7 @@ mod tests {
         let server = TaskServer::new(&base_url);
         let result = server
             .get_breakdown(Parameters(GetBreakdownRequest {
-                task_id: "task-123".to_string(),
+                task_id: TEST_TASK_ID.parse().expect("valid uuid"),
             }))
             .await
             .expect("tool call should not return ErrorData");
@@ -1720,7 +1727,7 @@ mod tests {
         let server = TaskServer::new(&base_url);
         let result = server
             .get_breakdown(Parameters(GetBreakdownRequest {
-                task_id: "task-123".to_string(),
+                task_id: TEST_TASK_ID.parse().expect("valid uuid"),
             }))
             .await
             .expect("tool call should not error");
@@ -1743,14 +1750,17 @@ mod tests {
         let server = TaskServer::new(&base_url);
         let result = server
             .accept_breakdown(Parameters(AcceptBreakdownRequest {
-                proposal_id: "prop-1".to_string(),
+                proposal_id: TEST_PROPOSAL_ID.parse().expect("valid uuid"),
             }))
             .await
             .expect("tool call should not error");
 
         let req = captured.lock().unwrap().clone().expect("request captured");
         assert_eq!(req.method, "POST");
-        assert_eq!(req.path, "/api/breakdown-proposals/prop-1/accept");
+        assert_eq!(
+            req.path,
+            format!("/api/breakdown-proposals/{TEST_PROPOSAL_ID}/accept")
+        );
         assert!(req.body.is_empty(), "accept_breakdown should send no body");
 
         assert!(!result.is_error.unwrap_or(false));
@@ -1771,7 +1781,7 @@ mod tests {
         let server = TaskServer::new(&base_url);
         let result = server
             .accept_breakdown(Parameters(AcceptBreakdownRequest {
-                proposal_id: "prop-1".to_string(),
+                proposal_id: TEST_PROPOSAL_ID.parse().expect("valid uuid"),
             }))
             .await
             .expect("tool call should not return ErrorData");

@@ -1603,12 +1603,28 @@ RUST_LOG=info
         .await
         {
             Ok(Some(p)) => p,
-            Ok(None) => return,
+            Ok(None) => {
+                tracing::debug!(
+                    execution_process_id = %ctx.execution_process.id,
+                    "no breakdown proposal linked to this execution process; discarding run result"
+                );
+                return;
+            }
             Err(e) => {
                 tracing::error!(execution_process_id = %ctx.execution_process.id, error = ?e, "breakdown proposal lookup failed");
                 return;
             }
         };
+        // A user may have discarded (or already accepted) the proposal while the run
+        // was still going. That decision wins over a late-arriving executor result.
+        if proposal.status != db::models::task_breakdown::BreakdownStatus::Draft {
+            tracing::debug!(
+                proposal_id = %proposal.id,
+                status = ?proposal.status,
+                "breakdown proposal is no longer a draft; ignoring completion"
+            );
+            return;
+        }
         if !success {
             if let Err(fe) =
                 BreakdownService::fail_proposal(pool, proposal.id, "executor run failed".into())

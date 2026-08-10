@@ -407,8 +407,8 @@ the enumerated gates remain as the itemized evidence).
   (22/22), tsc, eslint, prettier — recorded as a gating exception.
 
 ## Task 503
-- [Task 503 orchestrator] STOP resolved: the task's mandated breakdown.dialog.* nesting was authored
-  before 502 existed; 502 shipped FLAT breakdown.* keys (title, running, failedGeneric, retry, accept,
+- [Task 503 orchestrator] STOP resolved: the task's mandated `breakdown.dialog.*` nesting was authored
+  before 502 existed; 502 shipped FLAT `breakdown.*` keys (title, running, failedGeneric, retry, accept,
   discard, itemTitle, itemDescription, dependencies, moveUp, moveDown, deleteItem). Amended 503:
   locale files use the FLAT shipped key set + action + proposedBadge; en values byte-identical to the
   component fallbacks (F3 contract); ja/ko/es reuse the mandated translations re-keyed where they
@@ -671,7 +671,7 @@ VERDICT: PASS
 
 ## Deploy-verification finding DV-1 (2026-08-09) — dead trigger path on fresh attempts
 
-Live SC1 attempt on the deployed branch (node 4653baa7, http://10.69.96.233:9001) failed:
+Live SC1 attempt on the deployed branch (node 4653baa7, `http://<node-host>:<node-port>`) failed:
 proposal `13e4a1d1` landed `status='failed', error='Container ref not found for task attempt'`.
 Root cause: `start_breakdown_attempt` (crates/services/src/services/container.rs:1387) called
 `ensure_container_exists` unconditionally, but the local-deployment impl
@@ -724,14 +724,24 @@ substitutes assistant-event `message.content[].text` blocks; new test
 `test_parse_assistant_event_without_result_line` pins the production shape (assistant events, NO
 result line) captured from the live 2026-08-09 run.
 
+## Deploy-verification finding DV-5 (2026-08-09) — dev loop leaves a stale MCP binary
+
+**DV-5 (pre-existing, tooling, NOT this branch):** the dev loop rebuilds and restarts
+`vks-node-server` but never `vks-mcp-server`, so a node keeps serving the MCP binary from
+whenever it was last built by hand. During this verification the newly added breakdown MCP
+tools were absent from the node's tool list until `vks-mcp-server` was rebuilt and restarted
+manually. Nothing on this branch causes it and nothing on this branch can fix it — the gap is in
+the dev/watch tooling. Filed as backlog finding **F-2026-08-09-02**, tracked by the
+`mcp-server-dev-loop-rebuild` workstream. Disposition: NOT fixed here (out of scope, tracked).
+
 ## Deploy verification
 
-Feature-branch build deployed to the production node (host 10.69.96.233, db ~/.vkswarm/db/db.sqlite,
-hive https://vkswarm.thedoctor.raverx.net) on 2026-08-09. All outputs below are verbatim from the
+Feature-branch build deployed to the production node (`<node-host>`, db `<node-db-path>`,
+hive `<hive-url>`) on 2026-08-09. All outputs below are verbatim from the
 deployed system. Build under test:
 
 ```text
-$ curl -s http://10.69.96.233:9001/api/health
+$ curl -s http://<node-host>:<node-port>/api/health
 {"status":"ok","version":"0.0.125","git_commit":"1757424b","git_branch":"wai/vk-swarm-task-breakdown","build_timestamp":"2026-08-09T21:28+Z","database_ready":true}
 ```
 
@@ -794,11 +804,11 @@ POST /api/tasks (with description) → GET breakdown → data: null   (no propos
 **SC6 — offline-first + resync (hive container stopped, then restarted):**
 
 ```text
-$ docker stop remote-remote-server-1        # hive DOWN 21:35
+$ docker stop <hive-container>              # hive DOWN 21:35
 trigger (via MCP) → agent run → draft 5 items   — fully node-local while offline
 $ curl -X POST .../breakdown-proposals/b236791f.../accept → success, 5 children
 unacked outbox rows (hive down): 5
-$ docker start remote-remote-server-1       # hive UP 21:36:29
+$ docker start <hive-container>             # hive UP 21:36:29
 unacked outbox rows (after reconnect): 0
 acked in last 2 min: 5
 ```
@@ -904,3 +914,57 @@ diff shape, not any agent's account of its own revert.
 **Outstanding:** end-to-end tests not yet re-run for this pass. The bigint defect sat exactly
 in the UI-path gap that E2E covers and unit tests do not, so `remote-frontend/scripts/e2e-test.sh`
 plus a manual pass through the review dialog is the check that would have caught it.
+
+## Post-review known issues
+
+CodeRabbit review of PR #475 (2026-08-10) posted 18 actionable findings + 6 nitpicks. Most were
+applied. The following were **declined**, with the evidence that supports each decision. They are
+recorded here so a later review round does not re-litigate them.
+
+**Declined as a false positive:**
+
+- `crates/db/.sqlx/query-a30f13ff…json:3` — "restore the `github_enabled = 1 AND is_remote = 0`
+  filter on `find_github_enabled`". The cache file cited carries `WHERE is_remote = 1`, which is
+  `Project::find_remote_projects` (`crates/db/src/models/project/sync.rs:133`), not
+  `find_github_enabled`. `find_github_enabled`
+  (`crates/db/src/models/project/github.rs:29`) still reads
+  `WHERE github_enabled = 1 AND is_remote = 0`, and this branch's only change to that file is the
+  added `auto_breakdown_enabled` column in the SELECT list — `git diff origin/main...HEAD --
+  crates/db/src/models/project/github.rs` is a single `+` line. No filter was lost. CodeRabbit
+  matched the two queries by their shared SELECT column list.
+
+**Declined as out of scope (real, tracked as follow-up work):**
+
+- `frontend/src/components/tasks/TaskCard.tsx:99` — one `GET /api/tasks/{id}/breakdown` per
+  rendered card, so an N-task board issues N requests. Correct. The fix is to carry proposal
+  status on the task-list response (or a project-scoped batch query), which means a Rust model
+  change, `generate-types`, and a frontend data-flow refactor — a workstream, not a review-pass
+  edit. Tracked: `task-breakdown-followups` (dev-docs/workstreams/task-breakdown-followups/README.md).
+- `crates/db/src/models/task_breakdown/queries.rs:141` — replace the domain
+  `sqlx::Error::Protocol` values with a typed `BreakdownDbError` so `map_proposal_error` can
+  distinguish 400 from 409 without parsing message strings. Correct and worth doing; it is a
+  cross-crate error refactor touching every call site and the route mappings. Tracked:
+  `task-breakdown-followups`.
+- `crates/server/src/routes/breakdown.rs:320` (nitpick) — split the 674-line route module into a
+  directory module. Consistent with the repo convention, but CodeRabbit itself scored it
+  `⚖️ Poor tradeoff`; a pure file move on a PR this size costs review clarity and gains nothing
+  behavioural. Tracked: `task-breakdown-followups` (dev-docs/workstreams/task-breakdown-followups/README.md).
+- `crates/server/src/routes/breakdown.rs:86-170` (nitpick) — bound concurrent detached breakdown
+  runs with a semaphore and add an in-flight metric. Real operational risk with auto-breakdown on,
+  and CodeRabbit explicitly marks it "not a blocker for this PR". Needs a capacity decision and a
+  metrics surface. Tracked: `task-breakdown-followups` (dev-docs/workstreams/task-breakdown-followups/README.md).
+- `crates/services/src/services/container.rs:1406-1455` (nitpick) — the image-canonicalisation and
+  variable-expansion block duplicates `start_attempt` (1235-1277). Accurate. Extracting the shared
+  helper edits the far more heavily exercised `start_attempt` path, which is a change this review
+  pass should not make blind. Tracked: `task-breakdown-followups` (dev-docs/workstreams/task-breakdown-followups/README.md).
+
+**Declined in part:**
+
+- `shared/types.ts:396` — "convert `sort_order`/`depends_on_indices` at the API boundary AND align
+  the response types with JSON `number`". The first half was already fixed before this review, in
+  `637c8911`: `breakdownApi.putItems` uses `jsonBody(payload)`
+  (`frontend/src/lib/api/breakdown.ts:56`), which emits bigints as JSON numbers and throws a
+  `RangeError` outside the safe-integer range. The second half is declined: `shared/types.ts` is
+  generated by ts-rs from the Rust structs and is gated by `npm run generate-types:check`, so it
+  cannot be hand-edited, and Rust `i64` → TS `bigint` is the ts-rs mapping contract. Changing it
+  would mean changing the Rust field types, which is a wire-format decision, not a review fix.
