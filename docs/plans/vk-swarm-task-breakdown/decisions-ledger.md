@@ -1132,3 +1132,58 @@ New tests: `test_replace_items_dedupes_duplicate_dependencies`,
 `create_task` axum handler, which needs a full `DeploymentImpl` with a real git repo to exercise;
 injecting a panic into `spawn_breakdown_run` to assert the log line would test tokio, not this
 feature.
+
+### Added by `/wai:close` code-review round 2 (2026-08-10)
+
+Record: `reviews/code-review-round-2.md`. Three non-actionable findings (G–I), all new.
+
+- **G** — `BreakdownReviewDialog.tsx:281`: a settled query with `proposal === null` renders an
+  empty dialog with a silently dead Discard button. Effectively unreachable (the badge that opens
+  the dialog renders only when a draft exists); worth an explicit empty state when the N+1 fetch is
+  reworked, which is followups item 1.
+- **H** — `BreakdownReviewDialog.tsx:243`: the Reload button gives no in-flight feedback, because
+  after an error the query status stays `error` rather than `pending`, so `isLoading` is false
+  during the refetch. Harmless — react-query dedupes concurrent fetches for the same key.
+- **I** — `queries.rs:298`: the CAS `RowNotFound → Protocol` remap means a proposal row deleted
+  between the read and the write surfaces as 409 rather than 404. Defensible: a row vanishing
+  mid-update is a concurrency conflict. The absent-proposal case still 404s via the initial
+  `find_by_id`, which the remap does not touch.
+
+Round 2 also **refuted** the double-click window carried from round 1: every one of Discard, Retry
+and Accept is defended server-side independent of client state (the `a == b` transition arm plus
+CAS; the one-draft-per-task partial unique index; and `accept_proposal`'s re-read on the
+transaction handle respectively), so the client-side `isPending` disabling is defence in depth
+rather than the only guard.
+
+## Code-review round 2 remediation (2026-08-10)
+
+Two actionable findings, both fixed.
+
+- **Finding 1 — the running state never resolved.** A breakdown run completes server-side with
+  nothing pushed to the client; the only `['breakdown', taskId]` invalidation is in the dialog's own
+  mutations, and neither consumer polled. With `staleTime: 5min` and `refetchOnWindowFocus: false`
+  (`main.tsx:13-14`), *Generating breakdown...* sat there indefinitely — and closing and reopening
+  the dialog did not help, because the query stayed fresh in cache. Fix: `useBreakdownProposal`'s
+  `refetchInterval` accepts a predicate over the current data, and the dialog passes
+  `runningPollInterval`, which polls at 3s **only** in the running shape (draft + execution process
+  + zero items) and returns `false` otherwise.
+
+  **Undictated choice:** `TaskCard` deliberately left un-polled. Polling per card would multiply the
+  N+1 proposal fetch already tracked as followups item 1, so a stale badge for up to `staleTime`
+  is accepted in exchange for not amplifying a known scaling problem. Revisit when item 1 lands.
+
+- **Finding 2 — stale comment.** The auto-trigger comment still said "fire-and-forget" after the
+  round-1 fix made the spawn supervised. Fixed. Worth naming: this is the same intent-vs-behaviour
+  drift round 1 filed five findings against, reintroduced by the fix for one of them.
+
+Pinned by six new vitest cases. Anti-hollow verified by mutation: forcing `runningPollInterval` to
+return `false` turns `polls while a run is in flight` RED; mutation reverted and the file confirmed
+additive-only.
+
+**Independence gap (recorded, not hidden):** the adversarial reviewer dispatched for the round-2
+remediation diff never reported — the same failure mode as round 1's frontend finder. Its five
+axes were covered directly by the orchestrator with cited evidence (see "Verified sound" in the
+round-2 record), so coverage holds, but the independent second opinion is genuinely missing.
+
+Gates after remediation: `cargo fmt`/`clippy`/`test --workspace` (1190 passed), frontend
+lint/tsc/format:check/vitest (**535** passed, was 528), remote-frontend lint/tsc/vitest (426) — green.

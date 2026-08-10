@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { breakdownApi } from '@/lib/api/breakdown';
+import type { BreakdownWithItems } from '@/lib/api/breakdown';
 import type {
   TaskBreakdownProposal,
   TaskBreakdownProposalItem,
@@ -12,7 +13,17 @@ import type {
  */
 export interface UseBreakdownProposalOptions {
   enabled?: boolean;
-  refetchInterval?: number;
+  /**
+   * Poll interval in ms, or a predicate over the current data returning an
+   * interval (or `false` to stop). The predicate form is what lets a consumer
+   * poll only while a run is in flight: a breakdown completes server-side with
+   * nothing pushed to the client, and the app's query defaults
+   * (`staleTime` 5min, `refetchOnWindowFocus: false`) mean an un-polled query
+   * never notices.
+   */
+  refetchInterval?:
+    | number
+    | ((data: BreakdownWithItems | null | undefined) => number | false);
 }
 
 /**
@@ -62,7 +73,15 @@ export function useBreakdownProposal(
     queryKey: ['breakdown', taskId],
     queryFn: () => breakdownApi.get(taskId),
     enabled: options?.enabled !== false,
-    refetchInterval: options?.refetchInterval,
+    refetchInterval:
+      typeof options?.refetchInterval === 'function'
+        ? (query) => {
+            const fn = options.refetchInterval as (
+              data: BreakdownWithItems | null | undefined
+            ) => number | false;
+            return fn(query.state.data);
+          }
+        : options?.refetchInterval,
   });
 
   return {

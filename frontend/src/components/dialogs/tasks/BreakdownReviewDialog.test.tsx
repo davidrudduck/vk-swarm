@@ -90,7 +90,10 @@ vi.mock('@/hooks/useBreakdown', () => ({
   },
 }));
 
-import { BreakdownReviewDialog } from './BreakdownReviewDialog';
+import {
+  BreakdownReviewDialog,
+  runningPollInterval,
+} from './BreakdownReviewDialog';
 
 function renderDialog() {
   return render(
@@ -416,5 +419,62 @@ describe('BreakdownReviewDialog', () => {
     renderDialog();
 
     expect(screen.getByTestId('breakdown-running-state')).toBeInTheDocument();
+  });
+});
+
+describe('runningPollInterval', () => {
+  const proposal = (over: Record<string, unknown> = {}) => ({
+    id: 'p1',
+    task_id: 't1',
+    status: 'draft',
+    execution_process_id: 'e1',
+    error: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+    ...over,
+  });
+
+  it('polls while a run is in flight', () => {
+    // A draft with an execution process and no items yet IS the running state.
+    // The run completes server-side with nothing pushed to the client, so
+    // without this the spinner never resolves.
+    expect(
+      runningPollInterval({ proposal: proposal(), items: [] } as never)
+    ).toBe(3000);
+  });
+
+  it('stops as soon as items arrive', () => {
+    expect(
+      runningPollInterval({
+        proposal: proposal(),
+        items: [{ id: 'i1' }],
+      } as never)
+    ).toBe(false);
+  });
+
+  it('does not poll a draft that was never spawned', () => {
+    expect(
+      runningPollInterval({
+        proposal: proposal({ execution_process_id: null }),
+        items: [],
+      } as never)
+    ).toBe(false);
+  });
+
+  it.each(['failed', 'accepted', 'discarded'])(
+    'does not poll a %s proposal',
+    (status) => {
+      expect(
+        runningPollInterval({
+          proposal: proposal({ status }),
+          items: [],
+        } as never)
+      ).toBe(false);
+    }
+  );
+
+  it('does not poll when there is no proposal at all', () => {
+    expect(runningPollInterval(null)).toBe(false);
+    expect(runningPollInterval(undefined)).toBe(false);
   });
 });

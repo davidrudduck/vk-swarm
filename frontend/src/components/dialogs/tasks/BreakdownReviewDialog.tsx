@@ -20,6 +20,7 @@ import {
   useBreakdownProposal,
   useBreakdownMutations,
 } from '@/hooks/useBreakdown';
+import type { BreakdownWithItems } from '@/lib/api/breakdown';
 import type {
   TaskBreakdownProposalItem,
   ProposalItemInput,
@@ -75,6 +76,29 @@ function toPayload(items: LocalItem[]): ProposalItemInput[] {
   }));
 }
 
+/** Poll cadence while a breakdown run is in flight. */
+const RUNNING_POLL_MS = 3000;
+
+/**
+ * Poll interval for the proposal query: `RUNNING_POLL_MS` while a run is in
+ * flight, `false` otherwise.
+ *
+ * A breakdown run completes server-side with nothing pushed to the client, and
+ * the app's query defaults (`staleTime` 5min, `refetchOnWindowFocus: false`)
+ * mean an un-polled query never notices — the running spinner would sit there
+ * until the cache went stale, and closing and reopening the dialog would not
+ * help. Exported for direct testing.
+ */
+export function runningPollInterval(
+  data: BreakdownWithItems | null | undefined
+): number | false {
+  return data?.proposal?.status === 'draft' &&
+    data.items.length === 0 &&
+    !!data.proposal.execution_process_id
+    ? RUNNING_POLL_MS
+    : false;
+}
+
 const BreakdownReviewDialogImpl = NiceModal.create<BreakdownReviewDialogProps>(
   ({ taskId, projectId }) => {
     const modal = useModal();
@@ -87,6 +111,13 @@ const BreakdownReviewDialogImpl = NiceModal.create<BreakdownReviewDialogProps>(
       refetch: refetchProposal,
     } = useBreakdownProposal(taskId, {
       enabled: modal.visible,
+      // Poll ONLY while a run is in flight. The run finishes server-side with
+      // nothing pushed to the client, and the app's query defaults (staleTime
+      // 5min, refetchOnWindowFocus off) mean an un-polled query never notices —
+      // the spinner would sit there until the cache went stale, and closing and
+      // reopening the dialog would not help. Stops as soon as items arrive or
+      // the proposal leaves the running shape, so an idle dialog does not poll.
+      refetchInterval: runningPollInterval,
     });
     const { putItems, discard, retry, accept } = useBreakdownMutations(
       taskId,

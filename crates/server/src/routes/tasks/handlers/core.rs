@@ -298,7 +298,8 @@ pub async fn create_task(
     // Auto-trigger a breakdown proposal for opt-in projects (task 602). Stage 1
     // (`create_draft_proposal`) is awaited so the proposal row exists at handler-return
     // time; stage 2 (`spawn_breakdown_run`) is fully awaitable but performs no internal
-    // detachment, so we detach it here via `tokio::spawn` (fire-and-forget).
+    // detachment, so we detach it here via `tokio::spawn` — detached from the request,
+    // but supervised rather than fire-and-forget (see the inner spawn below).
     if project.auto_breakdown_enabled
         && task.parent_task_id.is_none()
         && task
