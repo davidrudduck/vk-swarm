@@ -49,7 +49,7 @@ Nothing currently bounds the number of concurrent breakdown runs. With **Auto-br
 A concurrency limit and an in-flight metric are tracked in `dev-docs/workstreams/task-breakdown-followups/README.md`. Until then, treat auto-breakdown as unsuitable for projects that receive tasks in bulk.
 </Warning>
 
-The run itself is read-only analysis — it commits nothing and leaves a clean tree — so worktrees are reclaimed by the ordinary worktree cleanup path. The prompt is bounded by the parent task's title and description, so cost per run scales with how much your team writes on a card.
+The run itself is read-only analysis — it commits nothing and leaves a clean tree. Its worktree is **not** removed when the run finishes, though: breakdown attempts are ordinary task attempts, so their worktrees are collected by the expired sweep, which only takes an attempt once **72 hours** have passed since its last process completed. Budget disk for that window, not for the length of a run. The prompt is bounded by the parent task's title and description, so cost per run scales with how much your team writes on a card.
 
 Breakdown runs only on a task's **origin node**. Tasks belonging to remote or mirrored projects are rejected, the same rule that governs starting an attempt.
 
