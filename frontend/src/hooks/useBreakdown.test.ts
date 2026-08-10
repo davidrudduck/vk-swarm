@@ -375,3 +375,56 @@ describe('useBreakdownMutations', () => {
     );
   });
 });
+
+describe('useBreakdownProposal refetchInterval plumbing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('passes a predicate through to react-query and polls on its verdict', async () => {
+    // The predicate itself is unit-tested next to the dialog; this pins the
+    // WIRING — that a function option reaches react-query in the shape its v5
+    // callback expects (it receives the Query, not the data). A shape mismatch
+    // here would silently disable polling with no type error at the call site.
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.get).mockResolvedValue({ proposal: mockProposal, items: [] });
+
+    const { result } = renderHook(
+      () =>
+        useBreakdownProposal('task-1', {
+          refetchInterval: (data) => (data?.items.length === 0 ? 10 : false),
+        }),
+      { wrapper: createWrapper().wrapper }
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const afterFirst = vi.mocked(api.get).mock.calls.length;
+
+    await waitFor(
+      () =>
+        expect(vi.mocked(api.get).mock.calls.length).toBeGreaterThan(
+          afterFirst
+        ),
+      { timeout: 2000 }
+    );
+  });
+
+  it('does not poll when the predicate returns false', async () => {
+    const { breakdownApi: api } = await import('@/lib/api/breakdown');
+    vi.mocked(api.get).mockResolvedValue({
+      proposal: mockProposal,
+      items: mockItems,
+    });
+
+    const { result } = renderHook(
+      () => useBreakdownProposal('task-1', { refetchInterval: () => false }),
+      { wrapper: createWrapper().wrapper }
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const afterFirst = vi.mocked(api.get).mock.calls.length;
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(vi.mocked(api.get).mock.calls.length).toBe(afterFirst);
+  });
+});

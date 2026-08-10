@@ -1187,3 +1187,31 @@ round-2 record), so coverage holds, but the independent second opinion is genuin
 
 Gates after remediation: `cargo fmt`/`clippy`/`test --workspace` (1190 passed), frontend
 lint/tsc/format:check/vitest (**535** passed, was 528), remote-frontend lint/tsc/vitest (426) — green.
+
+### Added by `/wai:close` code-review round 3 (2026-08-10)
+
+Record: `reviews/code-review-round-3.md`. **No new non-actionable findings.**
+
+Round 3 reviewed the round-2 remediation diff and found one actionable item — a test-coverage gap
+in round 2's own fix. Round 2 pinned `runningPollInterval` as a pure function but left the
+*plumbing* unpinned: whether a function-valued `refetchInterval` reaches react-query in the shape
+its v5 callback expects (the callback receives the `Query`, so the option is unwrapped via
+`query.state.data`). A shape mismatch would have silently disabled polling — restoring the exact
+defect round 2 fixed — with every predicate test green and `tsc` clean at the call site. Closed
+with two hook-level tests driving a real `QueryClient`, verified RED under mutation.
+
+Round 3 converged: `Actionable: []`. The loop ran 3 rounds within its cap of 3, terminating on
+convergence rather than cap exhaustion.
+
+**Coverage limits carried into graduation (stated, not implied away):**
+
+1. Round-1 findings 1/2/3/6 (the E2E script, its docs, the compose banner) were validated
+   **read-only** and have never been executed — the docker/compose ban stands. Evidence is
+   `bash -n`, a YAML parse, an exhaustive grep for compose calls bypassing `dc()`, and Compose's
+   documented `-p` > env > dirname precedence.
+2. Round-1 finding 7's supervision has no test; the block needs a full `DeploymentImpl` with a real
+   git repo, and injecting a panic would test tokio rather than this feature.
+3. Independent adversarial review was **absent for rounds 2 and 3** — the dispatched reviewer never
+   reported, the same failure mode as round 1's frontend finder. Its axes were covered directly by
+   the orchestrator with cited evidence, so coverage holds, but the independent second opinion on
+   the remediation diff is genuinely missing from this loop.
