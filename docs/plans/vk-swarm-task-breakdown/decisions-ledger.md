@@ -1215,3 +1215,62 @@ convergence rather than cap exhaustion.
    reported, the same failure mode as round 1's frontend finder. Its axes were covered directly by
    the orchestrator with cited evidence, so coverage holds, but the independent second opinion on
    the remediation diff is genuinely missing from this loop.
+
+## CodeRabbit PR #475 feedback pass (2026-08-10, post-close)
+
+Six unresolved inline threads plus one summary nitpick, discovered via the `dr:gh` engine
+(69 comments total; 17 already resolved in the earlier pass, the rest bot notices or our own
+replies). **All seven accepted** — none was declined. Fixed in `834c6cd8`, every thread replied to
+and resolved.
+
+### The one that matters: a real defect our own review pass got wrong
+
+`crates/services/src/services/container.rs` — `start_execution`'s **start-error** handler wrote
+`Task::update_status(..., InReview)` unconditionally. So a Breakdown run that failed to *start*
+moved a Todo parent task to `InReview`.
+
+This is significant beyond the fix, because code-review round 1 examined exactly this axis and
+recorded it as **refuted**, citing: `should_finalize` is false for `Breakdown`, the commit and
+next-action block excludes it, and `mark_process_failed_with_task_update` matches only
+`CodingAgent | SetupScript | CleanupScript`. Every one of those statements is true. None of them
+covers `start_execution`'s own error path. The refutation enumerated the *completion* paths and
+never asked what happens when the run fails to start — a scope error in the search, not a wrong
+fact. Recorded because the same shape of mistake will recur: an axis can be "checked" and still be
+uncovered if the enumeration that backs it is incomplete.
+
+**Undictated choice:** the fix gates the write on `flips_task_to_in_progress(run_reason)`, the same
+predicate as the InProgress flip, so there is one source of truth for "this run reason does not
+participate in the task lifecycle". That predicate also excludes `DevServer`, so **DevServer
+start-failures no longer flip the task to InReview either**. This is a behaviour change beyond
+breakdown. Accepted deliberately: if starting a run never moved the task into the lifecycle,
+failing to start it should not move it either. Task 301's "DevServer behaviour bit-for-bit
+unchanged" claim was about the InProgress path and is now superseded on the error path.
+
+No test — `start_execution` needs a full `DeploymentImpl` with a real git repo. The predicate's own
+unit test now documents that it governs both lifecycle writes.
+
+### The rest
+
+- **Three documentation corrections**, all verified against the code first: `accept_proposal` does
+  not call `Task::create` (raw SQLx insert at `queries.rs:406` plus an in-transaction outbox
+  enqueue at `:429` — the deliberate divergence documented at `:351`); retry creates a new draft
+  rather than performing a `Failed -> Draft` transition; `get_breakdown` returns the latest
+  proposal of any status, not only a draft. Same class as round 1's five doc findings.
+- **Discard disabled until the query settles with a proposal.** Round 2 found this independently
+  and filed it as non-actionable G on reachability grounds (the badge that opens the dialog renders
+  only for a draft). That reasoning was about likelihood, not correctness; an enabled control whose
+  handler is a no-op is a defect regardless, and the fix is one line. **G is hereby closed, not
+  carried.**
+- **Typed test fixtures.** The polling tests used five `as never` casts, and
+  `items: [{ id: 'i1' }]` omitted every other required field of `TaskBreakdownProposalItem` —
+  including `sort_order`, which is one of the `bigint` fields whose serialisation these very tests
+  exist to guard. Now built from the existing `makeProposal`/`makeItem` factories.
+- **Nitpick applied:** `attemptsApi.saveDraft` and `configApi.saveConfig` now use `jsonBody`. Both
+  carry `bigint` fields (draft `version`; `Config.pagination.initial_load`/`max_limit`). Scoped to
+  the two sites named — sweeping all ~60 `JSON.stringify` bodies under `lib/api/` needs each one
+  checked against its request type and belongs in its own change. **Third distinct instance of the
+  ts-rs `i64 -> bigint` root cause on this PR.**
+
+Gates: `cargo fmt`/`clippy`/`test --workspace` (1190), frontend lint/tsc/format:check/vitest (537),
+remote-frontend lint/tsc/vitest (426) — all green. PR reports `mergeable=MERGEABLE`; no rebase
+needed (branch is 1 commit behind `main` with zero conflicting paths).
