@@ -90,3 +90,21 @@ irreversible core — journal-first, in-process broadcast, monotonic seq cursors
 one typed enum, no external broker — is unchanged.
 
 Spec re-frozen: `spec_sha=8b2c864b5b8679acfd0e278d2728731e3b720ba4`.
+
+## 2026-08-11 decompose: sibling-advisory acknowledgement (plan-lint SC6 `W:` lines)
+
+`wai-plan-lint.sh` emits a same-directory sibling advisory per created file. It names the
+alphabetically-first unlisted neighbour, which in every case here is NOT the pattern sibling. Each
+`W:` is acknowledged below; the REAL pattern siblings are declared in the tasks' `siblings:` fields
+(the decomposer's cross-directory judgement, which the lint structurally cannot see).
+
+| `W:` names | Task | Verdict | Real sibling declared in `siblings:` |
+|---|---|---|---|
+| `crates/db/migrations/20250617183714_init.sql` | 002 | Not a pattern sibling — the initial schema dump, not a durable-log migration | `20260201000400_add_node_outbox.sql` |
+| `crates/db/src/models/activity_dismissal.rs` | 003 | Not a pattern sibling — a simple CRUD model, not a serde-tagged TS-exported enum | none needed; the pattern is the ts-rs `decl()` registration in `generate_types.rs` |
+| `crates/services/src/services/approvals.rs` | 005, 009, 011 | Not a pattern sibling — alphabetically first in a 40-file directory; unrelated domain | 005 → `events.rs` (the cross-directory `EventService` naming-collision risk); 009 → none; 011 → the WAL-monitor loop, named in the task body |
+| `crates/services/tests/electric_task_sync.rs` | 008 | Weak sibling — it IS the nearest integration-test harness precedent, and the task body already directs reading the existing test conventions | none declared; harness shape is followed, not its domain logic |
+| `crates/db/src/models/activity_dismissal.rs` | 009 (`trigger_cursor.rs`) | Not a pattern sibling — `trigger_cursor` is a single-row-per-key cursor table; closest precedent is `shared_activity_cursor.rs` | noted here rather than in `siblings:` so the gate does not treat it as a creation target |
+
+Note for a future run: `shared_activity_cursor.rs` is the closer precedent for task 009's
+`trigger_cursor.rs` and should be read during execution even though the lint did not name it.
