@@ -3,7 +3,7 @@ doc_type: spec
 status: shipped
 workstream: vk-swarm-task-breakdown
 change_kind: behaviour
-verify_cmd: "sqlite3 -readonly ${VK_DATABASE_PATH:-$HOME/.vkswarm/db/db.sqlite} 'select status from task_breakdown_proposals' | grep -q accepted"
+verify_cmd: sqlite3 -readonly "${VK_DATABASE_PATH:-$HOME/.vkswarm/db/db.sqlite}" 'select status from task_breakdown_proposals' | grep -q accepted
 ---
 
 # vk-swarm-task-breakdown — AI task breakdown harness (P3 / SC3)
@@ -16,7 +16,6 @@ Give the operator a kanban-driven way to turn a high-level goal card into a revi
 Why now: P1/P2 delivered a durable, offline-first, crash-resumable node + hive substrate. The next bottleneck to actually managing development work cycles in vk-swarm is that decomposing work is still manual and lives outside the board (chat sessions, WAI docs). P3 closes that gap and is — together with P4 (event bus) — the gate for P5 (conflict/priority/dependency automation), P6 (AI management agent), and P7 (MCP/ACP connectivity).
 
 Decisions settled at intent time (interview 2026-08-07): placement is node-local and executor-driven; triggers are (1) a Break down card action in the node UI, (2) an MCP tool on the node's existing MCP server, (3) an automatic trigger on task creation behind a per-project opt-in; output is native child tasks plus persisted dependency edges; every trigger is gated by review-then-accept — nothing becomes ready work without operator acceptance.
-
 
 ## User stories
 - **US1:** As the operator, I can invoke Break down on a goal card, review and edit the proposed subtasks, and accept them so they become real, independently-executable child tasks on the board.
@@ -47,7 +46,6 @@ External agents (MCP clients, later the P7 MCP/ACP fabric): gain a programmatic 
 
 Downstream phases as consumers: P5 needs the dependency edges this produces; P6 needs correctly-scoped ready tasks to select from; P4's bus will carry this feature's lifecycle events (proposal created / accepted) once both exist.
 
-
 ## Constraints
 Reuse the proven core: the executor abstraction (enum_dispatch over CLI agents, crates/executors/src/executors/mod.rs:88), local-SQLite-as-node-of-record, existing task parent/child hierarchy (tasks.parent_task_id, task->task since migration 20251215000000), ApiResponse<T> route patterns, ts-rs typegen with manual registration in crates/server/src/bin/generate_types.rs, i18n for all new UI strings in all four locales (en, ja, ko, es).
 
@@ -65,7 +63,6 @@ Reference systems read-only: paperclip (/data/Code/reference/agents/paperclip) f
 
 GitHub targeting: PRs only against davidrudduck/vk-swarm.
 
-
 ## Out of scope
 Hive-side breakdown or any hive-initiated assignment of breakdown work to nodes.
 
@@ -79,10 +76,8 @@ Recursive breakdown (auto-decomposing generated subtasks) — single level only.
 
 WednesdayAI integration (P8).
 
-
 ## Approach
 Ride the existing task-attempt execution machinery instead of inventing a parallel runner. A breakdown run is a real executor invocation: the node spawns the configured coding agent (via the enum_dispatch executor layer) with a breakdown prompt against the parent task, with a worktree created as usual by the attempt machinery (skip_worktree_creation is NOT used — it means reuse-the-parent-attempt's-container, which a fresh goal task does not have), captures the agent's final structured JSON from the durable execution log (the same pattern as Claude's ResultMessage extraction in crates/executors/src/executors/claude/protocol.rs:124-137), and materialises the result as a proposal set in new node-local tables (ADR-0016). Acceptance is a single transaction that converts proposal items into ordinary child tasks (existing Task::create + parent_task_id hierarchy, syncing to the hive through the existing outbox) and writes dependency edges into a new task_dependencies table. All three triggers (card action, MCP tool, auto-on-create) converge on one REST endpoint so semantics are identical; the MCP tool follows the established task_server.rs proxy pattern and adds no DB access. UI is a review panel wired through the existing NiceModal/defineModal dialog convention with react-query mutations that invalidate the tasks and proposals keys.
-
 
 ## Design
 Data model (crates/db, additive migrations; ADR-0016):
@@ -118,7 +113,6 @@ Frontend (frontend/src):
 
 Sync/offline: proposals and dependencies are node-local tables with no outbox ops — nothing crosses the wire until acceptance creates real tasks (which reuse the proven task.upsert outbox path). Every endpoint works with the hive unreachable.
 
-
 ## Decisions
 D1 (irreversible — ADR dev-docs/adr/0016-breakdown-proposals-separate-entity.md): proposals are a separate node-local entity (task_breakdown_proposals/_items) plus a first-class task_dependencies edge table keyed on real task ids; TaskStatus is never extended. P5/P6 build on this contract.
 
@@ -132,7 +126,6 @@ D5 (reversible): auto-breakdown is a per-project boolean (default off) with a mi
 
 D6 (reversible): dependency edges sync nowhere in this workstream; hive awareness of edges is deferred to a later phase together with P5.
 
-
 ## Test strategy
 TS1: DB layer: sqlx tests via db::test_utils::create_test_pool() covering proposal CRUD, the one-active-draft constraint, cascade deletes, and the accept transaction (child tasks + edges + status flip atomically; rollback on any failure).
 TS2: Parser: unit tests for BreakdownResult extraction from ExecutionProcessLogs JSONL fixtures — valid block, malformed JSON, missing block, multiple blocks (last wins), non-zero exit — asserting atomic failure semantics.
@@ -140,4 +133,3 @@ TS3: API: route tests for breakdown endpoints covering 409 on duplicate draft, r
 TS4: Frontend: vitest for breakdownApi, useBreakdownProposal hook, and BreakdownReviewDialog (edit/reorder/accept/discard/failed+retry states); i18n keys present in all four locales.
 TS5: MCP: tests asserting the three tools proxy the REST endpoints faithfully (params mapping, error envelope pass-through) per the existing task_server test conventions.
 TS6: Live acceptance on a deployed node per the SC list: card-action run end-to-end with hive disconnected (SC6), MCP parity (SC4), auto-trigger opt-in (SC5), failure injection via a bad executor profile (SC7); evidence recorded in the decisions-ledger and verify_cmd green post-deploy.
-

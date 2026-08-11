@@ -1305,9 +1305,28 @@ status from task_breakdown_proposals' | grep -q accepted"`. Two changes, both lo
   value through `bash -c`, and the YAML double-quoted scalar's escaped inner quotes arrive as
   literal backslashes. `-readonly` needs no inner quoting and no `?`, which would also glob.)
 
+  **Follow-up (CodeRabbit, PR #476):** the path expansion was unquoted, so a `VK_DATABASE_PATH`
+  or `$HOME` containing spaces word-split into several arguments. Confirmed with a probe that
+  stubs `sqlite3` and prints its argv:
+
+```console
+$ HOME='/tmp/home with spaces'   # unquoted — the path arrives as three arguments
+argc=5   [-readonly] [/tmp/home] [with] [spaces/.vkswarm/db/db.sqlite] [select status from ...]
+
+$ HOME='/tmp/home with spaces'   # quoted — one argument, as intended
+argc=3   [-readonly] [/tmp/home with spaces/.vkswarm/db/db.sqlite] [select status from ...]
+```
+
+  Fixed by quoting the expansion. The value is now a YAML **plain scalar** (no outer quotes)
+  rather than a double-quoted one: `fm()` in `wai-doc-lib.sh` strips only a leading/trailing `"`
+  (`gsub(/^"|"$/,"")`) and performs no YAML unescaping, so inner `"` survives verbatim while
+  `\"` would not — this is the same mechanism that defeated the `?mode=ro` attempt above.
+  Verified both ways: `fm` returns the command with its quotes intact, and `yaml.safe_load`
+  parses the plain scalar to the identical string.
+
 **Live evidence (read-only, post-merge):**
 
-```
+```console
 $ sqlite3 -readonly /home/david/.vkswarm/db/db.sqlite \
     'select status, count(*) from task_breakdown_proposals group by status;'
 accepted|3
