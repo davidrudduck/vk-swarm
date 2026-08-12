@@ -102,6 +102,26 @@ constructor, 006 delete-transaction collision, 007 `mark_orphaned_as_failed`, 00
 reachability, 009/011 missing startup wiring, and 005 `subscribe_from`/`Lagged` under-specification.
 Independent convergence is the strongest signal this round produced.
 
+## Round CLOSED — 2026-08-11
+
+Per the termination rule, the round closes when every peer-validated finding is remediated AND a
+focused re-check passes — not when a round finds zero. Both conditions hold:
+
+- **All 23 peer-validated codex findings and all 8 peer-validated grok findings are remediated.**
+  The five grok findings codex rejected were dropped, not re-litigated.
+- **Focused re-check green:** `PLAN-LINT PASS`, `decompose-guard: OK`, and coverage verified
+  exactly-one per SC id (SC1-SC6, SC8) and per TS id (TS1-TS6). Every `W:` sibling advisory is
+  acknowledged in the decisions ledger.
+
+Two findings were resolved better than by remediation — they were dissolved. Codex's #4 (task 005
+wires the wrong `DBService` constructors) became moot because `DBService` now gains no field at all;
+and grok's delete finding needed no separate fix because an executor-generic `append` composes with
+the caller-owned transaction. A deliberate deviation from codex's corrected delete fix is recorded in
+the ledger with its reasoning.
+
+No further round was launched. Launching one purely to confirm silence is the infinite loop the
+termination rule exists to prevent.
+
 ## Outcome
 
 The breakdown is **substantially defective** and does not proceed to `/wai:execute` as committed.

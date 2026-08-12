@@ -231,3 +231,28 @@ Task-level fixes applied (all peer-validated and independently verified against 
   expected rollback to retract the message — impossible, `broadcast::Sender::send` is not
   transactional. Task 013 replaces it with a structural equivalent: an uncommitted row is unreadable,
   so it cannot be tailed.
+
+### One deliberate deviation from a judge's corrected fix (task 006, delete)
+
+Judging grok's delete finding, codex ruled the ISSUE real but the FIX unsound, and supplied its own:
+add `delete_with_event(pool, id)` that opens a transaction, loads identity, nullifies children,
+deletes, appends, commits and broadcasts, then route every real deletion through it, adding `core.rs`
+and `remote.rs` to the file set.
+
+We implemented something different — `Task::delete` appends on the executor it is given and never
+commits — so the reasoning is recorded rather than left implicit.
+
+Codex's specific objection was to grok's *conditional* formulation: "append onto that same executor
+**when the executor is a transaction**, else open one." That is genuinely not expressible — a generic
+`E: Executor` cannot be interrogated at runtime for transaction-ness. The objection is correct.
+
+Our version has no conditional. `Task::delete` ALWAYS appends on the passed executor and NEVER
+commits, which is well-typed for every `E: Executor`, and the caller commits both the deletion and
+its journal row together. That satisfies D2's actual invariant (the journal write shares the state
+write's transaction) while preserving the route's existing atomic unit exactly.
+
+Preferred over codex's fix because that one moves child-nullification — a route-level composition
+concern — down into the DB model, edits two route handlers, and creates a second delete entry point
+whose existence invites a caller to use the wrong one. Ours changes no caller at all. Codex's remains
+the correct fallback if `append` cannot in practice be made executor-generic; task 004 carries a STOP
+trigger for exactly that case.
