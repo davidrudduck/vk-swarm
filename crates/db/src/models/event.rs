@@ -45,7 +45,7 @@ pub enum NodeEvent {
         attempt_id: Uuid,
         execution_process_id: Uuid,
         executor: String,
-        exit_code: i32,
+        exit_code: i64,
     },
     /// An attempt failed.
     AttemptFailed {

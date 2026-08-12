@@ -30,7 +30,7 @@ truncated: boolean,
  */
 language: string | null, };
 
-export type NodeEvent = { "type": "task_created", task_id: string, project_id: string, } | { "type": "task_status_changed", task_id: string, old_status: TaskStatus, new_status: TaskStatus, } | { "type": "task_deleted", task_id: string, project_id: string, } | { "type": "attempt_started", task_id: string, attempt_id: string, execution_process_id: string, executor: string, } | { "type": "attempt_finished", task_id: string, attempt_id: string, execution_process_id: string, executor: string, exit_code: number, } | { "type": "attempt_failed", task_id: string, attempt_id: string, execution_process_id: string, executor: string, reason: string, } | { "type": "hive_connected", } | { "type": "hive_disconnected", reason: string, } | { "type": "reconcile_completed", entity_count: bigint, };
+export type NodeEvent = { "type": "task_created", task_id: string, project_id: string, } | { "type": "task_status_changed", task_id: string, old_status: TaskStatus, new_status: TaskStatus, } | { "type": "task_deleted", task_id: string, project_id: string, } | { "type": "attempt_started", task_id: string, attempt_id: string, execution_process_id: string, executor: string, } | { "type": "attempt_finished", task_id: string, attempt_id: string, execution_process_id: string, executor: string, exit_code: bigint, } | { "type": "attempt_failed", task_id: string, attempt_id: string, execution_process_id: string, executor: string, reason: string, } | { "type": "hive_connected", } | { "type": "hive_disconnected", reason: string, } | { "type": "reconcile_completed", entity_count: bigint, };
 
 export type SequencedEvent = { seq: bigint, event: NodeEvent, };
 
