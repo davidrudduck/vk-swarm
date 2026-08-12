@@ -1,6 +1,6 @@
 # ADR-0017: Node event bus = in-process broadcast over a durable, cursor-replayable journal
 
-- **Status:** accepted (amended 2026-08-11 — see Amendment below)
+- **Status:** accepted (amended twice on 2026-08-11 — see Amendment and Amendment 2 below)
 - **Date:** 2026-08-07
 - **Workstream:** vk-swarm-event-bus
 - **Spec:** `docs/superpowers/specs/2026-08-07-vk-swarm-event-bus.md`
@@ -24,11 +24,15 @@ Events are **journaled first, broadcast second**, entirely node-local:
 
 - New `event_journal` table: monotonic `seq` (INTEGER PRIMARY KEY AUTOINCREMENT),
   `event_type`, typed JSON `payload`, `created_at`. Journal writes happen in the same
-  transaction as the **discrete state-write statement** they describe, owned and committed by
-  the DB model function performing that write. Where a lifecycle event has no accompanying
+  transaction as the **discrete state-write statement** they describe, appended by the DB model
+  function performing that write. (Amendment 2: the transaction may be opened by that model
+  function OR owned by its caller — `append` is generic over sqlx `Executor` — and the model
+  function does not publish.) Where a lifecycle event has no accompanying
   state write (hive connectivity transitions), the journal row IS the record and is appended
   directly.
-- An in-process `tokio::sync::broadcast` bus fans out live events after commit.
+- An in-process `tokio::sync::broadcast` bus fans out live events after commit. (Amendment 2:
+  "after commit" is now enforced structurally by a journal tailer rather than by the model function
+  publishing; the `Sender` lives in `crates/services`, not `crates/db`.)
 - Consumers (internal trigger hooks and the external SSE endpoint) resume from any
   `seq` cursor by reading the journal, then switch to live — **at-least-once, no journaled
   event skipped, duplicates possible; consumers must be idempotent**.
@@ -97,3 +101,55 @@ What changed and why:
 
 The irreversible core of the ADR — journal-first, in-process broadcast, monotonic seq cursors,
 at-least-once delivery, one typed enum, no external broker — is unchanged.
+
+## Amendment 2 — 2026-08-11 (after the adversarial breakdown review)
+
+Amended in place again, still before any implementation existed, following tournament 1 of
+`/wai:decompose`. Two cross-model competitors independently found that the emission mechanism
+described in Amendment 1 could not be built as written; the finding was peer-validated and
+verified against the repo before the spec owner decided.
+
+5. **Publication is decoupled from emission by a journal tailer.** Amendment 1 said the DB model
+   function commits its transaction "and only then publishes on the broadcast channel". That is
+   unbuildable: the sender was to live in the db layer held alongside the pool, but model functions
+   receive only `&SqlitePool`, and a pool has no back-reference to the `DBService` that owns it.
+   The repairs both cost more than they save — a process-global `OnceLock` in `crates/db` would
+   capture the *bootstrap* sender, because production constructs `DBService::bootstrap()` before the
+   live service at `crates/local-deployment/src/lib.rs:155-166`, and would additionally cross-publish
+   between in-process test pools; moving the public API onto `DBService` emitting wrappers is
+   correct but forces migration of every caller of the six emission functions.
+
+   Instead, model functions **append only**, and a per-`DBService` background task tails the journal
+   and publishes rows in `seq` order. Since a row is only readable once its transaction has
+   committed, **journal-first/broadcast-second becomes structural** rather than a convention an
+   implementer can forget, and a rolled-back transaction cannot produce a phantom broadcast. The
+   broadcast `Sender` therefore moves UP to `crates/services`, and `crates/db` needs no sender at
+   all — which is what makes "caller signatures stay `&SqlitePool`" satisfiable.
+
+   Accepted cost: publication latency is bounded by the tail interval rather than immediate. Every
+   named consumer (P6 triggers, P7 MCP/ACP observability, the SSE endpoint) is non-interactive, so
+   this is immaterial. Reversible: restoring synchronous publish later needs only a sender path at
+   the emission sites, and changes none of the seq, cursor, or at-least-once contracts P6/P7 bind to.
+
+6. **A generic append dissolves the delete problem.** `EventJournal::append` is generic over sqlx
+   `Executor`, so it composes both with a model function that opens its own transaction and with one
+   handed a caller-owned transaction. This matters because `Task::delete` is already generic over
+   `E: Executor` and its local route (`crates/server/src/routes/tasks/handlers/core.rs:655-670`)
+   owns an outer transaction spanning child nullification — so "the model owns the transaction"
+   could never have applied there.
+
+7. **A hard cap bounds the journal.** "Compaction never deletes at or above the minimum persisted
+   trigger cursor" cannot coexist with "the journal cannot grow unbounded" when a hook's cursor stops
+   advancing. `VK_EVENT_MAX_ROWS` now overrides the cursor floor and marks the passed cursors as
+   requiring rebootstrap, so a dead consumer degrades to explicit, observable event loss instead of
+   unbounded growth.
+
+8. **The `seq` non-contiguity rationale was factually wrong.** Amendment 1 (point 3) said assigning
+   `seq` inside a transaction that may roll back "can leak a value". A direct probe shows SQLite
+   **reuses** it — `sqlite_sequence` is itself transactional, so the rollback reverts the allocation.
+   The consumer-facing contract is unchanged and remains correct, because it is the conservative
+   direction: consumers must tolerate holes regardless of whether this mechanism creates them. Only
+   the stated cause was wrong, and the behaviour is now asserted by a test rather than assumed.
+
+The irreversible core is still unchanged. What moved is the publication mechanism, which was never
+part of it.

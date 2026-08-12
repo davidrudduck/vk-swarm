@@ -91,6 +91,63 @@ one typed enum, no external broker — is unchanged.
 
 Spec re-frozen: `spec_sha=8b2c864b5b8679acfd0e278d2728731e3b720ba4`.
 
+## 2026-08-11 tournament 1 HALTED the handoff; spec + ADR-0017 amended a second time
+
+The adversarial breakdown review (`reviews/tournament-1.md`) found the 12-task breakdown at
+`ae3e807e` **substantially defective**. Codex (23 findings) and grok-4.5 (13) converged
+independently on seven identical defects at identical anchors; kimi-k3 timed out, so the round
+closed with two competitors plus mutual non-self peer judging. Full scoreboard and the five findings
+the peer gate *killed* are in the review file.
+
+Two findings were contradictions internal to the frozen spec, escalated per ADR-0001 rather than
+patched into tasks. Both were decided by the spec owner:
+
+| # | Collision | Decision | Why this option |
+|---|---|---|---|
+| E1 | Design required publish-inside-the-model AND sender-in-db-layer AND unchanged `&SqlitePool` signatures — jointly unsatisfiable; a pool has no back-reference to its `DBService` | **Journal tailer** (D10; D2/D8 revised) | Dissolves E2 as a side effect, zero caller churn, makes journal-first structural, kills the broadcast-before-commit bug class |
+| E2 | `Task::delete` is generic over `E: Executor` and its route owns an outer txn, so "the model opens its own transaction" could never apply | resolved BY E1 — a generic `append` composes with a caller-owned txn | no separate decision needed |
+| E3 | Bounded-journal Constraint vs "compaction never deletes at/above the min trigger cursor" — a dead hook pins the journal forever | **`VK_EVENT_MAX_ROWS` hard cap overriding the floor, marking passed cursors for rebootstrap** (D6 revised) | only option that satisfies the Constraint absolutely; makes loss explicit rather than silent |
+
+Rejected for E1, with the evidence that killed each:
+
+- **Process-global `OnceLock` in `crates/db`** — production builds `DBService::bootstrap()` before the
+  live service (`crates/local-deployment/src/lib.rs:155-166`), so a single-assignment global would
+  permanently capture the *bootstrap* sender. Independently, `create_test_pool()` gives each test its
+  own DB inside one shared process, so a single global cross-publishes between tests. The first
+  argument came from the peer judge, not from either finder — the judge round earned its cost here.
+- **`DBService`-owned emitting wrappers** — architecturally sound, but forces migration of every
+  caller of the six emission functions, which is exactly the churn D2 exists to avoid.
+
+Accepted cost of the tailer: publication latency is tail-interval-bounded rather than immediate, plus
+one supervised background task per node. Immaterial — every named consumer (P6 triggers, P7 MCP/ACP
+observability, the SSE endpoint) is non-interactive. Reversible: restoring synchronous publish later
+needs only a sender path at the emission sites and changes none of the seq/cursor/at-least-once
+contracts P6/P7 bind to.
+
+Two corrections needed no spec-owner decision because the spec had already deferred them or was
+silent:
+
+- **D9's stated mechanism was factually wrong.** It claimed a rolled-back transaction "may consume a
+  seq value". Direct probe: committed `seq=1`; allocation `2` inside a rolled-back txn; the next
+  commit **reused** `2`; `sqlite_sequence` read back `('j', 2)` — it is itself transactional. The
+  consumer-facing contract stands unchanged because it is the conservative direction. The spec had
+  already said this was "asserted by a test rather than assumed", so only task 004's assertion
+  direction was wrong, not the decision.
+- **`ExecutionProcess::mark_orphaned_as_failed`** (`crates/db/src/models/execution_process/queries.rs:115-131`)
+  is a bulk running→failed transition invoked from startup recovery — a real terminal outcome SC2
+  requires, which the Design's emission-site list had omitted entirely.
+
+D11 was added: the hook runner persists its cursor after every consumed event, not only after a fire.
+Advancing only on a fire leaves non-matching events unacknowledged forever, causing infinite replay
+across restarts and pinning compaction at the first non-matching event.
+
+Spec re-frozen: `spec_sha=5b2ce1af399d459da9789c4d46b709ff40351d61` (was
+`8b2c864b5b8679acfd0e278d2728731e3b720ba4`). Precheck anchor-check was again suppressed only after
+all 19 path anchors were verified by hand against `main` (18 exist; `event_bus.rs` is the file the
+design creates) — same compensating control as the first amendment, same upstream cause
+(`agent-plugins` issue #86, which this run confirmed also truncates `crates/*/src/lib.rs` to
+`src/lib.rs`).
+
 ## 2026-08-11 decompose: sibling-advisory acknowledgement (plan-lint SC6 `W:` lines)
 
 `wai-plan-lint.sh` emits a same-directory sibling advisory per created file. It names the
