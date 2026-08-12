@@ -2,7 +2,7 @@
 id: "005"
 phase: 2
 title: "Add the EventBus with the broadcast channel and the subscribe_from replay-to-live contract"
-status: ready
+status: passed
 depends_on: ["004"]
 parallel: false
 conflicts_with: []
