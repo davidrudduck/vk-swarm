@@ -256,3 +256,7 @@ concern — down into the DB model, edits two route handlers, and creates a seco
 whose existence invites a caller to use the wrong one. Ours changes no caller at all. Codex's remains
 the correct fallback if `append` cannot in practice be made executor-generic; task 004 carries a STOP
 trigger for exactly that case.
+
+## Task 002
+
+- [Task 002] `event_journal` uses `INTEGER PRIMARY KEY AUTOINCREMENT` (not scalar subquery) — sibling `node_outbox` (20260201000400) assigns `seq` via scalar subquery with `UNIQUE` guard because its PK is `id BLOB` and `seq` is not a rowid alias; here `seq` IS the primary key, so AUTOINCREMENT is both correct and cheaper, and guarantees no reuse after deletion (required for compaction) — `crates/db/migrations/20260812000000_add_event_journal.sql`
