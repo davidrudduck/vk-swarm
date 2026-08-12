@@ -106,7 +106,7 @@ mod tests {
         match tokio::time::timeout(remaining, subscriber.recv()).await {
             Ok(Ok(ev)) => Some(ev),
             Ok(Err(_)) => None, // RecvError (channel closed)
-            Err(_) => None,      // Timeout (deadline passed)
+            Err(_) => None,     // Timeout (deadline passed)
         }
     }
 
