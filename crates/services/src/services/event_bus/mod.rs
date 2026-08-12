@@ -84,8 +84,14 @@ impl EventBus {
 
     /// Stops the background tailer task cleanly.
     ///
-    /// Takes ownership of the tailer handle and aborts it. Safe to call multiple times
-    /// (subsequent calls are no-ops). All clones of this EventBus will see the stopped tailer.
+    /// Locks the tailer handle, takes ownership, and aborts it. Safe to call multiple times
+    /// (subsequent calls are no-ops because `take()` makes it idempotent). Abort is not synchronous,
+    /// so the task may still be running briefly after this call returns.
+    ///
+    /// **WARNING**: All clones of this EventBus share the same tailer handle. If one clone calls
+    /// `shutdown()`, the tailer stops for ALL clones. Other clones' `subscribe_from()` streams
+    /// will park in the Live state forever waiting for broadcast messages that will never arrive
+    /// (no error is raised).
     pub async fn shutdown(&self) {
         let mut handle_guard = self.tailer_handle.lock().await;
         if let Some(handle) = handle_guard.take() {

@@ -37,12 +37,18 @@ const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(75);
 pub fn spawn(pool: SqlitePool, sender: broadcast::Sender<SequencedEvent>) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Start at the current high-water mark to replay only NEW events, not history
+        let mut retry_count = 0u32;
         let mut last_published = loop {
             match event_journal::high_water_mark(&pool).await {
                 Ok(mark) => break mark,
                 Err(e) => {
-                    warn!(error = ?e, "failed to fetch initial high-water mark; retrying");
-                    tokio::time::sleep(TAIL_INTERVAL).await;
+                    // Log once, then silently retry with exponential backoff
+                    if retry_count == 0 {
+                        warn!(error = ?e, "failed to fetch initial high-water mark; retrying");
+                    }
+                    retry_count += 1;
+                    let backoff_ms = std::cmp::min(1000, 50 * (1 << retry_count.min(4)));
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms as u64)).await;
                 }
             }
         };
@@ -339,11 +345,7 @@ mod tests {
 
     #[tokio::test]
     async fn tailer_survives_a_transient_read_error() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-
-        let (pool, temp_dir) = create_test_pool_with_migrations().await;
-        let db_path = temp_dir.path().join("test.db");
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         // Start the tailer first
         let (tx, _rx) = broadcast::channel(64);
@@ -352,7 +354,7 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
-        // Append and commit 1 row
+        // Append and commit 1 row before the outage
         {
             let mut tx_write = pool.begin().await.unwrap();
             let event = NodeEvent::TaskCreated {
@@ -374,20 +376,40 @@ mod tests {
             _ => panic!("expected to receive the row"),
         }
 
-        // Make the SQLite file unreadable to induce a transient read error
-        let original_perms = fs::metadata(&db_path).unwrap().permissions();
-        fs::set_permissions(&db_path, fs::Permissions::from_mode(0o000)).unwrap();
+        // Induce transient failure via table rename (fires high_water_mark, outer arm)
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
 
-        // Wait a bit for the tailer to attempt a read and fail
+        // Wait for the tailer to attempt a read and fail
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-        // Restore the file permissions to allow reads again
-        fs::set_permissions(&db_path, original_perms).unwrap();
+        // Verify no additional event was published during outage (fault fired)
+        match tokio::time::timeout(std::time::Duration::from_millis(50), subscriber.recv()).await {
+            Ok(Ok(_)) => panic!("no event should publish during table-hidden outage"),
+            _ => {
+                // Expected: nothing published while table is hidden
+            }
+        }
 
-        // Wait for the tailer to recover and attempt another read
+        // Repair: rename the table back (SQLite auto-reprepares on SQLITE_SCHEMA)
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Wait for the tailer to recover and verify the cursor is still at 0
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-        // Commit a second row during the outage (or right after recovery)
+        // The tailer should still be running (did not end on the error)
+        assert!(
+            !tailer_handle.is_finished(),
+            "tailer should survive the transient read error"
+        );
+
+        // The cursor should not have advanced during the error, so the tailer should still be at mark 1
+        // Commit a new row and verify it publishes (proving cursor didn't advance past the error)
         {
             let mut tx_write = pool.begin().await.unwrap();
             let event = NodeEvent::TaskCreated {
@@ -398,21 +420,14 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Wait for the tailer to publish the second row
+        // Wait for the tailer to publish the new row
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        // The tailer should still be running (survived the transient error)
-        assert!(
-            !tailer_handle.is_finished(),
-            "tailer should survive the transient read error"
-        );
-
-        // The second row should be published (cursor did not advance past the error)
         match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv()).await {
             Ok(Ok(ev)) => {
                 assert_eq!(
                     ev.seq, 2,
-                    "should receive the row committed after the outage"
+                    "should publish seq 2 after recovery; cursor did not advance past error"
                 );
             }
             _ => panic!("expected to receive seq 2 after recovery from transient error"),
@@ -426,7 +441,7 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         // Start the tailer first (with no subscribers yet)
-        let (tx, _rx) = broadcast::channel(64);
+        let (tx, _) = broadcast::channel(64);
         let tailer_handle = spawn(pool.clone(), tx.clone());
 
         // Commit rows with NO subscriber attached
@@ -486,11 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_read_does_not_end_the_loop_or_advance_the_cursor() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-
-        let (pool, temp_dir) = create_test_pool_with_migrations().await;
-        let db_path = temp_dir.path().join("test.db");
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         // Start the tailer first
         let (tx, _rx) = broadcast::channel(64);
@@ -521,17 +532,7 @@ mod tests {
             _ => panic!("expected to receive seq 1"),
         }
 
-        // Make the database unreadable to force a read_range error
-        let original_perms = fs::metadata(&db_path).unwrap().permissions();
-        fs::set_permissions(&db_path, fs::Permissions::from_mode(0o000)).unwrap();
-
-        // Wait for the tailer to attempt a read and fail
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-        // Restore permissions
-        fs::set_permissions(&db_path, original_perms).unwrap();
-
-        // Commit a new row before the tailer retries
+        // Commit row 2 before corrupting it
         {
             let mut tx_write = pool.begin().await.unwrap();
             let event = NodeEvent::TaskCreated {
@@ -542,7 +543,38 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Wait for the tailer to recover and publish the new row
+        // Corrupt payload on seq 2 so read_range fails at serde_json::from_str (inner arm)
+        sqlx::query("UPDATE event_journal SET payload = '{not json' WHERE seq = 2")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Wait for the tailer to attempt a read and fail at deserialization
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // Verify nothing was published during the corruption (fault fired)
+        match tokio::time::timeout(std::time::Duration::from_millis(50), subscriber.recv()).await {
+            Ok(Ok(_)) => panic!("no event should publish while payload is corrupted"),
+            _ => {
+                // Expected: nothing published
+            }
+        }
+
+        // Repair: restore the payload with valid JSON
+        {
+            let event = NodeEvent::TaskCreated {
+                task_id: Uuid::new_v4(),
+                project_id: Uuid::new_v4(),
+            };
+            let payload = serde_json::to_string(&event).unwrap();
+            sqlx::query("UPDATE event_journal SET payload = ? WHERE seq = 2")
+                .bind(payload)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Wait for the tailer to recover and read the repaired row
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // Verify the tailer is still running
@@ -551,12 +583,12 @@ mod tests {
             "tailer should continue running after a read error"
         );
 
-        // Verify the new row is published (proving the cursor did not advance during the error)
+        // Verify the corrupted row is now published (proving cursor did not advance)
         match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv()).await {
             Ok(Ok(ev)) => {
                 assert_eq!(
                     ev.seq, 2,
-                    "should publish seq 2; if cursor advanced during error, this row would be skipped"
+                    "should publish seq 2 after repair; if cursor advanced during error, this would be skipped"
                 );
             }
             _ => panic!("expected to receive seq 2 after recovery from read error"),
