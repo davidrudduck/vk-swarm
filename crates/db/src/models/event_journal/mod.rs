@@ -368,10 +368,18 @@ mod tests {
     async fn hard_cap_overrides_cursor_floor_and_flags_rebootstrap() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
-        // Insert a trigger cursor with low last_processed_seq
+        // Insert a trigger cursor with low last_processed_seq (will be below new minimum)
         sqlx::query("INSERT INTO trigger_cursors (hook_name, last_processed_seq) VALUES (?, ?)")
-            .bind("test_hook")
+            .bind("test_hook_below")
             .bind(5)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Insert a trigger cursor with high last_processed_seq (will be above new minimum)
+        sqlx::query("INSERT INTO trigger_cursors (hook_name, last_processed_seq) VALUES (?, ?)")
+            .bind("test_hook_above")
+            .bind(20)
             .execute(&pool)
             .await
             .unwrap();
@@ -393,6 +401,7 @@ mod tests {
         }
 
         // Compact with hard cap
+        // Rows 1-15 will be deleted (hard cap), new minimum surviving seq = 16
         compact(&pool, 24, 1, max_rows as i64).await.unwrap();
 
         // (a) Row count should drop to at most max_rows
@@ -416,16 +425,28 @@ mod tests {
             "row 4 (below cursor floor 5) should be absent after hard cap forces deletion"
         );
 
-        // (c) Cursor needs_rebootstrap should be set
-        let needs_rebootstrap: (i64,) =
+        // (c) Cursor below new minimum (16) should be flagged
+        let needs_rebootstrap_below: (i64,) =
             sqlx::query_as("SELECT needs_rebootstrap FROM trigger_cursors WHERE hook_name = ?")
-                .bind("test_hook")
+                .bind("test_hook_below")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(
-            needs_rebootstrap.0, 1,
-            "needs_rebootstrap should be flagged if cursor was passed"
+            needs_rebootstrap_below.0, 1,
+            "cursor below new minimum should be flagged"
+        );
+
+        // (d) Cursor above new minimum (16) should NOT be flagged
+        let needs_rebootstrap_above: (i64,) =
+            sqlx::query_as("SELECT needs_rebootstrap FROM trigger_cursors WHERE hook_name = ?")
+                .bind("test_hook_above")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            needs_rebootstrap_above.0, 0,
+            "cursor above new minimum should NOT be flagged"
         );
     }
 }
