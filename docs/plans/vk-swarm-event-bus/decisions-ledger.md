@@ -748,3 +748,12 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   time — attempt 4 goes to an Opus-class implementer. The remaining work is test synchronisation and
   a tokio race, which is reasoning-heavy rather than mechanical, and is a poor fit for the constrained
   tier that has now missed it three times
+- [Task 014 orchestrator] Pre-emptively amended 014's failing-test 5 while the evidence is fresh,
+  rather than letting a panel rediscover it in phase 5. Task 013 shipped `shutdown_stops_the_tailer`
+  TWICE with the subscriber created after the post-shutdown commit, and both challengers proved it
+  vacuous by replacing `shutdown()` with a no-op and watching it pass. 014's required test
+  `shutdown_stops_the_background_tasks` is the same shape and would copy the same idiom from the only
+  precedent in the codebase. It now dictates (a) a BEHAVIOURAL assertion, because `shutdown()`
+  `take()`s the handle so `is_finished()` is unreachable from `crates/local-deployment/src/lib.rs`
+  (014's only declared file), and (b) subscribing BEFORE the commit-and-wait window, with a no-op
+  mutation required to prove the test bites — `docs/plans/vk-swarm-event-bus/phase-5/014-*.md`

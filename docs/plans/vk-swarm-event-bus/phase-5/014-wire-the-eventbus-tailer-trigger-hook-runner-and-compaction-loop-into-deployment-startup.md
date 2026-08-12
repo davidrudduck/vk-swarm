@@ -27,7 +27,19 @@ covers_tests: []
 4. `startup_spawns_compaction` — assert the compaction handle exists.
 5. `shutdown_stops_the_background_tasks` — drop/shut down the deployment and assert the spawned tasks
    terminate rather than leaking.
-
+   **Two constraints, both learned the hard way in task 013 (added 2026-08-12):**
+   (a) **Assert BEHAVIOURALLY, not on a handle.** `EventBus::shutdown()` `take()`s and drops its
+       `JoinHandle`, so nothing outside that module can call `is_finished()`. Call
+       `deployment.event_bus().shutdown().await`, then commit a journal row and assert nothing is
+       published. `LocalDeployment::new` is already `async` (`crates/local-deployment/src/lib.rs:156`,
+       `:165`) and already spawns background work at `:171`, so the `.await` is reachable from here —
+       you do NOT need to edit `event_bus/mod.rs`, which is outside this task's file set.
+   (b) **SUBSCRIBE BEFORE the commit-and-wait window.** Task 013 shipped this exact test twice with
+       the subscriber created AFTER the post-shutdown commit, and BOTH challengers proved it vacuous by
+       replacing `shutdown()` with a literal no-op and watching it still pass: a tokio broadcast
+       receiver never sees history, so a still-running tailer's publish is gone before the subscriber
+       exists. Take the subscriber FIRST, then shut down, then commit, then assert silence. Prove it
+       with a mutation: a no-op shutdown must make this test FAIL.
 
 ## Change
 **Why this task exists at all.** Tasks 009, 011 and 013 each create a component and each
@@ -59,13 +71,11 @@ pool nothing writes to.
 Read how the file already spawns and supervises its background work before adding to it, and follow
 that shape exactly — record any divergence in the ledger.
 
-
 ## Allowed moves
 ONLY the wiring in `crates/local-deployment/src/lib.rs`. Do NOT change the components
 themselves — if a component's constructor is awkward to call from here, that is a defect in its
 owning task (009/011/013); STOP and fix it there. Do NOT alter the existing `EventService`
 after-connect hook wiring.
-
 
 ## STOP triggers
 - The live `DBService` is NOT the one from `new_with_after_connect` — re-read L155-166 before
@@ -78,7 +88,6 @@ after-connect hook wiring.
 - Any component's constructor signature does not match what this file can supply — STOP; fix the
   owning task rather than adapting here.
 
-
 ## Manual verification (record in decisions-ledger)
 Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
 WAI_TEST_CMD="cargo test -p local-deployment"
@@ -89,7 +98,6 @@ On a running node built from this branch:
 2. `sqlite3 $VK_DATABASE_PATH "select hook_name, last_processed_seq from trigger_cursors"` returns a
    row for the real hook, and its cursor advances as events flow. This proves the runner is spawned.
 3. Confirm the compaction loop logs its first run at startup. Paste all three.
-
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 014` exits 0
