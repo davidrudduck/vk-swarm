@@ -106,8 +106,18 @@ Required shape:
 - **Negative assertions** ("nothing is published during the outage"): a bounded wait is unavoidable,
   but it must be several multiples of `TAIL_INTERVAL`, never a value that only works on an idle
   machine.
-- Verify by running `cargo test -p services --lib event_bus` at least **five times consecutively**
-  and pasting every result. All five must pass.
+- Verify by running **`cargo test -p services --lib`** — the FULL crate, which is the shape CI runs
+  and where the contention actually occurs — at least **ten times consecutively**, pasting every
+  result. All ten must pass. (Corrected 2026-08-12: the earlier bar named the SCOPED
+  `--lib event_bus`. Attempt 3 passed that five times and was still failing ~1-in-3 under the full
+  crate; the orchestrator accepted it on the weaker command. The scoped filter is not sufficient
+  evidence.)
+- Fixing a flake by LENGTHENING a deadline is not a fix. Attempt 3 raised the budget to 30s and the
+  test still failed with `left: []` after exhausting it, which means the event never arrived at all —
+  a synchronisation bug, not a slow machine. Find the race. Two known ones in this file: a second
+  tailer is spawned with no readiness gap before rows are committed (every other spawn site in the
+  file sleeps first), and `abort()` is not synchronous, so the first tailer may still be live on the
+  same pool when the second starts.
 
 ## Change
 **File:** `crates/services/src/services/event_bus/tailer.rs`

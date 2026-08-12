@@ -711,3 +711,40 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
 - [Run orchestrator] Generalised: any remaining task whose tests observe a background loop (010's SSE
   endpoint, 015's cross-site suite, 011's compaction loop) inherits the same rule — deadline-based
   polling, never a fixed sleep sized for an idle machine
+
+## 2026-08-12 execute: task 013 attempt 3 REJECTED (two vacuous tests, one uncovered property, flake unfixed)
+
+- [Task 013 orchestrator] Attempt 3 (`94e58834` + `fb174355`) passed Stage 1 and was REJECTED by both
+  challengers, each reproducing its findings empirically and independently:
+  (1) **`shutdown_stops_the_tailer` is VACUOUS.** It subscribes AFTER the post-shutdown commit and
+  wait window, and a tokio broadcast receiver never sees history — so a still-running tailer's publish
+  is already gone before the subscriber exists. BOTH panels replaced `shutdown()` with a literal
+  no-op and the test still passed (3/3 and 15/15). The requirement I wrote — "wait until the tailer
+  has actually stopped" — was implemented as a cosmetic `sleep`.
+  (2) **Mutation b survives: the initial-mark error path has ZERO coverage.** Falling back to 0 on the
+  FIRST `high_water_mark` failure — attempt 1's actual bug, and the one the task named as "must now be
+  caught" — passes the whole suite, because no test ever fails that first call (the ALTER TABLE fault
+  fires only after seq 1 has already drained, i.e. strictly after the retry loop succeeded). Property
+  1's error path is asserted in prose only.
+  (3) **The flake is NOT fixed, only relocated.** `tailer_resumes_from_its_high_water_on_restart` fails
+  ~3-in-8 (panel: 3/8; orchestrator's own six-run full-crate check: 1/6, 31.65s). It fails with
+  `left: []` after exhausting a THIRTY-SECOND deadline, which means the event never arrived at all — a
+  synchronisation bug, not a slow machine. Attempt 3 lengthened deadlines instead of finding the race.
+  Two candidate races identified: the second tailer is spawned with no readiness gap before rows are
+  committed (every other spawn site in the file sleeps first), and `abort()` is not synchronous, so
+  the first tailer may still be live on the same pool.
+  (4) `tailer_does_not_republish_across_passes` discards its collection result with no assertion —
+  it passes even when the tailer never publishes anything at all (proved by replacing the publish body
+  with `let _ = seq_events;`).
+  (5) No ledger entry existed for attempt 3 at all.
+- [Run orchestrator] MY OWN VERIFICATION ERROR, recorded because it is the reason a flaky suite nearly
+  shipped: I accepted attempt 3 on five green runs of `cargo test -p services --lib event_bus` — the
+  SCOPED filter the task text specified. The panels used `cargo test -p services --lib`, the full
+  crate, which is the shape CI runs and where the contention occurs, and found it still failing. The
+  task's verification bar has been corrected to require the full-crate command, ten consecutive runs,
+  and it now states explicitly that lengthening a deadline is not a fix for a race
+- [Task 013 orchestrator] CIRCUIT BREAKER: three consecutive rejected attempts on one task. Per the
+  execute contract the implementer tier escalates rather than re-dispatching the same rung a fourth
+  time — attempt 4 goes to an Opus-class implementer. The remaining work is test synchronisation and
+  a tokio race, which is reasoning-heavy rather than mechanical, and is a poor fit for the constrained
+  tier that has now missed it three times
