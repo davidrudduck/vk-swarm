@@ -483,3 +483,9 @@ clean.
   `max_rows` to a floor of 1 (and `max_rows` up to `min_rows`) before every `compact` call, with a
   warning; task 004 deliberately takes its arguments as given, so the loop is the only place the
   invariant can hold — `docs/plans/vk-swarm-event-bus/phase-5/011-*.md`
+- [Task 004 orchestrator] Attempt 3 (`6f1dc922`) is test-only and was NOT sent to a third panel
+  round. Recording the call rather than leaving it implicit: both challengers had already CONFORMED
+  the production code on attempt 2; attempt 3 touches one test file, only ADDS assertions (verified
+  by reading the diff — clause (c) is preserved and re-asserted, (a) and (b) untouched), and carries
+  its own mutation proof (flagging every cursor unconditionally makes the new assertion (d) fail with
+  `left: 1, right: 0`, then restores green). A challenger would have re-derived exactly that.

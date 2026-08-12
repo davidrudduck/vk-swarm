@@ -2,7 +2,7 @@
 id: "004"
 phase: 1
 title: "Add the event_journal model with append, cursor range-read, and compaction"
-status: rejected
+status: passed
 depends_on: ["002","003"]
 parallel: false
 conflicts_with: []
