@@ -70,8 +70,8 @@ impl EventBus {
     /// Creates a new EventBus and spawns the journal tailer.
     ///
     /// The tailer runs in the background, polling the journal for new events and
-    /// publishing them to the broadcast channel. It will continue running until
-    /// the returned EventBus is dropped or the tailer handle is explicitly aborted.
+    /// publishing them to the broadcast channel. The task will continue running until
+    /// explicitly stopped via [`shutdown()`](#method.shutdown).
     pub fn new(pool: SqlitePool, broadcast_capacity: usize) -> Self {
         let (_tx, _rx) = broadcast::channel(broadcast_capacity);
         let tailer = tailer::spawn(pool.clone(), _tx.clone());
@@ -79,6 +79,17 @@ impl EventBus {
             pool,
             sender: _tx,
             tailer_handle: std::sync::Arc::new(tokio::sync::Mutex::new(Some(tailer))),
+        }
+    }
+
+    /// Stops the background tailer task cleanly.
+    ///
+    /// Takes ownership of the tailer handle and aborts it. Safe to call multiple times
+    /// (subsequent calls are no-ops). All clones of this EventBus will see the stopped tailer.
+    pub async fn shutdown(&self) {
+        let mut handle_guard = self.tailer_handle.lock().await;
+        if let Some(handle) = handle_guard.take() {
+            handle.abort();
         }
     }
 
@@ -614,6 +625,47 @@ mod tests {
             }
             _ => {
                 panic!("expected error to surface on closed pool");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_the_tailer() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        // Create an EventBus with a spawned tailer
+        let bus = EventBus::new(pool.clone(), 64);
+
+        // Shutdown the tailer
+        bus.shutdown().await;
+
+        // Give the abort a moment to take effect
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Commit a journal row AFTER shutdown
+        {
+            let mut tx = pool.begin().await.unwrap();
+            let event = NodeEvent::TaskCreated {
+                task_id: Uuid::new_v4(),
+                project_id: Uuid::new_v4(),
+            };
+            let _ = event_journal::append(&mut *tx, &event).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Wait a bit to give the (dead) tailer time to poll if it were still running
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Subscribe to the broadcast channel and verify nothing is published
+        let sender = bus.sender();
+        let mut subscriber = sender.subscribe();
+
+        match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv()).await {
+            Ok(Ok(_)) => {
+                panic!("tailer should be stopped; no events should be published after shutdown")
+            }
+            _ => {
+                // Expected: no events published
             }
         }
     }

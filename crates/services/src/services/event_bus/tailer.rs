@@ -37,11 +37,13 @@ const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(75);
 pub fn spawn(pool: SqlitePool, sender: broadcast::Sender<SequencedEvent>) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Start at the current high-water mark to replay only NEW events, not history
-        let mut last_published = match event_journal::high_water_mark(&pool).await {
-            Ok(mark) => mark,
-            Err(e) => {
-                warn!(error = ?e, "failed to fetch initial high-water mark; starting from 0");
-                0
+        let mut last_published = loop {
+            match event_journal::high_water_mark(&pool).await {
+                Ok(mark) => break mark,
+                Err(e) => {
+                    warn!(error = ?e, "failed to fetch initial high-water mark; retrying");
+                    tokio::time::sleep(TAIL_INTERVAL).await;
+                }
             }
         };
 
@@ -112,7 +114,7 @@ mod tests {
         }
 
         // Give the tailer time to poll and publish the 3 rows
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // Collect the published events
         let mut seqs = vec![];
@@ -337,7 +339,11 @@ mod tests {
 
     #[tokio::test]
     async fn tailer_survives_a_transient_read_error() {
-        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let db_path = temp_dir.path().join("test.db");
 
         // Start the tailer first
         let (tx, _rx) = broadcast::channel(64);
@@ -357,33 +363,204 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Give the tailer time to publish the row (at least 2 poll intervals)
+        // Give the tailer time to publish the row
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // Drain the event
         match tokio::time::timeout(std::time::Duration::from_millis(200), subscriber.recv()).await {
-            Ok(Ok(_)) => {
-                // Expected
+            Ok(Ok(ev)) => {
+                assert_eq!(ev.seq, 1, "expected to receive seq 1");
             }
             _ => panic!("expected to receive the row"),
         }
 
-        // Close the pool to force a read error on the next poll
-        let pool_closed = pool.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            pool_closed.close().await;
-        });
+        // Make the SQLite file unreadable to induce a transient read error
+        let original_perms = fs::metadata(&db_path).unwrap().permissions();
+        fs::set_permissions(&db_path, fs::Permissions::from_mode(0o000)).unwrap();
 
-        // Wait for the pool to close and the tailer to attempt a read (and fail)
-        // The tailer should log the error and continue the loop rather than panicking
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        // Wait a bit for the tailer to attempt a read and fail
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-        // The tailer should still be running (not aborted by the read error)
+        // Restore the file permissions to allow reads again
+        fs::set_permissions(&db_path, original_perms).unwrap();
+
+        // Wait for the tailer to recover and attempt another read
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // Commit a second row during the outage (or right after recovery)
+        {
+            let mut tx_write = pool.begin().await.unwrap();
+            let event = NodeEvent::TaskCreated {
+                task_id: Uuid::new_v4(),
+                project_id: Uuid::new_v4(),
+            };
+            let _ = event_journal::append(&mut *tx_write, &event).await.unwrap();
+            tx_write.commit().await.unwrap();
+        }
+
+        // Wait for the tailer to publish the second row
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // The tailer should still be running (survived the transient error)
         assert!(
             !tailer_handle.is_finished(),
-            "tailer should survive the read error"
+            "tailer should survive the transient read error"
         );
+
+        // The second row should be published (cursor did not advance past the error)
+        match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv()).await {
+            Ok(Ok(ev)) => {
+                assert_eq!(
+                    ev.seq, 2,
+                    "should receive the row committed after the outage"
+                );
+            }
+            _ => panic!("expected to receive seq 2 after recovery from transient error"),
+        }
+
+        tailer_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn zero_receivers_does_not_stall_the_cursor() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        // Start the tailer first (with no subscribers yet)
+        let (tx, _rx) = broadcast::channel(64);
+        let tailer_handle = spawn(pool.clone(), tx.clone());
+
+        // Commit rows with NO subscriber attached
+        {
+            let mut tx_write = pool.begin().await.unwrap();
+            for _ in 0..3 {
+                let event = NodeEvent::TaskCreated {
+                    task_id: Uuid::new_v4(),
+                    project_id: Uuid::new_v4(),
+                };
+                let _ = event_journal::append(&mut *tx_write, &event).await.unwrap();
+            }
+            tx_write.commit().await.unwrap();
+        }
+
+        // Give the tailer time to poll and advance the cursor despite zero receivers
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // NOW subscribe for the first time
+        let mut subscriber = tx.subscribe();
+
+        // Commit one more row
+        {
+            let mut tx_write = pool.begin().await.unwrap();
+            let event = NodeEvent::TaskCreated {
+                task_id: Uuid::new_v4(),
+                project_id: Uuid::new_v4(),
+            };
+            let _ = event_journal::append(&mut *tx_write, &event).await.unwrap();
+            tx_write.commit().await.unwrap();
+        }
+
+        // Give the tailer time to publish the new row
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Collect published events
+        let mut seqs = vec![];
+        for _ in 0..1 {
+            match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv())
+                .await
+            {
+                Ok(Ok(ev)) => seqs.push(ev.seq),
+                _ => break,
+            }
+        }
+
+        tailer_handle.abort();
+
+        // Should only receive seq 4 (the new row committed after we subscribed)
+        // If the cursor had stalled on the zero-receiver error, seqs 1-3 would be republished
+        assert_eq!(
+            seqs,
+            vec![4],
+            "tailer should have advanced its cursor despite zero receivers; only new rows should arrive"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_does_not_end_the_loop_or_advance_the_cursor() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let db_path = temp_dir.path().join("test.db");
+
+        // Start the tailer first
+        let (tx, _rx) = broadcast::channel(64);
+        let tailer_handle = spawn(pool.clone(), tx.clone());
+
+        // Subscribe to the broadcast channel
+        let mut subscriber = tx.subscribe();
+
+        // Append and commit 1 row
+        {
+            let mut tx_write = pool.begin().await.unwrap();
+            let event = NodeEvent::TaskCreated {
+                task_id: Uuid::new_v4(),
+                project_id: Uuid::new_v4(),
+            };
+            let _ = event_journal::append(&mut *tx_write, &event).await.unwrap();
+            tx_write.commit().await.unwrap();
+        }
+
+        // Give the tailer time to publish the row
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // Drain the published event
+        match tokio::time::timeout(std::time::Duration::from_millis(200), subscriber.recv()).await {
+            Ok(Ok(ev)) => {
+                assert_eq!(ev.seq, 1);
+            }
+            _ => panic!("expected to receive seq 1"),
+        }
+
+        // Make the database unreadable to force a read_range error
+        let original_perms = fs::metadata(&db_path).unwrap().permissions();
+        fs::set_permissions(&db_path, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Wait for the tailer to attempt a read and fail
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // Restore permissions
+        fs::set_permissions(&db_path, original_perms).unwrap();
+
+        // Commit a new row before the tailer retries
+        {
+            let mut tx_write = pool.begin().await.unwrap();
+            let event = NodeEvent::TaskCreated {
+                task_id: Uuid::new_v4(),
+                project_id: Uuid::new_v4(),
+            };
+            let _ = event_journal::append(&mut *tx_write, &event).await.unwrap();
+            tx_write.commit().await.unwrap();
+        }
+
+        // Wait for the tailer to recover and publish the new row
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // Verify the tailer is still running
+        assert!(
+            !tailer_handle.is_finished(),
+            "tailer should continue running after a read error"
+        );
+
+        // Verify the new row is published (proving the cursor did not advance during the error)
+        match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv()).await {
+            Ok(Ok(ev)) => {
+                assert_eq!(
+                    ev.seq, 2,
+                    "should publish seq 2; if cursor advanced during error, this row would be skipped"
+                );
+            }
+            _ => panic!("expected to receive seq 2 after recovery from read error"),
+        }
 
         tailer_handle.abort();
     }
