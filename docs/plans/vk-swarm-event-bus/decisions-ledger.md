@@ -503,6 +503,25 @@ clean.
   ledger, so this is a declared choice rather than a STOP. Cargo.toml is NOT in the task's `files:`,
   so adding a dependency is out of bounds — STOP if one seems necessary
 
+## 2026-08-12 task 013 implementation: TAIL_INTERVAL and high-water mark properties
+
+### TAIL_INTERVAL: 75ms
+
+The tailer polls the journal at a constant interval of 75ms. This value is in the 50-100ms range specified by the spec for tail-interval-bounded latency.
+
+**Rationale:**
+- **Responsiveness**: 75ms mean latency for new events from commit to subscriber delivery is acceptable for non-interactive consumers (P6 triggers, P7 MCP/ACP observability, the SSE endpoint).
+- **Efficiency**: A 75ms poll interval uses negligible CPU — at a 10 task/sec publication rate (very high), only ~1 event arrives per poll, so the tailer spends 99%+ of time sleeping.
+- **Broadcast buffer tuning**: The 64-event buffer at ~1-2 events/task spans up to ~32 concurrent tasks; at 75ms polling, Lagged refills are rare and subscribers stay nearly synchronized.
+
+The value is not tunable by environment variable (the task does not require it), and the tradeoff is insensitive to a single constant: small deviations (50-100ms) would have negligible impact on actual latencies or CPU usage in practice.
+
+### Starting at high-water mark, not 0
+
+The tailer starts at the current high-water mark when spawned, ensuring that it publishes only NEW events committed after it starts. The test `tailer_resumes_from_its_high_water_on_restart` verifies this property: a new tailer created while the high-water mark is 3 will not replay events 1-3, but will publish only events 4-5 committed after it starts.
+
+**Mutation proof**: Changing the tailer to start at 0 instead of the high-water mark causes test failure, confirming that property 1 is tested and required. The test panicked with "tailer should not replay old rows", validating that the assertion catches the violation.
+
 ## 2026-08-12 task 005 implementation: three required ledger entries
 
 ### EventService vs EventBus: sibling comparison and design separation

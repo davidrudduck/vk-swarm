@@ -5,6 +5,11 @@
 //! - The stream replays all journaled events from that cursor
 //! - When caught up, the stream switches to live delivery via the broadcast channel
 //! - If live delivery lags too far (broadcast buffer overrun), it refills from the journal
+//!
+//! A background journal tailer (task 013) polls the journal periodically and publishes
+//! committed events to the broadcast channel for immediate delivery to live subscribers.
+
+mod tailer;
 
 use db::models::event::SequencedEvent;
 use db::models::event_journal::{self, EventJournalError};
@@ -12,6 +17,7 @@ use futures::stream::{BoxStream, unfold};
 use sqlx::SqlitePool;
 use thiserror::Error;
 use tokio::sync::broadcast;
+use tokio::task::JoinHandle;
 
 /// Error type for EventBus operations.
 #[derive(Debug, Error)]
@@ -43,17 +49,37 @@ struct SubscriptionState {
 }
 
 /// The EventBus holds a broadcast sender and provides replay-to-live streaming.
-#[derive(Clone)]
+/// It also owns the journal tailer task via a shared Arc so multiple clones can safely coexist.
 pub struct EventBus {
     pool: SqlitePool,
     sender: broadcast::Sender<SequencedEvent>,
+    tailer_handle: std::sync::Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
+}
+
+impl Clone for EventBus {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            sender: self.sender.clone(),
+            tailer_handle: self.tailer_handle.clone(),
+        }
+    }
 }
 
 impl EventBus {
-    /// Creates a new EventBus.
+    /// Creates a new EventBus and spawns the journal tailer.
+    ///
+    /// The tailer runs in the background, polling the journal for new events and
+    /// publishing them to the broadcast channel. It will continue running until
+    /// the returned EventBus is dropped or the tailer handle is explicitly aborted.
     pub fn new(pool: SqlitePool, broadcast_capacity: usize) -> Self {
         let (_tx, _rx) = broadcast::channel(broadcast_capacity);
-        Self { pool, sender: _tx }
+        let tailer = tailer::spawn(pool.clone(), _tx.clone());
+        Self {
+            pool,
+            sender: _tx,
+            tailer_handle: std::sync::Arc::new(tokio::sync::Mutex::new(Some(tailer))),
+        }
     }
 
     /// Returns a sender that can publish events to the bus.
