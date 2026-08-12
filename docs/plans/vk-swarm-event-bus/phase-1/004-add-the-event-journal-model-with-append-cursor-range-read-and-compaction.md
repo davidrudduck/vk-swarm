@@ -51,13 +51,6 @@ Tests (these ARE TS1):
    floor from `compact` entirely and this test STAYED GREEN. Required instead: choose `min_rows`
    small enough that the cursor floor is the ONLY thing protecting rows, then
    `assert_eq!(surviving_seqs, vec![3, 4, 5])` — the exact set, count included.
-11. `compact_treats_a_zero_cursor_as_a_real_floor` — NEW (added 2026-08-12; the bug below shipped
-    because nothing covered this boundary). The migration declares
-    `last_processed_seq INTEGER NOT NULL DEFAULT 0`, so a freshly-registered hook that has processed
-    nothing legitimately sits at 0. Insert exactly one `trigger_cursors` row with
-    `last_processed_seq = 0`, backdate ALL journal rows beyond retention, compact with a small
-    `min_rows`; assert EVERY row survives, because `seq < 0` is never true. Attempt 1 collapsed this
-    case into "no cursors exist" and deleted almost everything.
 8. `compact_retains_min_rows_floor` — with retention expired for everything, assert the newest
    `min_rows` rows survive.
 9. `append_composes_with_a_caller_owned_transaction` — open a tx in the TEST, call `append(&mut *tx)`
@@ -80,6 +73,14 @@ Tests (these ARE TS1):
     predicate to flag all rows was caught by NO test. The shipped code is correct; this closes the
     coverage gap so a later refactor cannot silently break it and force healthy consumers to
     rebootstrap.
+
+11. `compact_treats_a_zero_cursor_as_a_real_floor` — NEW (added 2026-08-12; the bug below shipped
+    because nothing covered this boundary). The migration declares
+    `last_processed_seq INTEGER NOT NULL DEFAULT 0`, so a freshly-registered hook that has processed
+    nothing legitimately sits at 0. Insert exactly one `trigger_cursors` row with
+    `last_processed_seq = 0`, backdate ALL journal rows beyond retention, compact with a small
+    `min_rows`; assert EVERY row survives, because `seq < 0` is never true. Attempt 1 collapsed this
+    case into "no cursors exist" and deleted almost everything.
 
 ## Change
 **File:** `crates/db/src/models/event_journal/mod.rs`
