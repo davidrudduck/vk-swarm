@@ -51,10 +51,15 @@ CREATE TABLE IF NOT EXISTS event_journal (
 CREATE INDEX IF NOT EXISTS idx_event_journal_type_seq ON event_journal(event_type, seq);
 
 -- Per-hook cursor so trigger-hook processing survives restarts (at-least-once, ADR-0017 D3).
--- Compaction must never delete rows at or above MIN(last_processed_seq) across this table.
+-- Compaction normally never deletes rows at or above MIN(last_processed_seq) across this table.
+-- `needs_rebootstrap` is how a hook learns it lost that protection: when the journal exceeds
+-- VK_EVENT_MAX_ROWS the hard cap overrides the cursor floor (D6, revised), and every cursor the
+-- deletion passed is flagged here so the hook sees explicit loss instead of silently resuming
+-- mid-gap.
 CREATE TABLE IF NOT EXISTS trigger_cursors (
     hook_name          TEXT PRIMARY KEY,
     last_processed_seq INTEGER NOT NULL DEFAULT 0,
+    needs_rebootstrap  INTEGER NOT NULL DEFAULT 0,
     updated_at         TEXT NOT NULL DEFAULT (datetime('now', 'subsec'))
 );
 ```
@@ -78,7 +83,8 @@ WAI_TEST_CMD="cargo test -p db"
 
 1. `cargo sqlx migrate run` (or start the dev server) against a scratch DB.
 2. `sqlite3 <db> ".schema event_journal"` shows `seq INTEGER PRIMARY KEY AUTOINCREMENT`.
-3. `sqlite3 <db> ".schema trigger_cursors"` shows `hook_name TEXT PRIMARY KEY`.
+3. `sqlite3 <db> ".schema trigger_cursors"` shows `hook_name TEXT PRIMARY KEY` and
+   `needs_rebootstrap INTEGER NOT NULL DEFAULT 0`.
 4. `sqlite3 <db> "select name from sqlite_master where type='index' and name='idx_event_journal_type_seq'"`
    returns one row.
 

@@ -9,7 +9,7 @@ conflicts_with: []
 files:
   - "crates/server/src/routes/events.rs"
   - "crates/server/src/routes/mod.rs"
-siblings: ["crates/server/src/routes/logs.rs"]
+  - "crates/server/tests/events.rs"
 irreversible: false
 scope_test: "crates/server"
 allowed_change: mixed
@@ -17,8 +17,10 @@ covers_criteria: ["SC4"]
 covers_tests: ["TS5"]
 ---
 ## Failing test (write first)
-**File:** `crates/server/tests/` route tests (or colocated, matching however the server crate
-already tests routes — check first). These ARE TS5.
+**File:** `crates/server/tests/events.rs` — a NEW integration test file, declared in `files:`
+because TS5 requires route tests and the file-set gate rejects writing to an undeclared path. Reuse
+the existing harness in `crates/server/tests/common/mod.rs` and follow the shape of the neighbouring
+`*_routes.rs` suites. These ARE TS5.
 
 1. `events_without_cursor_streams_live_only` — subscribe with no `cursor`; assert pre-existing
    journal rows are NOT replayed and a subsequently emitted event IS received.
@@ -36,11 +38,22 @@ already tests routes — check first). These ARE TS5.
 ## Change
 **File:** `crates/server/src/routes/events.rs`
 **Anchor:** new file — task 001 deleted the previous occupant, so this is a clean create.
-**Sibling to read FIRST:** `crates/server/src/routes/logs.rs` and the `stream_raw_stream` /
-`stream_normalized_logs` SSE precedent in `crates/services/src/services/container.rs:827,878`
-(named by the spec's Constraints as the serving convention to reuse). List their keep-alive
-handling, error mapping into the stream, and client-disconnect behaviour, and justify any divergence
-in the ledger.
+**Sibling to read FIRST — and note the correction.** The original breakdown pointed at
+`crates/server/src/routes/logs.rs` and a symbol `stream_raw_stream`. Neither is a usable SSE
+precedent: the real symbol is `stream_raw_logs` (`crates/services/src/services/container.rs:819-868`,
+with `stream_normalized_logs` at `:870-883`), and both are generic stream SOURCES, not SSE handlers;
+`routes/logs.rs` serves REST and WebSocket (`WsKeepAlive`), not axum `Sse`. It can teach you nothing
+about `Sse`/`KeepAlive` framing or SSE error mapping.
+
+The correct precedent is the route task 001 deleted — it was a real `Sse` + `KeepAlive::default()`
+handler. Read it from git rather than from the working tree:
+`git show $(git rev-parse HEAD~1):crates/server/src/routes/events.rs` (or any commit before task
+001 landed). Cite `stream_raw_logs` / `stream_normalized_logs` only for boxed-stream construction.
+Justify any divergence in the ledger.
+
+Note also that `EventBus::subscribe_from` returns a Result-of-stream-of-Results (task 005): map a
+setup error to an HTTP error response, and a mid-stream error to a terminal SSE error frame rather
+than a silent close.
 **After:** `GET /api/events?cursor=N`:
 - parse an OPTIONAL `cursor` query param,
 - absent cursor ⇒ live-only from now (NOT `cursor=0`, which would replay the whole journal — the
@@ -57,16 +70,16 @@ alphabetical/chain positions, now pointing at the bus route.
 
 
 ## Allowed moves
-ONLY the new route file and the two re-added lines in routes/mod.rs. Do NOT add
-authentication or filtering beyond `cursor` — event-type filtering is not in this spec. Do NOT
-re-introduce anything resembling the deleted record-patch stream.
+ONLY the new route file, the new test file, and the two re-added lines in
+routes/mod.rs. Do NOT add authentication or filtering beyond `cursor` — event-type filtering is not
+in this spec. Do NOT re-introduce anything resembling the deleted record-patch stream.
 
 
 ## STOP triggers
 - `crates/server/src/routes/events.rs` still exists when this task starts — task 001 did not run or
   did not complete; STOP.
-- The server crate has no existing route-test harness — record how the tests are structured instead
-  of silently downgrading TS5 to manual verification.
+- `crates/server/tests/common/mod.rs` does not exist or exposes no reusable harness — record the
+  actual structure you used instead of silently downgrading TS5 to manual verification.
 - Distinguishing "no cursor" from `cursor=0` is awkward in the extractor — it MUST be distinguished;
   STOP rather than collapsing them.
 

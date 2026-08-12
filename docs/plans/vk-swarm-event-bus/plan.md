@@ -4,30 +4,42 @@
 docs/superpowers/specs/2026-08-07-vk-swarm-event-bus.md
 
 ## Approach
-Journal first, broadcast second (ADR-0017, amended 2026-08-11). A new event_journal table
-takes one typed row per covered lifecycle change, written in the same transaction as the discrete
-state-write statement — the DB model function owns that transaction, so no caller signature changes.
-After commit, the event is published on an in-process tokio broadcast channel whose Sender lives in
-crates/db (crates/db cannot depend on crates/services); crates/services/src/services/event_bus.rs
-wraps it and owns the subscribe_from replay-to-live handoff that every consumer shares.
+Journal first, broadcast second (ADR-0017, amended twice on 2026-08-11). A new event_journal
+table takes one typed row per covered lifecycle change, appended in the same transaction as the
+discrete state-write statement. EventJournal::append is generic over sqlx Executor, so it composes
+both with a model function that opens its own transaction (the pool-taking sites) and with one handed
+a caller-owned transaction (Task::delete, whose route already owns an outer transaction spanning
+child nullification). Caller signatures are unchanged either way.
+
+Publication is DECOUPLED from emission. Model functions append only; a per-DBService background
+tailer reads rows above its last published seq and sends them on an in-process tokio broadcast
+channel. Because a row is only readable once its transaction has committed, journal-first ordering is
+structural rather than a convention an implementer can forget, and a rolled-back transaction cannot
+produce a phantom broadcast. The Sender and the tailer both live in
+crates/services/src/services/event_bus.rs, which also owns the subscribe_from replay-to-live handoff
+every consumer shares. crates/db needs no sender at all — that is precisely what makes the
+unchanged-signature rule satisfiable (tournament 1 proved the alternative unbuildable: a &SqlitePool
+has no back-reference to its owning DBService).
 
 Two consumers ship: an internal TriggerHook registry with per-hook persisted cursors (the P6 seam,
 proven with one real hook) and a GET /api/events SSE endpoint with cursor resume. That path is
 currently occupied by a consumer-less record-patch SSE route, which is deleted first as a standalone
 irreversible step so the new route is a clean create.
 
-Emission is instrumented at three choke points: task CRUD in crates/db/src/models/task/, the
-execution-process create/completion writes, and hive connectivity transitions in hive_client.rs plus
-the reconcile leg in node_runner.rs. A periodic compaction task bounds the journal. UI is explicitly
-out of scope — the board already streams live over /api/tasks/stream/ws.
+Emission is instrumented at four choke points: task CRUD in crates/db/src/models/task/, the
+execution-process create and completion writes, the bulk orphan-recovery failure transition, and hive
+connectivity transitions — anchored in node_runner.rs, where a DBService is actually in scope, rather
+than in HiveClient, which holds no database handle. A periodic compaction task bounds the journal,
+with a hard row cap that overrides the trigger-cursor floor so a dead consumer cannot pin it forever.
+UI is explicitly out of scope — the board already streams live over /api/tasks/stream/ws.
 
 
 ## Phases
-- **Phase 1: Foundation** — Clear the /api/events path, then land the durable substrate: schema, typed event contract, journal model, and the broadcast sender in the db layer.
-- **Phase 2: Bus core** — The shared replay-to-live contract every consumer binds to: subscribe_from with journal catch-up, live handoff, dedupe, and Lagged refill.
-- **Phase 3: Emission** — One event per state change at all three choke points, each journaled in the same transaction as its discrete write statement.
+- **Phase 1: Foundation** — Clear the /api/events path, then land the durable substrate: schema, typed event contract, and the journal model with an executor-generic append.
+- **Phase 2: Bus core** — The broadcast channel, the journal tailer that feeds it, and the shared replay-to-live contract every consumer binds to: subscribe_from with journal catch-up, live handoff, dedupe, and Lagged refill.
+- **Phase 3: Emission** — One journal row per state change at every choke point, appended in the same transaction as its discrete write statement, then proved end to end by one cross-site suite.
 - **Phase 4: Consumers** — The P6 trigger-hook seam with persisted cursors, and the external SSE subscription endpoint on the freed /api/events path.
-- **Phase 5: Bounding and acceptance** — Bound the journal with env-tunable compaction, then prove the SC list on a live node including restart durability and offline coverage.
+- **Phase 5: Bounding, wiring and acceptance** — Bound the journal with env-tunable compaction and a hard cap, start every background loop on a real node, then prove the SC list live including restart durability and offline coverage.
 
 ## Tasks
 
@@ -37,11 +49,14 @@ out of scope — the board already streams live over /api/tasks/stream/ws.
 | 002 | 1 | Add the event_journal and trigger_cursors migration | dep: none | conflicts: none |
 | 003 | 1 | Define the NodeEvent and SequencedEvent typed contract and export it via ts-rs | dep: none | conflicts: none |
 | 004 | 1 | Add the event_journal model with append, cursor range-read, and compaction | dep: 002 003 | conflicts: none |
-| 005 | 2 | Add the broadcast sender to DBService and the EventBus wrapper with subscribe_from | dep: 004 | conflicts: none |
+| 005 | 2 | Add the EventBus with the broadcast channel and the subscribe_from replay-to-live contract | dep: 004 | conflicts: none |
+| 013 | 2 | Add the journal tailer that publishes committed rows onto the broadcast channel | dep: 005 | conflicts: none |
 | 006 | 3 | Emit task lifecycle events from the task model inside its own transaction | dep: 005 | conflicts: none |
 | 007 | 3 | Emit attempt lifecycle events from the execution-process create and completion writes | dep: 006 | conflicts: none |
-| 008 | 3 | Emit hive connectivity events and add the cross-site emission integration suite | dep: 007 | conflicts: none |
+| 008 | 3 | Emit hive connectivity events from the node_runner event loop | dep: 007 | conflicts: none |
+| 015 | 3 | Add the cross-site emission integration suite | dep: 006 007 008 | conflicts: none |
 | 009 | 4 | Add the TriggerHook seam with persisted per-hook cursors and one real hook | dep: 005 | conflicts: none |
 | 010 | 4 | Add the GET /api/events SSE endpoint with cursor resume on the freed path | dep: 001 005 | conflicts: none |
 | 011 | 5 | Bound the journal with an env-tunable periodic compaction task | dep: 004 009 | conflicts: none |
-| 012 | 5 | Record live acceptance for restart durability and full offline coverage | dep: 006 007 008 009 010 011 | conflicts: none |
+| 014 | 5 | Wire the EventBus, tailer, trigger-hook runner and compaction loop into deployment startup | dep: 009 011 013 | conflicts: none |
+| 012 | 5 | Record live acceptance for task-lifecycle observability, restart durability and full offline coverage | dep: 010 014 015 | conflicts: none |

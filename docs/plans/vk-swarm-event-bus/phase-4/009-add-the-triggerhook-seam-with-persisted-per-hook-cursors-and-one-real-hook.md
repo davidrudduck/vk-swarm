@@ -31,6 +31,15 @@ hook that appends every fired event to a `Vec` behind a mutex. These ARE TS4.
    re-delivers; assert that is accepted (hook is idempotent), not an error.
 5. `unknown_hook_starts_at_cursor_zero` — a hook with no `trigger_cursors` row replays from the
    beginning of the journal rather than silently starting live.
+6. `cursor_advances_past_non_matching_events` — journal one matching event followed by five
+   NON-matching ones; assert the persisted cursor reaches the LAST seq, not the seq of the last
+   match. Then drop the runner, restart it, and assert it replays nothing. Without this the hook
+   re-reads those five events on every restart forever, and — because compaction floors on
+   `MIN(last_processed_seq)` — pins the journal at the first non-matching event permanently.
+7. `rebootstrap_flag_is_surfaced_and_cleared` — set `needs_rebootstrap = 1` on the hook's cursor row
+   (as the hard cap does), start the runner, and assert it observes the flag, resumes from the
+   journal's current minimum rather than its stale cursor, and clears the flag. A hook that ignores
+   the flag silently resumes mid-gap.
 
 
 ## Change
@@ -59,8 +68,20 @@ Plus a registry holding `Vec<Arc<dyn TriggerHook>>` and a per-hook runner task t
 2. consumes `EventBus::subscribe_from(cursor)` — the SAME contract as every other consumer, not a
    bespoke poll loop,
 3. calls `fire` for events where `matches` is true,
-4. persists the cursor AFTER firing (fire-then-persist gives at-least-once; persist-then-fire would
-   give at-most-once and could LOSE events, which SC6 forbids).
+4. persists the cursor for EVERY consumed event — after firing when it matched, immediately when it
+   did not.
+
+**Point 4 is the correction, and it matters twice.** Advancing only after a fire (as the original
+breakdown said) leaves non-matching events permanently unacknowledged: on every restart the hook
+replays them again, and because compaction floors on `MIN(last_processed_seq)` across
+`trigger_cursors`, the journal is pinned at the first non-matching event forever. Spec D11 now states
+this explicitly. Ordering within a matching event is unchanged and still deliberate:
+fire-then-persist gives at-least-once, while persist-then-fire would give at-most-once and could LOSE
+events, which SC6 forbids.
+
+Also honour `needs_rebootstrap`: when the runner loads a cursor whose flag is set, the hard cap has
+deleted events it never saw. It must resume from the journal's current low-water mark rather than its
+stale cursor, log that it lost events, and clear the flag.
 
 Ship ONE real hook as the SC6 proof: a hook matching `task_status_changed` whose `fire` emits a
 structured `tracing::info!` carrying task id, old status, new status, and seq. That log line is the

@@ -28,6 +28,14 @@ covers_tests: []
 4. `non_terminal_update_emits_nothing` — an intermediate update (e.g. setting a pid) must emit no
    event. Guards against emitting on every UPDATE.
 5. `rolled_back_create_journals_nothing` — proves the shared transaction here too.
+6. `orphan_recovery_emits_one_attempt_failed_per_process` — seed three `running` execution processes
+   with a stale `server_instance_id`, run `mark_orphaned_as_failed`, assert exactly three
+   `attempt_failed` rows, one per transitioned process, each carrying task id, attempt id,
+   execution-process id, and executor identity. Also seed one row that must NOT transition (a
+   `resume_state` of `pending`) and assert it produces no event.
+7. `terminal_events_carry_executor_identity` — assert the `executor` field is populated and non-empty
+   on BOTH `attempt_finished` and `attempt_failed`, not only on `attempt_started`. SC2 names all
+   three events.
 
 
 ## Change
@@ -54,13 +62,32 @@ read INSIDE the transaction and record the cost in the ledger — do not emit an
 `ExecutionProcessStatus` (Completed / Failed / Killed) and sets `completed_at`. Locate it with
 `git grep -n "completed_at" crates/db/src/models/execution_process/`.
 **After:** same shape; emit `attempt_finished` on success and `attempt_failed` otherwise, keyed off
-the terminal status being written. Emit ONLY on the terminal transition (failing test 4).
+the terminal status being written. Emit ONLY on the terminal transition (failing test 4). Load the
+owning `TaskAttempt` INSIDE the transaction to source `executor` for the payload — SC2 requires
+executor identity on the terminal event, and task 003 now carries the field on both terminal
+variants so it can actually be serialized.
+
+**Anchor:** `ExecutionProcess::mark_orphaned_as_failed` at L115-131 — a bulk
+`UPDATE execution_processes SET status = 'failed' … WHERE status = 'running' AND …`, invoked from
+startup recovery (`crates/services/src/services/container.rs:539-549`).
+**After:** this is a REAL terminal-failure path that the original breakdown missed entirely — after a
+node crash, every orphaned process transitions to `failed` here and, as written, emitted nothing.
+SC2 covers terminal outcomes, so this must emit.
+
+Restructure as: open one transaction; SELECT the exact rows about to transition (with their task,
+attempt, execution-process ids and executor identity) using the same predicate; UPDATE them; append
+one `AttemptFailed` per selected row with a reason identifying orphan recovery; commit. Selecting
+before updating inside the same transaction is what makes "one event per transitioned process"
+exact — counting `rows_affected` after the fact cannot tell you WHICH rows moved.
+
+The function keeps its `pool: &SqlitePool` signature and its `Result<u64, …>` return.
 
 
 ## Allowed moves
-ONLY transaction wrapping, journal append, and post-commit broadcast at the create
-and terminal-completion writes. Do NOT modify `crates/services/src/services/container.rs` — no
-transaction may be opened there. Do NOT change any signature.
+ONLY transaction wrapping and journal append at the create write, the
+terminal-completion write, and `mark_orphaned_as_failed`. **Nothing broadcasts** — the tailer
+publishes (task 013). Do NOT modify `crates/services/src/services/container.rs` — no transaction may
+be opened there. Do NOT change any signature.
 
 
 ## STOP triggers
@@ -68,7 +95,10 @@ transaction may be opened there. Do NOT change any signature.
   real file, update `files:` via a plan amendment, and STOP rather than editing an unlisted file.
 - The completion path is not a discrete statement (it interleaves other I/O) — STOP; the D2 rule
   only permits a transaction around a discrete write.
-- Executor identity is genuinely unreachable at this layer — STOP and escalate; SC2 requires it.
+- Executor identity is genuinely unreachable at this layer — STOP and escalate; SC2 requires it and
+  task 003's schema now has a field that would serialize as empty.
+- `git grep -n "SET status" crates/db/src/models/execution_process/` finds a status writer beyond the
+  three instrumented here — every such path is a missed terminal event; enumerate and STOP.
 
 
 ## Manual verification (record in decisions-ledger)

@@ -46,18 +46,57 @@ mod tests {
     }
 
     #[test]
-    fn event_type_matches_serde_tag() {
+    fn event_type_matches_serde_tag_for_every_variant() {
         // event_type() is what lands in the event_journal.event_type column; it MUST equal the
-        // serde tag or cursor filtering by type silently misses rows.
-        let e = NodeEvent::TaskCreated { task_id: uuid::Uuid::nil(), project_id: uuid::Uuid::nil() };
-        let v = serde_json::to_value(&e).unwrap();
-        assert_eq!(v["type"].as_str().unwrap(), e.event_type());
+        // serde tag or cursor filtering by type silently misses rows. Table-driven across ALL
+        // NINE variants: checking one variant would let any of the other eight match arms drift
+        // while this test stayed green.
+        let nil = uuid::Uuid::nil();
+        let all = vec![
+            NodeEvent::TaskCreated { .. },
+            NodeEvent::TaskStatusChanged { .. },
+            NodeEvent::TaskDeleted { .. },
+            NodeEvent::AttemptStarted { .. },
+            NodeEvent::AttemptFinished { .. },
+            NodeEvent::AttemptFailed { .. },
+            NodeEvent::HiveConnected { .. },
+            NodeEvent::HiveDisconnected { .. },
+            NodeEvent::ReconcileCompleted { .. },
+        ];
+        assert_eq!(all.len(), 9, "a variant was added without extending this table");
+        for e in &all {
+            let v = serde_json::to_value(e).unwrap();
+            assert_eq!(v["type"].as_str().unwrap(), e.event_type(), "{e:?}");
+        }
+    }
+
+    #[test]
+    fn terminal_attempt_events_carry_executor_identity() {
+        // SC2 requires executor identity on the terminal outcome, not only on the start event.
+        for e in [
+            NodeEvent::AttemptFinished { /* .. */ executor: "claude".into(), .. },
+            NodeEvent::AttemptFailed { /* .. */ executor: "claude".into(), .. },
+        ] {
+            let v = serde_json::to_value(&e).unwrap();
+            assert_eq!(v["executor"], "claude");
+        }
+    }
+
+    #[test]
+    fn task_status_strings_use_serde_spelling() {
+        // TaskStatus has TWO string forms: serde renames lowercase ("inprogress") while strum
+        // Display is kebab-case ("in-progress") — see crates/db/src/models/task/mod.rs:21-33.
+        // Emission sites must use the serde form or consumers and this contract silently disagree.
+        let s = serde_json::to_value(TaskStatus::InProgress).unwrap();
+        assert_eq!(s.as_str().unwrap(), "inprogress");
+        assert_ne!(s.as_str().unwrap(), TaskStatus::InProgress.to_string());
     }
 }
 ```
 
-`event_type_matches_serde_tag` is the load-bearing one: it pins the invariant that the stored
-`event_type` column and the serde tag cannot drift apart.
+Fill in the elided fields — they are spelled out in the Change section. The first two tests are the
+load-bearing ones: they pin that the stored `event_type` column cannot drift from the serde tag for
+ANY variant, and that SC2's executor-identity clause is satisfied on terminal events.
 
 
 ## Change
@@ -70,9 +109,22 @@ mod tests {
 Variants (fields per the spec's Design "Event schema"): `TaskCreated { task_id, project_id }`,
 `TaskStatusChanged { task_id, old_status, new_status }`, `TaskDeleted { task_id, project_id }`,
 `AttemptStarted { task_id, attempt_id, execution_process_id, executor }`,
-`AttemptFinished { task_id, attempt_id, execution_process_id, exit_code }`,
-`AttemptFailed { task_id, attempt_id, execution_process_id, reason }`,
+`AttemptFinished { task_id, attempt_id, execution_process_id, executor, exit_code }`,
+`AttemptFailed { task_id, attempt_id, execution_process_id, executor, reason }`,
 `HiveConnected {}`, `HiveDisconnected { reason }`, `ReconcileCompleted { entity_count }`.
+
+**`executor` on the terminal variants is required, not optional.** SC2 reads "Starting a task attempt
+and its terminal outcome (finished or failed) each emit events carrying task id, attempt id, and
+executor identity." The original schema carried `executor` only on `AttemptStarted`, which made SC2
+unsatisfiable no matter what task 007 did — a field absent from the contract cannot be serialized.
+Task 007 loads it from the owning `TaskAttempt` inside the same transaction as the completion write.
+
+**Status string form:** `old_status` / `new_status` are the serde spelling of `TaskStatus`, NOT its
+strum `Display` form. `crates/db/src/models/task/mod.rs:21-33` gives `TaskStatus` two different
+string representations — serde `rename_all = "lowercase"` yields `inprogress`, strum yields
+`in-progress`. Prefer typing the fields as `TaskStatus` directly so the compiler removes the choice;
+if they must stay `String`, produce them by serializing `TaskStatus` through serde, never via
+`to_string()`. This is pinned by `task_status_strings_use_serde_spelling`.
 
 Also add:
 ```rust

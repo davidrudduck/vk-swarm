@@ -1,9 +1,9 @@
 ---
 id: "012"
 phase: 5
-title: "Record live acceptance for restart durability and full offline coverage"
+title: "Record live acceptance for task-lifecycle observability, restart durability and full offline coverage"
 status: ready
-depends_on: ["006","007","008","009","010","011"]
+depends_on: ["010","014","015"]
 parallel: false
 conflicts_with: []
 files:
@@ -11,7 +11,7 @@ files:
 irreversible: false
 scope_test: "N/A"
 allowed_change: edit
-covers_criteria: ["SC5","SC8"]
+covers_criteria: ["SC1","SC5","SC8"]
 covers_tests: ["TS6"]
 ---
 ## Failing test (write first)
@@ -25,9 +25,10 @@ two-phase live-evidence rule.
 ## Change
 **File:** `docs/plans/vk-swarm-event-bus/decisions-ledger.md`
 **Anchor:** append a new section `## Live acceptance — <date>`
-**After:** the pasted, fenced transcripts of every check below. Paste real output — a summary is not
-evidence. Deploy the FEATURE BRANCH build to the live node first; merging is not a prerequisite for
-deploying a branch.
+**After:** the pasted, fenced transcripts of every check below, plus the exact commit SHA of the
+deployed build. Paste real output — a summary is not evidence. Deploy the FEATURE BRANCH build to the
+live node first; merging is not a prerequisite for deploying a branch, and this task's own commit is
+part of the PR, so it cannot wait on that PR's merge.
 
 
 ## Allowed moves
@@ -44,6 +45,17 @@ check means an earlier task is wrong; STOP and fix it there, then re-run.
 
 
 ## Manual verification (record in decisions-ledger)
+**SC1 — task lifecycle observable BOTH ways**
+SC1 has two clauses — journaled events AND observability via the subscription endpoint — and task 006
+proves only the first (it queries sqlite directly). This task owns SC1 outright so that both halves
+are proved together on a live node, which is also the only place the endpoint exists.
+1. `curl -N http://<node>/api/events` in one shell.
+2. In another: create a task, move it, delete it.
+3. Assert the SSE stream shows `task_created` → `task_status_changed` → `task_deleted`, each carrying
+   its seq, in ascending order.
+4. Then `sqlite3 $VK_DATABASE_PATH "select seq, event_type from event_journal where event_type like 'task_%' order by seq"`
+   shows the same three rows. Paste both transcripts — the SSE one and the sqlite one.
+
 **SC5 — restart durability**
 1. On the running node, generate several events; record the highest seq:
    `sqlite3 $VK_DATABASE_PATH "select max(seq) from event_journal"`.
@@ -64,10 +76,17 @@ SC1, SC2, SC4, and SC6 exactly as their own tasks specify:
   resetting.
 Paste each transcript. SC8 passes only when all four hold offline.
 
-**TS6 — post-deploy verify_cmd**
-After merge and deploy of `main`, run `wai-verify.sh vk-swarm-event-bus` and paste the result. The
-spec's `verify_cmd` is:
+**TS6 — deployed verify_cmd**
+Run `wai-verify.sh vk-swarm-event-bus` against the deployed FEATURE-BRANCH build and paste the
+result, together with the exact commit SHA that was deployed. The spec's `verify_cmd` is:
 `sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} "select 1 from event_journal where event_type like 'task_%' limit 1" | grep -q 1`
+
+Deliberately NOT "after merge and deploy of `main`". This task's commit is part of the PR being
+merged, so it cannot contain evidence that only exists after that merge completes — an earlier draft
+asked for exactly that and was unsatisfiable. A deployed feature-branch build with its SHA recorded
+satisfies the spec's post-deploy intent: what the spec cares about is that the schema and emission
+work on real hardware, not which branch the binary was built from. Any main-only re-verification
+belongs on a post-merge operational checklist that does not gate this PR.
 
 
 ## Done when

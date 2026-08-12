@@ -9,10 +9,11 @@ conflicts_with: []
 files:
   - "crates/db/src/models/task/queries.rs"
   - "crates/db/src/models/task/hierarchy.rs"
+  - "crates/db/src/models/activity_dismissal.rs"
 irreversible: false
 scope_test: "crates/db"
 allowed_change: edit
-covers_criteria: ["SC1"]
+covers_criteria: []
 covers_tests: []
 ---
 ## Failing test (write first)
@@ -31,17 +32,39 @@ covers_tests: []
    half that is easy to get wrong by emitting unconditionally.
 5. `failed_write_journals_nothing` — force the state write to fail (e.g. violate a FK by using an
    absent project_id); assert `event_journal` is empty. Proves the shared transaction.
-6. `event_is_broadcast_after_commit` — subscribe to the bus, run `Task::create`, assert the
-   subscriber receives the event and that its seq matches the journaled row.
+6. `delete_journals_inside_the_callers_transaction` — open a transaction in the TEST, call
+   `Task::nullify_children_by_parent_id(&mut *tx, ..)` then `Task::delete(&mut *tx, id)`, then ROLL
+   BACK; assert the task still exists AND `event_journal` has no `task_deleted` row. Then repeat with
+   a commit and assert both landed. This pins that delete appends on the caller's executor rather
+   than committing its own transaction — the behaviour the real route at
+   `crates/server/src/routes/tasks/handlers/core.rs:655-670` depends on.
+7. `update_status_with_existing_dismissal_succeeds` — create a task WITH an activity dismissal, then
+   `update_status`; assert it completes without deadlock, the dismissal is cleared, and exactly one
+   `task_status_changed` row exists. Without this the dismissal path is never exercised inside a
+   transaction.
+
+There is deliberately NO broadcast assertion here. Model functions append; the tailer publishes
+(task 013). A test asserting broadcast at this layer would be testing the tailer through the wrong
+seam.
 
 
 ## Change
-For EACH function below the shape is identical, and it is the spec's D2 "Emission ownership"
-rule: **the model function opens its own transaction, performs its EXISTING discrete statement inside
-it, appends the journal row, commits, then broadcasts.** Caller signatures stay `pool: &SqlitePool` —
-nothing is threaded through callers, which is exactly why the node_outbox precedent's objection
-(`crates/db/src/models/task/queries.rs:337`, "threading a shared txn through all `Task::create`
-callers is OUT of scope") does not apply.
+The spec's D2 "Emission ownership" rule has TWO shapes, and picking the wrong one per site
+is the failure mode this task exists to prevent:
+
+- **Pool-taking sites** (`Task::create`, `Task::update`, `Task::update_status`): the model function
+  opens its own transaction, performs its EXISTING discrete statement inside it, appends the journal
+  row, and commits.
+- **Executor-taking sites** (`Task::delete`): the model function appends on the executor it was
+  GIVEN and does NOT commit — the caller already owns the transaction and commits it.
+
+**No site broadcasts.** Model functions append only; the tailer (task 013) publishes what it reads
+back from the journal. That is what makes "never broadcast before commit" structural rather than a
+rule an implementer has to remember.
+
+Caller signatures stay unchanged in both shapes — which is exactly why the node_outbox precedent's
+objection (`crates/db/src/models/task/queries.rs:337`, "threading a shared txn through all
+`Task::create` callers is OUT of scope") does not apply.
 
 **File:** `crates/db/src/models/task/queries.rs`
 **Anchor:** `Task::create`, the `.fetch_one(pool)` at L290 followed by
@@ -54,9 +77,8 @@ callers is OUT of scope") does not apply.
         Ok(task)
 ```
 **After:** begin a transaction, run the same `query_as!` against `&mut *tx`, append
-`NodeEvent::TaskCreated { .. }` via `event_journal::append(&mut tx, &event)`, `tx.commit().await?`,
-then publish `SequencedEvent { seq, event }` on the DBService sender, then
-`Self::enqueue_task_upsert_op(pool, &task).await;` (which stays OUTSIDE the transaction — it is
+`NodeEvent::TaskCreated { .. }` via `event_journal::append(&mut *tx, &event)`, `tx.commit().await?`,
+then `Self::enqueue_task_upsert_op(pool, &task).await;` (which stays OUTSIDE the transaction — it is
 best-effort by design and must not be able to roll back the task write), then `Ok(task)`.
 
 **Anchor:** `Task::update`, the identical `.fetch_one(pool)` / `enqueue_task_upsert_op` pair at
@@ -64,31 +86,71 @@ L327-330.
 **After:** same shape. Emit `task_status_changed` ONLY when the status actually differs — read the
 prior row inside the transaction to compare (see failing test 4).
 
-**Anchor:** `Task::delete` at L369 — note it is generic over `E: Executor`, not `&SqlitePool`.
-**After:** it must gain a transaction internally too. If the generic executor signature makes that
-impossible without touching callers, add a `delete_with_event(pool, id)` alongside it and route the
-callers that represent real user deletions; record the decision and the caller list in the ledger.
+**Anchor:** `Task::delete` at L369-376 — generic over `E: Executor`, NOT `&SqlitePool`.
+**After:** append onto the executor it was GIVEN; do not open a transaction and do not commit.
+
+This is the one site where "the model opens its own transaction" cannot apply, and it is not a corner
+case — it is the primary user-delete path. `crates/server/src/routes/tasks/handlers/core.rs:655-670`
+already opens a transaction, calls `Task::nullify_children_by_parent_id(&mut *tx, …)`, then
+`Task::delete(&mut *tx, task.id)`, then commits, precisely so child nullification and deletion are
+atomic. A nested `begin()` on a generic consumed executor is not expressible, and an inner commit
+would break that atomicity.
+
+Because `event_journal::append` is generic over `E: Executor` (task 004), the fix is simply to append
+on the same executor:
+
+```rust
+pub async fn delete<'e, E>(executor: E, id: Uuid) -> Result<u64, …>
+where E: Executor<'e, Database = Sqlite>
+{
+    // load identity for the payload, DELETE, then append TaskDeleted on the SAME executor
+}
+```
+
+The caller's commit then makes the deletion and its journal row atomic together — which is exactly
+what D2 requires. No route changes, no new `delete_with_event` entry point, no caller migration.
+
+Note the ordering constraint: the event payload needs `project_id`, so read it BEFORE the DELETE, on
+the same executor.
 
 **File:** `crates/db/src/models/task/hierarchy.rs`
-**Anchor:** `Task::update_status` at L13 — this is the status-change path used by
-`ContainerService::start_execution` (`crates/services/src/services/container.rs:1503`).
-**After:** same shape; emit `task_status_changed` with old and new status.
+**Anchor:** `Task::update_status` at L13-29 — the status-change path used by
+`ContainerService::start_execution`.
+**After:** same transaction-owning shape, BUT read L18-29 first: after updating the task it calls an
+activity-dismissal helper that takes `&SqlitePool` only
+(`crates/db/src/models/activity_dismissal.rs:49-53`). This is a genuine hazard — calling a
+pool-taking helper while your own transaction holds SQLite's single writer lock can self-block on a
+second connection, and moving it after the commit means it can fail after the event is already
+journaled.
+
+Resolution: generalize that helper to accept an executor and call it INSIDE the transaction, so the
+order is: update status → clear dismissal → append event → commit. Add
+`crates/db/src/models/activity_dismissal.rs` to this task's `files:`. Add a test that exercises
+`update_status` on a task WITH an existing dismissal — without it, this path is never covered.
 
 
 ## Allowed moves
-ONLY the transaction wrapping, the journal append, and the post-commit broadcast at
-the four named functions. Do NOT change any function's parameters or return type. Do NOT move
+ONLY the transaction wrapping and journal append at the four named functions, plus
+generalizing the activity-dismissal helper's executor parameter. **Nothing here broadcasts** — model
+functions append only; publication is the tailer's job (task 013). Do NOT change any function's
+parameters or return type apart from the dismissal helper's executor generalization. Do NOT move
 `enqueue_task_upsert_op` inside the transaction — it is deliberately best-effort and outside. Do NOT
 touch other files in `crates/db/src/models/task/` (archive.rs, sync.rs, cleanup.rs).
 
 
 ## STOP triggers
-- `Task::delete`'s generic executor cannot be given a transaction without changing callers — STOP and
-  record before choosing the `delete_with_event` fallback.
+- You are about to give `Task::delete` its own transaction, or add a `delete_with_event(pool, id)`
+  entry point — STOP and re-read the Change section. The delete route owns the transaction; appending
+  on the passed executor is the whole point of the generic signature.
+- `event_journal::append` turns out NOT to be generic over `Executor` — STOP; task 004 owes that
+  signature and the delete path cannot work without it.
 - Another code path writes task status directly with raw SQL, bypassing these four functions
   (`git grep -n "UPDATE tasks"`) — every such path is a missed event; enumerate them and STOP.
+- Generalizing the dismissal helper breaks an unlisted caller — enumerate with
+  `git grep -n "clear_for_task\|undismiss"` and STOP rather than editing outside `files:`.
 - Wrapping in a transaction causes `database is locked` in tests — that indicates an enclosing
-  transaction or a held connection; STOP rather than adding retries.
+  transaction or a pool-taking helper called from inside the transaction; STOP rather than adding
+  retries.
 
 
 ## Manual verification (record in decisions-ledger)

@@ -1,3 +1,3 @@
 # Phase 3: Emission
 
-One event per state change at all three choke points, each journaled in the same transaction as its discrete write statement.
+One journal row per state change at every choke point, appended in the same transaction as its discrete write statement, then proved end to end by one cross-site suite.

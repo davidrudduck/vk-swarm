@@ -21,12 +21,16 @@ covers_tests: []
 PREDICATE is already proved by task 004's TS1 tests; what is new here is the loop's configuration and
 scheduling, so test that:
 
-1. `reads_retention_defaults_when_env_absent` — asserts 168 hours and 10000 rows, the spec's D6
-   defaults.
-2. `env_overrides_are_respected` — `VK_EVENT_RETENTION_HOURS` / `VK_EVENT_MIN_ROWS` parse and win.
+1. `reads_retention_defaults_when_env_absent` — asserts 168 hours, 10000 min rows, and 100000 max
+   rows, the spec's D6 defaults.
+2. `env_overrides_are_respected` — `VK_EVENT_RETENTION_HOURS` / `VK_EVENT_MIN_ROWS` /
+   `VK_EVENT_MAX_ROWS` parse and win.
 3. `invalid_env_falls_back_to_default_and_warns` — a non-numeric value must not panic the node at
    startup.
 4. `compaction_run_is_a_no_op_on_an_empty_journal`.
+5. `max_rows_below_min_rows_is_rejected_or_clamped` — a misconfiguration where the hard cap sits
+   below the retention floor is contradictory; pick one behaviour (clamp with a warning is
+   preferred over refusing to start) and pin it.
 
 
 ## Change
@@ -35,9 +39,15 @@ scheduling, so test that:
 **Sibling to read FIRST:** the existing WAL-monitor loop named by the spec (find it with
 `git grep -n "VK_WAL_CHECK_INTERVAL_SECS"`). Follow its spawn shape, interval handling, and shutdown
 behaviour; justify divergence in the ledger.
-**After:** a periodic task that reads `VK_EVENT_RETENTION_HOURS` (default 168) and `VK_EVENT_MIN_ROWS`
-(default 10000) and calls `event_journal::compact(pool, retention_hours, min_rows)` on an interval.
-The cursor floor is enforced inside `compact` (task 004), not re-implemented here.
+**After:** a periodic task that reads `VK_EVENT_RETENTION_HOURS` (default 168), `VK_EVENT_MIN_ROWS`
+(default 10000) and `VK_EVENT_MAX_ROWS` (default 100000), and calls
+`event_journal::compact(pool, retention_hours, min_rows, max_rows)` on an interval. Both the cursor
+floor and the hard cap that overrides it are enforced inside `compact` (task 004), not re-implemented
+here.
+
+This task creates the loop; task 014 spawns it. A loop that is never spawned leaves the journal
+unbounded no matter how correct its predicate is, which is why the wiring is its own tracked task
+rather than an aside here.
 
 **File:** `crates/services/src/services/mod.rs`
 **Change:** add `pub mod event_compaction;` in alphabetical position.
@@ -47,10 +57,14 @@ The cursor floor is enforced inside `compact` (task 004), not re-implemented her
 `VK_BACKUP_RETENTION` at L102 and the WAL settings.
 **After:** append a documented block:
 ```
-# Event journal retention (see docs — ADR-0017). Compaction never deletes rows at or above the
-# minimum persisted trigger cursor, so a lagging consumer can never be starved of events.
+# Event journal retention (see docs — ADR-0017). Compaction normally never deletes rows at or above
+# the minimum persisted trigger cursor, so a lagging consumer is never starved of events. The hard
+# cap overrides that floor: above VK_EVENT_MAX_ROWS, older rows are deleted regardless and any
+# trigger cursor they passed is flagged for rebootstrap, so a dead consumer cannot pin the journal
+# and grow it without bound.
 # VK_EVENT_RETENTION_HOURS=168
 # VK_EVENT_MIN_ROWS=10000
+# VK_EVENT_MAX_ROWS=100000
 ```
 
 

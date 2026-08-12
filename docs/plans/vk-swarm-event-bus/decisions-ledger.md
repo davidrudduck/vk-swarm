@@ -160,8 +160,74 @@ alphabetically-first unlisted neighbour, which in every case here is NOT the pat
 | `crates/db/migrations/20250617183714_init.sql` | 002 | Not a pattern sibling — the initial schema dump, not a durable-log migration | `20260201000400_add_node_outbox.sql` |
 | `crates/db/src/models/activity_dismissal.rs` | 003 | Not a pattern sibling — a simple CRUD model, not a serde-tagged TS-exported enum | none needed; the pattern is the ts-rs `decl()` registration in `generate_types.rs` |
 | `crates/services/src/services/approvals.rs` | 005, 009, 011 | Not a pattern sibling — alphabetically first in a 40-file directory; unrelated domain | 005 → `events.rs` (the cross-directory `EventService` naming-collision risk); 009 → none; 011 → the WAL-monitor loop, named in the task body |
-| `crates/services/tests/electric_task_sync.rs` | 008 | Weak sibling — it IS the nearest integration-test harness precedent, and the task body already directs reading the existing test conventions | none declared; harness shape is followed, not its domain logic |
+| `crates/services/tests/filesystem_repo_discovery.rs` | 015 | Not the pattern sibling — alphabetically first integration test, unrelated domain | `electric_task_sync.rs`, declared in `siblings:` — the nearest integration-test harness precedent |
+| `crates/services/src/services/approvals.rs` | 013 (`event_bus/tailer.rs`) | Not a pattern sibling — alphabetically first in a 40-file directory | none; 013 restructures 005's own module, whose conventions it inherits directly |
+| `crates/server/tests/harness_smoke.rs` | 010 (`crates/server/tests/events.rs`) | Weak sibling — it IS a real harness user; the task body directs reading `crates/server/tests/common/mod.rs` and the neighbouring `*_routes.rs` suites, which is the same convention | none declared; the harness module is named in the task body |
 | `crates/db/src/models/activity_dismissal.rs` | 009 (`trigger_cursor.rs`) | Not a pattern sibling — `trigger_cursor` is a single-row-per-key cursor table; closest precedent is `shared_activity_cursor.rs` | noted here rather than in `siblings:` so the gate does not treat it as a creation target |
 
 Note for a future run: `shared_activity_cursor.rs` is the closer precedent for task 009's
 `trigger_cursor.rs` and should be read during execution even though the lint did not name it.
+
+## 2026-08-11 tournament 1 remediation: task-level fixes applied via envelope resubmit
+
+The breakdown was rebuilt from the submit envelope and re-promoted atomically — no promoted file was
+hand-edited to clear a gate. 12 tasks became 15. Task ids 001-012 were deliberately NOT renumbered so
+the tournament reports stay legible against the tree they reviewed; the three new tasks take the next
+free numbers and sit in their correct phases.
+
+| New task | Phase | Why it exists |
+|---|---|---|
+| 013 | 2 | The journal tailer. The component that makes journal-first structural and dissolves the sender-reachability collision. |
+| 014 | 5 | Startup wiring. Tasks 009/011/013 each correctly STOPPED rather than editing `local-deployment`, so without this every one of them shipped as dead code — the tailer never runs, the hook is never registered, compaction never spawns. |
+| 015 | 3 | The TS3 cross-site suite, split out of 008. Connectivity emission and a cross-crate assertion suite are different failure domains; fused, a bug in either blocked the other's revert. |
+
+Coverage moves, both forced by the exactly-one-claimant gate: **TS3** 008 → 015, and **SC1** 006 →
+012. SC1's second clause ("observable via the subscription endpoint") was covered-but-hollow — task
+006 verified only journal rows via sqlite, and the endpoint does not exist until task 010. Task 012
+now proves both halves together on a live node, which is the only place both exist at once.
+
+Task-level fixes applied (all peer-validated and independently verified against the repo first):
+
+- **004** `allowed_change: create` → `mixed` + `crates/db/src/models/mod.rs`. `pub mod event_journal;`
+  is now a first-class step, not an "only if cargo check demands it" aside — the file-set gate rejects
+  the latter outright, and task 009 already declared the identical edit correctly.
+- **004** the rollback assertion was inverted. It asserted seq values are never reused; SQLite reuses
+  them. Now asserts only that COMMITTED seqs strictly increase.
+- **004** `append` cannot return `Result<_, sqlx::Error>` while calling `serde_json::to_string(..)?` —
+  no `From` impl exists. Added `EventJournalError` with `#[from]` variants per CLAUDE.md.
+- **004** `append` is now explicitly generic over `sqlx::Executor`. This is load-bearing: it is what
+  lets task 006's delete append onto the route's own transaction.
+- **003** the serde-tag test covered one of nine variants; table-driven across all nine with a length
+  assertion so adding a variant without extending the table fails.
+- **003** `executor` added to `AttemptFinished`/`AttemptFailed`. SC2 requires executor identity on
+  terminal events; the field was absent from the contract, so no amount of work in task 007 could
+  have satisfied it.
+- **003** pinned the `TaskStatus` string form. It has two (`serde` → `inprogress`, `strum` → 
+  `in-progress`); emission sites must use serde's.
+- **006** `Task::delete` appends on the executor it is GIVEN and does not commit. Its route already
+  owns a transaction spanning child nullification.
+- **006** `Task::update_status` calls a pool-taking activity-dismissal helper; generalized to take an
+  executor and moved inside the transaction, with a test that exercises a task that HAS a dismissal.
+- **007** added `mark_orphaned_as_failed`, restructured to SELECT-then-UPDATE in one transaction so
+  "one event per transitioned process" is exact rather than inferred from `rows_affected`.
+- **008** re-anchored from `hive_client.rs` to `node_runner.rs` (L353/L375), where a `DBService` is
+  actually in scope, and given an explicit `was_connected` transition gate. The original anchor was
+  doubly broken: a clean close takes the `Ok(())` arm and emitted NOTHING, while every failed retry
+  took the `Err` arm and emitted ANOTHER disconnect from an already-disconnected state.
+- **008** `ReconcileCompleted` anchored at one completion point with `entity_count` defined; the
+  digest-heal pull at L1150 is explicitly NOT a second anchor for the same variant.
+- **009** the cursor now advances on every consumed event, not only after a fire (D11).
+- **010** declared `crates/server/tests/events.rs` — TS5 requires route tests and the gate rejects
+  writes to undeclared paths.
+- **010** corrected the SSE precedent: `stream_raw_stream` does not exist (it is `stream_raw_logs`),
+  and `routes/logs.rs` is REST/WebSocket, not SSE. The real precedent is the route task 001 deletes,
+  read via `git show`.
+- **012** no longer requires post-merge `main` evidence in a commit that is part of the PR being
+  merged. Deployed feature-branch build plus its SHA.
+- **005** `subscribe_from` is now fallible (`Result` of stream of `Result`) and specified as an
+  explicit loop rather than five linear steps, pinning fresh-mark capture on refill, that `Lagged(n)`
+  is a COUNT not a seq, and that recovery re-enters the live loop.
+- **005** dropped `broadcast_only_after_commit`, which tried to broadcast inside a transaction and
+  expected rollback to retract the message — impossible, `broadcast::Sender::send` is not
+  transactional. Task 013 replaces it with a structural equivalent: an uncommitted row is unreadable,
+  so it cannot be tailed.
