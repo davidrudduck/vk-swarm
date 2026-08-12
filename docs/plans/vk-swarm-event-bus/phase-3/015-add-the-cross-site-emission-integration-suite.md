@@ -62,6 +62,10 @@ broadcast delivery; that is task 013's and task 005's territory.
   than weakening the assertion.
 - Driving a real hive connection from an integration test is not feasible — assert connectivity
   emission through whatever seam `node_runner`'s own tests use, and record the substitution.
+- Task 008 escalated on its clean-close ambiguity STOP trigger — then test 3 here
+  (`connectivity_transitions_emit_exactly_one_event_each`) has no implementation to assert against
+  and is blocked on THAT escalation, not on this task. Say so explicitly rather than weakening the
+  test to pass; this suite inherits 008's risk and must not disguise it.
 
 
 ## Manual verification (record in decisions-ledger)

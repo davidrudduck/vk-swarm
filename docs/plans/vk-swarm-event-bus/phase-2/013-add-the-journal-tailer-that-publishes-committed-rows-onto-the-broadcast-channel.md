@@ -8,7 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - "crates/services/src/services/event_bus/tailer.rs"
-  - "crates/services/src/services/event_bus.rs"
+  - "crates/services/src/services/event_bus/mod.rs"
 irreversible: false
 scope_test: "crates/services"
 allowed_change: mixed
@@ -39,9 +39,9 @@ covers_tests: []
 
 ## Change
 **File:** `crates/services/src/services/event_bus/tailer.rs`
-**Anchor:** new file. Note `event_bus.rs` becomes a directory module (`event_bus/mod.rs` +
-`event_bus/tailer.rs`) following the `models/task/` shape in CLAUDE.md section 3 — move the existing
-`event_bus.rs` content to `event_bus/mod.rs` as part of this task.
+**Anchor:** new file inside the `event_bus/` directory module task 005 already created. This task
+does NOT restructure anything — 005 authored `event_bus/mod.rs` as a directory module from the start
+precisely so this task only adds a sibling file.
 
 **After:** the tailer — the component that makes "journal-first, broadcast-second" structural (D10).
 
@@ -74,15 +74,17 @@ accepts tail-interval-bounded latency because every named consumer (P6 triggers,
 observability, the SSE endpoint) is non-interactive. Something in the 50-100ms range is appropriate;
 justify the value in the ledger.
 
-**File:** `crates/services/src/services/event_bus.rs` → `event_bus/mod.rs`
+**File:** `crates/services/src/services/event_bus/mod.rs`
+**Anchor:** the existing module created by task 005.
 **Change:** add `mod tailer;` and a constructor/handle so `EventBus` owns the spawned tailer task.
 Retain a `JoinHandle` (or an abort handle) so shutdown can stop it cleanly rather than leaking it.
 
 
 ## Allowed moves
-ONLY the tailer module and the mod.rs restructure. Do NOT change `subscribe_from`'s
-algorithm (task 005 owns it). Do NOT spawn the tailer from deployment startup here — task 014 owns
-all startup wiring. Do NOT add a sender to `crates/db`.
+ONLY the new `tailer.rs` and the `mod tailer;` + handle additions in the existing
+`event_bus/mod.rs`. Do NOT change `subscribe_from`'s algorithm (task 005 owns it). Do NOT spawn the
+tailer from deployment startup here — task 014 owns all startup wiring. Do NOT add a sender to
+`crates/db`.
 
 
 ## STOP triggers
@@ -90,9 +92,9 @@ all startup wiring. Do NOT add a sender to `crates/db`.
   does not already carry it, STOP rather than reaching for a global.
 - The obvious implementation requires `crates/db` to know about the sender — STOP. That inversion is
   precisely the design the adversarial review disproved.
-- Making `event_bus.rs` a directory module breaks the `pub mod event_bus;` declaration in
-  `services/mod.rs` — it should not (Rust resolves both forms), but if it does, fix the declaration
-  and note it.
+- `crates/services/src/services/event_bus/mod.rs` does not exist when this task starts — task 005 did
+  not run or authored a flat `event_bus.rs` instead; STOP rather than restructuring it here, which
+  would write to a path outside this task's declared file set.
 
 
 ## Manual verification (record in decisions-ledger)

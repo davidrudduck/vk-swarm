@@ -7,7 +7,7 @@ depends_on: ["004"]
 parallel: false
 conflicts_with: []
 files:
-  - "crates/services/src/services/event_bus.rs"
+  - "crates/services/src/services/event_bus/mod.rs"
   - "crates/services/src/services/mod.rs"
 siblings: ["crates/services/src/services/events.rs"]
 irreversible: false
@@ -58,8 +58,11 @@ sender, and `create_test_pool()` gives every test its own DB inside one shared p
 would cross-publish between tests. Spec D8/D10 now place the Sender HERE, in `crates/services`, fed
 by the journal tailer (task 013). `crates/db` needs no sender at all.
 
-**File:** `crates/services/src/services/event_bus.rs`
-**Anchor:** new file
+**File:** `crates/services/src/services/event_bus/mod.rs`
+**Anchor:** new file — create `event_bus/` as a DIRECTORY MODULE from the start, following the
+`crates/db/src/models/task/` shape in CLAUDE.md section 3. Do not write a flat `event_bus.rs`: task
+013 adds `event_bus/tailer.rs` alongside this file, and restructuring later would make that task
+write outside its declared file set.
 **Cross-directory sibling to read FIRST:** `crates/services/src/services/events.rs` — the EXISTING
 `EventService`. It is a different thing (SQLite-hook record patches over a msg-store) and must not be
 merged with or renamed by this task, but read how it is constructed, held on the deployment, and
@@ -115,7 +118,7 @@ ascending order of first occurrence.
 
 
 ## Allowed moves
-ONLY the new event_bus.rs and the one module declaration line. Do NOT touch
+ONLY the new event_bus/mod.rs and the one module declaration line. Do NOT touch
 `crates/db/src/lib.rs` — `DBService` gains no field in this plan. Do NOT touch
 `crates/services/src/services/events.rs` or its `events/` directory. Do NOT write the tailer (task
 013), instrument any emission site (phase 3), or add the SSE route (task 010).
