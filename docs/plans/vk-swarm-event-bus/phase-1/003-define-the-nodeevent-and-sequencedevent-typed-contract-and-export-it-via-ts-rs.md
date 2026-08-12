@@ -2,7 +2,7 @@
 id: "003"
 phase: 1
 title: "Define the NodeEvent and SequencedEvent typed contract and export it via ts-rs"
-status: rejected
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
