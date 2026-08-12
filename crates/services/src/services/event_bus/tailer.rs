@@ -537,8 +537,19 @@ mod tests {
         let (tx, _) = broadcast::channel(64);
         let tailer_handle = spawn(pool.clone(), tx.clone());
 
-        // Give the tailer a moment to start and initialize
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // Establish readiness with a probe receiver that is DROPPED before the zero-receiver
+        // window below. A permanently live `_rx` would make this test vacuous (send would always
+        // succeed), but a sleep alone is worse than vacuous here: if the tailer's initial mark read
+        // lands after the three commits it starts at their mark, never attempts a send with zero
+        // receivers, and the advance-only-on-send-success mutation survives. Dropping the receiver
+        // does not permanently close the channel — tokio resets `tail.closed` at the next
+        // `subscribe()` once `rx_cnt` has fallen to 0.
+        let base = {
+            let mut probe_rx = tx.subscribe();
+            let base = probe_until_live(&pool, &mut probe_rx, 0).await;
+            drop(probe_rx);
+            base
+        };
 
         // Commit rows with NO subscriber attached
         {
@@ -580,15 +591,27 @@ mod tests {
             }
         }
 
-        tailer_handle.abort();
-
-        // Should only receive seq 4 (the new row committed after we subscribed)
-        // If the cursor had stalled on the zero-receiver error, seqs 1-3 would be republished
+        // The FIRST event must be the row committed after subscribing. Had the cursor stalled on
+        // the zero-receiver send errors, the three rows published into no receivers would be
+        // re-sent now that one has attached, and the first event would be `base + 1` instead.
         assert_eq!(
             seqs,
-            vec![4],
+            vec![base + 4],
             "tailer should have advanced its cursor despite zero receivers; only new rows should arrive"
         );
+
+        // ...and nothing further arrives (a stalled cursor would still be draining the backlog)
+        match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
+            Ok(Ok(ev)) => panic!(
+                "only the newly committed row should arrive; also got seq {}",
+                ev.seq
+            ),
+            _ => {
+                // Expected: nothing else
+            }
+        }
+
+        tailer_handle.abort();
     }
 
     #[tokio::test]

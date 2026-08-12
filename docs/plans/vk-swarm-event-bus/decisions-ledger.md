@@ -867,3 +867,35 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   `..._resumes_from_its_high_water_on_restart`). (iv) `read_range` Err arm returns from the loop:
   `a_failed_read_does_not_end_the_loop_or_advance_the_cursor` FAILED, the only failure. Both mutations
   that survived attempt 3 now fail, each against exactly the test written for it
+
+## 2026-08-12 execute: task 013 attempt 4 follow-up — `zero_receivers` was still ~vacuous under load
+
+- [Task 013 implementer] SUPERSEDES the "one fixed readiness gap remains, deliberately" line above.
+  That entry judged `zero_receivers_does_not_stall_the_cursor` safe because it could not FLAKE. It
+  could not, but it could go VACUOUS, which is worse and is this task's whole failure history. Trace
+  with the 10ms gap: if the initial mark read lands after the three commits, the tailer starts at
+  their mark, never attempts a single send while `rx_cnt == 0`, then sends the final row to an
+  attached receiver — so the advance-only-on-`send`-success mutation that item 6 exists to catch
+  SURVIVES. Discrimination depended entirely on the initial read beating 10ms, i.e. on exactly the
+  window that failed ~3-in-8 elsewhere. No other test covers this: every other test in both files has
+  a live subscriber when the tailer sends, so `send` never returns `Err` in them
+- [Task 013 implementer] Fixed with a probe receiver that is explicitly `drop`ped before the
+  zero-receiver window, rather than by lengthening the gap. This honours the RATIONALE of item 6's
+  binding point (a) — the objection is to a receiver that is live *for the whole test*, making `send`
+  always succeed — while removing the timing dependency: the tailer is proven live and its cursor
+  proven to sit at `base` BEFORE the three rows are committed into zero receivers. Point (b)'s
+  rationale (cursor below the rows so the sends are actually attempted) is likewise now guaranteed
+  rather than hoped for. The task file already blesses the mechanism: dropping the receiver does not
+  permanently close the channel, since tokio resets `tail.closed` at the next `subscribe()`.
+  Item 6(d)'s second half ("and that no further event arrives") was also missing and is now asserted
+- [Task 013 implementer] MUTATION PROOF (the fifth): `last_published` advances only when
+  `sender.send(..).is_ok()`. `zero_receivers_does_not_stall_the_cursor` FAILED and was the ONLY
+  failure (15 passed, 1 failed). Under the correct implementation the cursor advances through the
+  zero-receiver window, so the first event the late subscriber sees is `base + 4`; under the mutation
+  the cursor stalls at `base` and the backlog is re-sent, making the first event `base + 1`
+- [Task 013 implementer] Ten-run bar RE-MEASURED from scratch after this change, on a quiet machine
+  and a stable tree, all ten green (262 passed / 0 failed): 6.92s, 6.90s, 5.42s, 6.05s, 6.88s, 7.64s,
+  6.45s, 6.42s, 5.38s, 8.67s. Three concurrent full-crate runs also green: 6.83s, 6.88s, 8.77s.
+  `cargo fmt --all -- --check`, `cargo clippy -p services --all-targets -- -D warnings`,
+  `cargo check --workspace --all-targets` all exit 0. There are now NO fixed readiness gaps left in
+  the tailer suite: every spawn site establishes readiness by observing a publication
