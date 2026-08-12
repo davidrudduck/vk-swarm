@@ -222,7 +222,7 @@ mod tests {
     async fn compact_never_crosses_min_trigger_cursor() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
-        // Insert trigger cursor
+        // Insert trigger cursor with floor at 3
         sqlx::query("INSERT INTO trigger_cursors (hook_name, last_processed_seq) VALUES (?, ?)")
             .bind("test_hook")
             .bind(3)
@@ -247,16 +247,16 @@ mod tests {
             .unwrap();
         }
 
-        // Compact with 24-hour retention
+        // Compact with 24-hour retention, min_rows=1 so cursor floor is the only real protection
         compact(&pool, 24, 1, 100).await.unwrap();
 
-        // Rows with seq >= 3 (cursor floor) should survive
-        let rows: Vec<(i64,)> = sqlx::query_as("SELECT seq FROM event_journal ORDER BY seq")
+        // Rows with seq >= 3 (cursor floor) should survive; assert exact set, not just a predicate
+        let surviving_seqs: Vec<i64> = sqlx::query_scalar("SELECT seq FROM event_journal ORDER BY seq")
             .fetch_all(&pool)
             .await
             .unwrap();
 
-        assert!(rows.iter().all(|row| row.0 >= 3), "all remaining rows should be >= cursor floor");
+        assert_eq!(surviving_seqs, vec![3, 4, 5], "cursor floor must protect rows 3,4,5 exactly");
     }
 
     #[tokio::test]
@@ -323,6 +323,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compact_treats_a_zero_cursor_as_a_real_floor() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        // Insert exactly one trigger cursor with last_processed_seq = 0 (freshly-registered hook)
+        sqlx::query("INSERT INTO trigger_cursors (hook_name, last_processed_seq) VALUES (?, ?)")
+            .bind("new_hook")
+            .bind(0)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Insert journal rows with backdated created_at beyond retention
+        let old_time = Utc::now() - chrono::Duration::hours(48);
+        for i in 0..5 {
+            sqlx::query(
+                "INSERT INTO event_journal (event_type, payload, created_at) VALUES (?, ?, ?)",
+            )
+            .bind("task_created")
+            .bind(format!(
+                r#"{{"type":"task_created","task_id":"00000000-0000-0000-0000-00000000000{}","project_id":"00000000-0000-0000-0000-00000000000{}"}}"#,
+                i, i
+            ))
+            .bind(old_time.to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Compact with small min_rows so cursor floor is the only real protection
+        compact(&pool, 24, 1, 100).await.unwrap();
+
+        // With cursor at 0, seq < 0 is never true, so ALL rows should survive
+        let surviving_seqs: Vec<i64> = sqlx::query_scalar("SELECT seq FROM event_journal ORDER BY seq")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+        // The 5 rows inserted will have seqs 1-5 (autoincrement from 1)
+        assert_eq!(surviving_seqs, vec![1, 2, 3, 4, 5], "all rows should survive with cursor at 0");
+    }
+
+    #[tokio::test]
     async fn hard_cap_overrides_cursor_floor_and_flags_rebootstrap() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
@@ -363,8 +405,16 @@ mod tests {
             "hard cap should limit to max_rows"
         );
 
-        // (b) Rows below cursor floor should be deleted (if needed to hit cap)
-        // If we had to delete to hit the hard cap, some rows below 5 should be gone
+        // (b) Rows below cursor floor should be deleted (assert a specific seq below floor is absent)
+        let row_below_floor: Option<i64> = sqlx::query_scalar("SELECT seq FROM event_journal WHERE seq = ?")
+            .bind(4)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+        assert!(
+            row_below_floor.is_none(),
+            "row 4 (below cursor floor 5) should be absent after hard cap forces deletion"
+        );
 
         // (c) Cursor needs_rebootstrap should be set
         let needs_rebootstrap: (i64,) =

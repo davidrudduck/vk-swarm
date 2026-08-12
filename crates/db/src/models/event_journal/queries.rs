@@ -93,14 +93,6 @@ pub async fn compact(
 ) -> Result<u64, EventJournalError> {
     let mut tx = pool.begin().await?;
 
-    // Determine the cursor floor (MIN(last_processed_seq) or high_water_mark if no cursors)
-    let cursor_floor = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT MIN(last_processed_seq) FROM trigger_cursors",
-    )
-    .fetch_one(&mut *tx)
-    .await?
-    .unwrap_or(0);
-
     // Get high water mark for cursor floor calculation
     let high_water = sqlx::query_scalar::<_, i64>(
         "SELECT COALESCE(MAX(seq), 0) FROM event_journal",
@@ -108,11 +100,15 @@ pub async fn compact(
     .fetch_one(&mut *tx)
     .await?;
 
-    let cursor_floor = if cursor_floor == 0 {
-        high_water
-    } else {
-        cursor_floor
-    };
+    // Determine the cursor floor: MIN(last_processed_seq) from trigger_cursors,
+    // or high_water if no cursors exist. Decide on Option, not the value 0.
+    let cursor_floor_option: Option<i64> = sqlx::query_scalar(
+        "SELECT MIN(last_processed_seq) FROM trigger_cursors",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let cursor_floor = cursor_floor_option.unwrap_or(high_water);
 
     // Stage 1: Normal pass (respect cursor floor and retention window)
     let cutoff_time = chrono::Utc::now() - chrono::Duration::hours(retention_hours);

@@ -427,3 +427,35 @@ Test 3 (`committed_seqs_are_strictly_increasing_across_rollback`) directly probe
   covered tasks, and task 004 is the proof that this is not theoretical — a fully green gate shipped
   a broken cursor floor. Panels for tasks with non-empty `covers_tests` are dispatched with an
   explicit mutation-testing instruction for the remainder of this run.
+
+## 2026-08-12 task 004 attempt 2: fixed cursor floor and hollow tests
+
+Three fixes applied to address the attempt-1 failures:
+
+1. **Cursor floor bug (live): decide on Option, not the value 0.** Rewrote lines 96-115 of 
+   `queries.rs` to fetch `cursor_floor_option: Option<i64>` from `MIN(last_processed_seq)`, then 
+   `unwrap_or(high_water)`. Deleted the `if cursor_floor == 0 { high_water }` block entirely. This 
+   correctly distinguishes "no cursors exist" (NULL) from "cursor at zero" (a real floor) — the 
+   migration declares `last_processed_seq INTEGER NOT NULL DEFAULT 0`, so a freshly-registered hook 
+   sits at exactly that value.
+
+2. **Hollow test 7: assert the exact surviving seq set, not a loose predicate.** Changed 
+   `compact_never_crosses_min_trigger_cursor` from `assert!(rows.iter().all(|r| r.0 >= 3))` to 
+   `assert_eq!(surviving_seqs, vec![3, 4, 5])`. With min_rows=1 and all rows old, cursor floor at 3 
+   protects seqs 3–5; without that logic, only seq 5 survives (the min_rows floor), which the old 
+   assertion would incorrectly pass.
+
+3. **Hollow test 10, clause (b): add a real assertion.** Added 
+   `assert!(row_below_floor.is_none())` to confirm that seq 4 (below cursor floor 5) is absent 
+   after the hard cap forces deletion. Previously this was a bare comment.
+
+4. **New test 11: regression guard for the zero-cursor boundary.** Added 
+   `compact_treats_a_zero_cursor_as_a_real_floor` — one cursor at 0, all rows backdated beyond 
+   retention, min_rows=1; asserts all 5 rows survive (seq < 0 is never true). This catches the bug 
+   if someone re-introduces the `if == 0` logic.
+
+Mutation proof: deleted cursor floor logic entirely, reran tests; both 7 and 11 failed:
+- Test 7: expected [3, 4, 5], got [5]
+- Test 11: expected [1, 2, 3, 4, 5], got [5]
+Restored from backup; both tests pass. All 11 event_journal tests green, cargo check and clippy 
+clean.
