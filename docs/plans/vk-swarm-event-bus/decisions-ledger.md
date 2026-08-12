@@ -601,3 +601,27 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   broken as one that dies. Found independently by the orchestrator and a challenger.
   No task amendment needed: all three are deviations from text the task already dictated —
   `docs/plans/vk-swarm-event-bus/phase-2/013-*.md`
+- [Task 013 orchestrator] The mutation panel found a FOURTH defect neither the orchestrator nor the
+  system-level challenger saw, and it is the most instructive of the run: the `read_range` error arm
+  is **structurally unreachable in tests**, because it is nested inside the `Ok(mark)` arm of the
+  `high_water_mark` match — a closed pool always trips the OUTER branch first. Three mutations
+  therefore survived the whole 12-test suite: returning from the loop on a read error, advancing
+  `last_published` by 1000 on a failed read, and refusing to advance when `send` reports zero
+  receivers. That is ALL of property 2 and HALF of property 3 with zero coverage, hidden behind a
+  green gate. Task amended with two new tests (6 and 7) that make both properties observable without
+  inventing a mock: zero-receiver cursor advance is provable by subscribing LATE, and read-failure
+  behaviour by `chmod 000` on the SQLite file (transient, unlike `pool.close()`, which sqlx makes
+  irreversible — that is why attempt 1's test 5 could never have had a "then succeed" half) —
+  `docs/plans/vk-swarm-event-bus/phase-2/013-*.md`
+- [Task 005 note, raised by the 013 mutation panel] `EventBus::new()` now spawns a tailer, which
+  publishes journaled rows onto the same broadcast channel task 005's tests use. Deleting the manual
+  re-broadcast loop from `lagged_refills_from_journal_and_resumes_live` leaves that test PASSING,
+  because the tailer republishes those rows itself — so the test no longer isolates `subscribe_from`'s
+  Lagged handling the way it did when 005 was reviewed. Judged not a correctness break (it would still
+  fail on a real refill regression, since the tailer's extra publishes add noise rather than remove
+  behaviour) and deliberately NOT fixed from task 013, which must not rewrite 005's assertions.
+  Recorded so whoever next touches `subscribe_from` knows the isolation changed under it
+- [Run orchestrator] Baseline flakiness observed by the same panel and worth knowing before it is
+  mistaken for a regression: `tailer_publishes_committed_rows_in_seq_order` failed once on
+  git-clean, unmutated code under concurrent load (its 200ms sleep / 100ms recv margins), then passed
+  15/15 and 6/6. A red gate with no code change is more likely this than a defect
