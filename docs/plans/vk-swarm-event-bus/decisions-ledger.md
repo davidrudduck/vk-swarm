@@ -399,3 +399,31 @@ Test 3 (`committed_seqs_are_strictly_increasing_across_rollback`) directly probe
   named `hive_client.rs`'s private `ConnectionState` (`:761`) in a file the task forbids touching,
   contradicting the Change section's own local `was_connected: bool` —
   `docs/plans/vk-swarm-event-bus/phase-3/008-*.md`
+
+## 2026-08-12 execute: task 004 attempt 1 REJECTED (mutation testing found a live bug)
+
+- [Task 004 orchestrator] Attempt 1 (`826545fd`) passed the deterministic gate with 10/10 tests green
+  and was REJECTED by the adversarial panel. The decisive evidence was mutation testing: deleting the
+  cursor-floor logic from `compact` entirely left the whole suite GREEN, including the test named for
+  that guarantee. Three findings, each verified independently against the task text before acting:
+  (1) **Live bug.** The task dictated `COALESCE((SELECT MIN(last_processed_seq) FROM trigger_cursors),
+  <high_water>)`. COALESCE substitutes only on NULL. The implementation wrote `.unwrap_or(0)` then
+  `if cursor_floor == 0 { high_water }`, which ALSO fires on a legitimate `0` — and the migration
+  declares `last_processed_seq INTEGER NOT NULL DEFAULT 0`, so a freshly-registered hook that has
+  processed nothing is stripped of all compaction protection. Probed live by the panel: 5 rows should
+  have survived, 1 did.
+  (2) **Hollow test.** `compact_never_crosses_min_trigger_cursor` asserted
+  `all(|r| r.0 >= 3)` — the CONVERSE of "every row with seq >= N survives" — and with `min_rows = 1`
+  one row survives on the unrelated min-rows floor, making `all()` vacuously true over a single
+  element.
+  (3) `hard_cap_overrides_cursor_floor_and_flags_rebootstrap` shipped clause (b) as a bare comment
+  with no assertion.
+  Task sharpened rather than left as-is, because the phrasing PERMITTED the weak reading: exact
+  surviving-set assertions, all three clauses of test 10 required in code, COALESCE spelled out as
+  NULL-only, and a new test 11 for the `last_processed_seq = 0` boundary that nothing covered —
+  `docs/plans/vk-swarm-event-bus/phase-1/004-*.md`
+- [Run orchestrator] No task in this plan declares `red_proof`, so `task-gate.sh`'s mutation-proof
+  check never runs. The adversarial panel is therefore the ONLY defence against a hollow test on the
+  covered tasks, and task 004 is the proof that this is not theoretical — a fully green gate shipped
+  a broken cursor floor. Panels for tasks with non-empty `covers_tests` are dispatched with an
+  explicit mutation-testing instruction for the remainder of this run.

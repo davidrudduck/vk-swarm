@@ -2,7 +2,7 @@
 id: "004"
 phase: 1
 title: "Add the event_journal model with append, cursor range-read, and compaction"
-status: ready
+status: rejected
 depends_on: ["002","003"]
 parallel: false
 conflicts_with: []
@@ -44,6 +44,20 @@ Tests (these ARE TS1):
 7. `compact_never_crosses_min_trigger_cursor` — insert a `trigger_cursors` row with
    `last_processed_seq = N`, backdate ALL journal rows beyond retention, compact; assert every row
    with `seq >= N` survives. This is the D6 guarantee and the one most likely to be silently wrong.
+   **Assert the EXACT surviving seq set, not a predicate over the survivors (sharpened 2026-08-12).**
+   Attempt 1 wrote `assert!(rows.iter().all(|r| r.0 >= 3))`, which is the CONVERSE of what this test
+   must prove and passes vacuously: with `min_rows = 1` a single row survives on the unrelated
+   min-rows floor, and `all()` over one element is trivially true. A challenger deleted the cursor
+   floor from `compact` entirely and this test STAYED GREEN. Required instead: choose `min_rows`
+   small enough that the cursor floor is the ONLY thing protecting rows, then
+   `assert_eq!(surviving_seqs, vec![3, 4, 5])` — the exact set, count included.
+11. `compact_treats_a_zero_cursor_as_a_real_floor` — NEW (added 2026-08-12; the bug below shipped
+    because nothing covered this boundary). The migration declares
+    `last_processed_seq INTEGER NOT NULL DEFAULT 0`, so a freshly-registered hook that has processed
+    nothing legitimately sits at 0. Insert exactly one `trigger_cursors` row with
+    `last_processed_seq = 0`, backdate ALL journal rows beyond retention, compact with a small
+    `min_rows`; assert EVERY row survives, because `seq < 0` is never true. Attempt 1 collapsed this
+    case into "no cursors exist" and deleted almost everything.
 8. `compact_retains_min_rows_floor` — with retention expired for everything, assert the newest
    `min_rows` rows survive.
 9. `append_composes_with_a_caller_owned_transaction` — open a tx in the TEST, call `append(&mut *tx)`
@@ -56,6 +70,9 @@ Tests (these ARE TS1):
     (a) the row count drops to at most `max_rows`, (b) rows below the cursor floor WERE deleted, and
     (c) that cursor's `needs_rebootstrap` is now 1. This is the D6 hard-cap guarantee — without it a
     stopped hook pins the journal forever and the bounded-journal Constraint is unsatisfiable.
+    **All THREE are required assertions in code (2026-08-12): attempt 1 shipped (b) as a bare comment
+    with no assertion following it.** For (b), assert that a specific seq known to be below the
+    cursor floor is absent from the surviving set — not merely that the count fell.
 
 ## Change
 **File:** `crates/db/src/models/event_journal/mod.rs`
@@ -141,7 +158,14 @@ Remaining operations (these read, so `&SqlitePool` is fine):
   two-stage, and the order matters:
   1. **Normal pass.** Delete rows that are BOTH older than the retention window AND outside the
      newest `min_rows`, AND strictly below the cursor floor
-     `COALESCE((SELECT MIN(last_processed_seq) FROM trigger_cursors), <high_water>)`. When
+     `COALESCE((SELECT MIN(last_processed_seq) FROM trigger_cursors), <high_water>)`.
+     **COALESCE semantics are literal and load-bearing (emphasised 2026-08-12): the sentinel
+     substitutes ONLY when the subquery returns NULL — i.e. when `trigger_cursors` is EMPTY. A row
+     whose `last_processed_seq` is legitimately `0` is a REAL floor of 0 and must protect every row,
+     since `seq < 0` is never true.** Attempt 1 wrote `.unwrap_or(0)` followed by
+     `if cursor_floor == 0 { high_water }`, which conflates the two cases and strips a
+     freshly-registered hook (the migration defaults `last_processed_seq` to `0`) of all protection.
+     Do the COALESCE in SQL, or branch on `Option::None` — never on the VALUE `0`. When
      `trigger_cursors` is EMPTY there is no hook to protect, so there is no floor — the
      `COALESCE(..., high_water)` sentinel expresses exactly that, since deletion is strictly below it.
   2. **Hard cap.** If the journal still holds more than `max_rows` rows, delete the oldest rows down
