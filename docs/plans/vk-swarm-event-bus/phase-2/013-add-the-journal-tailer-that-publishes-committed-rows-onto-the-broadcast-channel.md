@@ -36,9 +36,22 @@ covers_tests: []
    logs and continues rather than terminating. A tailer that dies on one error silently stops the
    entire bus. **`pool.close()` is NOT an acceptable way to do this (2026-08-12): it is irreversible
    in sqlx, so there is no "then succeed" half and attempt 1's version proved only non-termination.**
-   Induce a genuinely transient failure instead — e.g. `chmod 000` the SQLite file so reads fail,
-   then restore the mode — and assert BOTH that the tailer is still running AND that a row committed
-   during the outage is published afterwards. That second assertion is what proves property 3's
+   Induce a genuinely transient failure by POOL EXHAUSTION (corrected 2026-08-12 — see below), and
+   assert BOTH that the tailer is still running AND that a row committed
+   during the outage is published afterwards.
+
+   **Do NOT use `chmod 000`** — an earlier version of this amendment prescribed it and it does not
+   work. Verified on this machine: `chmod 000` does deny the owner, but an ALREADY-OPEN file
+   descriptor keeps reading afterwards, because POSIX checks permissions at `open()` and not on each
+   read; only NEW opens are denied. `create_test_pool_with_migrations()` uses `min_connections(1)`, so
+   a connection is already open and the tailer's reads would not fail at all — producing a test that
+   appears to inject a failure and injects nothing.
+
+   Use instead: build a pool with `max_connections(1)` and a short `acquire_timeout` (~200ms), spawn
+   the tailer on it, then hold the ONLY connection with `pool.acquire()` in the test. Every tailer
+   query then fails with `sqlx::Error::PoolTimedOut` — a real failure through the real code path —
+   until the guard is dropped. Record in the ledger how the row committed during the outage was
+   written (a second pool/connection, or written before the guard was taken). That second assertion is what proves property 3's
    "do NOT advance `last_published` on a failed read": if the cursor had advanced past the outage,
    that row would be lost forever.
 6. `zero_receivers_does_not_stall_the_cursor` — NEW (2026-08-12). Property 2 says `send` errors are

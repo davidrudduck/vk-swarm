@@ -625,3 +625,15 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   mistaken for a regression: `tailer_publishes_committed_rows_in_seq_order` failed once on
   git-clean, unmutated code under concurrent load (its 200ms sleep / 100ms recv margins), then passed
   15/15 and 6/6. A red gate with no code change is more likely this than a defect
+- [Task 013 orchestrator] I prescribed a broken test technique and caught it myself before the
+  expedited review returned: the amendment told the implementer to induce a transient read failure
+  with `chmod 000` on the SQLite file. Verified empirically on this machine — `chmod 000` DOES deny
+  the owner (we are non-root), but an already-open file descriptor keeps reading afterwards, because
+  POSIX checks permissions at `open()` rather than per read; only new opens are denied. Since
+  `create_test_pool_with_migrations()` uses `min_connections(1)`, the pool holds an open connection
+  and the tailer's reads would never have failed — a test that appears to inject a failure and
+  injects nothing, which is precisely the hollow-test class attempt 1 was rejected for. Replaced with
+  POOL EXHAUSTION: `max_connections(1)` plus a short `acquire_timeout`, with the test holding the only
+  connection so every tailer query fails `PoolTimedOut` until the guard drops. The in-flight
+  implementer was messaged directly rather than left to burn a cycle on the bad instruction —
+  `docs/plans/vk-swarm-event-bus/phase-2/013-*.md`
