@@ -693,3 +693,21 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   it asserts) but never sees the recovery half (read succeeding after the fault). This is the "hollow
   test" antipattern. Noted here so a future task or refactoring attempt sees why the approach was
   abandoned and what alternatives exist (ALTER TABLE RENAME or payload corruption).
+- [Task 013 orchestrator] Attempt 2 (`f402ccf8`) REJECTED BY STAGE 1 — the first time the
+  deterministic gate has rejected anything this run. The tailer suite is FLAKY: it passes in
+  isolation but fails inside the full `-p services --lib` run, measured at 1, 0, 2 and 1 failures
+  across four consecutive runs, with two different tests flaking
+  (`tailer_publishes_committed_rows_in_seq_order`, `tailer_survives_a_transient_read_error`). Root
+  cause: fixed `sleep(200ms)` paired with `timeout(50ms, recv())` against a 75ms `TAIL_INTERVAL` —
+  margins that evaporate when 261 tests share the runtime. Note the first of those two tests was
+  flaking on ATTEMPT 1 as well: the mutation panel observed it and explicitly declined to cite it,
+  judging it a shared-machine artifact. That call was defensible in isolation but wrong under
+  CLAUDE.md's requirement that `cargo test --workspace` be green — a suite that fails 1-in-3 locally
+  is a CI failure that will be blamed on infrastructure. Task amended to require deadline-based
+  polling for positive assertions, multiples of `TAIL_INTERVAL` for negative ones, and five
+  consecutive green runs as evidence. No expedited review dispatched for this amendment: unlike the
+  previous two it introduces no new technique or API, only a testing-robustness rule, and the
+  flakiness was measured rather than reasoned — `docs/plans/vk-swarm-event-bus/phase-2/013-*.md`
+- [Run orchestrator] Generalised: any remaining task whose tests observe a background loop (010's SSE
+  endpoint, 015's cross-site suite, 011's compaction loop) inherits the same rule — deadline-based
+  polling, never a fixed sleep sized for an idle machine

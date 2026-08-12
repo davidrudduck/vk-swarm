@@ -2,7 +2,7 @@
 id: "013"
 phase: 2
 title: "Add the journal tailer that publishes committed rows onto the broadcast channel"
-status: in-progress
+status: rejected
 depends_on: ["005"]
 parallel: false
 conflicts_with: []
@@ -89,6 +89,25 @@ covers_tests: []
 **Every fault-injection test above must assert the outage window is observably silent BEFORE the
 repair.** A fault that silently fails to fire otherwise yields a passing test — which is exactly how
 the `chmod 000` version would have shipped green.
+
+**Waiting must be DEADLINE-BASED, not fixed sleeps (added 2026-08-12 after attempt 2 shipped a flaky
+suite).** Attempt 2 paired `sleep(200ms)` with `timeout(50ms, recv())` against a 75ms
+`TAIL_INTERVAL`. Run alone it passed; run inside the full 261-test `-p services --lib` suite it failed
+1-in-3, with two different tests flaking across four consecutive runs
+(`tailer_publishes_committed_rows_in_seq_order` and `tailer_survives_a_transient_read_error`) —
+because the tokio runtime is starved under parallel load and those margins disappear. A suite that
+fails intermittently on the developer's own machine is not green, and it trains everyone to ignore
+red.
+
+Required shape:
+- **Positive assertions** ("this event arrives"): poll until a GENEROUS deadline — e.g. loop with a
+  total budget of ~5s, returning the moment the expected event appears. Fast in the common case,
+  immune to load. Never `sleep(fixed)` then a tight `recv()` timeout.
+- **Negative assertions** ("nothing is published during the outage"): a bounded wait is unavoidable,
+  but it must be several multiples of `TAIL_INTERVAL`, never a value that only works on an idle
+  machine.
+- Verify by running `cargo test -p services --lib event_bus` at least **five times consecutively**
+  and pasting every result. All five must pass.
 
 ## Change
 **File:** `crates/services/src/services/event_bus/tailer.rs`
