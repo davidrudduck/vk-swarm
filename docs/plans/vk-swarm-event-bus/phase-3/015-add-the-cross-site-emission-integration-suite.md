@@ -37,6 +37,15 @@ connectivity bug and a cross-site assertion bug blocked each other's revert.
 
 
 ## Change
+
+**Query form for any NEW SQL you write (amended 2026-08-12).** Use the runtime sqlx API —
+`sqlx::query(...)`, `sqlx::query_as::<_, Row>(...)`, `sqlx::query_scalar::<_, T>(...)` plus
+`.bind()`. Do NOT write a NEW `sqlx::query!` / `query_as!` / `query_scalar!` macro call (re-using an
+EXISTING macro query verbatim is fine — it is already cached). Reason, established by probe and
+recorded in full in task 004's Change section: this crate's `.sqlx` offline query cache is tracked,
+compile-time verification is active, and a new macro query would require `cargo sqlx prepare` whose
+`query-<hash>.json` output cannot be declared in `files:` — the committer would leave it unstaged, so
+the build would work here and nowhere else. STOP if you find yourself needing `cargo sqlx prepare`.
 **Sibling to read FIRST:** `crates/services/tests/electric_task_sync.rs` — the nearest
 integration-test harness precedent in this crate. Follow its setup shape (how it builds a pool, a
 deployment/service graph, and drives the system under test); its domain logic is irrelevant here.

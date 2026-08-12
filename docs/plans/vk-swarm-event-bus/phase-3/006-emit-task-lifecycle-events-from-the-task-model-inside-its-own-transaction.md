@@ -49,6 +49,15 @@ seam.
 
 
 ## Change
+
+**Query form for any NEW SQL you write (amended 2026-08-12).** Use the runtime sqlx API —
+`sqlx::query(...)`, `sqlx::query_as::<_, Row>(...)`, `sqlx::query_scalar::<_, T>(...)` plus
+`.bind()`. Do NOT write a NEW `sqlx::query!` / `query_as!` / `query_scalar!` macro call (re-using an
+EXISTING macro query verbatim is fine — it is already cached). Reason, established by probe and
+recorded in full in task 004's Change section: this crate's `.sqlx` offline query cache is tracked,
+compile-time verification is active, and a new macro query would require `cargo sqlx prepare` whose
+`query-<hash>.json` output cannot be declared in `files:` — the committer would leave it unstaged, so
+the build would work here and nowhere else. STOP if you find yourself needing `cargo sqlx prepare`.
 The spec's D2 "Emission ownership" rule has TWO shapes, and picking the wrong one per site
 is the failure mode this task exists to prevent:
 
