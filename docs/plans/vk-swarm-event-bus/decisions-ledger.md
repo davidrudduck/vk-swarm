@@ -459,3 +459,27 @@ Mutation proof: deleted cursor floor logic entirely, reran tests; both 7 and 11 
 - Test 11: expected [1, 2, 3, 4, 5], got [5]
 Restored from backup; both tests pass. All 11 event_journal tests green, cargo check and clippy 
 clean.
+- [Task 004 orchestrator] Attempt 2 (`46cb7c62`) drew CONFORMS from both challengers: a 12-mutation
+  sweep killed 9, and each of the three attempt-1 findings was re-verified by REINTRODUCING the exact
+  bug as a mutation and confirming the matching test now fails. Of the three uncaught mutations, two
+  are genuinely unreachable by unit test — SQLite returns rows in index order for this query shape so
+  dropping `ORDER BY` is observationally a no-op, and crash-atomicity of the stage-2 flagging cannot
+  be observed without fault injection (both verified correct by inspection instead). The THIRD is a
+  real coverage gap and is being closed rather than banked: test 10 inserts a single
+  `trigger_cursors` row, so "flag only cursors the deletion passed" and "flag EVERY cursor" are
+  indistinguishable to it. The shipped predicate is correct, but nothing would catch a later refactor
+  breaking it — and the failure mode is healthy consumers being forced to rebootstrap. Task amended to
+  require two cursors, one either side of the new minimum —
+  `docs/plans/vk-swarm-event-bus/phase-1/004-*.md`
+- [Task 011 orchestrator] Two defects of the already-proven classes, found by following task 004's
+  `.unwrap_or(0)` shape downstream rather than waiting for 011 to be implemented: (a) test 5 said
+  "pick one behaviour (clamp … is preferred) and pin it" — an undictated choice of exactly the kind
+  that got task 003 rejected; now DICTATED as clamp-with-warning. (b) nothing covered
+  `VK_EVENT_MAX_ROWS=0`, which would let stage 2 empty the journal, after which `compact`'s
+  post-delete `MIN(seq)` returns NULL and falls back to `0`
+  (`crates/db/src/models/event_journal/queries.rs:169-174`), so `WHERE last_processed_seq < 0` flags
+  NOTHING — every consumer loses every event and none is marked for rebootstrap. Silent loss with no
+  signal, the same Option-collapsed-to-zero shape as the 004 bug. 011 must now sanitise `min_rows` and
+  `max_rows` to a floor of 1 (and `max_rows` up to `min_rows`) before every `compact` call, with a
+  warning; task 004 deliberately takes its arguments as given, so the loop is the only place the
+  invariant can hold — `docs/plans/vk-swarm-event-bus/phase-5/011-*.md`

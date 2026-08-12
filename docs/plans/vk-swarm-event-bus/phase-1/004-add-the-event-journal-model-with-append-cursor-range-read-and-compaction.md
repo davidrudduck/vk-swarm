@@ -73,6 +73,13 @@ Tests (these ARE TS1):
     **All THREE are required assertions in code (2026-08-12): attempt 1 shipped (b) as a bare comment
     with no assertion following it.** For (b), assert that a specific seq known to be below the
     cursor floor is absent from the surviving set — not merely that the count fell.
+    **Insert TWO `trigger_cursors` rows, not one (added 2026-08-12).** One below the new minimum
+    surviving seq and one ABOVE it; assert the first is flagged `needs_rebootstrap = 1` and
+    **the second is still 0**. With a single cursor, "flag only the cursors the deletion passed" and
+    "flag every cursor" are indistinguishable — a mutation changing the `WHERE last_processed_seq < ?`
+    predicate to flag all rows was caught by NO test. The shipped code is correct; this closes the
+    coverage gap so a later refactor cannot silently break it and force healthy consumers to
+    rebootstrap.
 
 ## Change
 **File:** `crates/db/src/models/event_journal/mod.rs`
