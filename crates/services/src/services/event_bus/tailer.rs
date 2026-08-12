@@ -110,6 +110,79 @@ mod tests {
         }
     }
 
+    /// Commits one journal row and returns the seq it was assigned.
+    async fn commit_one(pool: &SqlitePool) -> i64 {
+        let mut tx = pool.begin().await.unwrap();
+        let event = NodeEvent::TaskCreated {
+            task_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+        };
+        let seq = event_journal::append(&mut *tx, &event).await.unwrap();
+        tx.commit().await.unwrap();
+        seq
+    }
+
+    /// Blocks until a freshly spawned tailer is demonstrably live, returning the seq its cursor
+    /// now sits at. Every subsequent commit by the caller is strictly after the tailer's initial
+    /// high-water-mark read.
+    ///
+    /// `tokio::spawn` only SCHEDULES the tailer; its initial `high_water_mark` read can therefore
+    /// resolve AFTER rows the test commits immediately afterwards, in which case the tailer
+    /// correctly starts above them and publishes nothing — the `left: []` failure that made this
+    /// suite flaky under full-crate load. A fixed sleep cannot close that window, because the only
+    /// observable proof that the initial read has completed is a publication. So this commits
+    /// probe rows until one comes back, which is a happens-before edge rather than a hopeful gap.
+    ///
+    /// It also DRAINS: it returns only once the NEWEST probe row has been received, so no stale
+    /// probe event can be mistaken for a later assertion's event.
+    ///
+    /// `floor` is the journal high-water mark at the moment the tailer was spawned. A correct
+    /// tailer starts there (property 1), so any event at or below it is a history replay.
+    async fn probe_until_live(
+        pool: &SqlitePool,
+        subscriber: &mut tokio::sync::broadcast::Receiver<SequencedEvent>,
+        floor: i64,
+    ) -> i64 {
+        for _ in 0..10 {
+            let seq = commit_one(pool).await;
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                match poll_for_event(subscriber, deadline).await {
+                    Some(ev) if ev.seq == seq => return seq,
+                    Some(ev) => assert!(
+                        ev.seq > floor,
+                        "tailer replayed history: published seq {} at or below its spawn-time high-water mark {}",
+                        ev.seq,
+                        floor
+                    ),
+                    None => break,
+                }
+            }
+        }
+        panic!("tailer never published a probe row; it never became live");
+    }
+
+    /// Commits one journal row directly to the RENAMED journal table.
+    ///
+    /// `event_journal::append` targets the original table name, so it cannot be used while the
+    /// table is renamed away — and the initial-mark outage test needs rows committed DURING the
+    /// outage, which is the only way to prove a correct tailer starts above them afterwards.
+    async fn commit_one_to_hidden_journal(pool: &SqlitePool) -> i64 {
+        let event = NodeEvent::TaskCreated {
+            task_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+        };
+        let payload = serde_json::to_string(&event).unwrap();
+        sqlx::query_scalar::<_, i64>(
+            "INSERT INTO event_journal_hidden (event_type, payload) VALUES (?, ?) RETURNING seq",
+        )
+        .bind(event.event_type())
+        .bind(payload)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn tailer_publishes_committed_rows_in_seq_order() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
@@ -121,8 +194,9 @@ mod tests {
         // Subscribe to the broadcast channel BEFORE committing rows
         let mut subscriber = tx.subscribe();
 
-        // Give the tailer a moment to start and initialize
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // Wait until the tailer is provably live rather than sleeping and hoping. Its spawn-time
+        // high-water mark is 0, so nothing it publishes may sit at or below that.
+        let base = probe_until_live(&pool, &mut subscriber, 0).await;
 
         // Now append and commit 3 rows
         {
@@ -150,11 +224,11 @@ mod tests {
 
         tailer_handle.abort();
 
-        // Verify seqs are 1, 2, 3 in order
+        // The three rows must arrive, consecutive and ascending, immediately after the probe row
         assert_eq!(
             seqs,
-            vec![1, 2, 3],
-            "tailer should publish seqs 1, 2, 3 in order"
+            vec![base + 1, base + 2, base + 3],
+            "tailer should publish the three committed rows in seq order"
         );
     }
 
@@ -169,8 +243,8 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
-        // Give the tailer a moment to start and initialize
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // Wait until the tailer is provably live (spawn-time high-water mark 0)
+        let base = probe_until_live(&pool, &mut subscriber, 0).await;
 
         // Open a transaction, append an event, and roll back without committing
         {
@@ -211,9 +285,12 @@ mod tests {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         match poll_for_event(&mut subscriber, deadline).await {
             Some(ev) => {
-                // Should only receive seq 1 (the committed row, not the rolled-back one)
+                // The rolled-back append released its seq, so the committed row takes it: the very
+                // next seq after the probe row. Receiving anything else means the rolled-back row
+                // was published too.
                 assert_eq!(
-                    ev.seq, 1,
+                    ev.seq,
+                    base + 1,
                     "should only receive the committed row, not the rolled-back one"
                 );
             }
@@ -234,8 +311,8 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
-        // Give the tailer a moment to start and initialize
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // Wait until the tailer is provably live (spawn-time high-water mark 0)
+        let base = probe_until_live(&pool, &mut subscriber, 0).await;
 
         // Append and commit 3 journal rows
         {
@@ -252,14 +329,21 @@ mod tests {
 
         // Collect the published events from the first pass using deadline-based polling
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut first_pass = vec![];
         for _ in 0..3 {
             match poll_for_event(&mut subscriber, deadline).await {
-                Some(_) => {
-                    // Expected
-                }
+                Some(ev) => first_pass.push(ev.seq),
                 None => break,
             }
         }
+
+        // The first pass MUST actually have published the rows. Without this the whole test is
+        // vacuous: a tailer that publishes nothing at all trivially "does not republish".
+        assert_eq!(
+            first_pass,
+            vec![base + 1, base + 2, base + 3],
+            "the first pass must publish the three committed rows"
+        );
 
         // Wait for another poll interval (tailer should find no new events).
         // Use multiple multiples of TAIL_INTERVAL to ensure no republish occurs.
@@ -314,9 +398,11 @@ mod tests {
             }
         }
 
-        // Drop the tailer
+        // Drop the tailer. `abort()` is NOT synchronous — it only cancels at the task's next await
+        // point — so join the handle to get a real barrier. Without it the old tailer can still be
+        // polling the same 5-connection pool while the new one performs its initial read.
         tailer_handle.abort();
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let _ = tailer_handle.await;
 
         // Create a new tailer (will start at the current high-water mark of 3)
         let (tx2, _rx2) = broadcast::channel(64);
@@ -324,6 +410,17 @@ mod tests {
 
         // Subscribe to the new tailer
         let mut subscriber2 = tx2.subscribe();
+
+        // Wait until the NEW tailer is provably live before committing the rows under assertion.
+        // This is the race that made this test fail with `left: []`: the rows used to be committed
+        // immediately after `tokio::spawn`, so the tailer's initial high-water-mark read could
+        // resolve after them, start at 5, and correctly never publish 4 and 5.
+        // `floor = 3` also asserts the new tailer never replays the 3 pre-existing rows.
+        let base = probe_until_live(&pool, &mut subscriber2, 3).await;
+        assert!(
+            base > 3,
+            "new tailer must resume above the pre-existing high-water mark of 3, got {base}"
+        );
 
         // Now append 2 more rows
         {
@@ -350,10 +447,10 @@ mod tests {
 
         tailer_handle2.abort();
 
-        // Only the 2 new rows (seqs 4, 5) should be published
+        // Only the 2 new rows should be published, in order, with no history mixed in
         assert_eq!(
             seqs,
-            vec![4, 5],
+            vec![base + 1, base + 2],
             "new tailer should resume from high-water and publish only new rows"
         );
     }
@@ -369,34 +466,21 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
-        // Give the tailer a moment to start and initialize
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        // Append and commit 1 row before the outage
-        {
-            let mut tx_write = pool.begin().await.unwrap();
-            let event = NodeEvent::TaskCreated {
-                task_id: Uuid::new_v4(),
-                project_id: Uuid::new_v4(),
-            };
-            let _ = event_journal::append(&mut *tx_write, &event).await.unwrap();
-            tx_write.commit().await.unwrap();
-        }
-
-        // Drain the event using deadline-based polling
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-        match poll_for_event(&mut subscriber, deadline).await {
-            Some(ev) => {
-                assert_eq!(ev.seq, 1, "expected to receive seq 1");
-            }
-            None => panic!("expected to receive the row"),
-        }
+        // Commit one row before the outage and wait until it comes back, which both proves the
+        // tailer is live and leaves its cursor at that row.
+        let base = probe_until_live(&pool, &mut subscriber, 0).await;
 
         // Induce transient failure via table rename (fires high_water_mark, outer arm)
         sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
             .execute(&pool)
             .await
             .unwrap();
+
+        // Commit a row DURING the outage (against the renamed table, the only reachable name).
+        // Its silence below is what proves the fault actually fired, and its arrival after the
+        // repair is what proves the cursor did not advance past it.
+        let outage_seq = commit_one_to_hidden_journal(&pool).await;
+        assert_eq!(outage_seq, base + 1, "outage row should be the next seq");
 
         // Wait several multiples of TAIL_INTERVAL (75ms * 3 = 225ms) to ensure the tailer
         // has attempted multiple reads and confirmed nothing is published during the outage.
@@ -405,7 +489,10 @@ mod tests {
         // Verify no additional event was published during outage (fault fired).
         // Use a bounded wait (3 * TAIL_INTERVAL) to check for spurious events.
         match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
-            Ok(Ok(_)) => panic!("no event should publish during table-hidden outage"),
+            Ok(Ok(ev)) => panic!(
+                "no event should publish during table-hidden outage; got seq {}",
+                ev.seq
+            ),
             _ => {
                 // Expected: nothing published while table is hidden
             }
@@ -423,28 +510,20 @@ mod tests {
             "tailer should survive the transient read error"
         );
 
-        // The cursor should not have advanced during the error, so the tailer should still be at mark 1
-        // Commit a new row and verify it publishes (proving cursor didn't advance past the error)
-        {
-            let mut tx_write = pool.begin().await.unwrap();
-            let event = NodeEvent::TaskCreated {
-                task_id: Uuid::new_v4(),
-                project_id: Uuid::new_v4(),
-            };
-            let _ = event_journal::append(&mut *tx_write, &event).await.unwrap();
-            tx_write.commit().await.unwrap();
-        }
-
-        // Poll for the recovered row using deadline-based polling
+        // The cursor must not have advanced during the outage, so the row committed while the
+        // table was hidden is still owed to subscribers. Had the cursor advanced past the outage,
+        // it would be lost forever.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         match poll_for_event(&mut subscriber, deadline).await {
             Some(ev) => {
                 assert_eq!(
-                    ev.seq, 2,
-                    "should publish seq 2 after recovery; cursor did not advance past error"
+                    ev.seq, outage_seq,
+                    "should publish the outage row after recovery; cursor did not advance past error"
                 );
             }
-            None => panic!("expected to receive seq 2 after recovery from transient error"),
+            None => {
+                panic!("expected to receive the outage row after recovery from transient error")
+            }
         }
 
         tailer_handle.abort();
@@ -523,45 +602,29 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
-        // Give the tailer a moment to start and initialize
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // Commit one row and wait until it comes back: the tailer is live and its cursor is there
+        let base = probe_until_live(&pool, &mut subscriber, 0).await;
 
-        // Append and commit 1 row
-        {
+        // Commit the next row and corrupt it in the SAME transaction, so it is never visible in a
+        // readable state. Corrupting it in a separate statement leaves a window in which the tailer
+        // can publish the row before the UPDATE lands, which would fail the silence check below.
+        let corrupt_seq = {
             let mut tx_write = pool.begin().await.unwrap();
             let event = NodeEvent::TaskCreated {
                 task_id: Uuid::new_v4(),
                 project_id: Uuid::new_v4(),
             };
-            let _ = event_journal::append(&mut *tx_write, &event).await.unwrap();
+            let seq = event_journal::append(&mut *tx_write, &event).await.unwrap();
+            // Corrupt the payload so read_range fails at serde_json::from_str (inner arm)
+            sqlx::query("UPDATE event_journal SET payload = '{not json' WHERE seq = ?")
+                .bind(seq)
+                .execute(&mut *tx_write)
+                .await
+                .unwrap();
             tx_write.commit().await.unwrap();
-        }
-
-        // Drain the published event using deadline-based polling
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-        match poll_for_event(&mut subscriber, deadline).await {
-            Some(ev) => {
-                assert_eq!(ev.seq, 1);
-            }
-            None => panic!("expected to receive seq 1"),
-        }
-
-        // Commit row 2 before corrupting it
-        {
-            let mut tx_write = pool.begin().await.unwrap();
-            let event = NodeEvent::TaskCreated {
-                task_id: Uuid::new_v4(),
-                project_id: Uuid::new_v4(),
-            };
-            let _ = event_journal::append(&mut *tx_write, &event).await.unwrap();
-            tx_write.commit().await.unwrap();
-        }
-
-        // Corrupt payload on seq 2 so read_range fails at serde_json::from_str (inner arm)
-        sqlx::query("UPDATE event_journal SET payload = '{not json' WHERE seq = 2")
-            .execute(&pool)
-            .await
-            .unwrap();
+            seq
+        };
+        assert_eq!(corrupt_seq, base + 1, "corrupt row should be the next seq");
 
         // Wait for the tailer to attempt multiple reads and fail at deserialization
         tokio::time::sleep(std::time::Duration::from_millis(225)).await;
@@ -569,7 +632,10 @@ mod tests {
         // Verify nothing was published during the corruption (fault fired).
         // Use bounded wait (3 * TAIL_INTERVAL) to ensure we're checking real state.
         match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
-            Ok(Ok(_)) => panic!("no event should publish while payload is corrupted"),
+            Ok(Ok(ev)) => panic!(
+                "no event should publish while payload is corrupted; got seq {}",
+                ev.seq
+            ),
             _ => {
                 // Expected: nothing published
             }
@@ -582,8 +648,9 @@ mod tests {
                 project_id: Uuid::new_v4(),
             };
             let payload = serde_json::to_string(&event).unwrap();
-            sqlx::query("UPDATE event_journal SET payload = ? WHERE seq = 2")
+            sqlx::query("UPDATE event_journal SET payload = ? WHERE seq = ?")
                 .bind(payload)
+                .bind(corrupt_seq)
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -601,12 +668,77 @@ mod tests {
         match poll_for_event(&mut subscriber, deadline).await {
             Some(ev) => {
                 assert_eq!(
-                    ev.seq, 2,
-                    "should publish seq 2 after repair; if cursor advanced during error, this would be skipped"
+                    ev.seq, corrupt_seq,
+                    "should publish the repaired row; if the cursor advanced during the error, this would be skipped"
                 );
             }
-            None => panic!("expected to receive seq 2 after recovery from read error"),
+            None => panic!("expected to receive the repaired row after recovery from read error"),
         }
+
+        tailer_handle.abort();
+    }
+
+    /// Property 1 binds the ERROR path as well as the happy path: when the FIRST `high_water_mark`
+    /// call fails, the tailer must RETRY until a mark is obtainable. Falling back to 0 — attempt
+    /// 1's actual bug — makes the tailer replay the entire journal onto the live channel.
+    ///
+    /// The fault has to be in place BEFORE the tailer is spawned, which is what distinguishes this
+    /// from `tailer_survives_a_transient_read_error`: that one's ALTER TABLE only fires after the
+    /// initial retry loop has already succeeded, so it cannot see this path at all.
+    #[tokio::test]
+    async fn tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        // Hide the table BEFORE spawning, so the tailer's very first high_water_mark call fails
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (tx, _rx) = broadcast::channel(64);
+        let tailer_handle = spawn(pool.clone(), tx.clone());
+
+        // Subscribe before anything can be published, so a replay cannot slip past unobserved
+        let mut subscriber = tx.subscribe();
+
+        // Commit three rows while the table is renamed away. A tailer that retries its initial
+        // mark starts ABOVE these; a tailer that fell back to 0 replays every one of them.
+        for _ in 0..3 {
+            commit_one_to_hidden_journal(&pool).await;
+        }
+
+        // The outage window must be observably silent — several multiples of TAIL_INTERVAL, and
+        // longer than the initial retry backoff's first few steps (100/200/400ms).
+        match tokio::time::timeout(std::time::Duration::from_millis(750), subscriber.recv()).await {
+            Ok(Ok(ev)) => panic!(
+                "nothing may publish while the journal table is hidden; got seq {}",
+                ev.seq
+            ),
+            _ => {
+                // Expected: the journal is unreadable, so there is nothing to publish
+            }
+        }
+
+        // The retry loop must still be retrying, not have exited the task
+        assert!(
+            !tailer_handle.is_finished(),
+            "tailer must retry the initial high-water mark, not give up"
+        );
+
+        // Repair: rename back. The retry now succeeds and resolves to a mark of 3.
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // A correct tailer publishes NOTHING already committed and only picks up from here.
+        // `floor = 3` fails the moment any of seqs 1-3 arrives, which is exactly what the
+        // fall-back-to-0 mutation does on its first successful pass.
+        let base = probe_until_live(&pool, &mut subscriber, 3).await;
+        assert!(
+            base > 3,
+            "tailer must resume at the recovered high-water mark of 3, not replay from 0 (got {base})"
+        );
 
         tailer_handle.abort();
     }

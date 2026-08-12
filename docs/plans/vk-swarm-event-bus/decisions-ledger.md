@@ -757,3 +757,113 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   `take()`s the handle so `is_finished()` is unreachable from `crates/local-deployment/src/lib.rs`
   (014's only declared file), and (b) subscribing BEFORE the commit-and-wait window, with a no-op
   mutation required to prove the test bites — `docs/plans/vk-swarm-event-bus/phase-5/014-*.md`
+
+## 2026-08-12 execute: task 013 attempt 4 — a CONTAMINATED verification run (orchestrator error)
+
+- [Run orchestrator] MY SECOND VERIFICATION ERROR ON THIS TASK, recorded because the failure mode is
+  subtle and would have produced a WRONG rejection. I started the corrected ten-run bar
+  (`cargo test -p services --lib`, full crate) while the attempt-4 implementer was **still running**.
+  Result: 3 of 10 runs failed, which read as "attempt 4 is still flaky". It was not evidence of that.
+  Two independent contaminants:
+  (1) **The implementer was mutation-testing its own assertions in-tree.** Run 3's captured log
+  contains `WARN ... event journal tail read failed; giving up`, a string that does not exist
+  anywhere in `crates/` (`grep -rn "giving up" crates/` → no match). Run 1 failed with
+  `left: [4, 3, 2] right: [2, 3, 4]` — a deliberately reversed publish order. Both are mutations the
+  implementer applied and reverted to prove its new assertions bite. `stat` confirms both source
+  files were rewritten at 12:37:20, mid-loop, exactly when run 3 executed.
+  (2) **Two concurrent ten-run loops on one target dir.** The implementer was independently running
+  the same bar (`ps` showed its shell running `for i in $(seq 1 10); do cargo test -p services --lib`).
+  Doubling CPU load is precisely the contention these tests race on, so each loop degraded the other.
+- [Run orchestrator] The generalisable rule, now applied for the rest of this run: **a timing-sensitive
+  verification is only valid on a quiet machine with a stable tree.** Before measuring, confirm (a) no
+  `cargo test` for the crate under test is running (`ps -eo args | grep '[c]argo test -p <crate>'`),
+  and (b) the source mtimes have not moved since the diff under review was read. Neither check is in
+  `task-gate.sh` — Stage 1 runs the tests but cannot know another agent is mid-mutation, so this is an
+  orchestrator discipline, the same class as the reachability gate
+- [Run orchestrator] Runs 4-10 of the contaminated loop (7 consecutive, all green, after the tree
+  stabilised at 12:37:20) are suggestive but are NOT the evidence of record: they still overlapped the
+  implementer's own runs. The bar is being re-measured from scratch on a quiet machine
+
+## 2026-08-12 execute: task 013 attempt 4 (escalated tier) — the five outstanding findings
+
+- [Task 013 implementer] **The race in `tailer_resumes_from_its_high_water_on_restart` was candidate
+  (a), and it is a genuine synchronisation bug, not a slow machine.** `#[tokio::test]` builds a
+  CURRENT-THREAD runtime, and `tokio::spawn` only SCHEDULES: the tailer body does not begin executing
+  until the test task next awaits, and its initial `high_water_mark` query then has to complete on
+  sqlx's worker. The test committed rows 4 and 5 immediately after spawning tailer2, so under load the
+  initial mark could resolve AFTER that commit, return 5, and the tailer would then CORRECTLY publish
+  nothing — the observed `left: []` after a 30s deadline. Lengthening the deadline can never fix it:
+  the event is not late, it is never sent. The `sleep(10ms)` "readiness gap" at the other spawn sites
+  is the same defect with a smaller window, which is why attempt 2 also saw
+  `tailer_publishes_committed_rows_in_seq_order` flake
+- [Task 013 implementer] Candidate (b) (`abort()` is not synchronous) is NOT a cause of this failure:
+  tailer1 publishes to `tx`, and the assertion subscribes to `tx2`, so a surviving tailer1 cannot
+  produce or suppress an event on that channel. It can only ADD contention — a second poller on the
+  same 5-connection pool while tailer2 does its initial read — which amplifies (a). Fixed anyway, and
+  deterministically: `tailer_handle.abort(); let _ = tailer_handle.await;`. Awaiting the handle is a
+  real join barrier; the `sleep(50ms)` it replaces was not
+- [Task 013 implementer] **The fix is a readiness POLL, not a longer gap: `probe_until_live()`**
+  (`tailer.rs`). It commits probe rows until one is published back, and returns only once the NEWEST
+  probe row has been received. Why this makes the race IMPOSSIBLE rather than unlikely: a publication
+  is proof that the initial `high_water_mark` read has already completed (the tailer cannot publish
+  before it has a cursor), so the test cannot proceed past the probe until that read is done. Every
+  row the test commits afterwards is therefore strictly after the tailer's initial read —
+  a happens-before edge, not a timing margin. Draining to the newest probe row additionally makes it
+  impossible for a stale probe event to be mistaken for a later assertion's event. Applied at all five
+  racy spawn sites (tests 1, 2, 3, 4, 5, 7); the full-crate suite now finishes in ~7s rather than
+  burning multi-second deadlines
+- [Task 013 implementer] **DEVIATION from the task's literal seq numbers, declared once for all
+  sites.** The task text dictates `assert_eq!(seqs, vec![1, 2, 3])` etc.; the probe consumes a seq, so
+  the assertions are now relative (`vec![base + 1, base + 2, base + 3]`). This is unavoidable: the ONLY
+  observable proof that the initial mark read completed is a publication, and a publication requires a
+  committed row. Strength is preserved and increased, not weakened — `probe_until_live` takes a `floor`
+  (the journal high-water mark at spawn time) and PANICS on any event at or below it, which is a
+  stronger history-replay check than the old absolute-seq equality, and it now runs in six tests
+  instead of one
+- [Task 013 implementer] **One fixed readiness gap remains, deliberately:
+  `zero_receivers_does_not_stall_the_cursor`.** It cannot be probe-hardened, because the probe needs a
+  subscriber and the task text's point (a) binds that test to having NO receiver until after the
+  cursor has advanced. Its shape is left exactly as dictated. It is also the site least exposed to the
+  race: if the initial mark read lands late the tailer starts at 3, and the row committed after
+  subscribing still publishes, so the assertion holds either way. It held across all ten runs. If it
+  ever flakes, the fix is to lengthen the SETUP gap before the rows are committed — NOT the positive
+  assertion's deadline; the two are different things and only the second is the non-fix attempt 3 made
+- [Task 013 implementer] FINDING 1 fixed (`shutdown_stops_the_tailer`, `mod.rs`): the subscriber is
+  now created BEFORE the shutdown-and-commit window, and `wait_until_tailer_publishes()` proves the
+  tailer IS publishing before `shutdown()` is called, so the silence afterwards is attributable to
+  shutdown rather than to a tailer that was never live. `shutdown()` itself was NOT changed — it was
+  not broken; the test was
+- [Task 013 implementer] FINDING 2 fixed: new
+  `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero`. The table is renamed
+  away BEFORE the tailer is spawned, so its FIRST `high_water_mark` call fails — the path the existing
+  ALTER TABLE test cannot reach, because that fault only fires after the initial retry loop has
+  already succeeded. Mechanical note: the dictated "commit rows while it is renamed away" requires a
+  raw `INSERT INTO event_journal_hidden`, since `event_journal::append` targets the original name.
+  After the rename-back a correct tailer resolves to mark 3 and publishes nothing already committed;
+  the fallback-to-0 mutation replays seqs 1-3 into the already-attached subscriber and trips the
+  `floor = 3` guard
+- [Task 013 implementer] FINDING 4 fixed: `tailer_does_not_republish_across_passes` now asserts the
+  first pass published the expected seqs before asserting the second publishes nothing
+- [Task 013 implementer] Two additional windows closed while fixing the above, both strengthening,
+  neither weakening or deleting an assertion. (1) `tailer_survives_a_transient_read_error` now commits
+  a row DURING the outage (via the hidden-table insert) and asserts that same row arrives after the
+  repair — the task's item 5(a)/(c) shape. Previously nothing was committed during the outage, so the
+  silence window proved nothing had fired. (2) `a_failed_read_does_not_end_the_loop_or_advance_the_cursor`
+  now appends and corrupts the row in ONE transaction: as two statements there was a real window in
+  which the tailer could publish the row before the UPDATE landed, which would fail the silence check
+- [Task 013 implementer] EVIDENCE. Ten consecutive `cargo test -p services --lib` (full crate, the
+  shape CI runs), ALL GREEN, 262 passed / 0 failed each: 7.06s, 7.11s, 6.70s, 7.57s, 8.32s, 7.21s,
+  7.75s, 6.72s, 5.60s, 8.32s. Additionally three CONCURRENT full-crate runs (a deliberate contention
+  stress, since contention is the failure mode) all green: 6.80s, 8.40s, 5.32s. `cargo fmt --all --
+  --check`, `cargo clippy -p services --all-targets -- -D warnings`, `cargo check --workspace
+  --all-targets` all exit 0. All four mutation proofs were completed and the tree restored BEFORE the
+  ten-run loop began, so no run is contaminated by an in-tree mutation
+- [Task 013 implementer] MUTATION PROOFS (backed up and restored with `cp` via `.wai-scratch/`, never
+  git). (i) `shutdown()` no-op (`take()` the handle, never abort): `shutdown_stops_the_tailer` FAILED,
+  and it was the ONLY failure — 15 passed, 1 failed. (ii) initial-mark error falls back to 0 instead of
+  retrying: `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero` FAILED, the
+  only failure, panicking at the `probe_until_live` floor guard (`tailer.rs:144`). (iii) publish in
+  reverse seq order: three FAILED (`..._in_seq_order`, `..._does_not_republish_across_passes`,
+  `..._resumes_from_its_high_water_on_restart`). (iv) `read_range` Err arm returns from the loop:
+  `a_failed_read_does_not_end_the_loop_or_advance_the_cursor` FAILED, the only failure. Both mutations
+  that survived attempt 3 now fail, each against exactly the test written for it

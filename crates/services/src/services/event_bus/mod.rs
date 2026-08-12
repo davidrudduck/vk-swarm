@@ -635,6 +635,44 @@ mod tests {
         }
     }
 
+    /// Commits one journal row and returns the seq it was assigned.
+    async fn commit_one(pool: &SqlitePool) -> i64 {
+        let mut tx = pool.begin().await.unwrap();
+        let event = NodeEvent::TaskCreated {
+            task_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+        };
+        let seq = event_journal::append(&mut *tx, &event).await.unwrap();
+        tx.commit().await.unwrap();
+        seq
+    }
+
+    /// Blocks until the tailer is provably publishing, by committing probe rows until one comes
+    /// back. `tokio::spawn` only schedules the task, so without this the tailer's initial
+    /// high-water-mark read can land after the row under test and skip it — silence would then
+    /// prove nothing about `shutdown()`.
+    ///
+    /// Returns only once the NEWEST probe row has been received, so no stale probe event can be
+    /// mistaken for a post-shutdown publication.
+    async fn wait_until_tailer_publishes(
+        pool: &SqlitePool,
+        subscriber: &mut broadcast::Receiver<SequencedEvent>,
+    ) {
+        for _ in 0..10 {
+            let seq = commit_one(pool).await;
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                match tokio::time::timeout(remaining, subscriber.recv()).await {
+                    Ok(Ok(ev)) if ev.seq == seq => return,
+                    Ok(Ok(_)) => continue,
+                    _ => break,
+                }
+            }
+        }
+        panic!("the tailer never published a probe row, so this test cannot observe shutdown");
+    }
+
     #[tokio::test]
     async fn shutdown_stops_the_tailer() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
@@ -642,34 +680,29 @@ mod tests {
         // Create an EventBus with a spawned tailer
         let bus = EventBus::new(pool.clone(), 64);
 
+        // Subscribe BEFORE the shutdown-and-commit window. A tokio broadcast receiver never
+        // receives history: a subscriber created afterwards cannot observe a still-running
+        // tailer's publish, which is what made the previous version of this test vacuous — a
+        // literal no-op `shutdown()` passed it.
+        let mut subscriber = bus.sender().subscribe();
+
+        // Prove the tailer IS publishing first, so the silence below is attributable to shutdown()
+        // and not to a tailer that was never live.
+        wait_until_tailer_publishes(&pool, &mut subscriber).await;
+
         // Shutdown the tailer
         bus.shutdown().await;
 
-        // Give the abort a moment to take effect
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Commit a journal row AFTER shutdown. A live tailer publishes it within TAIL_INTERVAL.
+        let post_shutdown_seq = commit_one(&pool).await;
 
-        // Commit a journal row AFTER shutdown
-        {
-            let mut tx = pool.begin().await.unwrap();
-            let event = NodeEvent::TaskCreated {
-                task_id: Uuid::new_v4(),
-                project_id: Uuid::new_v4(),
-            };
-            let _ = event_journal::append(&mut *tx, &event).await.unwrap();
-            tx.commit().await.unwrap();
-        }
-
-        // Wait a bit to give the (dead) tailer time to poll if it were still running
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // Subscribe to the broadcast channel and verify nothing is published
-        let sender = bus.sender();
-        let mut subscriber = sender.subscribe();
-
-        match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv()).await {
-            Ok(Ok(_)) => {
-                panic!("tailer should be stopped; no events should be published after shutdown")
-            }
+        // Nothing may arrive. The window is many multiples of TAIL_INTERVAL (75ms) so that a
+        // still-running tailer has no plausible excuse for being silent.
+        match tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv()).await {
+            Ok(Ok(ev)) => panic!(
+                "tailer should be stopped; it published seq {} after shutdown (expected silence for seq {})",
+                ev.seq, post_shutdown_seq
+            ),
             _ => {
                 // Expected: no events published
             }
