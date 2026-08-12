@@ -296,3 +296,39 @@ trigger for exactly that case.
   TypeScript runner against Rust crates for all 15 tasks. The channel path is gitignored (commit
   `ccb09d98`) because `task-gate.sh` refuses a tracked channel file and an untracked one could
   otherwise be swept into a task commit — `.gitignore`, `docs/plans/vk-swarm-event-bus/.wai-test-cmd`
+- [Task 010 note, raised by the task-003 panel] `SequencedEvent.seq` and
+  `NodeEvent::ReconcileCompleted.entity_count` generate as TypeScript `bigint` (`shared/types.ts:33,35`),
+  following the project-wide ts-rs `i64` mapping that `Task.remote_version` already uses; no
+  `#[ts(type = "number")]` override exists anywhere in `crates/`. An SSE consumer, however, receives a
+  plain `number` from `JSON.parse` — the declared type and the runtime value disagree on the INBOUND
+  direction, and `frontend/src/lib/api/utils.ts:92` `jsonBody()` only addresses the outbound one.
+  Pre-existing convention, NOT introduced by task 003 and not a defect in it; carried here so task
+  010's implementer and panel see it when the SSE endpoint gains a real consumer.
+- [Task 003 orchestrator] Attempt 1 (`4f244ae4`) passed the deterministic gate but the adversarial
+  panel returned DEVIATES on two undeclared type choices, both verified against the repo before acting:
+  `exit_code: i32` and `executor: String` were named-but-untyped by the task, so the implementer chose
+  silently and declared nothing. Resolved by DICTATING the types in the task rather than letting a
+  second implementer re-choose. (a) `exit_code: i64` — `shared/types.ts:854` already types the same
+  datum `bigint | null`, so `i32` made one generated file describe one field two ways; it also spares
+  task 007 a narrowing `as i32`. (b) `executor: String`, not the TS-registered `BaseCodingAgent`.
+  My first rationale for (b) — "closed enums break replay" — was SELF-REFUTING and the expedited
+  amendment review caught it: `TaskStatus` is equally closed (same `EnumString`, no `#[serde(other)]`)
+  yet is correctly typed. The property that actually discriminates is vocabulary stability:
+  `TaskStatus` is pinned to the persisted `tasks.status` column
+  (`crates/db/src/models/task/mod.rs:24`) so no variant can be dropped without a migration that can
+  also rewrite journal payloads, whereas `BaseCodingAgent`
+  (`crates/executors/src/executors/mod.rs:103-117`) is a vendor list that churns with no migration ever
+  touching journal rows — and one undeserializable row fails an entire `(cursor, mark]` window
+  (ADR-0017 L36-40), wedging every consumer below that seq permanently —
+  `docs/plans/vk-swarm-event-bus/phase-1/003-*.md`
+- [Task 003 orchestrator] The same review found `old_status`/`new_status` were still undictated inside
+  a block titled "Field types are DICTATED", AND that the task's own test skeleton contradicted its
+  Change section: `old_status: "todo".into()` compiles only against `String`, so attempt 1 had to
+  silently rewrite those constructors to `TaskStatus::Todo`. Both fixed — the `String` escape hatch is
+  withdrawn and the skeleton's constructors corrected. This was a defect in the ORIGINAL task text that
+  the breakdown tournament and the attempt-1 panel both missed —
+  `docs/plans/vk-swarm-event-bus/phase-1/003-*.md`
+- [Task 007 orchestrator] Added the `Option<i64>` sourcing clause: dictating a non-optional `i64` on
+  the event only MOVED the silent choice downstream, and `unwrap_or(0)` would report a clean exit that
+  never happened. 007 now requires emitting `attempt_failed` with a reason naming the missing exit code
+  instead of substituting a value — `docs/plans/vk-swarm-event-bus/phase-3/007-*.md`
