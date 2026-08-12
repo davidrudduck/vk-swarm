@@ -489,3 +489,16 @@ clean.
   by reading the diff — clause (c) is preserved and re-asserted, (a) and (b) untouched), and carries
   its own mutation proof (flagging every cursor unconditionally makes the new assertion (d) fail with
   `left: 1, right: 0`, then restores green). A challenger would have re-derived exactly that.
+- [Task 005 orchestrator] Corrected a flat-vs-directory-module contradiction before dispatch: the
+  "Failing test" header named `crates/services/src/services/event_bus.rs` while `files:` and the
+  Change section both require `event_bus/mod.rs`. An implementer following the test header would have
+  created an undeclared path and the file-set gate would have rejected the commit. This is the THIRD
+  instance of the class (013 at decompose time, 007's "commit, broadcast", now 005), so every task
+  file was swept programmatically — comparing every `crates/**.rs|.sql` path mentioned in the body
+  against the `files:` frontmatter for directory-module collisions. No further instances exist —
+  `docs/plans/vk-swarm-event-bus/phase-2/005-*.md`
+- [Task 005 orchestrator] Pre-flight for its STOP triggers: `async-stream` is NOT a dependency of
+  `crates/services`; `tokio-stream 0.1.17`, `futures 0.3.31` and `futures-util 0.3` ARE. The task
+  already sanctions "return a boxed stream" in that case and requires the concrete return type in the
+  ledger, so this is a declared choice rather than a STOP. Cargo.toml is NOT in the task's `files:`,
+  so adding a dependency is out of bounds — STOP if one seems necessary

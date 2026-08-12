@@ -17,8 +17,11 @@ covers_criteria: []
 covers_tests: ["TS2"]
 ---
 ## Failing test (write first)
-**File:** `crates/services/src/services/event_bus.rs` (colocated `#[cfg(test)] mod tests`),
-using `db::test_utils::create_test_pool_with_migrations()`.
+**File:** `crates/services/src/services/event_bus/mod.rs` (colocated `#[cfg(test)] mod tests`),
+using `db::test_utils::create_test_pool_with_migrations()`. (Corrected 2026-08-12: this line
+previously named a flat `event_bus.rs`, contradicting both this task's `files:` frontmatter and its
+own Change section, which require a directory module. A flat file would be an undeclared
+create-target and the file-set gate would reject the commit.)
 
 Tests (these ARE TS2, together with task 013's tailer tests):
 
@@ -45,7 +48,6 @@ Tests (these ARE TS2, together with task 013's tailer tests):
 
 Tests 5 and 6 are the ones that fail loudest if the `Lagged` branch is written as `continue` (which
 skips journaled events) or as a single non-looping refill.
-
 
 ## Change
 **Do NOT put the Sender in `crates/db`.** An earlier draft added a
@@ -116,13 +118,11 @@ ascending order of first occurrence.
 **File:** `crates/services/src/services/mod.rs`
 **Change:** add `pub mod event_bus;` in alphabetical position.
 
-
 ## Allowed moves
 ONLY the new event_bus/mod.rs and the one module declaration line. Do NOT touch
 `crates/db/src/lib.rs` — `DBService` gains no field in this plan. Do NOT touch
 `crates/services/src/services/events.rs` or its `events/` directory. Do NOT write the tailer (task
 013), instrument any emission site (phase 3), or add the SSE route (task 010).
-
 
 ## STOP triggers
 - `subscribe_from` cannot be expressed as a `Stream` without an unstable feature — use
@@ -133,7 +133,6 @@ ONLY the new event_bus/mod.rs and the one module declaration line. Do NOT touch
 - You find yourself needing a sender inside `crates/db` to make a test pass — STOP. That is the exact
   design that was proven unbuildable; the tailer (013) is the answer.
 
-
 ## Manual verification (record in decisions-ledger)
 Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
 WAI_TEST_CMD="cargo test -p services event_bus"
@@ -142,7 +141,6 @@ Record in the ledger: the `EventService` sibling comparison (why `EventBus` is a
 than an extension of it), the chosen broadcast capacity and its reasoning (a slow consumer that
 exceeds it gets `Lagged` and refills from the journal, so this is a latency/memory knob, not a
 correctness one), and the concrete `subscribe_from` return type.
-
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 005` exits 0
