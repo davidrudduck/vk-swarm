@@ -53,10 +53,7 @@ impl EventBus {
     /// Creates a new EventBus.
     pub fn new(pool: SqlitePool, broadcast_capacity: usize) -> Self {
         let (_tx, _rx) = broadcast::channel(broadcast_capacity);
-        Self {
-            pool,
-            sender: _tx,
-        }
+        Self { pool, sender: _tx }
     }
 
     /// Returns a sender that can publish events to the bus.
@@ -89,106 +86,98 @@ impl EventBus {
             rx: None,
         };
 
-        Ok(Box::pin(unfold(
-            initial_state,
-            |mut state| async move {
-                loop {
-                    match &mut state.state {
-                        StreamState::Initializing => {
-                            // Subscribe before reading journal (critical invariant 1)
-                            let rx = state.sender.subscribe();
-                            state.rx = Some(rx);
+        Ok(Box::pin(unfold(initial_state, |mut state| async move {
+            loop {
+                match &mut state.state {
+                    StreamState::Initializing => {
+                        // Subscribe before reading journal (critical invariant 1)
+                        let rx = state.sender.subscribe();
+                        state.rx = Some(rx);
 
-                            // Read fresh high-water mark (critical invariant 3)
-                            let mark = match event_journal::high_water_mark(&state.pool).await {
-                                Ok(m) => m,
-                                Err(e) => {
-                                    return Some((Err(EventBusError::Journal(e)), state));
-                                }
-                            };
-
-                            // Read replay events
-                            match event_journal::read_range(&state.pool, state.last, mark).await {
-                                Ok(events) => {
-                                    state.state = StreamState::ReplayingJournal {
-                                        events,
-                                        index: 0,
-                                    };
-                                    continue;
-                                }
-                                Err(e) => {
-                                    return Some((Err(EventBusError::Journal(e)), state));
-                                }
+                        // Read fresh high-water mark (critical invariant 3)
+                        let mark = match event_journal::high_water_mark(&state.pool).await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                return Some((Err(EventBusError::Journal(e)), state));
                             }
-                        }
+                        };
 
-                        StreamState::ReplayingJournal { events, index } => {
-                            if *index < events.len() {
-                                let seq_ev = events[*index].clone();
-                                *index += 1;
-                                state.last = seq_ev.seq;
-                                return Some((Ok(seq_ev), state));
-                            } else {
-                                // Done replaying; switch to live
-                                state.state = StreamState::Live;
+                        // Read replay events
+                        match event_journal::read_range(&state.pool, state.last, mark).await {
+                            Ok(events) => {
+                                state.state = StreamState::ReplayingJournal { events, index: 0 };
                                 continue;
                             }
-                        }
-
-                        StreamState::Live => {
-                            if let Some(rx) = &mut state.rx {
-                                match rx.recv().await {
-                                    Ok(ev) => {
-                                        // Tolerate duplicates (critical invariant 2)
-                                        if ev.seq > state.last {
-                                            state.last = ev.seq;
-                                            return Some((Ok(ev), state));
-                                        }
-                                        // Skip duplicate and continue polling
-                                        continue;
-                                    }
-                                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                                        // Overrun; refill from journal (critical invariant 4)
-                                        let mark = match event_journal::high_water_mark(&state.pool)
-                                            .await
-                                        {
-                                            Ok(m) => m,
-                                            Err(e) => {
-                                                return Some((Err(EventBusError::Journal(e)), state));
-                                            }
-                                        };
-
-                                        match event_journal::read_range(&state.pool, state.last, mark)
-                                            .await
-                                        {
-                                            Ok(events) => {
-                                                state.state = StreamState::ReplayingJournal {
-                                                    events,
-                                                    index: 0,
-                                                };
-                                                continue;
-                                            }
-                                            Err(e) => {
-                                                return Some((Err(EventBusError::Journal(e)), state));
-                                            }
-                                        }
-                                    }
-                                    Err(broadcast::error::RecvError::Closed) => {
-                                        return None;
-                                    }
-                                }
-                            } else {
-                                return None;
+                            Err(e) => {
+                                return Some((Err(EventBusError::Journal(e)), state));
                             }
                         }
+                    }
 
-                        StreamState::Closed => {
+                    StreamState::ReplayingJournal { events, index } => {
+                        if *index < events.len() {
+                            let seq_ev = events[*index].clone();
+                            *index += 1;
+                            state.last = seq_ev.seq;
+                            return Some((Ok(seq_ev), state));
+                        } else {
+                            // Done replaying; switch to live
+                            state.state = StreamState::Live;
+                            continue;
+                        }
+                    }
+
+                    StreamState::Live => {
+                        if let Some(rx) = &mut state.rx {
+                            match rx.recv().await {
+                                Ok(ev) => {
+                                    // Tolerate duplicates (critical invariant 2)
+                                    if ev.seq > state.last {
+                                        state.last = ev.seq;
+                                        return Some((Ok(ev), state));
+                                    }
+                                    // Skip duplicate and continue polling
+                                    continue;
+                                }
+                                Err(broadcast::error::RecvError::Lagged(_)) => {
+                                    // Overrun; refill from journal (critical invariant 4)
+                                    let mark = match event_journal::high_water_mark(&state.pool)
+                                        .await
+                                    {
+                                        Ok(m) => m,
+                                        Err(e) => {
+                                            return Some((Err(EventBusError::Journal(e)), state));
+                                        }
+                                    };
+
+                                    match event_journal::read_range(&state.pool, state.last, mark)
+                                        .await
+                                    {
+                                        Ok(events) => {
+                                            state.state =
+                                                StreamState::ReplayingJournal { events, index: 0 };
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            return Some((Err(EventBusError::Journal(e)), state));
+                                        }
+                                    }
+                                }
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    return None;
+                                }
+                            }
+                        } else {
                             return None;
                         }
                     }
+
+                    StreamState::Closed => {
+                        return None;
+                    }
                 }
-            },
-        )))
+            }
+        })))
     }
 }
 
@@ -227,12 +216,7 @@ mod tests {
 
         // Collect the 3 replayed events
         for _ in 0..3 {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                stream.next(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
                 Ok(Some(Ok(ev))) => seqs.push(ev.seq),
                 _ => break,
             }
@@ -241,20 +225,17 @@ mod tests {
         assert_eq!(seqs, vec![1, 2, 3], "should replay seqs 1, 2, 3");
 
         // Emit a 4th event live and assert it arrives
-        sender.send(SequencedEvent {
-            seq: 4,
-            event: NodeEvent::TaskCreated {
-                task_id: Uuid::new_v4(),
-                project_id: Uuid::new_v4(),
-            },
-        }).ok();
+        sender
+            .send(SequencedEvent {
+                seq: 4,
+                event: NodeEvent::TaskCreated {
+                    task_id: Uuid::new_v4(),
+                    project_id: Uuid::new_v4(),
+                },
+            })
+            .ok();
 
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream.next(),
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
             Ok(Some(Ok(ev))) => assert_eq!(ev.seq, 4, "live event should arrive"),
             _ => panic!("live event 4 did not arrive"),
         }
@@ -283,12 +264,7 @@ mod tests {
 
         let mut seqs = vec![];
         for _ in 0..2 {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                stream.next(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
                 Ok(Some(Ok(ev))) => seqs.push(ev.seq),
                 _ => break,
             }
@@ -325,13 +301,15 @@ mod tests {
         let sender_clone = sender.clone();
         let emit_task = tokio::spawn(async move {
             for i in 4..=6 {
-                sender_clone.send(SequencedEvent {
-                    seq: i,
-                    event: NodeEvent::TaskCreated {
-                        task_id: Uuid::new_v4(),
-                        project_id: Uuid::new_v4(),
-                    },
-                }).ok();
+                sender_clone
+                    .send(SequencedEvent {
+                        seq: i,
+                        event: NodeEvent::TaskCreated {
+                            task_id: Uuid::new_v4(),
+                            project_id: Uuid::new_v4(),
+                        },
+                    })
+                    .ok();
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         });
@@ -339,12 +317,7 @@ mod tests {
         // Collect all events
         let mut seqs = vec![];
         for _ in 0..6 {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                stream.next(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await {
                 Ok(Some(Ok(ev))) => seqs.push(ev.seq),
                 _ => break,
             }
@@ -383,44 +356,38 @@ mod tests {
         let mut stream = bus.subscribe_from(0).unwrap();
 
         // Collect the replayed event (seq 1)
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream.next(),
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
             Ok(Some(Ok(ev))) => assert_eq!(ev.seq, 1),
             _ => panic!("failed to get seq 1"),
         }
 
         // Now emit the same seq live (a duplicate from the handoff race)
-        sender.send(SequencedEvent {
-            seq: 1,
-            event: NodeEvent::TaskCreated {
-                task_id: Uuid::new_v4(),
-                project_id: Uuid::new_v4(),
-            },
-        }).ok();
+        sender
+            .send(SequencedEvent {
+                seq: 1,
+                event: NodeEvent::TaskCreated {
+                    task_id: Uuid::new_v4(),
+                    project_id: Uuid::new_v4(),
+                },
+            })
+            .ok();
 
         // The duplicate should be tolerated and skipped
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Emit a new event
-        sender.send(SequencedEvent {
-            seq: 2,
-            event: NodeEvent::TaskCreated {
-                task_id: Uuid::new_v4(),
-                project_id: Uuid::new_v4(),
-            },
-        }).ok();
+        sender
+            .send(SequencedEvent {
+                seq: 2,
+                event: NodeEvent::TaskCreated {
+                    task_id: Uuid::new_v4(),
+                    project_id: Uuid::new_v4(),
+                },
+            })
+            .ok();
 
         // Collect seq 2 (the duplicate 1 should have been skipped)
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream.next(),
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
             Ok(Some(Ok(ev))) => assert_eq!(ev.seq, 2, "stream should skip duplicate and continue"),
             _ => panic!("seq 2 did not arrive"),
         }
@@ -452,12 +419,7 @@ mod tests {
         // Collect the 5 replayed events
         let mut seen_seqs = vec![];
         for _ in 0..5 {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                stream.next(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
                 Ok(Some(Ok(ev))) => seen_seqs.push(ev.seq),
                 _ => break,
             }
@@ -480,13 +442,15 @@ mod tests {
 
         // Emit the journaled events on the broadcast channel
         for i in 6..=10 {
-            sender.send(SequencedEvent {
-                seq: i,
-                event: NodeEvent::TaskCreated {
-                    task_id: Uuid::new_v4(),
-                    project_id: Uuid::new_v4(),
-                },
-            }).ok();
+            sender
+                .send(SequencedEvent {
+                    seq: i,
+                    event: NodeEvent::TaskCreated {
+                        task_id: Uuid::new_v4(),
+                        project_id: Uuid::new_v4(),
+                    },
+                })
+                .ok();
         }
 
         // Give the refill a chance to happen
@@ -495,20 +459,14 @@ mod tests {
         // The stream should recover via refill and continue with live events
         let mut post_lagged_seqs = vec![];
         for _ in 0..5 {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                stream.next(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
                 Ok(Some(Ok(ev))) => post_lagged_seqs.push(ev.seq),
                 _ => break,
             }
         }
 
         // Should have seqs 6-10 from the refill or live delivery
-        let unique_post: std::collections::HashSet<_> =
-            post_lagged_seqs.iter().cloned().collect();
+        let unique_post: std::collections::HashSet<_> = post_lagged_seqs.iter().cloned().collect();
         for seq in 6..=10 {
             assert!(
                 unique_post.contains(&seq),
@@ -518,20 +476,17 @@ mod tests {
         }
 
         // Emit a new event and verify it arrives (stream is still live)
-        sender.send(SequencedEvent {
-            seq: 11,
-            event: NodeEvent::TaskCreated {
-                task_id: Uuid::new_v4(),
-                project_id: Uuid::new_v4(),
-            },
-        }).ok();
+        sender
+            .send(SequencedEvent {
+                seq: 11,
+                event: NodeEvent::TaskCreated {
+                    task_id: Uuid::new_v4(),
+                    project_id: Uuid::new_v4(),
+                },
+            })
+            .ok();
 
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream.next(),
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
             Ok(Some(Ok(ev))) => assert_eq!(
                 ev.seq, 11,
                 "stream should resume live delivery after Lagged refill"
@@ -566,13 +521,15 @@ mod tests {
         let sender_clone = sender.clone();
         let emit_task = tokio::spawn(async move {
             for i in 4..=6 {
-                sender_clone.send(SequencedEvent {
-                    seq: i,
-                    event: NodeEvent::TaskCreated {
-                        task_id: Uuid::new_v4(),
-                        project_id: Uuid::new_v4(),
-                    },
-                }).ok();
+                sender_clone
+                    .send(SequencedEvent {
+                        seq: i,
+                        event: NodeEvent::TaskCreated {
+                            task_id: Uuid::new_v4(),
+                            project_id: Uuid::new_v4(),
+                        },
+                    })
+                    .ok();
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             }
         });
@@ -585,12 +542,7 @@ mod tests {
             if count >= 9 {
                 break;
             }
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                stream.next(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await {
                 Ok(Some(Ok(ev))) => {
                     first_occurrences.entry(ev.seq).or_insert(count);
                     count += 1;
@@ -627,12 +579,7 @@ mod tests {
         let mut stream = bus.subscribe_from(0).unwrap();
 
         // The first item should be an error
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream.next(),
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
             Ok(Some(Err(_))) => {
                 // Expected: error surfaces
             }

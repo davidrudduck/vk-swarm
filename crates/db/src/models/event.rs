@@ -17,10 +17,7 @@ use super::task::TaskStatus;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NodeEvent {
     /// A new task was created.
-    TaskCreated {
-        task_id: Uuid,
-        project_id: Uuid,
-    },
+    TaskCreated { task_id: Uuid, project_id: Uuid },
     /// A task's status changed.
     TaskStatusChanged {
         task_id: Uuid,
@@ -28,10 +25,7 @@ pub enum NodeEvent {
         new_status: TaskStatus,
     },
     /// A task was deleted.
-    TaskDeleted {
-        task_id: Uuid,
-        project_id: Uuid,
-    },
+    TaskDeleted { task_id: Uuid, project_id: Uuid },
     /// An attempt started execution.
     AttemptStarted {
         task_id: Uuid,
@@ -58,13 +52,9 @@ pub enum NodeEvent {
     /// Connected to the hive server.
     HiveConnected {},
     /// Disconnected from the hive server.
-    HiveDisconnected {
-        reason: String,
-    },
+    HiveDisconnected { reason: String },
     /// Reconciliation completed.
-    ReconcileCompleted {
-        entity_count: i64,
-    },
+    ReconcileCompleted { entity_count: i64 },
 }
 
 impl NodeEvent {
@@ -165,7 +155,11 @@ mod tests {
             },
             NodeEvent::ReconcileCompleted { entity_count: 0 },
         ];
-        assert_eq!(all.len(), 9, "a variant was added without extending this table");
+        assert_eq!(
+            all.len(),
+            9,
+            "a variant was added without extending this table"
+        );
         for e in &all {
             let v = serde_json::to_value(e).unwrap();
             assert_eq!(v["type"].as_str().unwrap(), e.event_type(), "{e:?}");

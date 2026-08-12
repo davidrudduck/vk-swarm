@@ -534,3 +534,23 @@ The return type is `Result<BoxStream<'static, Result<SequencedEvent, EventBusErr
 `subscribe_from` must be fallible (the task pinned this to catch journal errors early, not silence them in the stream). Since `async_stream` is not available in crates/services, a boxed stream (`Box<Pin<impl Stream<...>>>` wrapped in `Box::pin()`) is the fallback. The stream is 'static because it owns cloned pool/sender and does not borrow from `self`. Built using `futures::stream::unfold`, which handles the async state machine without a procedural macro.
 
 The inner error variant `EventBusError` wraps `EventJournalError` to give consumers a single error enum for all operational failures (pool closed, deserialization, cursor floor exceeded).
+- [Run orchestrator] FOURTH gate gap found, this one by a challenger rather than by me: `task-gate.sh`
+  never runs `cargo fmt --all -- --check`, which CLAUDE.md section 9 lists as a required backend check.
+  Tasks 003, 004 and 005 all shipped unformatted code (34 rustfmt hunks across `event.rs`,
+  `event_journal/{mod,queries}.rs` and `event_bus/mod.rs`); every one was NEW in this run, none
+  pre-existing on `main`. Fixed at the source with `cargo fmt --all` and re-verified: `cargo fmt --all
+  -- --check` clean, `cargo test -p db event_journal` 11/11, `cargo test -p db event` 16/16,
+  `cargo test -p services event_bus` 7/7. Closed mechanically for every REMAINING task by folding the
+  check into the gate's own override:
+  `WAI_TYPECHECK_CMD="cargo fmt --all -- --check && cargo check --workspace --all-targets"`, so
+  Stage 1 now rejects unformatted code instead of relying on an implementer remembering
+- [Task 005 orchestrator] PASSED on two independent CONFORMS: an 8-mutation sweep run 5x per mutation
+  (7 killed; the lone survivor — advancing `last` on a duplicate — was argued non-load-bearing because
+  it can only produce MORE tolerated duplicates, never loss or misordering, and the contract commits
+  only to at-least-once delivery and ascending FIRST occurrence) and a scope/layering review
+  confirming no sender leaked into `crates/db`, `EventService` was not shadowed, the directory module
+  is real, and both `Result` levels survived. A third cross-model seat (grok-4.5 via opencode,
+  reasoning about the handoff race) produced NO verdict: the opencode server stopped returning
+  completions mid-session — every call connects, prints its model header and exits rc=0 with 35 bytes,
+  reproduced with and without `--auto`/`--variant`. Recorded as a seat that did not report rather than
+  quietly dropped; the two verdicts that DID land are what 005 passed on

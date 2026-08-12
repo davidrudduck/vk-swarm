@@ -147,10 +147,17 @@ mod tests {
         // Read (2, 4] should return exactly seqs 3 and 4
         let events = read_range(&pool, 2, 4).await.unwrap();
 
-        assert_eq!(events.len(), 2, "should have exactly 2 events in range (2, 4]");
+        assert_eq!(
+            events.len(),
+            2,
+            "should have exactly 2 events in range (2, 4]"
+        );
         assert_eq!(events[0].seq, 3, "first event should have seq 3");
         assert_eq!(events[1].seq, 4, "second event should have seq 4");
-        assert!(events[0].seq < events[1].seq, "events should be seq-ordered");
+        assert!(
+            events[0].seq < events[1].seq,
+            "events should be seq-ordered"
+        );
     }
 
     #[tokio::test]
@@ -251,12 +258,17 @@ mod tests {
         compact(&pool, 24, 1, 100).await.unwrap();
 
         // Rows with seq >= 3 (cursor floor) should survive; assert exact set, not just a predicate
-        let surviving_seqs: Vec<i64> = sqlx::query_scalar("SELECT seq FROM event_journal ORDER BY seq")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+        let surviving_seqs: Vec<i64> =
+            sqlx::query_scalar("SELECT seq FROM event_journal ORDER BY seq")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
 
-        assert_eq!(surviving_seqs, vec![3, 4, 5], "cursor floor must protect rows 3,4,5 exactly");
+        assert_eq!(
+            surviving_seqs,
+            vec![3, 4, 5],
+            "cursor floor must protect rows 3,4,5 exactly"
+        );
     }
 
     #[tokio::test]
@@ -355,13 +367,18 @@ mod tests {
         compact(&pool, 24, 1, 100).await.unwrap();
 
         // With cursor at 0, seq < 0 is never true, so ALL rows should survive
-        let surviving_seqs: Vec<i64> = sqlx::query_scalar("SELECT seq FROM event_journal ORDER BY seq")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+        let surviving_seqs: Vec<i64> =
+            sqlx::query_scalar("SELECT seq FROM event_journal ORDER BY seq")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
 
         // The 5 rows inserted will have seqs 1-5 (autoincrement from 1)
-        assert_eq!(surviving_seqs, vec![1, 2, 3, 4, 5], "all rows should survive with cursor at 0");
+        assert_eq!(
+            surviving_seqs,
+            vec![1, 2, 3, 4, 5],
+            "all rows should survive with cursor at 0"
+        );
     }
 
     #[tokio::test]
@@ -415,11 +432,12 @@ mod tests {
         );
 
         // (b) Rows below cursor floor should be deleted (assert a specific seq below floor is absent)
-        let row_below_floor: Option<i64> = sqlx::query_scalar("SELECT seq FROM event_journal WHERE seq = ?")
-            .bind(4)
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
+        let row_below_floor: Option<i64> =
+            sqlx::query_scalar("SELECT seq FROM event_journal WHERE seq = ?")
+                .bind(4)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
         assert!(
             row_below_floor.is_none(),
             "row 4 (below cursor floor 5) should be absent after hard cap forces deletion"

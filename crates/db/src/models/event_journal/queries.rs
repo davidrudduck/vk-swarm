@@ -53,7 +53,10 @@ pub async fn read_range(
     let mut events = Vec::new();
     for row in rows {
         let event: NodeEvent = serde_json::from_str(&row.payload)?;
-        events.push(SequencedEvent { seq: row.seq, event });
+        events.push(SequencedEvent {
+            seq: row.seq,
+            event,
+        });
     }
 
     Ok(events)
@@ -61,11 +64,9 @@ pub async fn read_range(
 
 /// Get the highest sequence number in the journal (high water mark).
 pub async fn high_water_mark(pool: &SqlitePool) -> Result<i64, EventJournalError> {
-    let mark = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(MAX(seq), 0) FROM event_journal",
-    )
-    .fetch_one(pool)
-    .await?;
+    let mark = sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq), 0) FROM event_journal")
+        .fetch_one(pool)
+        .await?;
 
     Ok(mark)
 }
@@ -94,19 +95,17 @@ pub async fn compact(
     let mut tx = pool.begin().await?;
 
     // Get high water mark for cursor floor calculation
-    let high_water = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(MAX(seq), 0) FROM event_journal",
-    )
-    .fetch_one(&mut *tx)
-    .await?;
+    let high_water =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq), 0) FROM event_journal")
+            .fetch_one(&mut *tx)
+            .await?;
 
     // Determine the cursor floor: MIN(last_processed_seq) from trigger_cursors,
     // or high_water if no cursors exist. Decide on Option, not the value 0.
-    let cursor_floor_option: Option<i64> = sqlx::query_scalar(
-        "SELECT MIN(last_processed_seq) FROM trigger_cursors",
-    )
-    .fetch_one(&mut *tx)
-    .await?;
+    let cursor_floor_option: Option<i64> =
+        sqlx::query_scalar("SELECT MIN(last_processed_seq) FROM trigger_cursors")
+            .fetch_one(&mut *tx)
+            .await?;
 
     let cursor_floor = cursor_floor_option.unwrap_or(high_water);
 
@@ -140,11 +139,9 @@ pub async fn compact(
     let stage1_deleted = stage1_result.rows_affected();
 
     // Stage 2: Hard cap (if still too many rows, delete oldest regardless of cursor)
-    let current_count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM event_journal",
-    )
-    .fetch_one(&mut *tx)
-    .await?;
+    let current_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM event_journal")
+        .fetch_one(&mut *tx)
+        .await?;
 
     if current_count > max_rows {
         // Delete oldest rows down to max_rows
@@ -166,12 +163,11 @@ pub async fn compact(
         let stage2_deleted = stage2_result.rows_affected();
 
         // Get the new minimum seq
-        let new_min_seq = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT MIN(seq) FROM event_journal",
-        )
-        .fetch_one(&mut *tx)
-        .await?
-        .unwrap_or(0);
+        let new_min_seq =
+            sqlx::query_scalar::<_, Option<i64>>("SELECT MIN(seq) FROM event_journal")
+                .fetch_one(&mut *tx)
+                .await?
+                .unwrap_or(0);
 
         // Flag cursors that are below the new minimum
         sqlx::query(
