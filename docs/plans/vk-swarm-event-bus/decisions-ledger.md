@@ -637,3 +637,24 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   connection so every tailer query fails `PoolTimedOut` until the guard drops. The in-flight
   implementer was messaged directly rather than left to burn a cycle on the bad instruction —
   `docs/plans/vk-swarm-event-bus/phase-2/013-*.md`
+- [Task 013 orchestrator] The expedited review of my amendment returned DEFECTIVE with five findings,
+  all accepted. It confirmed my `chmod` retraction independently and then showed my REPLACEMENT was
+  also insufficient: pool exhaustion fails at `acquire()`, which surfaces inside `high_water_mark` —
+  the OUTER arm — so it would never have unlocked test 7's inner arm, the whole reason test 7 exists.
+  Two better faults, both verified empirically by the reviewer: (a) OUTER arm via a reversible
+  `ALTER TABLE event_journal RENAME TO ...` (SQLite auto-reprepares on `SQLITE_SCHEMA`, so the same
+  pooled connection recovers on rename-back); (b) INNER arm via payload corruption —
+  `UPDATE event_journal SET payload = '{not json'` makes `read_range` fail at `serde_json::from_str`
+  while `high_water_mark`'s `SELECT COALESCE(MAX(seq),0)` is untouched, and the column has no
+  `CHECK json_valid` so the garbage is storable. It also corrected my hypothesis about test 6: the
+  discriminator is NOT delivery of pre-subscription sends (tokio's `send` early-returns without
+  buffering at `rx_cnt == 0`, and a late subscriber starts at the tail) but REPUBLICATION after
+  subscribing — under the mutation the cursor is still 0 and the next pass re-sends 1,2,3, so the
+  subscriber's FIRST message is seq 1. And it caught that the file's own `let (tx, _rx) = ...` idiom
+  keeps a receiver alive for the whole test, which would have made test 6 vacuous by default. Two
+  further fixes applied: the pseudocode still contained `high_water_mark(pool)?`, contradicting the
+  amended property 1 AND not compilable (`?` in an async block returning `()`); and the shutdown
+  paragraph called cross-clone shutdown "safe" when one clone's `shutdown()` silently parks every
+  other clone's stream forever. Every fault-injection test must now assert the outage window is
+  observably silent BEFORE repair, so a fault that fails to fire cannot yield a green test —
+  `docs/plans/vk-swarm-event-bus/phase-2/013-*.md`

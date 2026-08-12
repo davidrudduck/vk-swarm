@@ -2,7 +2,7 @@
 id: "013"
 phase: 2
 title: "Add the journal tailer that publishes committed rows onto the broadcast channel"
-status: rejected
+status: in-progress
 depends_on: ["005"]
 parallel: false
 conflicts_with: []
@@ -32,42 +32,63 @@ covers_tests: []
    publishes nothing (the cursor advanced).
 4. `tailer_resumes_from_its_high_water_on_restart` — publish 3, drop the tailer, construct a new one,
    append 2 more, run a pass; assert only the 2 new rows are published.
-5. `tailer_survives_a_transient_read_error` — make one read fail, then succeed; assert the tailer
-   logs and continues rather than terminating. A tailer that dies on one error silently stops the
-   entire bus. **`pool.close()` is NOT an acceptable way to do this (2026-08-12): it is irreversible
-   in sqlx, so there is no "then succeed" half and attempt 1's version proved only non-termination.**
-   Induce a genuinely transient failure by POOL EXHAUSTION (corrected 2026-08-12 — see below), and
-   assert BOTH that the tailer is still running AND that a row committed
-   during the outage is published afterwards.
-
-   **Do NOT use `chmod 000`** — an earlier version of this amendment prescribed it and it does not
-   work. Verified on this machine: `chmod 000` does deny the owner, but an ALREADY-OPEN file
-   descriptor keeps reading afterwards, because POSIX checks permissions at `open()` and not on each
-   read; only NEW opens are denied. `create_test_pool_with_migrations()` uses `min_connections(1)`, so
-   a connection is already open and the tailer's reads would not fail at all — producing a test that
-   appears to inject a failure and injects nothing.
-
-   Use instead: build a pool with `max_connections(1)` and a short `acquire_timeout` (~200ms), spawn
-   the tailer on it, then hold the ONLY connection with `pool.acquire()` in the test. Every tailer
-   query then fails with `sqlx::Error::PoolTimedOut` — a real failure through the real code path —
-   until the guard is dropped. Record in the ledger how the row committed during the outage was
-   written (a second pool/connection, or written before the guard was taken). That second assertion is what proves property 3's
-   "do NOT advance `last_published` on a failed read": if the cursor had advanced past the outage,
-   that row would be lost forever.
+5. `tailer_survives_a_high_water_mark_failure` — exercises the OUTER arm. `pool.close()` is NOT
+   acceptable (irreversible in sqlx: there is no "then succeed" half). **`chmod 000` is NOT acceptable
+   either (2026-08-12):** POSIX checks permissions at `open(2)`, not at read, and
+   `create_test_pool_with_migrations` sets `.min_connections(1)` (`crates/db/src/test_utils.rs:118`),
+   so the pool holds an open fd and reads — and writes — keep succeeding after `chmod 000` on the db,
+   `-wal` and `-shm` alike. Verified empirically. **Pool exhaustion is also wrong here for test 7**
+   (see below) though it would work for this one. Induce the fault with a reversible schema change:
+   `sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden").execute(&pool)`, then
+   rename back. Both queries then fail with "no such table" and the outer arm is taken; SQLite
+   auto-reprepares on `SQLITE_SCHEMA`, so the same pooled connection recovers after the rename-back
+   (verified). Assert THREE things: (a) during the outage, a row committed at that time is NOT
+   published — this proves the fault actually fired, without which the test is vacuous; (b) the tailer
+   task is still running (`!handle.is_finished()`); (c) after the rename-back, that same row IS
+   published. (c) is what proves property 3's "do NOT advance `last_published` on a failed read" — had
+   the cursor advanced past the outage, the row would be lost forever.
 6. `zero_receivers_does_not_stall_the_cursor` — NEW (2026-08-12). Property 2 says `send` errors are
-   ignored deliberately and `last_published` advances regardless, because zero receivers is the
-   normal idle state of a node. Every attempt-1 test subscribed BEFORE publishing, so `send` never
-   returned `Err` and this property was never exercised — a mutation that only advanced on `send`
-   success survived the whole suite. Required shape: commit rows with NO subscriber attached, let a
-   pass run, THEN subscribe and commit one more row; assert only the NEW row arrives. If the cursor
-   had stalled on the zero-receiver error, the earlier rows would be republished.
+   ignored deliberately and `last_published` advances regardless, because zero receivers is the normal
+   idle state of a node. Every attempt-1 test subscribed BEFORE publishing, so `send` never returned
+   `Err` and a mutation that advanced only on `send` success survived the whole suite.
+   **Required shape, all four points binding:**
+   (a) Create the channel as `let (tx, _) = broadcast::channel(64);` — **NOT** `let (tx, _rx) = ...`,
+       the idiom used everywhere else in this file. `_rx` is a live binding for the whole test, so
+       `rx_cnt` is 1, `send` succeeds, and the test passes under the mutation too — vacuous. Dropping
+       the receiver does not permanently close the channel: tokio resets `tail.closed` when
+       `rx_cnt == 0` on the next `subscribe()`, so step (c) works.
+   (b) Spawn the tailer FIRST, so its cursor is below seq 1, and only THEN commit rows 1-3. If the
+       tailer is spawned after the commits it starts at mark 3, never attempts those sends, and the
+       mutation survives again.
+   (c) Let at least one pass run (sleep > `TAIL_INTERVAL`), THEN `tx.subscribe()`, THEN commit one
+       more row.
+   (d) Assert the FIRST event received has the new row's seq, and that no further event arrives.
+       "the new seq is among those received" is NOT sufficient — it passes under the mutation.
+   Why this discriminates: `broadcast::Sender::send` returns `Err` WITHOUT buffering when
+   `rx_cnt == 0`, and a late subscriber starts at the current tail. Under the correct implementation
+   the cursor has already advanced past 3, so only the new row is ever sent; under the mutation the
+   cursor is still 0 and the next pass RE-sends seqs 1,2,3 after the subscriber attaches, making its
+   first message seq 1.
 7. `a_failed_read_does_not_end_the_loop_or_advance_the_cursor` — NEW (2026-08-12). Property 3 has two
-   halves and attempt 1 tested neither for the `read_range` call: because `read_range` is nested
-   inside the `Ok(mark)` arm of the `high_water_mark` match, a closed pool trips the OUTER branch and
-   `read_range`'s error arm never executes. Mutations that returned from the loop on a read error, and
-   that advanced `last_published` by 1000 on a failed read, BOTH survived the suite. Structure the
-   pass so a read failure is reachable and assert both halves: the task is still running afterwards,
-   and no row is skipped.
+   halves and attempt 1 tested neither for the `read_range` call. Mutations that returned from the loop
+   on a read error, and that advanced `last_published` by 1000 on a failed read, BOTH survived the
+   suite. **Do NOT restructure the loop to fix this** — nesting is not the obstacle; the obstacle is
+   that every fault tried also broke `high_water_mark`, so the outer arm tripped first. Use a fault
+   that hits `read_range` ONLY: corrupt a committed row's payload with
+   `UPDATE event_journal SET payload = '{not json' WHERE seq = ?`. `read_range` fails at
+   `serde_json::from_str` (`crates/db/src/models/event_journal/queries.rs:55` →
+   `EventJournalError::Serde`) while `high_water_mark` (`:67`, `SELECT COALESCE(MAX(seq), 0)`) is
+   unaffected. The column is `payload TEXT NOT NULL` with no `CHECK json_valid`
+   (`crates/db/migrations/20260812000000_add_event_journal.sql:12`), so this is storable; verified.
+   Repair it with `serde_json::to_string(&event)` for the same event. Assert THREE things: (a) while
+   the payload is corrupt, nothing is published — proves the fault fired; (b) the tailer task is still
+   running; (c) after the repair, that seq IS published. (c) kills both surviving mutations: a loop
+   that returned would never publish it, and a cursor that jumped by 1000 would read an empty window
+   forever.
+
+**Every fault-injection test above must assert the outage window is observably silent BEFORE the
+repair.** A fault that silently fails to fire otherwise yields a passing test — which is exactly how
+the `chmod 000` version would have shipped green.
 
 ## Change
 **File:** `crates/services/src/services/event_bus/tailer.rs`
@@ -78,13 +99,25 @@ precisely so this task only adds a sibling file.
 **After:** the tailer — the component that makes "journal-first, broadcast-second" structural (D10).
 
 ```text
-last_published = high_water_mark(pool)?   // start live; replay is subscribe_from's job, not ours
-loop {
-    match read_range(pool, last_published, high_water_mark(pool)?) {
-        Ok(rows) => for ev in rows { let _ = sender.send(ev.clone()); last_published = ev.seq }
-        Err(e)   => tracing::warn!(error = ?e, "event journal tail read failed; retrying"),
+// Initial mark: RETRY, never fall back to 0 (property 1 binds this path).
+// Log once or back off here -- at TAIL_INTERVAL=75ms an unbounded warn! is ~13 lines/second forever.
+let mut last_published = loop {
+    match high_water_mark(pool).await {
+        Ok(mark) => break mark,
+        Err(e) => { warn_once!(error = ?e, "high-water mark unavailable; retrying");
+                    sleep(TAIL_INTERVAL).await; }
     }
-    tokio::time::sleep(TAIL_INTERVAL).await
+};
+
+loop {
+    match high_water_mark(pool).await {
+        Ok(mark) => match read_range(pool, last_published, mark).await {
+            Ok(rows) => for ev in rows { let _ = sender.send(ev.clone()); last_published = ev.seq }
+            Err(e)   => warn!(error = ?e, "tail read failed; retrying"),      // do NOT advance
+        },
+        Err(e) => warn!(error = ?e, "high-water mark failed; retrying"),      // do NOT advance
+    }
+    sleep(TAIL_INTERVAL).await
 }
 ```
 
@@ -127,10 +160,23 @@ property forbids, and it also makes task 014's REQUIRED test `shutdown_stops_the
 alone and cannot reach into this module.
 
 Add `pub async fn shutdown(&self)` on `EventBus`: lock the handle, `take()` the `Option`, and
-`.abort()` it. Taking makes it idempotent, so repeat calls and clones are safe. Add a test that
-constructs an `EventBus`, calls `shutdown()`, then commits a journal row and asserts NOTHING is
-published. Also fix `new()`'s doc comment, which currently claims the tailer stops when the
-`EventBus` is dropped — that claim is false.
+`.abort()` it. `take()` makes repeat calls no-ops. **It does NOT make clones independent:** every
+clone shares one `Arc`, so one clone's `shutdown()` stops the tailer for ALL of them, and any other
+clone's `subscribe_from` stream will then replay the journal and park in `Live` forever with no error.
+That is the intended consequence of property 4 (one tailer per `DBService`) — document it on the
+method so only the owning deployment calls it. Note also that `abort()` is NOT synchronous: it cancels
+at the task's next await point.
+
+Add a test that constructs an `EventBus`, calls `shutdown()`, **waits until the tailer has actually
+stopped**, then commits a journal row and asserts NOTHING is published. Also fix `new()`'s doc
+comment, which currently claims the tailer stops when the `EventBus` is dropped — that claim is false.
+
+**Task 014 note.** Because `shutdown()` `take()`s and drops the handle, nothing outside this module
+can call `is_finished()`. Task 014's failing-test 5 (`shutdown_stops_the_background_tasks`, worded
+"assert the spawned tasks terminate") is therefore satisfiable ONLY behaviourally: call
+`deployment.event_bus().shutdown().await`, then commit a row and assert nothing is published.
+`LocalDeployment::new` is already `async` (`crates/local-deployment/src/lib.rs:156,165`) and already
+spawns background work at `:171`, so the `.await` is reachable from where 014 wires startup.
 
 ## Allowed moves
 ONLY the new `tailer.rs` and the `mod tailer;` + handle additions in the existing
