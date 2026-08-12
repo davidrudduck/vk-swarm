@@ -373,3 +373,29 @@ Test 3 (`committed_seqs_are_strictly_increasing_across_rollback`) directly probe
 - `sqlite_sequence` table read directly: `('event_journal', 2)` after the committed second insert
 
 **Finding**: SQLite **does reuse** allocations when a transaction rolls back. The `sqlite_sequence` internal table is itself transactional; the rollback reverts the allocation. This is the conservative direction for the consumer contract (D9 says "consumers must tolerate holes"), so the guarantee holds either way — but the observation confirms SQLite's documented behavior rather than an assumption.
+- [Task 008 orchestrator] The expedited review of the `entity_count` amendment found a far bigger
+  PRE-EXISTING defect, verified independently before acting: 008's connectivity anchors `L353`/`L375`
+  sit in `NodeRunnerHandle::process_event` (`node_runner.rs:349`), whose struct (`:334-343`) holds
+  only `event_rx`, `command_tx`, `state`, `_join_handle` — **no `DBService` and no pool**. That is the
+  identical defect the task diagnoses about `hive_client.rs`: tournament 1 moved the anchor off
+  `hive_client.rs` but landed one layer up, still with no database handle. The loop that actually
+  holds `db: DBService` is in `spawn_node_runner` (`:697-701`, loop `:804-1175`) — and it has NO
+  `Disconnected` arm at all (verified: arms are Connected `:806`, TaskAssigned, TaskCancelled,
+  TaskSyncResponse, LabelSync, BackfillRequest, OpAck, LeaseRevoked, DigestResult, then `Some(_)`
+  `:1166`), so hive disconnects currently fall through and are ignored. Anchors corrected and the new
+  arm made an explicit, authorised requirement. Left unfixed this task was unimplementable as written
+  — `docs/plans/vk-swarm-event-bus/phase-3/008-*.md`
+- [Task 008 orchestrator] Three further amendment defects the same review caught, all accepted:
+  (a) my `i64::try_from(n).unwrap_or(i64::MAX)` dictate rested on a FALSE premise — `n` is
+  `Vec::len()`, bounded by `isize::MAX`, so `as i64` is lossless and the fallback unreachable;
+  worse, reporting `i64::MAX` is the same meaningful-looking-lie class that task 007's `unwrap_or(0)`
+  ban exists to prevent, so I had imported a rule to justify the thing it forbids. Repo precedent is
+  15 `.len() as i64` sites (including `node_runner.rs:1118`) against zero `i64::try_from`.
+  (b) step 3 dictated only the `Ok`/`Err` branches and left `remote_client == None` (`:701`) to the
+  implementer — the exact undictated-choice pattern that got task 003 rejected, reintroduced by the
+  amendment meant to eliminate it. All three branches are now dictated.
+  (c) Allowed moves did not authorise the call-site restructure the step requires — the same
+  paragraph-vs-Allowed-moves contradiction just found in task 007. Also fixed STOP trigger 1, which
+  named `hive_client.rs`'s private `ConnectionState` (`:761`) in a file the task forbids touching,
+  contradicting the Change section's own local `was_connected: bool` —
+  `docs/plans/vk-swarm-event-bus/phase-3/008-*.md`
