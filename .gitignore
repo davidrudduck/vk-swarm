@@ -121,3 +121,7 @@ mcp.json.disabled
 .claude/
 crates/remote/.env.dev
 crates/remote/.env.remote.dev
+
+# wai per-run transients (never commit: .wai-test-cmd is executed by task-gate.sh)
+docs/plans/*/.wai-test-cmd
+docs/plans/*/.wai-task-base
