@@ -332,3 +332,12 @@ trigger for exactly that case.
   the event only MOVED the silent choice downstream, and `unwrap_or(0)` would report a clean exit that
   never happened. 007 now requires emitting `attempt_failed` with a reason naming the missing exit code
   instead of substituting a value — `docs/plans/vk-swarm-event-bus/phase-3/007-*.md`
+- [Task 007 orchestrator] Removed stale pre-tournament wording: the `ExecutionProcess::create`
+  paragraph ended "commit, broadcast", contradicting the SAME file's Allowed-moves paragraph
+  ("**Nothing broadcasts** — the tailer publishes (task 013)") and the journal-tailer decision the
+  spec was re-frozen on. Left as written it would have had the implementer either STOP on the
+  contradiction or wire a broadcast sender into a DB model — the precise coupling D10 removed. Found
+  by sweeping every task file for `broadcast|publish|sender`; 007:56 was the only stale instance
+  (006 and 008 state the rule correctly). No expedited review dispatched for this one: it deletes a
+  contradiction rather than introducing a decision, and the surviving text is the file's own already-
+  reviewed statement — `docs/plans/vk-swarm-event-bus/phase-3/007-*.md`

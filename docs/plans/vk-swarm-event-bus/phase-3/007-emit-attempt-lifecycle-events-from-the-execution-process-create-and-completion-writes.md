@@ -53,7 +53,10 @@ its own discrete write statement.
 **File:** `crates/db/src/models/execution_process/queries.rs`
 **Anchor:** `ExecutionProcess::create` at L361 — a single `INSERT … RETURNING` (L371-391) taking
 `pool: &SqlitePool`.
-**After:** wrap in a transaction, append `NodeEvent::AttemptStarted { .. }`, commit, broadcast.
+**After:** wrap in a transaction, append `NodeEvent::AttemptStarted { .. }`, commit. Nothing is
+broadcast here — see "Nothing broadcasts" below; the tailer (task 013) publishes what it reads back
+from the journal. (Amended 2026-08-12: this line previously ended "commit, broadcast", stale wording
+from the pre-tournament design that contradicted this same file's own Allowed-moves paragraph.)
 
 CRITICAL — why this is safe here: the git I/O that computes `before_head_commit` runs in the CALLER
 at `crates/services/src/services/container.rs:1516-1523` and its result is passed in as a plain
