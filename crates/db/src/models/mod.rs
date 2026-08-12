@@ -20,6 +20,7 @@ pub mod all_tasks;
 pub mod dashboard;
 pub mod draft;
 pub mod event;
+pub mod event_journal;
 pub mod execution_process;
 pub mod execution_process_logs;
 pub mod executor_session;

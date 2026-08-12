@@ -341,3 +341,35 @@ trigger for exactly that case.
   (006 and 008 state the rule correctly). No expedited review dispatched for this one: it deletes a
   contradiction rather than introducing a decision, and the surviving text is the file's own already-
   reviewed statement — `docs/plans/vk-swarm-event-bus/phase-3/007-*.md`
+
+## 2026-08-12 task 004 execute: sibling comparison and SQLite AUTOINCREMENT observation
+
+### Sibling `crates/db/src/models/node_outbox.rs` structural choices and justified divergences
+
+Sibling `node_outbox.rs` uses:
+1. **Separate public/private struct pattern**: `OutboxOp` (public) vs `OutboxOpRow` (private with `sqlx::FromRow`)
+2. **Conversion trait for deserialization**: `From<OutboxOpRow>` with best-effort JSON parsing (warns, continues with `Null` on error)
+3. **Repository pattern**: `OutboxRepository` struct with associated functions (not instantiated)
+4. **Best-effort error posture**: Failed enqueue is logged and swallows the error, allowing partial success
+5. **Error type scoped to sqlx**: All functions return `Result<_, sqlx::Error>`
+
+**Event journal divergences** (all justified by the D2 SC1 guarantee):
+
+1. **`EventJournalError` with serde composition**: Append MUST propagate `serde_json::Error` because a silently dropped event breaks SC1/SC2. The contract is SC1 (read replays all events in order) and SC2 (executor identity is durable); dropping an event breaks both. `node_outbox` can be best-effort because a missed outbound op is a liveness issue (the hive retries), not a data loss.
+
+2. **Generic over `sqlx::Executor` not just `&SqlitePool`**: Required to compose with caller-owned transactions. The spec (L87, L106) names this as load-bearing for task 006 (`Task::delete` already owns an outer transaction spanning child nullification). `node_outbox` is a stateless repository with no such requirement.
+
+3. **Direct `FromRow` on `EventJournalEntry`**: Simplified pattern vs `node_outbox`'s separate row struct. The event_journal schema has no BLOB UUID PKs or nullable complex payloads requiring conversion; the single structure is sufficient.
+
+4. **No Repository struct**: Functions are module-level (`append`, `read_range`, `compact`). This is a stylistic choice not dictated by the task; `node_outbox`'s pattern is equally valid and was considered.
+
+### SQLite AUTOINCREMENT rollback observation
+
+Test 3 (`committed_seqs_are_strictly_increasing_across_rollback`) directly probed SQLite's `AUTOINCREMENT` behavior under rollback:
+
+- Appended event, committed: `seq = 1`
+- Appended event, rolled back: allocation consumed `seq = 2`
+- Appended event, committed: reused `seq = 2` (**REUSE CONFIRMED**)
+- `sqlite_sequence` table read directly: `('event_journal', 2)` after the committed second insert
+
+**Finding**: SQLite **does reuse** allocations when a transaction rolls back. The `sqlite_sequence` internal table is itself transactional; the rollback reverts the allocation. This is the conservative direction for the consumer contract (D9 says "consumers must tolerate holes"), so the guarantee holds either way — but the observation confirms SQLite's documented behavior rather than an assumption.
