@@ -2,7 +2,7 @@
 id: "002"
 phase: 1
 title: "Add the event_journal and trigger_cursors migration"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []

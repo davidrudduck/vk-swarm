@@ -260,3 +260,32 @@ trigger for exactly that case.
 ## Task 002
 
 - [Task 002] `event_journal` uses `INTEGER PRIMARY KEY AUTOINCREMENT` (not scalar subquery) — sibling `node_outbox` (20260201000400) assigns `seq` via scalar subquery with `UNIQUE` guard because its PK is `id BLOB` and `seq` is not a rowid alias; here `seq` IS the primary key, so AUTOINCREMENT is both correct and cheaper, and guarantees no reuse after deletion (required for compaction) — `crates/db/migrations/20260812000000_add_event_journal.sql`
+
+## 2026-08-12 execute: orchestrator amendments (sqlx query form)
+
+- [Task 004 orchestrator] Amended the Change section to require the RUNTIME sqlx API
+  (`query`/`query_as::<_, T>`/`query_scalar::<_, T>` + `.bind()`) and forbid the `query!` macro
+  family; rewrote STOP trigger 3 (it named the macro form the Change section now forbids) and added
+  a STOP trigger for `cargo sqlx prepare` — established by probe, not assumption: `crates/db/.sqlx`
+  is a TRACKED per-crate offline cache (235 files, `git ls-files`), `DATABASE_URL`/`SQLX_OFFLINE` are
+  both unset, and substituting an unknown table into an existing `query_scalar!` fails with
+  `error: set DATABASE_URL to use query macros online, or run cargo sqlx prepare to update the query cache`.
+  A new macro query therefore needs `cargo sqlx prepare`, whose `crates/db/.sqlx/query-<hash>.json`
+  output cannot be declared in `files:` — `task-gate.sh`'s `is_declared()` skips any declared entry
+  whose basename contains a dot when expanding directory scopes, so `crates/db/.sqlx` covers nothing
+  beneath it. Worst case is silent: `wai-committer.sh` stages only declared files, so the regenerated
+  cache is left unstaged, the gate passes on a machine whose cache is warm, and every other machine
+  fails to compile. Not a spec divergence — the spec constrains only that `append` be generic over
+  `sqlx::Executor` (spec L87, L106) and says nothing about query form, so ADR-0001 does not apply.
+  Consistent with the declared sibling `crates/db/src/models/node_outbox.rs:81,100,126`, which already
+  uses the runtime form — `docs/plans/vk-swarm-event-bus/phase-1/004-*.md`
+- [Task 009 orchestrator] Same directive applied to `crates/db/src/models/trigger_cursor.rs`, which
+  authors the `trigger_cursors` UPSERT and the `MIN(last_processed_seq)` read — the only other task
+  that writes NEW SQL. 010/011/013 call task 004's model rather than authoring SQL and were left
+  untouched — `docs/plans/vk-swarm-event-bus/phase-4/009-*.md`
+- [Run orchestrator] Gate runner override supplied via the `.wai-test-cmd` file channel
+  (`cargo test -p "$(basename {scope})"`) with `WAI_TYPECHECK_CMD="cargo check --workspace --all-targets"`.
+  Without it the gate auto-detects vitest from the root `pnpm-lock.yaml` and would have run a
+  TypeScript runner against Rust crates for all 15 tasks. The channel path is gitignored (commit
+  `ccb09d98`) because `task-gate.sh` refuses a tracked channel file and an untracked one could
+  otherwise be swept into a task commit — `.gitignore`, `docs/plans/vk-swarm-event-bus/.wai-test-cmd`

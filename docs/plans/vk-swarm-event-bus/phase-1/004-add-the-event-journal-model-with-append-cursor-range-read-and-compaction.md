@@ -57,7 +57,6 @@ Tests (these ARE TS1):
     (c) that cursor's `needs_rebootstrap` is now 1. This is the D6 hard-cap guarantee — without it a
     stopped hook pins the journal forever and the bounded-journal Constraint is unsatisfiable.
 
-
 ## Change
 **File:** `crates/db/src/models/event_journal/mod.rs`
 **Anchor:** new file — directory module, following the `crates/db/src/models/task_breakdown/`
@@ -73,6 +72,30 @@ its best-effort error posture where a failed enqueue is logged not propagated) a
 divergence in the ledger. Key expected divergence: this journal's append is NOT best-effort — it
 shares the caller's transaction and its failure MUST propagate, because a silently dropped event
 breaks the SC1/SC2 guarantee.
+
+**Query form — use the RUNTIME API, not the `query!` macro family (amended 2026-08-12).**
+Write every statement in this task with `sqlx::query(...)`, `sqlx::query_as::<_, Row>(...)` or
+`sqlx::query_scalar::<_, T>(...)` plus `.bind()`. Do NOT use `sqlx::query!`, `query_as!` or
+`query_scalar!`.
+
+Reason (verified by probe, not assumed): `crates/db/.sqlx` is a **tracked** offline query cache (235
+files) and compile-time verification is active with no `DATABASE_URL` set — substituting an unknown
+table into an existing macro query produces:
+
+```text
+error: set `DATABASE_URL` to use query macros online, or run `cargo sqlx prepare` to update the query cache
+```
+
+A new macro query would therefore require `cargo sqlx prepare`, whose output is `crates/db/.sqlx/query-<hash>.json`
+files that CANNOT be declared in `files:` — the gate's `is_declared()` treats `.sqlx` as a file, not a
+directory scope, so it covers nothing beneath it. `wai-committer.sh` stages only declared files, so the
+regenerated cache would be left unstaged: this machine would compile and every other machine would not.
+The sibling `crates/db/src/models/node_outbox.rs:81,100,126` already uses exactly this runtime form.
+
+Concretely: `append` returns the assigned seq via
+`sqlx::query_scalar::<_, i64>("INSERT INTO event_journal (event_type, payload) VALUES (?, ?) RETURNING seq")`
+with two `.bind()`s and `.fetch_one(executor)`; `read_range` uses
+`sqlx::query_as::<_, EventJournalEntry>(...)` with `#[derive(sqlx::FromRow)]` on the row struct.
 
 **Error type first.** These operations serialize and deserialize JSON, so they CANNOT return
 `Result<_, sqlx::Error>` — `serde_json::Error` has no `From` conversion into `sqlx::Error`, and
@@ -137,24 +160,25 @@ contingency — a submodule is unreachable without it. (An earlier draft of this
 "only if cargo check demands it" aside while declaring `allowed_change: create`, which the file-set
 gate rejects outright; task 009 declares the same edit correctly.)
 
-
 ## Allowed moves
 ONLY the two new files plus the single `pub mod event_journal;` line in
 `crates/db/src/models/mod.rs`. Do NOT wire emission, the broadcast sender, or the tailer — tasks
 005/006/013. Do NOT spawn the compaction loop here; task 011 owns that and task 014 starts it.
-
 
 ## STOP triggers
 - `create_test_pool_with_migrations()` does not exist in `crates/db/src/test_utils.rs` — use
   whatever the crate actually exposes and record it; do NOT hand-write `CREATE TABLE`.
 - `thiserror` is not already a dependency of `crates/db` — check `crates/db/Cargo.toml` before
   writing `EventJournalError`; if absent, STOP rather than adding a dependency in a `create` task.
-- Making `append` generic over `sqlx::Executor` will not compile against the `query!` macro form used
-  by the sibling — STOP and record the exact error; the generic signature is load-bearing for task
-  006's delete path and must not be quietly narrowed to `&SqlitePool`.
+- Making `append` generic over `sqlx::Executor` will not compile against the runtime query form
+  prescribed above — STOP and record the exact error; the generic signature is load-bearing for task
+  006's delete path and must not be quietly narrowed to `&SqlitePool`. (Amended 2026-08-12: this
+  trigger previously named the `query!` macro form, which the Change section now forbids outright.)
+- You find yourself needing to run `cargo sqlx prepare`, or a build error names a missing entry in
+  `crates/db/.sqlx` — STOP. That means a compile-time `query!`-family macro was used; the Change
+  section's Query-form rule forbids it and no regenerated cache file can be committed by this task.
 - The hard-cap pass cannot identify which cursors to flag without a second query — that is fine, do
   it in the same transaction as the cap deletion so a crash cannot delete rows without flagging.
-
 
 ## Manual verification (record in decisions-ledger)
 Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
@@ -166,7 +190,6 @@ expected answer is that the value IS reused, because `sqlite_sequence` is transa
 rollback reverts the allocation — this was probed directly during decomposition. If you observe
 non-reuse instead, say so in the ledger; the consumer contract holds either way, but the note should
 match reality.
-
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 004` exits 0

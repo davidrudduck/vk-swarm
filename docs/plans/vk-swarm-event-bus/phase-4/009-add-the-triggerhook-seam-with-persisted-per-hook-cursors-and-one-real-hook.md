@@ -41,13 +41,22 @@ hook that appends every fired event to a `Vec` behind a mutex. These ARE TS4.
    journal's current minimum rather than its stale cursor, and clears the flag. A hook that ignores
    the flag silently resumes mid-gap.
 
-
 ## Change
 **File:** `crates/db/src/models/trigger_cursor.rs`
 **Anchor:** new file
 **After:** load/upsert accessors over the `trigger_cursors` table created in task 002 —
 `get(pool, hook_name) -> Option<i64>`, `set(pool, hook_name, seq)` (UPSERT on the `hook_name`
 primary key, updating `updated_at`), and `min_cursor(pool) -> Option<i64>` used by compaction.
+
+**Query form — use the RUNTIME API, not the `query!` macro family (amended 2026-08-12).** Write every
+statement here with `sqlx::query(...)`, `sqlx::query_as::<_, Row>(...)` or
+`sqlx::query_scalar::<_, T>(...)` plus `.bind()`. Do NOT use `sqlx::query!`, `query_as!` or
+`query_scalar!`. Same reason as task 004: `crates/db/.sqlx` is a tracked offline query cache and
+compile-time verification is active, so a new macro query would demand `cargo sqlx prepare`, whose
+`crates/db/.sqlx/query-<hash>.json` output cannot be declared in `files:` (the gate treats `.sqlx` as a
+file, not a directory scope) and would be left unstaged by the committer — compiling here and nowhere
+else. The sibling `crates/db/src/models/node_outbox.rs:81,100,126` uses this runtime form.
+STOP if you find yourself needing `cargo sqlx prepare`.
 
 **File:** `crates/db/src/models/mod.rs`
 **Change:** add `pub mod trigger_cursor;` in alphabetical position.
@@ -90,13 +99,11 @@ observable side-effect SC6 requires — it must be greppable in the node log.
 **File:** `crates/services/src/services/mod.rs`
 **Change:** add `pub mod trigger_hooks;` in alphabetical position.
 
-
 ## Allowed moves
 ONLY the four files listed. Registration of the hook on the deployment at startup is
 in scope ONLY if it can be done without editing an unlisted file; if it requires touching
 `crates/local-deployment/src/lib.rs`, STOP and amend the plan rather than editing outside `files:`.
 Do NOT build rule engines, priority selection, or any policy — the spec puts those in P5/P6.
-
 
 ## STOP triggers
 - Registering the hook requires editing a file not in `files:` — STOP and amend.
@@ -104,7 +111,6 @@ Do NOT build rule engines, priority selection, or any policy — the spec puts t
   size (`VK_SQLITE_MAX_CONNECTIONS`, default 10) and record the reasoning.
 - `async_trait` is not already a dependency of `crates/services` — do NOT add a new dependency
   without recording it; prefer whatever async-trait mechanism the crate already uses.
-
 
 ## Manual verification (record in decisions-ledger)
 Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
@@ -116,7 +122,6 @@ Live SC6 check (record BOTH halves in the ledger):
 2. Restart the node, move a task again, and confirm the hook fires again AND that
    `sqlite3 $VK_DATABASE_PATH "select hook_name, last_processed_seq from trigger_cursors"` shows the
    cursor advancing across the restart rather than resetting.
-
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 009` exits 0
