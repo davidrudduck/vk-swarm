@@ -502,3 +502,35 @@ clean.
   already sanctions "return a boxed stream" in that case and requires the concrete return type in the
   ledger, so this is a declared choice rather than a STOP. Cargo.toml is NOT in the task's `files:`,
   so adding a dependency is out of bounds — STOP if one seems necessary
+
+## 2026-08-12 task 005 implementation: three required ledger entries
+
+### EventService vs EventBus: sibling comparison and design separation
+
+`EventBus` is a separate type from `EventService`, not an extension of it. Both are Clone structs holding shared state for managing state transitions in the node.
+
+- **EventService** (`crates/services/src/services/events.rs`): Holds a message store and DBService. Created once per deployment. Manages SQLite hook patches — intercepts row changes and records them as JSON patches to a message store for WebSocket delivery to the frontend. API: `new(db, msg_store, entry_count)`, `msg_store()` accessor, `create_hook()` factory for the pre/post-update hooks.
+
+- **EventBus** (`crates/services/src/services/event_bus/mod.rs`): Holds a SqlitePool and broadcast Sender. Created once per deployment. Manages durable event streaming from the journal — receives events from the tailer (task 013), broadcasts them to subscribers, and provides a fallback replay-to-live subscription model. API: `new(pool, capacity)`, `sender()` accessor for the tailer, `subscribe_from(cursor)` for consumers.
+
+**Why separate types:** Both are stateless services in the architectural sense (no per-request state), but they serve orthogonal concerns: EventService patches record-level changes; EventBus sequences and replays domain events. Merging them would violate separation of concerns and would force the message store into the event journal layer (where it doesn't belong). The task prohibited a Sender field in DBService for architectural reasons (D8 decision), so EventBus lives in services alongside EventService, receiving events from the tailer.
+
+### Broadcast channel capacity: 64, reasoning
+
+Broadcast capacity controls how many events the channel buffers before a slow subscriber causes a Lagged error, triggering a journal refill. This is a latency/memory tradeoff, not a correctness one.
+
+**Chosen value: 64 events.** Reasoning:
+- Small enough to detect slow subscribers quickly (no silent lag buildup)
+- Large enough for typical bursts: a task creation + status change + attempt start spans ~3 events; 20 concurrent tasks = ~60 events, leaving a buffer
+- Journal refill recovers all missed events, so Lagged is recoverable and not data loss
+- 64 SequencedEvent instances (64 bytes base + inline NodeEvent enum ≈ 200-300 bytes per event) = ~20KB per subscriber — multiple subscribers at reasonable cost
+
+An implementation COULD make this tunable (env var), but the task does not require it, and the tradeoff is insensitive to a single magic constant.
+
+### Concrete `subscribe_from` return type
+
+The return type is `Result<BoxStream<'static, Result<SequencedEvent, EventBusError>>, EventBusError>`.
+
+`subscribe_from` must be fallible (the task pinned this to catch journal errors early, not silence them in the stream). Since `async_stream` is not available in crates/services, a boxed stream (`Box<Pin<impl Stream<...>>>` wrapped in `Box::pin()`) is the fallback. The stream is 'static because it owns cloned pool/sender and does not borrow from `self`. Built using `futures::stream::unfold`, which handles the async state machine without a procedural macro.
+
+The inner error variant `EventBusError` wraps `EventJournalError` to give consumers a single error enum for all operational failures (pool closed, deserialization, cursor floor exceeded).
