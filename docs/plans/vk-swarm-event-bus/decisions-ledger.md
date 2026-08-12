@@ -279,6 +279,13 @@ trigger for exactly that case.
   `sqlx::Executor` (spec L87, L106) and says nothing about query form, so ADR-0001 does not apply.
   Consistent with the declared sibling `crates/db/src/models/node_outbox.rs:81,100,126`, which already
   uses the runtime form — `docs/plans/vk-swarm-event-bus/phase-1/004-*.md`
+- [Task 006/007/015 orchestrator] Widened the same directive after an exhaustive re-scan of every
+  task file: 006's and 015's tests read `event_journal` directly, and 007 adds a new `SELECT` of the
+  rows about to transition inside its transaction — all three author NEW SQL in a crate with a
+  tracked `.sqlx` cache. The first scoping pass (004/009 only) was too narrow. The inserted block is
+  deliberately narrower than 004's: re-using an EXISTING macro query verbatim stays allowed, because
+  its text is already cached — this matters for 006, which re-runs `Task::create`'s existing
+  `query_as!` against `&mut *tx` — `docs/plans/vk-swarm-event-bus/phase-3/{006,007,015}-*.md`
 - [Task 009 orchestrator] Same directive applied to `crates/db/src/models/trigger_cursor.rs`, which
   authors the `trigger_cursors` UPSERT and the `MIN(last_processed_seq)` read — the only other task
   that writes NEW SQL. 010/011/013 call task 004's model rather than authoring SQL and were left
