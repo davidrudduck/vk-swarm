@@ -573,3 +573,31 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   completions mid-session — every call connects, prints its model header and exits rc=0 with 35 bytes,
   reproduced with and without `--auto`/`--variant`. Recorded as a seat that did not report rather than
   quietly dropped; the two verdicts that DID land are what 005 passed on
+
+## 2026-08-12 execute: task 013 attempt 1 REJECTED
+
+- [Task 013 orchestrator] Attempt 1 (`2617d509`) passed the deterministic gate (12/12 tests, fmt,
+  clippy, check all clean) and was REJECTED on three cited findings:
+  (1) **The tailer cannot be stopped.** The task required "retain a JoinHandle (or an abort handle) so
+  shutdown can stop it cleanly rather than leaking it". The handle IS stored
+  (`event_bus/mod.rs:56`, `:81`) but never read: three references total in that file — declaration,
+  clone, construction — and NO public method reaches it. Dropping a tokio `JoinHandle` DETACHES the
+  task rather than aborting it, so the `new()` doc comment claiming it stops on drop is false. A
+  challenger proved it empirically in a disposable worktree: it dropped the `EventBus`, then committed
+  a journal row, and the detached tailer still published it. Consequence found at system level, not
+  file level — **task 014 carries a REQUIRED test `shutdown_stops_the_background_tasks` (014:28) that
+  is unsatisfiable as shipped**, because 014's file set is `crates/local-deployment/src/lib.rs` only
+  and it cannot reach `tailer_handle` without editing `event_bus/mod.rs`, which would trip its own
+  STOP trigger. A defect in 013 whose only symptom is an impossibility three tasks later.
+  (2) **Initial-read error path violates property 1** (orchestrator finding). `tailer.rs:41-46` falls
+  back to `last_published = 0` when the first `high_water_mark` call fails. Property 1 exists BECAUSE
+  "a tailer starting at 0 would flood every new subscriber's live channel with history and force an
+  immediate Lagged" — so the error path silently does the exact thing the property forbids. Undictated
+  and undeclared.
+  (3) **Test 5 implements half its dictated behaviour.** The task says "make one read fail, THEN
+  SUCCEED; assert the tailer logs and continues". `tailer_survives_a_transient_read_error`
+  (`tailer.rs:339-389`) closes the pool permanently and asserts only `!handle.is_finished()`. It proves
+  non-termination, never recovery — and a tailer that survives but never resumes publishing is just as
+  broken as one that dies. Found independently by the orchestrator and a challenger.
+  No task amendment needed: all three are deviations from text the task already dictated —
+  `docs/plans/vk-swarm-event-bus/phase-2/013-*.md`

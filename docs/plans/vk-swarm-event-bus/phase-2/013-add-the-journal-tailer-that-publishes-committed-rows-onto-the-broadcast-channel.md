@@ -2,7 +2,7 @@
 id: "013"
 phase: 2
 title: "Add the journal tailer that publishes committed rows onto the broadcast channel"
-status: ready
+status: rejected
 depends_on: ["005"]
 parallel: false
 conflicts_with: []
