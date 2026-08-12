@@ -95,6 +95,21 @@ mod tests {
     use db::test_utils::create_test_pool_with_migrations;
     use uuid::Uuid;
 
+    /// Poll for an event with a generous deadline budget (~30 seconds).
+    /// Returns the first event received before the deadline, or None if the deadline expires.
+    /// Immune to runtime contention since it waits indefinitely (up to deadline) for the event.
+    async fn poll_for_event(
+        subscriber: &mut tokio::sync::broadcast::Receiver<SequencedEvent>,
+        deadline: tokio::time::Instant,
+    ) -> Option<SequencedEvent> {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, subscriber.recv()).await {
+            Ok(Ok(ev)) => Some(ev),
+            Ok(Err(_)) => None, // RecvError (channel closed)
+            Err(_) => None,      // Timeout (deadline passed)
+        }
+    }
+
     #[tokio::test]
     async fn tailer_publishes_committed_rows_in_seq_order() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
@@ -105,6 +120,9 @@ mod tests {
 
         // Subscribe to the broadcast channel BEFORE committing rows
         let mut subscriber = tx.subscribe();
+
+        // Give the tailer a moment to start and initialize
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         // Now append and commit 3 rows
         {
@@ -119,17 +137,14 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Give the tailer time to poll and publish the 3 rows
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-        // Collect the published events
+        // Collect the published events using deadline-based polling.
+        // This is immune to runtime contention; waits up to deadline for events to arrive.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut seqs = vec![];
         for _ in 0..3 {
-            match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv())
-                .await
-            {
-                Ok(Ok(ev)) => seqs.push(ev.seq),
-                _ => break,
+            match poll_for_event(&mut subscriber, deadline).await {
+                Some(ev) => seqs.push(ev.seq),
+                None => break,
             }
         }
 
@@ -154,6 +169,9 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
+        // Give the tailer a moment to start and initialize
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
         // Open a transaction, append an event, and roll back without committing
         {
             let mut tx_write = pool.begin().await.unwrap();
@@ -166,11 +184,12 @@ mod tests {
             drop(tx_write);
         }
 
-        // Give the tailer time to poll (should find nothing because the row was rolled back)
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Wait several multiples of TAIL_INTERVAL to ensure the tailer has polled multiple times
+        // and confirmed no events were published (rolled back row is not committed).
+        tokio::time::sleep(std::time::Duration::from_millis(225)).await;
 
-        // Verify no events were published
-        match tokio::time::timeout(std::time::Duration::from_millis(50), subscriber.recv()).await {
+        // Verify no events were published during the rollback
+        match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
             Ok(Ok(_)) => panic!("tailer should not publish rolled-back rows"),
             _ => {
                 // Expected: no event received
@@ -188,19 +207,17 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Give the tailer time to publish the committed row
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // Collect the published event
-        match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv()).await {
-            Ok(Ok(ev)) => {
+        // Collect the published event using deadline-based polling
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        match poll_for_event(&mut subscriber, deadline).await {
+            Some(ev) => {
                 // Should only receive seq 1 (the committed row, not the rolled-back one)
                 assert_eq!(
                     ev.seq, 1,
                     "should only receive the committed row, not the rolled-back one"
                 );
             }
-            _ => panic!("expected to receive the committed row"),
+            None => panic!("expected to receive the committed row"),
         }
 
         tailer_handle.abort();
@@ -217,6 +234,9 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
+        // Give the tailer a moment to start and initialize
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
         // Append and commit 3 journal rows
         {
             let mut tx_write = pool.begin().await.unwrap();
@@ -230,26 +250,23 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Give the tailer time to poll and publish the 3 rows
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // Collect the published events from the first pass
+        // Collect the published events from the first pass using deadline-based polling
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         for _ in 0..3 {
-            match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv())
-                .await
-            {
-                Ok(Ok(_)) => {
+            match poll_for_event(&mut subscriber, deadline).await {
+                Some(_) => {
                     // Expected
                 }
-                _ => break,
+                None => break,
             }
         }
 
-        // Wait for another poll interval (tailer should find no new events)
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Wait for another poll interval (tailer should find no new events).
+        // Use multiple multiples of TAIL_INTERVAL to ensure no republish occurs.
+        tokio::time::sleep(std::time::Duration::from_millis(225)).await;
 
-        // Verify the second pass publishes nothing
-        match tokio::time::timeout(std::time::Duration::from_millis(50), subscriber.recv()).await {
+        // Verify the second pass publishes nothing (bounded wait ensures we're checking real state)
+        match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
             Ok(Ok(_)) => panic!("tailer should not republish in the second pass"),
             _ => {
                 // Expected: no new events
@@ -284,11 +301,13 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
-        // Give the tailer time to poll (it will find nothing from (3, 3])
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Give the tailer a moment to start and initialize
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-        // Verify no events were published yet (tailer started at the high-water mark)
-        match tokio::time::timeout(std::time::Duration::from_millis(50), subscriber.recv()).await {
+        // Wait and verify no events were published yet (tailer started at the high-water mark).
+        // Use multiple multiples of TAIL_INTERVAL to ensure the tailer has polled and found nothing.
+        tokio::time::sleep(std::time::Duration::from_millis(225)).await;
+        match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
             Ok(Ok(_)) => panic!("tailer should not replay old rows"),
             _ => {
                 // Expected: no events
@@ -319,17 +338,13 @@ mod tests {
             tx.commit().await.unwrap();
         }
 
-        // Give the tailer time to poll and publish the 2 new rows
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // Collect the published events
+        // Collect the published events using deadline-based polling
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut seqs = vec![];
         for _ in 0..2 {
-            match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber2.recv())
-                .await
-            {
-                Ok(Ok(ev)) => seqs.push(ev.seq),
-                _ => break,
+            match poll_for_event(&mut subscriber2, deadline).await {
+                Some(ev) => seqs.push(ev.seq),
+                None => break,
             }
         }
 
@@ -354,6 +369,9 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
+        // Give the tailer a moment to start and initialize
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
         // Append and commit 1 row before the outage
         {
             let mut tx_write = pool.begin().await.unwrap();
@@ -365,15 +383,13 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Give the tailer time to publish the row
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-        // Drain the event
-        match tokio::time::timeout(std::time::Duration::from_millis(200), subscriber.recv()).await {
-            Ok(Ok(ev)) => {
+        // Drain the event using deadline-based polling
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        match poll_for_event(&mut subscriber, deadline).await {
+            Some(ev) => {
                 assert_eq!(ev.seq, 1, "expected to receive seq 1");
             }
-            _ => panic!("expected to receive the row"),
+            None => panic!("expected to receive the row"),
         }
 
         // Induce transient failure via table rename (fires high_water_mark, outer arm)
@@ -382,11 +398,13 @@ mod tests {
             .await
             .unwrap();
 
-        // Wait for the tailer to attempt a read and fail
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // Wait several multiples of TAIL_INTERVAL (75ms * 3 = 225ms) to ensure the tailer
+        // has attempted multiple reads and confirmed nothing is published during the outage.
+        tokio::time::sleep(std::time::Duration::from_millis(225)).await;
 
-        // Verify no additional event was published during outage (fault fired)
-        match tokio::time::timeout(std::time::Duration::from_millis(50), subscriber.recv()).await {
+        // Verify no additional event was published during outage (fault fired).
+        // Use a bounded wait (3 * TAIL_INTERVAL) to check for spurious events.
+        match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
             Ok(Ok(_)) => panic!("no event should publish during table-hidden outage"),
             _ => {
                 // Expected: nothing published while table is hidden
@@ -398,9 +416,6 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-
-        // Wait for the tailer to recover and verify the cursor is still at 0
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // The tailer should still be running (did not end on the error)
         assert!(
@@ -420,17 +435,16 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Wait for the tailer to publish the new row
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv()).await {
-            Ok(Ok(ev)) => {
+        // Poll for the recovered row using deadline-based polling
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        match poll_for_event(&mut subscriber, deadline).await {
+            Some(ev) => {
                 assert_eq!(
                     ev.seq, 2,
                     "should publish seq 2 after recovery; cursor did not advance past error"
                 );
             }
-            _ => panic!("expected to receive seq 2 after recovery from transient error"),
+            None => panic!("expected to receive seq 2 after recovery from transient error"),
         }
 
         tailer_handle.abort();
@@ -443,6 +457,9 @@ mod tests {
         // Start the tailer first (with no subscribers yet)
         let (tx, _) = broadcast::channel(64);
         let tailer_handle = spawn(pool.clone(), tx.clone());
+
+        // Give the tailer a moment to start and initialize
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         // Commit rows with NO subscriber attached
         {
@@ -474,17 +491,13 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Give the tailer time to publish the new row
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // Collect published events
+        // Collect published events using deadline-based polling
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut seqs = vec![];
         for _ in 0..1 {
-            match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv())
-                .await
-            {
-                Ok(Ok(ev)) => seqs.push(ev.seq),
-                _ => break,
+            match poll_for_event(&mut subscriber, deadline).await {
+                Some(ev) => seqs.push(ev.seq),
+                None => break,
             }
         }
 
@@ -510,6 +523,9 @@ mod tests {
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
 
+        // Give the tailer a moment to start and initialize
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
         // Append and commit 1 row
         {
             let mut tx_write = pool.begin().await.unwrap();
@@ -521,15 +537,13 @@ mod tests {
             tx_write.commit().await.unwrap();
         }
 
-        // Give the tailer time to publish the row
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-        // Drain the published event
-        match tokio::time::timeout(std::time::Duration::from_millis(200), subscriber.recv()).await {
-            Ok(Ok(ev)) => {
+        // Drain the published event using deadline-based polling
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        match poll_for_event(&mut subscriber, deadline).await {
+            Some(ev) => {
                 assert_eq!(ev.seq, 1);
             }
-            _ => panic!("expected to receive seq 1"),
+            None => panic!("expected to receive seq 1"),
         }
 
         // Commit row 2 before corrupting it
@@ -549,11 +563,12 @@ mod tests {
             .await
             .unwrap();
 
-        // Wait for the tailer to attempt a read and fail at deserialization
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // Wait for the tailer to attempt multiple reads and fail at deserialization
+        tokio::time::sleep(std::time::Duration::from_millis(225)).await;
 
-        // Verify nothing was published during the corruption (fault fired)
-        match tokio::time::timeout(std::time::Duration::from_millis(50), subscriber.recv()).await {
+        // Verify nothing was published during the corruption (fault fired).
+        // Use bounded wait (3 * TAIL_INTERVAL) to ensure we're checking real state.
+        match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
             Ok(Ok(_)) => panic!("no event should publish while payload is corrupted"),
             _ => {
                 // Expected: nothing published
@@ -574,9 +589,6 @@ mod tests {
                 .unwrap();
         }
 
-        // Wait for the tailer to recover and read the repaired row
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
         // Verify the tailer is still running
         assert!(
             !tailer_handle.is_finished(),
@@ -584,14 +596,16 @@ mod tests {
         );
 
         // Verify the corrupted row is now published (proving cursor did not advance)
-        match tokio::time::timeout(std::time::Duration::from_millis(100), subscriber.recv()).await {
-            Ok(Ok(ev)) => {
+        // Use deadline-based polling for the positive assertion.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        match poll_for_event(&mut subscriber, deadline).await {
+            Some(ev) => {
                 assert_eq!(
                     ev.seq, 2,
                     "should publish seq 2 after repair; if cursor advanced during error, this would be skipped"
                 );
             }
-            _ => panic!("expected to receive seq 2 after recovery from read error"),
+            None => panic!("expected to receive seq 2 after recovery from read error"),
         }
 
         tailer_handle.abort();
