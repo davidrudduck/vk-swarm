@@ -2,7 +2,7 @@
 id: "016"
 phase: 2
 title: "Make the tailer give-up defect unrepresentable, and the tailer observable"
-status: ready
+status: rejected
 depends_on: ["013"]
 parallel: false
 conflicts_with: []
@@ -139,10 +139,12 @@ and it is the only place the driver can still be mutated invisibly.
   `TailerHealth` counters and their accessor, and the three tests above.
 - The extraction must be **behaviour-preserving**. Do not change a query, a cursor rule, a log site,
   the `TAIL_INTERVAL`, or the initial-mark retry loop's backoff.
-- You MAY delete the two 1500ms windows in `tailer_survives_a_transient_read_error` and
-  `a_failed_read_does_not_end_the_loop_or_advance_the_cursor`, returning them to a short window —
-  but ONLY after test 1 is green and its mutation proof kills. Those windows exist solely to bound
-  retry duration, which `PollOutcome` now makes unrepresentable. **Do not touch the 8000ms window**
+- ~~You MAY delete the two 1500ms windows in `tailer_survives_a_transient_read_error` and
+  `a_failed_read_does_not_end_the_loop_or_advance_the_cursor`~~ **WITHDRAWN after attempt 1 — this
+  permission was based on a false premise and the panel disproved it. `PollOutcome` constrains
+  `poll_once`; it does NOT constrain the driver loop, which is where give-up still lives. See
+  "REQUIRED after attempt 1" at the foot of this file for what replaces those windows.**
+  **Do not touch the 8000ms window**
   (test 2) and **do not lengthen `zero_receivers_does_not_stall_the_cursor`'s 300ms gap**, which the
   ledger records as the only thing pinning `TAIL_INTERVAL` small.
 - Every other test in both modules must still pass UNCHANGED. 268 tests is the floor.
@@ -183,3 +185,84 @@ Each script must assert its anchor matches exactly once and abort otherwise.
 
 ## Done when
 `WAI_TYPECHECK_CMD="cargo check --workspace" WAI_TEST_CMD='cargo test -p "$(basename {scope})"' bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 016` exits 0
+
+## REQUIRED after attempt 1 — the panel refuted this task's central premise
+
+**The orchestrator's reasoning in the "Allowed moves" section above was wrong, and the permission it
+granted to delete the two 1500ms windows must be treated as withdrawn.**
+
+The claim was: *"Those windows exist solely to bound retry duration, which `PollOutcome` now makes
+unrepresentable."* `PollOutcome` makes give-up unrepresentable **inside `poll_once`**. It does not
+constrain the **driver loop**, and the driver is where the loop actually lives. Conflating the two was
+a conceptual error, not a detail.
+
+The panel proved it with the same mutation producing opposite verdicts:
+
+| suite state | driver gives up after 10 consecutive failures |
+|---|---|
+| post-attempt-1 (225ms window) | `test result: ok. 270 passed; 0 failed` |
+| 1500ms window restored | `panicked at tailer.rs:802:9: tailer should survive the transient read error` |
+
+The measured detection floor fell from ~20 poll passes to **4** — a 5x regression on the most-attacked
+property in this file. `a_poll_step_can_never_terminate_the_loop` cannot see it, because it drives
+`poll_once` directly with no spawned task and no driver.
+
+### Fix all three findings together — they share one solution
+
+Do NOT simply restore the two 1500ms sleeps. Restoring fixed wall-clock windows reinstates the exact
+weakness the ledger's declared residual describes: a budget above the window still passes, and every
+run pays the full sleep on every machine. **Use the health counters as the observable instead.**
+
+1. **Driver liveness, waiting on a counter rather than a clock.** In both
+   `tailer_survives_a_transient_read_error` and
+   `a_failed_read_does_not_end_the_loop_or_advance_the_cursor`: induce the outage, then poll
+   `health.consecutive_failures` until it reaches **at least 25**, with a generous deadline as a
+   safety net — not a fixed sleep. Then repair and assert a row committed after the repair is
+   published with its absolute seq. This kills any driver give-up budget below 25, returns as soon as
+   the counter arrives rather than burning a fixed 1500ms, and makes the counters load-bearing instead
+   of decorative.
+
+2. **F1 — `EventBus::tailer_health()` is wired to nothing verifiable.** Handing the tailer a
+   different `Arc` than the accessor returns survives the whole suite:
+   ```text
+   MUTATION APPLIED: EventBus hands the tailer a DIFFERENT Arc than tailer_health() returns
+   test result: ok. 270 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 11.22s
+   ```
+   The accessor has zero callers and zero tests; the only health test calls `tailer::spawn` directly
+   and holds its own `Arc`. Add a test at the **`EventBus`** layer asserting that
+   `bus.tailer_health().polls_total` advances while the bus's own tailer runs. Without it, a `/health`
+   surface built on this accessor would report zeros forever — reproducing the green-while-dead mode
+   this task exists to remove.
+
+3. **F3 — the counters are self-reporting.** The health test publishes exactly one row, so every
+   counter is indistinguishable from the literal `1`. Both of these survive:
+   ```text
+   MUTATION APPLIED: polls_total frozen at 1, never counts
+   test result: ok. 270 passed; 0 failed; ... finished in 11.19s
+   MUTATION APPLIED: last_published_seq hardcoded to 1
+   test result: ok. 270 passed; 0 failed; ... finished in 11.19s
+   ```
+   Assert them AS COUNTERS: publish several rows across several passes; require `polls_total` to
+   climb strictly between two observations, and `last_published_seq` to equal the LAST seq, not `1`.
+   A liveness signal that cannot be falsified is worse than none.
+
+4. **Initialise `last_published_seq` to the resolved initial mark**, not `0`. On a non-empty journal
+   it currently reads `0` — indistinguishable from "nothing ever published" — until the first
+   post-start publish.
+
+### Mutation proofs (required; anchor-guarded, `assert s.count(OLD) == 1`)
+
+1. Driver gives up after **10** consecutive failures → both driver-liveness tests must FAIL.
+2. `EventBus` hands the tailer a different `Arc` than `tailer_health()` returns → the new
+   EventBus-layer health test must FAIL.
+3. `polls_total` frozen at 1 → the counter test must FAIL.
+4. `last_published_seq` hardcoded to 1 → the counter test must FAIL.
+5. The attempt-1 proofs must still kill: a terminating `PollOutcome` variant, and `break 0` after 10
+   retries in the initial-mark loop.
+
+### What attempt 1 got RIGHT and must be preserved
+The panel verified the extraction line by line and found **no semantic change**: identical `debug!`
+value and firing point, `count` computed before the publish loop, cursor advanced immediately after
+`send` regardless of its result, both error arms preserving their `warn!` text and not touching the
+cursor, and the initial-mark loop and `TAIL_INTERVAL` untouched. Keep all of it. The defect is in the
+tests, not the extraction.

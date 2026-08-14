@@ -2144,3 +2144,62 @@ ran, and the full suite re-confirmed green between mutations.
 - `cargo fmt --all -- --check` → exit 0
 - `cargo clippy -p services --all-targets --all-features -- -D warnings` → exit 0
 - Machine confirmed quiet (`pgrep -x cargo` → 0) before each timed run
+
+## 2026-08-14 execute: 016 attempt 1 REJECTED — ORCHESTRATOR ERROR, the premise was wrong
+
+- [Run orchestrator] **My fourth drafting error on this workstream, and the most consequential: I
+  conflated the STEP with the LOOP.** Task 016's "Allowed moves" granted permission to delete two
+  1500ms windows on the stated ground that *"those windows exist solely to bound retry duration, which
+  `PollOutcome` now makes unrepresentable."* `PollOutcome` makes give-up unrepresentable inside
+  `poll_once`. The driver loop is a separate three lines, and that is where the loop actually lives.
+  The panel proved it with one mutation and two opposite verdicts:
+
+  | suite state | driver gives up after 10 consecutive failures |
+  |---|---|
+  | post-attempt-1 (225ms window) | `test result: ok. 270 passed; 0 failed` |
+  | 1500ms window restored | `panicked at tailer.rs:802:9: tailer should survive the transient read error` |
+
+  Measured detection floor fell from ~20 poll passes to **4** — a 5x regression on the most-attacked
+  property in this file, introduced by a permission I wrote. `a_poll_step_can_never_terminate_the_loop`
+  cannot see it: it drives `poll_once` directly, with no spawned task and no driver
+- [Run orchestrator] The three previous drafting errors were a contradictory pinned value, a
+  mechanism framed as the fix, and wrong arithmetic. This one is different in kind — a category error
+  about what a type can guarantee. The standing correction is broader than the earlier one: when a
+  change claims to make a defect class UNREPRESENTABLE, name the exact scope the guarantee covers and
+  the scope it does not, and keep the old coverage for the uncovered scope until something replaces it
+- [Run orchestrator] **F1 — `EventBus::tailer_health()` is wired to nothing verifiable.** Handing the
+  tailer a different `Arc` than the accessor returns survives: `270 passed; 0 failed`. The accessor has
+  zero callers and zero tests; the only health test calls `tailer::spawn` directly with its own `Arc`.
+  So 016's headline product claim — closing the green-while-dead gap — is untested at the layer a
+  health surface would read from, and a `/health` endpoint built on it would report zeros forever
+- [Run orchestrator] **F3 — the counters are self-reporting.** The health test publishes exactly one
+  row, so every counter is indistinguishable from the literal `1`: `polls_total` frozen at 1 survives,
+  and `last_published_seq` hardcoded to 1 survives. A liveness signal that cannot be falsified is worse
+  than none, because it converts "unknown" into "healthy". Also: `last_published_seq` initialises to 0
+  while the cursor starts at the high-water mark, so on a non-empty journal it reads 0 until the first
+  post-start publish
+- [Run orchestrator] **The remedy is NOT to restore the sleeps.** Attempt 2 waits on
+  `consecutive_failures >= 25` as an observable instead of a wall clock: it kills any driver budget
+  below 25, returns as soon as the counter arrives rather than burning a fixed 1500ms on every machine,
+  and makes the counters load-bearing — which fixes F1 and F3 by the same stroke rather than bolting on
+  three unrelated patches
+- [Run orchestrator] **What attempt 1 got right, verified by the panel line by line and to be
+  preserved:** the extraction changed NO semantics — identical `debug!` value and firing point, `count`
+  computed before the publish loop, cursor advanced immediately after `send` regardless of its result,
+  both error arms preserving their `warn!` text and not touching the cursor, initial-mark loop and
+  `TAIL_INTERVAL` untouched. The defect is in the tests, not the extraction
+- [Run orchestrator] Panel cleared by inspection, recorded so no future round re-spends it: **no
+  reachable panic path in `poll_once`** — no `unwrap`/`expect`/indexing, both DB calls `?`-only, and the
+  one arithmetic site (`retry_count += 1` on `u32`) needs ~13 years to overflow at the 100ms minimum
+  backoff. Hardening note only: there is no `catch_unwind` around the driver, so a panic introduced
+  later would end the task permanently and `PollOutcome` could not prevent it
+
+### Process correction: commit-then-gate
+
+- [Run orchestrator] The Stage-1 gate's file-set check runs `git show "$COMMIT" --name-only` at
+  `task-gate.sh:544` — it validates the HEAD COMMIT, not the working tree. Task 013 attempt 8 was gated
+  while its work was uncommitted, so that portion validated the PRIOR commit (`de75b78f`) rather than
+  attempt 8. The typecheck and scope tests DID run against the working tree, and the file set was
+  separately confirmed by hand via `git status --porcelain`, so the conclusion stands — but "Stage 1
+  CONFORMS" claimed more than had been established. Every task from 016 onward is committed first, then
+  gated, and 016's gate was re-run that way (`file-set: only declared files changed (3 paths)`)
