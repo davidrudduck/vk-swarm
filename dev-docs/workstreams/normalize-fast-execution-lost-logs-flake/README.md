@@ -39,7 +39,7 @@ It also failed 2 of 3 full `cargo test -p services` runs on the task-013 branch 
 Same code passing in one worktree and failing in another, plus the failure reproducing on code that
 predates task 013 entirely, rules out the event bus as the cause. The variable is machine load.
 
-## Why this may be a REAL bug, not test debt
+## Why it looked like it MIGHT be a real bug (superseded by the confirmation below)
 
 The test's name is the point: it was written because fast executions were **losing logs**. It
 asserts `patch_count >= 1` after pushing one message, pushing finished, and awaiting the
@@ -117,14 +117,18 @@ job it was written for and should not be touched until the race is fixed.
    pushed before `finished` was signalled? Suspect the ordering between the message-store push, the
    finished signal, and the normalizer's stream subscription — a subscriber that attaches after the
    final message and after `finished` sees an empty stream and exits cleanly with nothing to do.
-3. If it is a real race, fix it in the normalizer and keep the test as the regression guard.
-4. If it is purely timing, make the test wait on an observable condition rather than a 5s wall-clock
-   budget — the same fix pattern task 013 applied to its own flaky tailer tests (a readiness/
-   happens-before edge instead of a deadline).
+4. Fix the race in the normalizer and keep this test as the regression guard. Do NOT convert it to
+   wait on an observable condition — that was the right remedy under hypothesis H1, which the
+   captured evidence has now disproved. Making the test wait longer would hide a live bug.
 
 ## Impact while open
 
 `cargo test -p services` (and therefore the WAI Stage-1 gate for any task scoped to
-`crates/services`) can reject spuriously at roughly a 1-in-8 rate under load. A rejection citing ONLY
-`test_fast_execution_no_lost_logs` is this issue and not the task under gate — verify by re-running
-the crate's own tests and confirming no other failure.
+`crates/services`) fails at roughly a 1-in-6 to 1-in-8 rate under load. **These are NOT spurious
+rejections** — that framing was written under hypothesis H1 and is now known to be wrong. The gate is
+correctly reporting a real defect that happens to live outside the task under test.
+
+The operational rule stands, but for a different reason than originally recorded: a failure citing
+ONLY a `normalize_sync_test.rs` test is THIS bug and not the task under gate, so confirm no other test
+failed and proceed. What changed is that the rejection is a true positive against the codebase, not
+noise, and it will keep firing until the race is fixed.
