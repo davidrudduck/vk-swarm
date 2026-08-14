@@ -6,6 +6,9 @@
 //! - Consumers subscribe to the broadcast live, plus replay-to-live via subscribe_from
 //! - The journal is the source of truth; broadcast is an optimization
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+
 use db::models::event::SequencedEvent;
 use db::models::event_journal;
 use sqlx::SqlitePool;
@@ -23,6 +26,104 @@ use tracing::{debug, warn};
 ///   at 75ms polling, even a 10 task/sec rate (very high) only sees ~1 event per poll, so Lagged
 ///   refills are rare and subscribers stay nearly synchronized
 const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(75);
+
+/// Observable liveness counters for the tailer, shared with `EventBus` so a caller can tell
+/// whether the tailer is alive WITHOUT inferring it from timing side-effects on the broadcast
+/// channel.
+///
+/// This is the product gap named in the decisions-ledger: today, if the tailer dies, the channel
+/// goes quiet, `subscribe_from` parks forever, and every health surface still reads green.
+#[derive(Debug, Default)]
+pub struct TailerHealth {
+    /// Total number of poll passes attempted, whatever their outcome.
+    pub polls_total: AtomicU64,
+    /// Number of `Failed` outcomes since the last non-`Failed` outcome. Reset to 0 on `Idle` or
+    /// `Published`.
+    pub consecutive_failures: AtomicU64,
+    /// The seq of the most recently published row. Unchanged by `Idle` or `Failed` passes.
+    pub last_published_seq: AtomicI64,
+}
+
+/// The outcome of ONE poll pass. Deliberately has NO variant that ends the loop: "give up" is not
+/// expressible here, which is the point of this type. See the decisions-ledger for task 016: the
+/// prior approach detected instances of the poll loop terminating early one wall-clock window at a
+/// time; this makes the defect unrepresentable instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollOutcome {
+    /// The journal had no rows above the cursor.
+    Idle,
+    /// `count` rows were read and published; the cursor advanced to the last of them.
+    Published { count: usize },
+    /// The high-water-mark read or the range read failed. The cursor is unchanged.
+    Failed,
+}
+
+/// Runs exactly ONE poll pass: read the current high-water mark, read (and publish) any rows
+/// above `cursor`, and report what happened. Contains no `sleep` and no loop — driving it directly
+/// is synchronous and immune to machine load, which is what makes `PollOutcome`'s absence of a
+/// terminating variant testable as a structural property rather than an inferred one.
+///
+/// Behaviour is unchanged from the loop body this was extracted from: same queries, same order,
+/// same cursor-advance rule (advance regardless of broadcast send errors — the journal is the
+/// authority), same `warn!`/`debug!` sites.
+async fn poll_once(
+    pool: &SqlitePool,
+    sender: &broadcast::Sender<SequencedEvent>,
+    cursor: &mut i64,
+    health: &TailerHealth,
+) -> PollOutcome {
+    health.polls_total.fetch_add(1, Ordering::Relaxed);
+
+    let outcome = match event_journal::high_water_mark(pool).await {
+        Ok(mark) => {
+            // Read all rows in (cursor, mark]
+            // read_range returns Vec<SequencedEvent> with already-deserialized events
+            match event_journal::read_range(pool, *cursor, mark).await {
+                Ok(seq_events) => {
+                    let count = seq_events.len();
+                    for seq_ev in seq_events {
+                        // Publish to the broadcast channel.
+                        // Ignore send errors — they mean zero receivers (normal idle state).
+                        // Advance the cursor regardless.
+                        let _ = sender.send(seq_ev.clone());
+                        *cursor = seq_ev.seq;
+                    }
+                    debug!(last_published = *cursor, "tailer pass completed");
+                    if count == 0 {
+                        PollOutcome::Idle
+                    } else {
+                        PollOutcome::Published { count }
+                    }
+                }
+                Err(e) => {
+                    // Read error: log and retry without advancing
+                    warn!(error = ?e, "event journal tail read failed; retrying");
+                    PollOutcome::Failed
+                }
+            }
+        }
+        Err(e) => {
+            // Failed to fetch high-water mark: log and retry
+            warn!(error = ?e, "failed to fetch high-water mark; retrying");
+            PollOutcome::Failed
+        }
+    };
+
+    match outcome {
+        PollOutcome::Failed => {
+            health.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+        }
+        PollOutcome::Idle => {
+            health.consecutive_failures.store(0, Ordering::Relaxed);
+        }
+        PollOutcome::Published { .. } => {
+            health.consecutive_failures.store(0, Ordering::Relaxed);
+            health.last_published_seq.store(*cursor, Ordering::Relaxed);
+        }
+    }
+
+    outcome
+}
 
 /// Spawns the journal tailer task.
 ///
@@ -51,6 +152,7 @@ const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(75);
 pub fn spawn(
     pool: SqlitePool,
     sender: broadcast::Sender<SequencedEvent>,
+    health: Arc<TailerHealth>,
 ) -> (JoinHandle<()>, oneshot::Receiver<()>) {
     let (ready_tx, ready_rx) = oneshot::channel();
 
@@ -84,36 +186,11 @@ pub fn spawn(
         // tests; readiness only makes those assertions sound rather than flaky.
         let _ = ready_tx.send(());
 
+        // The driver's ONLY exit is the task being aborted. `poll_once`'s return type has no
+        // variant that could end this loop — that is what makes the give-up defect class
+        // unrepresentable rather than merely undetected.
         loop {
-            // Get the current high-water mark
-            match event_journal::high_water_mark(&pool).await {
-                Ok(mark) => {
-                    // Read all rows in (last_published, mark]
-                    // read_range returns Vec<SequencedEvent> with already-deserialized events
-                    match event_journal::read_range(&pool, last_published, mark).await {
-                        Ok(seq_events) => {
-                            for seq_ev in seq_events {
-                                // Publish to the broadcast channel.
-                                // Ignore send errors — they mean zero receivers (normal idle state).
-                                // Advance last_published regardless.
-                                let _ = sender.send(seq_ev.clone());
-                                last_published = seq_ev.seq;
-                            }
-                            debug!(last_published, "tailer pass completed");
-                        }
-                        Err(e) => {
-                            // Read error: log and retry without advancing
-                            warn!(error = ?e, "event journal tail read failed; retrying");
-                        }
-                    }
-                }
-                Err(e) => {
-                    // Failed to fetch high-water mark: log and retry
-                    warn!(error = ?e, "failed to fetch high-water mark; retrying");
-                }
-            }
-
-            // Wait for the next poll interval
+            let _ = poll_once(&pool, &sender, &mut last_published, &health).await;
             tokio::time::sleep(TAIL_INTERVAL).await;
         }
     });
@@ -252,6 +329,17 @@ mod tests {
             .expect("the tailer dropped its readiness sender without signalling");
     }
 
+    /// `spawn` for tests that don't care about `TailerHealth` — everything except
+    /// `tailer_health_advances_while_polling_and_records_failures`, which needs to hold onto the
+    /// `Arc` it passes in and so calls `spawn` directly. This just wires up a throwaway default so
+    /// the signature change task 016 requires does not have to be repeated at every call site.
+    fn spawn_ignoring_health(
+        pool: SqlitePool,
+        sender: broadcast::Sender<SequencedEvent>,
+    ) -> (JoinHandle<()>, oneshot::Receiver<()>) {
+        spawn(pool, sender, Arc::new(TailerHealth::default()))
+    }
+
     /// Commits one row and asserts the tailer publishes exactly it — the same seq AND the same
     /// body — at exactly `expected_seq`.
     ///
@@ -338,7 +426,7 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
 
         // The cursor is fixed from here on, and no poll pass has run
         await_ready(ready).await;
@@ -384,7 +472,7 @@ mod tests {
 
         // Start the tailer first (high-water mark is 0)
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
 
         // Subscribe to the broadcast channel BEFORE committing rows
         let mut subscriber = tx.subscribe();
@@ -437,7 +525,7 @@ mod tests {
 
         // Start the tailer first
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
 
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
@@ -504,7 +592,7 @@ mod tests {
 
         // Start the tailer first
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
 
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
@@ -569,7 +657,7 @@ mod tests {
         // Create the broadcast channel and start the tailer
         // It will start at high-water mark (3) and won't republish the initial 3 rows
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
 
         // Subscribe BEFORE readiness resolves, so a tailer that replays history cannot do it in a
         // window where nothing is listening
@@ -598,7 +686,7 @@ mod tests {
 
         // Create a new tailer (will start at the current high-water mark of 3)
         let (tx2, _rx2) = broadcast::channel(64);
-        let (tailer_handle2, ready2) = spawn(pool.clone(), tx2.clone());
+        let (tailer_handle2, ready2) = spawn_ignoring_health(pool.clone(), tx2.clone());
 
         // Subscribe to the new tailer, again before readiness resolves
         let mut subscriber2 = tx2.subscribe();
@@ -651,7 +739,7 @@ mod tests {
 
         // Start the tailer first
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
 
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
@@ -676,22 +764,16 @@ mod tests {
         let outage_row = commit_one_to_hidden_journal(&pool).await;
         assert_eq!(outage_row.seq, 2, "outage row should be seq 2");
 
-        // Hold the outage for at least 1500ms — 20 poll attempts at TAIL_INTERVAL = 75ms.
+        // This used to hold the outage open for 1500ms (20 poll attempts) purely to bound retry
+        // duration before the `!is_finished()` assertion below — a wall-clock window standing in
+        // for a property the type system could not state. Task 016 makes that property structural
+        // instead: `PollOutcome` has no variant that ends the loop
+        // (`a_poll_step_can_never_terminate_the_loop`, killed by mutation proof 1), so `is_finished`
+        // cannot go true here regardless of how long the outage runs. What remains for THIS test to
+        // prove is only that the fault fires and the cursor holds, which the bounded wait below
+        // (3 * TAIL_INTERVAL) already establishes.
         //
-        // This length is the whole point of the wait, not a "give it a moment" margin. The
-        // `!is_finished()` assertion below claims the tailer DOES NOT GIVE UP, and an assertion of
-        // that shape is only as strong as the outage it survives: at the previous 225ms sleep the
-        // tailer faced about six failed passes, so a main loop that returned after ten consecutive
-        // failures passed this test twice over — the assertion was wired to the branch but defeated
-        // by its window. Twenty attempts exceeds any budget a plausible "add a retry limit" change
-        // would use. See the declared residual in the decisions-ledger: no finite wall-clock window
-        // can exclude an arbitrarily large finite give-up budget, and this does not claim to.
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
         // Verify no additional event was published during outage (fault fired).
-        // Use a bounded wait (3 * TAIL_INTERVAL) to check for spurious events. This one is
-        // deliberately left at 225ms: it proves the FAULT FIRED, which is a different job from the
-        // duration wait above, and lengthening it buys nothing.
         match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
             Ok(Ok(ev)) => panic!(
                 "no event should publish during table-hidden outage; got seq {}",
@@ -743,7 +825,7 @@ mod tests {
         // NOTE the `_` binding, not `_rx`: a receiver live for the whole test makes every `send`
         // succeed, and this test exists precisely to exercise the zero-receiver `send` error path.
         let (tx, _) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
 
         // Readiness fixes the cursor at 0, so the three rows below are provably ABOVE it and the
         // tailer must therefore attempt those sends into zero receivers. Attempt 4 depended on a
@@ -833,7 +915,7 @@ mod tests {
 
         // Start the tailer first
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
 
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
@@ -866,19 +948,15 @@ mod tests {
         };
         assert_eq!(corrupt_seq, 2, "corrupt row should be seq 2");
 
-        // Hold the outage for at least 1500ms — 20 read attempts at TAIL_INTERVAL = 75ms — all of
-        // which fail at `serde_json::from_str`.
+        // Same reasoning as `tailer_survives_a_transient_read_error`: this used to hold the outage
+        // open for 1500ms (20 read attempts, all failing at `serde_json::from_str`) purely to bound
+        // retry duration ahead of the `!is_finished()` assertion below. Task 016 makes "the loop
+        // does not end on a read error" structural instead — `PollOutcome` has no variant that ends
+        // it — so that assertion no longer depends on how long the outage runs. What remains for
+        // THIS test to prove is only that the fault fires and the cursor holds, which the bounded
+        // wait below (3 * TAIL_INTERVAL) already establishes.
         //
-        // Same reasoning as `tailer_survives_a_transient_read_error`: the `!is_finished()`
-        // assertion below claims the loop DOES NOT END on a read error, and at the previous 225ms
-        // the tailer only had to survive about six failed reads, so a loop that returned after ten
-        // consecutive failures passed this test. The window, not the assertion, was the weak part.
-        // The residual is declared in the decisions-ledger.
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
         // Verify nothing was published during the corruption (fault fired).
-        // Use bounded wait (3 * TAIL_INTERVAL) to ensure we're checking real state. Left at 225ms
-        // on purpose: this window proves the FAULT FIRED, not that the tailer kept retrying.
         match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
             Ok(Ok(ev)) => panic!(
                 "no event should publish while payload is corrupted; got seq {}",
@@ -1054,7 +1132,7 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
         let mut subscriber = tx.subscribe();
         await_ready(ready).await;
 
@@ -1122,7 +1200,7 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
         let mut subscriber = tx.subscribe();
         await_ready(ready).await;
 
@@ -1205,7 +1283,7 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         let (tx, _rx) = broadcast::channel(N * 4);
-        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
         let mut subscriber = tx.subscribe();
         await_ready(ready).await;
 
@@ -1258,7 +1336,7 @@ mod tests {
             .unwrap();
 
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, mut ready) = spawn(pool.clone(), tx.clone());
+        let (tailer_handle, mut ready) = spawn_ignoring_health(pool.clone(), tx.clone());
 
         // Subscribe before anything can be published, so a replay cannot slip past unobserved
         let mut subscriber = tx.subscribe();
@@ -1324,6 +1402,143 @@ mod tests {
         // `break mark + 1` skip mutation, which resumes at 5. Any of seqs 1-3 arriving instead is
         // the fall-back-to-0 replay.
         assert_publishes_exactly(&pool, &mut subscriber, 4).await;
+
+        tailer_handle.abort();
+    }
+
+    /// The structural guarantee task 016 exists to add: `PollOutcome` has NO variant that ends
+    /// the loop, so 50 idle passes and 50 failures are indistinguishable from 5 in the type
+    /// system. Drives `poll_once` directly — no spawned task, no `sleep` anywhere — so this runs
+    /// in microseconds and is immune to machine load, unlike every prior "does not give up" test
+    /// in this file.
+    #[tokio::test]
+    async fn a_poll_step_can_never_terminate_the_loop() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let (tx, _rx) = broadcast::channel(64);
+        let health = TailerHealth::default();
+
+        // Against an EMPTY journal, every call is Idle and the cursor never moves.
+        let mut cursor = 0i64;
+        for i in 0..50 {
+            let outcome = poll_once(&pool, &tx, &mut cursor, &health).await;
+            assert_eq!(
+                outcome,
+                PollOutcome::Idle,
+                "pass {i} against an empty journal must report Idle, not {outcome:?}"
+            );
+        }
+        assert_eq!(cursor, 0, "an idle poll must never move the cursor");
+
+        // Against an UNREADABLE journal, every call is Failed and the cursor it is handed comes
+        // back UNCHANGED.
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut failing_cursor = 0i64;
+        for i in 0..50 {
+            let outcome = poll_once(&pool, &tx, &mut failing_cursor, &health).await;
+            assert_eq!(
+                outcome,
+                PollOutcome::Failed,
+                "pass {i} against an unreadable journal must report Failed, not {outcome:?}"
+            );
+            assert_eq!(
+                failing_cursor, 0,
+                "pass {i}: a Failed poll must never advance the cursor it was handed"
+            );
+        }
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Against a journal with rows above the cursor, the pass reports Published{count} and
+        // advances the cursor to the last published seq.
+        let committed = commit_batch(&pool, 3).await;
+        let mut published_cursor = 0i64;
+        let outcome = poll_once(&pool, &tx, &mut published_cursor, &health).await;
+        match outcome {
+            PollOutcome::Published { count } => assert_eq!(
+                count, 3,
+                "a pass reading 3 new rows must report a Published count of 3"
+            ),
+            other => panic!("expected Published, got {other:?}"),
+        }
+        assert_eq!(
+            published_cursor,
+            committed.last().unwrap().seq,
+            "the cursor must advance to the last published seq"
+        );
+    }
+
+    /// Makes the tailer's liveness directly OBSERVABLE via counters, rather than inferred from
+    /// timing side-effects. `polls_total` proves the loop is running at all; `consecutive_failures`
+    /// proves an outage is happening and that recovery is detected; `last_published_seq` proves
+    /// what a subscriber should already know from the broadcast channel, but now from a
+    /// health-check surface that does not require a live subscriber.
+    #[tokio::test]
+    async fn tailer_health_advances_while_polling_and_records_failures() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let (tx, _rx) = broadcast::channel(64);
+        let health = Arc::new(TailerHealth::default());
+        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone(), Arc::clone(&health));
+        let mut subscriber = tx.subscribe();
+        await_ready(ready).await;
+
+        // A published row must advance polls_total, clear consecutive_failures, and record its
+        // seq as last_published_seq.
+        assert_publishes_exactly(&pool, &mut subscriber, 1).await;
+        assert!(
+            health.polls_total.load(Ordering::Relaxed) >= 1,
+            "polls_total must advance once a poll pass has run"
+        );
+        assert_eq!(
+            health.consecutive_failures.load(Ordering::Relaxed),
+            0,
+            "a successful publish must leave consecutive_failures at 0"
+        );
+        assert_eq!(
+            health.last_published_seq.load(Ordering::Relaxed),
+            1,
+            "last_published_seq must equal the seq of the row just published"
+        );
+
+        // Induce an outage: consecutive_failures must climb.
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let climb_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if health.consecutive_failures.load(Ordering::Relaxed) >= 3 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < climb_deadline,
+                "consecutive_failures did not climb within 30s of an induced outage"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // Repair: consecutive_failures must return to 0.
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let reset_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if health.consecutive_failures.load(Ordering::Relaxed) == 0 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < reset_deadline,
+                "consecutive_failures did not reset to 0 after repair within 30s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
 
         tailer_handle.abort();
     }

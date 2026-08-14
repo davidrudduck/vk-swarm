@@ -11,6 +11,10 @@
 
 mod tailer;
 
+pub use tailer::TailerHealth;
+
+use std::sync::Arc;
+
 use db::models::event::SequencedEvent;
 use db::models::event_journal::{self, EventJournalError};
 use futures::stream::{BoxStream, unfold};
@@ -54,6 +58,7 @@ pub struct EventBus {
     pool: SqlitePool,
     sender: broadcast::Sender<SequencedEvent>,
     tailer_handle: std::sync::Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
+    tailer_health: Arc<TailerHealth>,
 }
 
 impl Clone for EventBus {
@@ -62,6 +67,7 @@ impl Clone for EventBus {
             pool: self.pool.clone(),
             sender: self.sender.clone(),
             tailer_handle: self.tailer_handle.clone(),
+            tailer_health: self.tailer_health.clone(),
         }
     }
 }
@@ -80,12 +86,22 @@ impl EventBus {
     /// discard it. Dropping the receiver is safe: `spawn` signals with `let _ = ready_tx.send(())`.
     pub fn new(pool: SqlitePool, broadcast_capacity: usize) -> Self {
         let (_tx, _rx) = broadcast::channel(broadcast_capacity);
-        let (tailer, _ready) = tailer::spawn(pool.clone(), _tx.clone());
+        let tailer_health = Arc::new(TailerHealth::default());
+        let (tailer, _ready) = tailer::spawn(pool.clone(), _tx.clone(), Arc::clone(&tailer_health));
         Self {
             pool,
             sender: _tx,
             tailer_handle: std::sync::Arc::new(tokio::sync::Mutex::new(Some(tailer))),
+            tailer_health,
         }
+    }
+
+    /// The tailer's liveness counters, shared across all clones of this `EventBus` exactly as
+    /// `tailer_handle` is. A caller can use this to expose a health surface that does not depend
+    /// on inferring liveness from timing side-effects on the broadcast channel — see the
+    /// decisions-ledger for task 016.
+    pub fn tailer_health(&self) -> &TailerHealth {
+        &self.tailer_health
     }
 
     /// Stops the background tailer task cleanly.

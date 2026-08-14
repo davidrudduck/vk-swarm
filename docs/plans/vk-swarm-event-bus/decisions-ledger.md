@@ -1995,3 +1995,152 @@ paying for it in efficiency, security or complexity, and without a queue of post
   `retention_hours` and the `min_rows` floor — an SSE consumer would have to fall a full retention
   period behind, which is not a realistic operating state. Recorded as a known bound rather than a
   defect; if SSE consumers ever persist cursors, they must join the floor calculation
+
+## 2026-08-14 execute: task 016 — make the tailer give-up defect unrepresentable, and observable
+
+Touched only `crates/services/src/services/event_bus/tailer.rs` and
+`crates/services/src/services/event_bus/mod.rs`, per the task's file set. Every choice below is one
+the task left open; none was silent.
+
+- [Task 016 executor] **`spawn_ignoring_health` test helper — undeclared shape, declared here.** The
+  task dictates `spawn` takes `Arc<TailerHealth>`; it does not dictate how the 13 pre-existing
+  `spawn(pool.clone(), tx.clone())` call sites in `tailer.rs`'s test module adapt to the new
+  3-argument signature. Added a private test-only wrapper,
+  `fn spawn_ignoring_health(pool, sender) -> (JoinHandle<()>, oneshot::Receiver<()>)`, that calls
+  `spawn(pool, sender, Arc::new(TailerHealth::default()))`, and repointed all 13 sites at it. This
+  keeps every pre-existing test's *behaviour* unchanged (268 tests is the floor, and stayed the
+  floor) while satisfying the mandated signature. The ONE test that needs to observe the counters —
+  `tailer_health_advances_while_polling_and_records_failures` — calls `spawn` directly so it can hold
+  onto the `Arc` it passes in
+- [Task 016 executor] **`debug!(last_published, …)` → `debug!(last_published = *cursor, …)` —
+  syntax changed, output did not.** The task says "do not change... a log site." Extracting the loop
+  body into `poll_once(cursor: &mut i64, ...)` (the task's own dictated parameter name) means the
+  local variable is no longer named `last_published`, so tracing's shorthand-field syntax
+  (`debug!(last_published, ...)`, which requires a local of that exact name) no longer compiles.
+  Used the explicit form `debug!(last_published = *cursor, ...)` instead: same field key
+  (`last_published`), same message, same value (the cursor after the same for-loop mutated it in
+  both versions) — the emitted log record is byte-identical, only the Rust binding syntax used to
+  produce it differs. This was a forced adaptation of the extraction, not a discretionary change to
+  the log site's behaviour
+- [Task 016 executor] **`PollOutcome` derives beyond the task's bare enum.** The task's shown shape
+  is a plain `enum PollOutcome { Idle, Published { count: usize }, Failed }` with no derives. Added
+  `#[derive(Debug, Clone, Copy, PartialEq, Eq)]`: `Debug` for panic/assert messages, `PartialEq`/`Eq`
+  for `assert_eq!(outcome, PollOutcome::Idle)` in `a_poll_step_can_never_terminate_the_loop`, `Clone`/
+  `Copy` because the health-update `match` at the end of `poll_once` needed to consume `outcome` by
+  value after computing it (cheap enough to just derive `Copy` rather than restructure). None of this
+  changes the type's shape or the loop's unrepresentability property; it only makes the type usable
+  in test assertions
+- [Task 016 executor] **`pub use tailer::TailerHealth;` in `mod.rs` — forced by E0446, not a free
+  choice, but it does widen the crate's public surface.** `EventBus::tailer_health(&self) -> &TailerHealth`
+  is `pub` on a `pub struct` in a `pub mod event_bus`; `mod tailer;` is a private submodule, so
+  without a re-export the accessor would leak a type unreachable from outside `event_bus`
+  (E0446, private type in public interface). Re-exporting makes `TailerHealth` reachable as
+  `services::event_bus::TailerHealth`. This is the minimum re-export needed to make the task's
+  dictated accessor signature compile; `PollOutcome` and `poll_once` are NOT re-exported and stay
+  module-private, since nothing outside `tailer.rs` needs them
+- [Task 016 executor] **Failing test item 2 (`the_driver_loop_has_exactly_one_exit`) — read as
+  naming an existing test's role, not commissioning a new one.** The task's own text under that
+  heading says: "Keep exactly ONE long-window test rather than three: the existing
+  `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero` at its current
+  8000ms." Read literally, this is an instruction not to add new duration-based give-up tests (idle,
+  lagged, pool-exhausted) precisely because `PollOutcome` now closes that class structurally, and
+  that the one already-existing 8000ms test is retained, unmodified, as the sole residual guard for
+  the part `poll_once` cannot carry (the INITIAL mark loop, explicitly out of scope for the
+  extraction). No new test function was written for item 2. The existing test is byte-for-byte
+  unmodified at 8000ms, and mutation proof 2 (below) confirms it still kills
+- [Task 016 executor] **The two 1500ms windows removed, per "Allowed moves," only after test 1 was
+  green and mutation proof 1 killed** (verified in that order, not assumed). Their comments were
+  rewritten to state why the window is now unnecessary (the give-up property is structural, proven by
+  `a_poll_step_can_never_terminate_the_loop` + mutation proof 1) rather than deleted silently — a
+  reader hitting `git blame` on those two tests should see the reasoning, not just a smaller number.
+  The 8000ms window (test 2) and the 300ms `zero_receivers_does_not_stall_the_cursor` gap were left
+  untouched, per the task's explicit prohibition
+- [Task 016 executor] **Wall-clock result: flat under the default parallel test runner, not a
+  measurable drop.** Lib unittest binary: 268 tests / 10.90s before any task-016 change (baseline
+  run, single measurement) vs 270 tests / 10.85–10.96s after (three runs, windows removed). The
+  retained 8000ms initial-mark test dominates wall-clock under `cargo test`'s default
+  multi-threaded-by-file parallelism, so shaving 1500ms off two OTHER tests that run concurrently
+  with it does not move the total. Attempted a serialized comparison
+  (`--test-threads=1`, `event_bus`-filtered, 24 tests) to isolate the saving: 25.59s with the
+  windows removed vs 26.32s with them temporarily restored (via `Edit`, not `git`, then reverted and
+  diff-confirmed identical to the clean state) — a ~0.7s difference, far short of the ~3s naively
+  expected. Each `#[tokio::test]` gets its own (by default multi-threaded) Tokio runtime independent
+  of the libtest harness's `--test-threads`, so a sleep inside one test does not serialize the wall
+  clock the way a synchronous sleep would; the measurement does not cleanly isolate the removed
+  sleeps and is reported as inconclusive rather than as evidence either way. The load-bearing evidence
+  that the removal is sound is mutation proof 1 (below), not a timing delta
+- [Task 016 executor] **No STOP triggers hit.** The extraction needed no query, cursor rule, or
+  backoff change; every pre-existing test that went red during development did so only under a
+  mutation this task applied and turned green again on restore; `PollOutcome` needed no terminating
+  variant; the health counters required no third file. `crates/services/tests/normalize_sync_test.rs`
+  passed clean (5/5) on the final full-crate run — the known flake did not fire this session
+
+### Mutation proofs (verbatim)
+
+**1. Add a terminating variant, return it after N idle passes** (`GaveUp` added to `PollOutcome`;
+`poll_once`'s idle arm returns it after 5 consecutive idle passes via a function-local
+`AtomicU64` streak counter) — kills `a_poll_step_can_never_terminate_the_loop`:
+```
+thread 'services::event_bus::tailer::tests::a_poll_step_can_never_terminate_the_loop' panicked at crates/services/src/services/event_bus/tailer.rs:1446:13:
+assertion `left == right` failed: pass 4 against an empty journal must report Idle, not GaveUp
+  left: GaveUp
+ right: Idle
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 274 filtered out; finished in 0.20s
+```
+
+**2. `break 0` after 10 retries in the INITIAL mark loop** — kills
+`tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero` (8000ms window fired,
+confirming it is still the guard that catches this):
+```
+thread 'services::event_bus::tailer::tests::tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero' panicked at crates/services/src/services/event_bus/tailer.rs:1383:9:
+the tailer signalled readiness while the journal table was unreadable, so it did not retry the initial high-water mark — it fabricated one
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 274 filtered out; finished in 8.18s
+```
+
+**3. `poll_once` returns `Idle` without advancing the cursor after a successful publish** (cursor
+advance line removed from the for-loop; the outcome arm always returns `Idle`) — kills THREE
+pre-existing cursor tests (leading with these, since the requirement was "an existing cursor test"):
+```
+thread 'services::event_bus::tailer::tests::tailer_does_not_republish_across_passes' panicked at crates/services/src/services/event_bus/tailer.rs:632:26:
+tailer should not republish in the second pass
+
+thread 'services::event_bus::tailer::tests::tailer_resumes_from_its_high_water_on_restart' panicked at crates/services/src/services/event_bus/tailer.rs:726:9:
+assertion `left == right` failed: new tailer should resume from high-water and publish only the new rows, bodies intact
+  left: [RowId { seq: 4, ... }, RowId { seq: 5, ... }]
+ right: [RowId { seq: 5, ... }, RowId { seq: 6, ... }]
+
+thread 'services::event_bus::tailer::tests::zero_receivers_does_not_stall_the_cursor' panicked at crates/services/src/services/event_bus/tailer.rs:887:9:
+assertion `left == right` failed: tailer should have advanced its cursor despite zero receivers; only the new row, with its own body, should arrive
+  left: [RowId { seq: 1, ... }]
+ right: [RowId { seq: 5, ... }]
+```
+(also killed, incidentally: `a_failed_read_does_not_end_the_loop_or_advance_the_cursor`,
+`tailer_survives_a_transient_read_error`, `a_poll_step_can_never_terminate_the_loop`,
+`tailer_health_advances_while_polling_and_records_failures`, and
+`the_bus_publishes_a_committed_row_exactly_once` in `mod.rs` — total 8 of 24 `event_bus` tests red,
+16 passed. `finished in 10.49s`.)
+
+**4. `consecutive_failures` never reset on success** (both `store(0, ...)` reset sites removed from
+the `Idle` and `Published` match arms) — kills
+`tailer_health_advances_while_polling_and_records_failures`:
+```
+thread 'services::event_bus::tailer::tests::tailer_health_advances_while_polling_and_records_failures' panicked at crates/services/src/services/event_bus/tailer.rs:1536:13:
+consecutive_failures did not reset to 0 after repair within 30s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 274 filtered out; finished in 30.49s
+```
+
+Each mutation script asserted its anchor(s) matched exactly once and aborted otherwise (all four did
+match exactly once on first attempt); each was reverted via `cp` from a `.wai-scratch/` backup, with
+the restored file diffed byte-identical against the pre-mutation baseline before the next mutation
+ran, and the full suite re-confirmed green between mutations.
+
+### Final verification (all green)
+
+- `cargo test -p services` (full crate, not `--lib`): 270 passed lib unittests (0 failed, 5 ignored)
+  + all integration-test binaries green (electric_task_sync, filesystem_repo_discovery,
+  filesystem_test, git_clone, git_ops_safety, git_stash, git_workflow, log_batcher_test,
+  log_migration, node_cache_sync, normalize_sync_test [5/5, no flake this run], pr_discovery,
+  process_inspector_integration, doctests). Two consecutive full runs, both clean
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy -p services --all-targets --all-features -- -D warnings` → exit 0
+- Machine confirmed quiet (`pgrep -x cargo` → 0) before each timed run
