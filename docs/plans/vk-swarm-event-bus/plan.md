@@ -33,7 +33,6 @@ than in HiveClient, which holds no database handle. A periodic compaction task b
 with a hard row cap that overrides the trigger-cursor floor so a dead consumer cannot pin it forever.
 UI is explicitly out of scope — the board already streams live over /api/tasks/stream/ws.
 
-
 ## Phases
 - **Phase 1: Foundation** — Clear the /api/events path, then land the durable substrate: schema, typed event contract, and the journal model with an executor-generic append.
 - **Phase 2: Bus core** — The broadcast channel, the journal tailer that feeds it, and the shared replay-to-live contract every consumer binds to: subscribe_from with journal catch-up, live handoff, dedupe, and Lagged refill.
@@ -51,6 +50,8 @@ UI is explicitly out of scope — the board already streams live over /api/tasks
 | 004 | 1 | Add the event_journal model with append, cursor range-read, and compaction | dep: 002 003 | conflicts: none |
 | 005 | 2 | Add the EventBus with the broadcast channel and the subscribe_from replay-to-live contract | dep: 004 | conflicts: none |
 | 013 | 2 | Add the journal tailer that publishes committed rows onto the broadcast channel | dep: 005 | conflicts: none |
+| 016 | 2 | Make the tailer give-up defect unrepresentable, and the tailer observable | dep: 013 | conflicts: none |
+| 017 | 2 | Add the end-to-end bus seam suite that hand-drives nothing | dep: 013 016 | conflicts: none |
 | 006 | 3 | Emit task lifecycle events from the task model inside its own transaction | dep: 005 | conflicts: none |
 | 007 | 3 | Emit attempt lifecycle events from the execution-process create and completion writes | dep: 006 | conflicts: none |
 | 008 | 3 | Emit hive connectivity events from the node_runner event loop | dep: 007 | conflicts: none |

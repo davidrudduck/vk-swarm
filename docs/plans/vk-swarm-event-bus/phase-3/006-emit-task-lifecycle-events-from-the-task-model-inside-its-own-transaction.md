@@ -47,7 +47,6 @@ There is deliberately NO broadcast assertion here. Model functions append; the t
 (task 013). A test asserting broadcast at this layer would be testing the tailer through the wrong
 seam.
 
-
 ## Change
 
 **Query form for any NEW SQL you write (amended 2026-08-12).** Use the runtime sqlx API —
@@ -137,7 +136,6 @@ order is: update status → clear dismissal → append event → commit. Add
 `crates/db/src/models/activity_dismissal.rs` to this task's `files:`. Add a test that exercises
 `update_status` on a task WITH an existing dismissal — without it, this path is never covered.
 
-
 ## Allowed moves
 ONLY the transaction wrapping and journal append at the four named functions, plus
 generalizing the activity-dismissal helper's executor parameter. **Nothing here broadcasts** — model
@@ -146,8 +144,22 @@ parameters or return type apart from the dismissal helper's executor generalizat
 `enqueue_task_upsert_op` inside the transaction — it is deliberately best-effort and outside. Do NOT
 touch other files in `crates/db/src/models/task/` (archive.rs, sync.rs, cleanup.rs).
 
-
 ## STOP triggers
+
+**Two of these are PRE-RESOLVED by the orchestrator (2026-08-12) — do not spend a STOP on them:**
+- *Raw status writes bypassing the four functions:* enumerated with
+  `git grep -n "SET status" -- 'crates/**/*.rs'`. The ONLY write to `tasks.status` in Rust source is
+  `crates/db/src/models/task/hierarchy.rs:19`, which IS `update_status` itself. `Task::update`'s
+  status write is inside its own `UPDATE ... SET title, description, status, parent_task_id`. There
+  is no bypass path, so SC1 coverage is complete with the four named functions.
+  `crates/db/src/models/task/archive.rs:15` writes `archived_at`, NOT `status` — a separate lifecycle
+  concern this plan does not journal, and archive.rs stays out of `files:` as stated above.
+- *Dismissal-helper callers:* enumerated with `git grep -n "clear_for_task\|undismiss"`.
+  `clear_for_task` has exactly ONE caller (`hierarchy.rs:27`), and `undismiss` has one caller outside
+  the model (`crates/server/src/routes/dashboard.rs:62`, passing `&deployment.db().pool`). Generalizing
+  to `E: Executor` keeps that caller compiling unchanged, because `&SqlitePool` implements `Executor`.
+  Generalize `clear_for_task`; you may leave `undismiss` pool-taking if that is simpler.
+
 - You are about to give `Task::delete` its own transaction, or add a `delete_with_event(pool, id)`
   entry point — STOP and re-read the Change section. The delete route owns the transaction; appending
   on the passed executor is the whole point of the generic signature.
@@ -161,7 +173,6 @@ touch other files in `crates/db/src/models/task/` (archive.rs, sync.rs, cleanup.
   transaction or a pool-taking helper called from inside the transaction; STOP rather than adding
   retries.
 
-
 ## Manual verification (record in decisions-ledger)
 Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
 WAI_TEST_CMD="cargo test -p db task"
@@ -170,7 +181,6 @@ Live SC1 check (record output in the ledger): on a running node, create a task, 
 then
 `sqlite3 $VK_DATABASE_PATH "select seq, event_type from event_journal where event_type like 'task_%' order by seq"`
 shows exactly three rows in that order with strictly increasing seq.
-
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 006` exits 0

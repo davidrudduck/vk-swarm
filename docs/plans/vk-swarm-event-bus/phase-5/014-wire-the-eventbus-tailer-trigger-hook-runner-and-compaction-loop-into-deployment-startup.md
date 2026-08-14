@@ -101,3 +101,44 @@ On a running node built from this branch:
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 014` exits 0
+
+## REQUIRED — added after panel 6 on task 013
+
+### 1. `EventBus::Clone` shares one tailer handle — assert it HERE, where the call sites exist
+
+Panel 6 proved that giving clones an independent `tailer_handle` survives the whole 268-test suite:
+
+```text
+MUTATION APPLIED: clones get an independent (empty) tailer handle
+test result: ok. 268 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 10.73s
+```
+
+It was recorded as non-blocking for 013 because there are **zero call sites today** — the only
+reference to the module outside itself is `crates/services/src/services/mod.rs:22`. This task creates
+the first real ones, so this is where it becomes live.
+
+`EventBus`'s own doc comment states the contract: *"All clones of this EventBus share the same tailer
+handle. If one clone calls `shutdown()`, the tailer stops for ALL clones."* The hazard is specific and
+this task walks straight into it: `DeploymentImpl` is cloned per request, so if `event_bus()` returns
+a clone whose handle is independent, `shutdown()` becomes a silent no-op — the tailer survives process
+shutdown holding a SQLite connection and polling every 75ms, and this task's own
+`shutdown_stops_the_background_tasks` passes anyway, because it only asserts silence.
+
+REQUIRED: a test that clones the deployment (or the bus), calls `shutdown()` on ONE clone, and asserts
+the tailer is stopped as observed through **another** clone. Asserting silence is not enough — silence
+is also what a no-op produces when nothing is being written. Assert a row committed AFTER the shutdown
+is never delivered.
+
+Mutation proof: give clones an independent handle → this test must FAIL.
+
+### 2. Reachability gate (b) — the real HTTP seam
+
+The run-level reachability gate requires at least one test driving the real entry point rather than a
+mock past it, and it blocks closing this run. Task 017 covers the bus seam
+(`commit → tailer → broadcast → subscribe_from`); task 015 covers write-site → journal. **Nothing
+covers the HTTP entry point**, which is where the feature actually lives.
+
+REQUIRED: one test that drives a real `GET /api/events` request against the wired deployment and
+observes an event produced by a real state change — not a fabricated `SequencedEvent`, not a
+hand-driven `sender`. If that cannot be expressed at this layer, say so explicitly and record where it
+CAN be, because the run cannot be declared done without it.

@@ -820,7 +820,9 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   (the journal high-water mark at spawn time) and PANICS on any event at or below it, which is a
   stronger history-replay check than the old absolute-seq equality, and it now runs in six tests
   instead of one
-- [Task 013 implementer] **One fixed readiness gap remains, deliberately:
+- [Task 013 implementer] **[SUPERSEDED — see the "attempt 4 follow-up" entry below; this gap was
+  removed because it could go VACUOUS, not because it flaked.] One fixed readiness gap remains,
+  deliberately:
   `zero_receivers_does_not_stall_the_cursor`.** It cannot be probe-hardened, because the probe needs a
   subscriber and the task text's point (a) binds that test to having NO receiver until after the
   cursor has advanced. Its shape is left exactly as dictated. It is also the site least exposed to the
@@ -899,3 +901,1053 @@ The inner error variant `EventBusError` wraps `EventJournalError` to give consum
   `cargo fmt --all -- --check`, `cargo clippy -p services --all-targets -- -D warnings`,
   `cargo check --workspace --all-targets` all exit 0. There are now NO fixed readiness gaps left in
   the tailer suite: every spawn site establishes readiness by observing a publication
+
+## 2026-08-12 execute: task 013 attempt 4 REJECTED — a real at-least-once violation survives the suite
+
+- [Task 013 orchestrator] Attempt 4 (`d7bcad51` + `de75b78f`) closed all five outstanding findings,
+  found and fixed a sixth itself, passed Stage 1 (`CONFORMS`), and passed the orchestrator's own ten
+  consecutive full-crate runs (10/10, 262 passed each, under background load). It is REJECTED anyway,
+  on a finding first raised by challenger `panel-013-a4-race` and then **independently reproduced by
+  the orchestrator in an isolated worktree at `de75b78f`** (`git worktree add`, separate
+  `CARGO_TARGET_DIR`, nothing else running):
+  a tailer that silently DROPS the first row it would ever publish — while still advancing the cursor
+  past it, so the row is lost forever — passes the ENTIRE suite:
+  ```bash
+  test result: ok. 262 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 13.55s
+  ```
+
+  It is the most serious defect found on this task, and it survived three panels
+- [Task 013 orchestrator] SCOPE OF THE BREAK, corrected after challenger `panel-013-a4-race` pushed
+  back on the orchestrator's first framing. I wrote "a violation of at-least-once delivery, the
+  invariant journal-first exists to provide". That is too strong and the challenger was right to
+  narrow it. The journal remains the source of truth and is unaffected, so a consumer that
+  (re)connects via `subscribe_from(cursor)` still replays the skipped row, and a `Lagged` refill would
+  also recover it. What breaks is task 013's **property 1** — "the tailer starts AT the high-water
+  mark and publishes every subsequent committed row" — and the loss is real but bounded: a consumer
+  already in the LIVE phase of `subscribe_from` never receives that row, because the live phase is fed
+  by the broadcast channel alone. Recorded because precision about which invariant broke is what makes
+  the finding actionable, and because a peer correcting the orchestrator is exactly what the panel is
+  for
+- [Task 013 orchestrator] TWO independent skip mutations survive, found separately and confirmed
+  separately. The orchestrator's drops the first row inside the publish loop; the challenger's is
+  `Ok(mark) => break mark + 1` in `spawn`'s initial retry loop, which given
+  `read_range`'s `WHERE seq > ? AND seq <= ?` skips exactly the first row committed after startup on
+  every start and restart. The challenger's is the better proof: a one-character off-by-one in
+  PRODUCTION code, which is the shape the real bug takes. Its runtime signature is itself evidence —
+  11.34s against a ~6s baseline, the difference being `probe_until_live`'s burned 2s timeouts, so the
+  mutant demonstrably took effect and was still not caught. The REPLAY direction (`break mark - 1`) IS
+  already caught by `tailer_resumes_from_its_high_water_on_restart`; only the SKIP direction is
+  unbound, and that asymmetry is the finding
+- [Task 013 orchestrator] REJECTED the minimal fix the challenger validated
+  (`assert_eq!(base, 1, ...)` bolted onto the existing probe), despite it killing both mutants and
+  passing once on clean code. Without the readiness signal it is flaky BY CONSTRUCTION in the one
+  direction that matters: if the tailer's initial mark read legitimately lands after the probe's first
+  commit, the tailer correctly starts at 1, the probe correctly rebases to 2, and the assertion fails
+  on CORRECT code — the identical spawn-vs-commit race that failed ~3-in-8 on attempt 3, re-entering
+  through the assertion instead of the deadline. Readiness is what makes the absolute assertion sound
+  rather than lucky. The task now requires them shipped together
+- [Task 013 orchestrator] ROOT CAUSE, and it is instructive: `probe_until_live()` makes every
+  assertion RELATIVE to whichever row comes back first (`base + 1`, `base + 2`, …). Drop the first row
+  and the probe just retries; the SECOND row becomes `base`; every relative assertion still holds.
+  The deviation that replaced the dictated absolute seqs with relative ones was declared in the ledger
+  and justified as "strength INCREASED". It genuinely did strengthen history-replay detection (the
+  `floor` guard, now in six tests), which is why both the implementer and the orchestrator accepted
+  it — but it silently traded away coverage of the core invariant. **A declared deviation is not a
+  safe deviation.** The declaration worked exactly as designed (it is why the trade was visible at
+  all); what failed was accepting the implementer's own strength assessment without testing it
+- [Task 013 orchestrator] Why no relative assertion can ever fix this: on startup, a row committed
+  BEFORE the tailer's initial `high_water_mark` read is CORRECTLY not published. Without an observable
+  readiness signal a test cannot distinguish that legitimate skip from a dropped row — which is why
+  the probe must retry, and why the retry hides the bug. The ambiguity is structural. Task amended to
+  require `spawn` to return a readiness `oneshot::Receiver<()>` signalled once the initial mark
+  resolves, one NEW test asserting an ABSOLUTE `seq == 1` on a fresh journal after awaiting readiness,
+  removal of `probe_until_live` in favour of readiness (restoring the originally dictated absolute
+  seqs), and a sixth mutation proof — `docs/plans/vk-swarm-event-bus/phase-2/013-*.md`
+- [Run orchestrator] MY THIRD PROCESS ERROR ON THIS TASK, and the first that was a DESIGN error rather
+  than a measurement one: I dispatched both Opus challengers into the SAME worktree and even specified
+  the same `.wai-scratch/` path in both briefs, so they overwrote each other's source mutations and
+  logs. Challenger A proved it the same way I had earlier — a panicking assertion string that exists
+  nowhere in the reviewed tree — and voided its own ten-run bar. The Agent tool supports
+  `isolation: "worktree"`; a panel that mutates source MUST use it, or give each challenger its own
+  scratch dir and `CARGO_TARGET_DIR`. This nearly cost the finding above: the collision made both
+  challengers' timing evidence suspect at the moment one of them was surfacing the only defect that
+  mattered
+- [Run orchestrator] Standing rule for the rest of this run: **a mutation-testing panel gets isolated
+  worktrees.** Applies to the 013 re-panel, 015's cross-site suite, and any future panel that edits
+  source to prove a test bites
+
+## 2026-08-12 execute: task 013 — panel closing findings (tokio claim verified; amendment corrected)
+
+- [Task 013 orchestrator] **A FLAW IN MY OWN AMENDMENT, caught by challenger `panel-013-a4-race`
+  before the attempt-5 implementer built on it.** I wrote the fix as "add a readiness signal", framing
+  readiness as what kills the skip mutation. It is not. Readiness proves the initial
+  `high_water_mark` READ COMPLETED; it does NOT prove the cursor EQUALS that mark. A mutant can signal
+  readiness and then set `last_published = mark + 1` — the happens-before edge is satisfied and the
+  skip stays invisible. **The ABSOLUTE `seq == 1` assertion is what kills mutations (vi) and (vii);
+  readiness is only what makes that assertion SOUND rather than flaky.** Two distinct problems, both
+  needing a fix. Task amended, and the running implementer messaged directly, so the mutation proof is
+  scored against the assertion and not against readiness. Also pinned: signal AFTER `last_published`
+  is assigned, never between the read and the assignment
+- [Task 013 orchestrator] The tokio claim underpinning attempt 4's sixth fix is **VERIFIED TRUE**
+  against the version this workspace actually resolves (`tokio v1.49.0`), read from
+  `~/.cargo/registry/.../tokio-1.49.0/src/sync/broadcast.rs`: `Receiver::drop` sets
+  `tail.closed = true` when the last receiver goes, and `new_receiver` resets `tail.closed = false`
+  when `rx_cnt == 0` (the path `Sender::subscribe` takes). `Sender::send` returns
+  `Err(SendError(value))` BEFORE writing the slot, so the three zero-receiver rows never enter the
+  ring buffer — which means the test's "had the cursor stalled, they would be re-sent" reasoning
+  correctly depends on the DB re-read. `zero_receivers_does_not_stall_the_cursor` therefore tests what
+  it claims, and the next attempt may build on it. Recorded because this claim was accepted on
+  assertion when attempt 4 shipped it; it is now evidence
+- [Task 013 orchestrator] SCOPE OF THE BLIND SPOT, so attempt 5 does not over-correct. The relative
+  form still CATCHES skip-within-an-asserted-batch (`[base+1, base+3]` ≠ the expected vector),
+  reorder (confirmed empirically by the reverse-order mutation failing three tests), and duplicate
+  (the extra row shifts the collected vector). The blind spot is specifically the BOUNDARY between
+  startup and the first asserted row — whatever `probe_until_live` swallows before it rebases. Batch-
+  internal ordering coverage is intact and does not need re-proving
+- [Task 013 orchestrator] Two further latent weaknesses recorded now rather than rediscovered later:
+  the whole drop-first-**N** family is absorbed, not just N=1 (the probe retries 10 times at 2s, so any
+  bounded early loss just burns timeouts and rebases — which is why the fix must be an absolute pin,
+  not a tighter relative one); and `floor = 0` in the three fresh-journal probes is DECORATIVE, since
+  `assert!(ev.seq > 0)` is trivially true for every row — it reads like a guard and guards nothing
+- [Task 013 orchestrator] `probe_until_live` IS a genuine happens-before edge — the challenger tried
+  to break the synchronisation argument and could not. The defect was the REBASING, not the
+  synchronisation. Preserve that insight when the helper is deleted: attempt 4's diagnosis of the
+  original race was CORRECT, and the readiness signal is a cleaner expression of the same edge
+
+## 2026-08-12 execute: task 013 — why the absolute assertion REQUIRES readiness (settled)
+
+- [Task 013 orchestrator] The challenger proposed a one-line fix (`assert_eq!(base, 1)` on top of the
+  existing probe), the orchestrator rejected it as flaky-by-construction and asked to be shown wrong;
+  the challenger then supplied the construction proving the ORCHESTRATOR's side and withdrew its own.
+  Recorded in full because it is the crux of the amendment:
+  1. `tokio::spawn` only SCHEDULES; the test's next statement can run before the task is first polled.
+  2. `probe_until_live` commits row seq 1 (BEGIN/INSERT/COMMIT, durable).
+  3. ONLY THEN is the tailer polled; `high_water_mark` correctly returns 1; `last_published = 1`.
+  4. A correct tailer therefore never publishes seq 1 — it is not new relative to its start mark.
+     That is property 1 behaving exactly as specified.
+  5. The probe burns its deadline, commits row 2, gets it back, returns `base = 2`.
+  6. `assert_eq!(base, 1)` FAILS **on correct code**.
+  The assertion cannot distinguish "the tailer skipped the first row" (the bug) from "the tailer
+  legitimately started above it" (correct under an unlucky schedule) — the two are observationally
+  identical to the probe. That is precisely why the probe cannot be the vehicle for an absolute
+  assertion, and why readiness and the absolute pin must ship together
+- [Task 013 orchestrator] Nothing orders the initial read before the first commit: the tailer's first
+  poll may land on a busy worker, and its `high_water_mark` needs a connection from a 5-connection
+  pool the test is simultaneously writing through. Under full-crate load the window is WIDER, not
+  narrower — which is why a single green run of the one-line fix was the window-didn't-open case
+- [Task 013 orchestrator] Mechanical consequence for the outage tests: in
+  `tailer_retries_the_initial_high_water_mark_...` the readiness signal necessarily arrives LATE (the
+  retry loop only breaks after the rename-back), so readiness must be awaited AFTER the repair, not
+  after the spawn; awaiting before it would hang to the test's deadline and read as a tailer failure
+  rather than a test defect. Same ordering for the restart test; both pin `base == 4`
+- [Run orchestrator] Process note worth keeping: the challenger's self-diagnosis was that it "anchored
+  on 'it kills the mutant' and did not test the other direction" — the identical failure mode it had
+  spent the session correctly criticising in the implementer. A fix that kills the mutation is only
+  half the evidence; the other half is that it still passes on CORRECT code. Both directions are now
+  required for every mutation proof in this run
+
+## 2026-08-12 execute: task 013 — two novel mutations left UNVERIFIED (orchestrator to close)
+
+- [Run orchestrator] Challenger `panel-013-a4-mutation` had two novel mutations in flight when the
+  panel closed and went idle without reporting them, so their results are LOST:
+  `mut-N4_batch_collapse_publish_last_only` and `mut-N5_advance_cursor_on_read_error`. Recording the
+  gap explicitly rather than letting it evaporate — an unverified mutation I know about is worth more
+  than one I have to rediscover in a later panel
+- [Run orchestrator] Deliberately NOT added to attempt 5's proof list. The contract was declared
+  frozen to the implementer mid-flight, and churning it for two mutations that reasoning says are
+  already covered is a worse trade than verifying them myself. Reasoning, to be CONFIRMED not assumed:
+  **N4** — the three rows under assertion are committed in a SINGLE transaction, so they arrive as one
+  `read_range` batch; collapsing the batch to its last row publishes only `base + 3` and fails
+  `assert_eq!(seqs, vec![base+1, base+2, base+3])`. The probe still works under it (a batch of one has
+  the same first and last row), so the mutation does reach the assertion. Expected CAUGHT.
+  **N5** — `a_failed_read_does_not_end_the_loop_or_advance_the_cursor` corrupts a payload and requires
+  the repaired row to publish after repair; a cursor that advanced past the error skips that row and
+  the test fails. Expected CAUGHT.
+- [Run orchestrator] ACTION, owned by the orchestrator, to run BEFORE task 013 is marked passed: apply
+  both mutations in an ISOLATED worktree (`git worktree add`, own `CARGO_TARGET_DIR`) against attempt
+  5's tree and confirm each fails its predicted test. Not run now, because attempt 5's implementer is
+  mid-flight and CPU contention is what invalidated two earlier measurements on this task. If either
+  SURVIVES it is a finding against attempt 5 regardless of its other evidence
+
+## 2026-08-12 execute: task 013 attempt 5 — the readiness signal, and absolute seqs restored
+
+- [Task 013 implementer] **THE CONTRACT CHANGE.** `tailer::spawn` now returns
+  `(JoinHandle<()>, tokio::sync::oneshot::Receiver<()>)`. The signal fires AFTER the initial
+  `high_water_mark` retry loop resolves and BEFORE the first poll pass, via `let _ = ready_tx.send(())`
+  so a dropped receiver cannot panic the tailer. Signalling before the first pass rather than after it
+  is load-bearing: a signal sent after a pass would leave rows committed *during* that pass in the same
+  ambiguous window the signal exists to remove. Once readiness resolves the cursor is fixed, so every
+  row committed afterwards is strictly above it (seq is `INTEGER PRIMARY KEY AUTOINCREMENT`, so a new
+  row's seq exceeds every seq counted in the mark) and MUST be published. That is a happens-before
+  edge, and it is what makes an ABSOLUTE seq assertion sound rather than lucky
+- [Task 013 implementer] **`probe_until_live` DELETED**, and with it attempt 4's relative `base + n`
+  assertions. Every tailer test now asserts absolute seqs — `vec![1, 2, 3]` as this task dictated
+  originally. Readiness costs no journal row, so the deviation that traded the core invariant for
+  history-replay strength is simply unnecessary now rather than merely tolerated. Two replacements
+  carry its value forward: `await_ready()` (the happens-before edge) and `assert_publishes_exactly()`
+  (commits one row and asserts the tailer publishes exactly it, at exactly the expected seq — both
+  halves absolute, no retry loop, nothing for a dropped row to hide behind)
+- [Task 013 implementer] The `floor` history-replay guard is not lost, it is subsumed and strengthened.
+  Where it fired on `ev.seq <= floor`, the tests now assert seq EQUALITY against an absolute expected
+  value, which fails on a replayed row and on a skipped row alike. `floor` was one-sided in the skip
+  direction; equality is not, and that asymmetry was the whole finding against attempt 4
+- [Task 013 implementer] **DEVIATION, declared: `tailer_resumes_from_its_high_water_on_restart` asserts
+  `vec![5, 6]`, not the task's `vec![4, 5]`.** Task items 2 and 4 cannot both be satisfied literally.
+  Item 2 says restore the originally dictated absolute seqs (the 2 new rows are 4 and 5); item 4 says
+  pin the restarted tailer's first published row to exactly `base == 4`. A base row must exist to be
+  pinned, and it consumes seq 4, so the two new rows become 5 and 6. Item 4 is followed literally — it
+  is the more specific and more recent instruction, it names the test and the value, and the base row
+  doubles as the liveness proof this test needs. Nothing is bounded: `base > 3` is gone, replaced by
+  `assert_publishes_exactly(.., 4)`, and the trailing assertion is exact equality on `vec![5, 6]`.
+  Same treatment in `tailer_retries_the_initial_high_water_mark_...`, where `base == 4` is satisfied
+  literally with no knock-on
+- [Task 013 implementer] Undictated STRENGTHENING in `tailer_retries_the_initial_high_water_mark_...`:
+  while the journal table is hidden, the test asserts `ready.try_recv()` is `Err(Empty)`. A mark is
+  genuinely unobtainable during that outage, so a tailer that has signalled is a tailer that fabricated
+  a cursor. This catches the fall-back-to-0 bug at its source rather than through its downstream replay,
+  and it is deterministic — readiness cannot fire while `high_water_mark` keeps erroring
+- [Task 013 implementer] Undictated: both fault-injection tests
+  (`tailer_survives_a_transient_read_error`, `a_failed_read_does_not_end_the_loop_or_advance_the_cursor`)
+  commit and RECEIVE seq 1 before the outage. Readiness proves the initial mark resolved; it does NOT
+  prove a poll pass ever ran. Without a pre-outage publication those silence windows are unattributable
+  — the exact vacuity class this task has failed on four times. The pre-outage row also leaves the
+  cursor at a known absolute value
+- [Task 013 implementer] Undictated: `zero_receivers_does_not_stall_the_cursor`'s setup gap raised
+  300ms → 600ms (8 × `TAIL_INTERVAL`). It keeps its probe-receiver drop per task item 3, and readiness
+  now guarantees rather than hopes that the cursor sits below the three rows, so the zero-receiver sends
+  are definitely attempted. This is the ONE fixed gap left in the suite and it is irreducible: with zero
+  receivers the cursor is unobservable by construction, so there is nothing to poll for. It is a SETUP
+  gap, which attempt 4's ledger already names as the sanctioned thing to lengthen here — unlike a
+  positive-assertion deadline, which is the non-fix attempt 3 made
+- [Task 013 implementer] `EventBus::new` DROPS the readiness receiver — no consumer in this crate needs
+  to observe the tailer's cursor being established. **Task 014 will likely want it surfaced:** 014 must
+  prove the tailer is connected on a real deployment and faces this identical spawn-versus-commit race,
+  and its `shutdown_stops_the_background_tasks` test would otherwise inherit `mod.rs`'s probe idiom.
+  The drop is documented on `new()` with that note so 014 finds it
+- [Task 013 implementer] MUTATION PROOFS — all SEVEN, each in its OWN isolated worktree
+  (`git worktree add <path> HEAD --detach`, own `CARGO_TARGET_DIR`, removed after), seeded from a
+  sha256-pinned copy of the attempt-5 sources, run sequentially on a quiet machine. The mutator aborts
+  unless its anchor matches exactly once, so a mutation can never silently fail to apply. Full-crate
+  `cargo test -p services --lib` each time; sole-failure status was RE-MEASURED rather than inherited,
+  because attempt 5 rewrote all seven tests and attempt 4's evidence is void for every one of them:
+  - (i) `shutdown()` no-op → `shutdown_stops_the_tailer`, THE ONLY failure (262 passed, 1 failed)
+  - (ii) initial mark falls back to 0 → `tailer_retries_the_initial_high_water_mark_...`, THE ONLY
+    failure (262/1)
+  - (iii) reverse publish order → 3 failures (`..._in_seq_order`, `..._does_not_republish_across_passes`,
+    `..._resumes_from_its_high_water_on_restart`), 260/3, as attempt 4
+  - (iv) `read_range` Err arm returns from the loop → `a_failed_read_does_not_end_the_loop_...`, THE
+    ONLY failure (262/1). Confirmed empirically rather than argued: the rename fault in
+    `tailer_survives_a_transient_read_error` still trips `high_water_mark` first, so read_range's arm
+    stays unreachable there
+  - (v) advance only on `send` success → `zero_receivers_does_not_stall_the_cursor`, THE ONLY failure
+    (262/1)
+  - (vi) **drop the first row ever published while advancing the cursor** → 9 failures including
+    `a_row_committed_after_readiness_is_never_dropped` (254/9). This mutation passed attempt 4's ENTIRE
+    suite (262 passed; 0 failed)
+  - (vii) **`Ok(mark) => break mark + 1`, the one-character off-by-one in production code** → 9 failures
+    including the new test (254/9). Also passed attempt 4's entire suite. Its old fingerprint — 11.34s
+    against a ~6s baseline from burned probe timeouts — is gone with the probe; it now fails loudly
+- [Task 013 implementer] EVIDENCE. Ten consecutive `cargo test -p services --lib` (FULL crate), all
+  green, **263 passed / 0 failed / 5 ignored** each: 5.48s, 5.33s, 5.40s, 5.42s, 5.30s, 5.33s, 5.34s,
+  5.33s, 5.36s, 7.19s. Three CONCURRENT full-crate runs (deliberate contention stress) also green:
+  5.47s, 7.15s, 7.27s. Test count is 263, up from attempt 4's 262, by exactly the one new test.
+  `cargo fmt --all -- --check`, `cargo clippy -p services --all-targets --all-features -- -D warnings`
+  and `cargo check --workspace --all-targets` all exit 0. Measurement hygiene per the standing rule:
+  `ps -eo args | grep -c '[c]argo test -p services'` was 0 before the bar; all seven mutations were
+  proven and their worktrees removed BEFORE it started; and the working tree's sha256 was confirmed
+  identical to the pre-mutation snapshot (`tailer.rs` 257ea49e…, `mod.rs` ba207009…), so no run is
+  contaminated by an in-tree mutation. The suite is also FASTER than attempt 4 (5.3-7.2s vs 5.4-8.7s)
+  despite one more test, because readiness replaces the probe's journal rows and retry loops
+- [Task 013 implementer] TAIL_INTERVAL is unchanged at 75ms (mid 50-100ms band, justified in the
+  attempt-1 entry), and the tailer still starts at the high-water mark rather than 0 — now provably so
+  from outside, which is the point of this attempt
+
+## 2026-08-12 execute: task 013 attempt 5 — corrections after the amended contract
+
+Three corrections arrived mid-flight (readiness is not the killer; leave the `zero_receivers` gap
+alone; both directions per proof). All evidence below was RE-MEASURED against the final source
+(`tailer.rs` sha256 6cfe7248…, `mod.rs` ba207009…); the superseded numbers in the entry above were
+measured against a tree with a 600ms gap and are void.
+
+- [Task 013 implementer] **SUPERSEDES my 300ms → 600ms change: reverted to 300ms.** I lengthened the
+  `zero_receivers_does_not_stall_the_cursor` setup gap before the amended contract landed, reasoning
+  that more margin on the suite's last timing dependency was strictly conservative. The orchestrator's
+  assessment is better evidenced than my reasoning was: 300ms is what 16 full-suite runs including
+  6-way concurrent contention validated, and exceeding the gap makes the assertion flip from 5 to 2
+  and FAIL loudly rather than pass vacuously — so it is a flake risk, not a vacuity risk, and it never
+  materialised. Lengthening it was an undictated change with no evidence that 300ms was insufficient.
+  The probe-receiver drop mechanism itself was never touched
+- [Task 013 implementer] **The proofs for (vi) and (vii) are scored against the ABSOLUTE assertions,
+  not the readiness signal — verified from the panic sites, not argued.** Neither mutation touches the
+  readiness code path; both signal readiness normally and are caught purely by absolute seq
+  assertions. Every one of the 9 failures under each mutation panics at one of:
+  `tailer.rs:205` (`assert_publishes_exactly`'s absolute check), `:278` (the new test's absolute
+  `seq == 1`), `:328` / `:438` (`assert_eq!(.., vec![1, 2, 3])`, both reporting `left: [2, 3]`),
+  `:393`. The readiness `try_recv` assertion at `:872` fired in NEITHER mutation. This is the
+  distinction the amended contract draws: readiness proves the initial READ completed, not that the
+  cursor EQUALS the mark; the absolute assertion is what kills the skip
+- [Task 013 implementer] Signal placement re-confirmed against the amended wording: the send sits
+  AFTER `let mut last_published = loop { … };` has been assigned, not between the read and the
+  assignment, and before the first poll pass. The code comment now states both halves of what
+  readiness does and does NOT buy, so a future reader cannot repeat the misreading
+- [Task 013 implementer] **EIGHTH PROOF, added because mutation (ii) was the one proof that DID lean
+  on readiness.** Under (ii) the test aborts at the `try_recv` assertion, which hides whether the
+  absolute assertion would also have caught it. Proof (ii-b) = (ii) with the readiness assertion
+  REMOVED (removed outright, not via `try_recv`, which would consume the oneshot and panic
+  `await_ready` for an unrelated reason — the first version of this mutation did exactly that and was
+  discarded). Result: `tailer_retries_the_initial_high_water_mark_...` still fails, alone (262/1), now
+  at `tailer.rs:195` — "the tailer published seq 1 where seq 4 was owed", `left: 1, right: 4`. So the
+  absolute assertion catches fallback-to-0 independently and the `try_recv` check is a bonus that
+  fires first, not load-bearing
+- [Task 013 implementer] **Batch-internal coverage confirmed intact, per the "do not over-correct"
+  caution.** The absolute form is a superset of the relative one, not a replacement for a different
+  property: (iii) reverse-order still fails 3 tests with `left: [3, 2, 1] right: [1, 2, 3]` and
+  `left: [6, 5] right: [5, 6]`. Skip-within-batch, reorder and duplicate coverage never depended on the
+  relative form
+- [Task 013 implementer] MUTATION PROOFS, all EIGHT, re-run against the final source, each in its own
+  `git worktree add HEAD --detach` with its own `CARGO_TARGET_DIR`, removed after. **BOTH DIRECTIONS
+  for every one:**
+  - (i) `shutdown()` no-op → `shutdown_stops_the_tailer`, ONLY failure (262/1)
+  - (ii) initial mark falls back to 0 → `tailer_retries_the_initial_high_water_mark_...`, ONLY failure
+    (262/1), at the readiness assertion
+  - (ii-b) same, readiness assertion removed → same test, ONLY failure (262/1), at the ABSOLUTE
+    assertion (`left: 1, right: 4`)
+  - (iii) reverse publish order → 3 failures (260/3), all at absolute equality
+  - (iv) `read_range` Err returns from loop → `a_failed_read_does_not_end_the_loop_...`, ONLY failure
+    (262/1). Confirmed empirically, not argued: the rename fault still trips `high_water_mark` first
+  - (v) advance only on send ok → `zero_receivers_does_not_stall_the_cursor`, ONLY failure (262/1),
+    `left: [2] right: [5]`
+  - (vi) drop first row + advance → 9 failures (254/9), all absolute; passed attempt 4's suite entirely
+  - (vii) `break mark + 1` → 9 failures (254/9), all absolute; passed attempt 4's suite entirely
+  CLEAN direction, per mutation: every one of the seven target tests is `ok` in **all 16** clean
+  full-crate runs (10 sequential + 6 concurrent), 0 failures each. A fix that kills a mutant but is
+  unsound on correct code is the failure mode the amended contract warns about; this is the check
+- [Task 013 implementer] FINAL EVIDENCE. Ten consecutive `cargo test -p services --lib` (FULL crate),
+  all green, **263 passed / 0 failed / 5 ignored** each: 7.13s, 5.33s, 5.26s, 5.30s, 5.31s, 5.34s,
+  5.36s, 5.34s, 5.33s, 7.18s. SIX concurrent full-crate runs (matching the contention level the
+  orchestrator used to validate the 300ms gap), all green: 5.47s, 5.49s, 5.48s, 5.42s, 5.49s, 5.33s.
+  `cargo fmt --all -- --check`, `cargo clippy -p services --all-targets --all-features -- -D warnings`,
+  `cargo check --workspace --all-targets` all exit 0. Quiet machine
+  (`ps -eo args | grep -c '[c]argo test -p services'` = 0 before the bar), no mutation worktrees
+  outstanding, source sha256 unchanged across the whole measurement
+- [Task 013 implementer] Housekeeping: no `bindings/` directory was produced — checked before and after
+  the bar. `cargo test -p services --lib` does not trigger the ts-rs export tests. Nothing was added to
+  `.gitignore` by me
+- [Task 013 implementer] The SANCTIONED FALLBACK was not needed and not used. The `spawn` signature
+  change was not blocked: `EventBus::new` is the only caller (`grep -rn 'tailer::spawn' crates/`) and
+  it is in this task's file set. Readiness is the primary mechanism, as preferred
+
+## 2026-08-12 execute: task 013 attempt 5 — orchestrator's independent verification
+
+- [Run orchestrator] Ten consecutive `cargo test -p services --lib` (FULL crate), run by the
+  orchestrator, not inherited from the implementer's report: **10/10 green, 263 passed / 0 failed**
+  each (5.28-7.19s), with the source sha256 re-checked before every run and unchanged throughout
+  (`tailer.rs` 6cfe7248f974a973, `mod.rs` ba207009ce698a1d). Matches the implementer's numbers
+- [Run orchestrator] **The decisive mutation re-proved independently, in an isolated worktree**
+  (`git worktree add HEAD --detach`, seeded by copying attempt 5's uncommitted sources, own
+  `CARGO_TARGET_DIR`, removed after). Mutation (vii) — `Ok(mark) => break mark + 1`, the
+  one-character off-by-one in production code that passed attempt 4's ENTIRE suite with
+  `262 passed; 0 failed`:
+  ```bash
+  test result: FAILED. 254 passed; 9 failed; 5 ignored; 0 measured; 0 filtered out; finished in 91.41s
+  ```
+
+  Nine failures, including the new `a_row_committed_after_readiness_is_never_dropped`. The blind spot
+  that rejected attempt 4 is closed, verified by the orchestrator rather than accepted on report
+- [Run orchestrator] **The owed N4/N5 action is DISCHARGED — neither lost mutation was a survivor.**
+  Both run in the same isolated worktree against attempt 5's tree, and both were caught exactly where
+  predicted:
+  - `mut-N4_batch_collapse_publish_last_only` (publish only the last row of each batch, advancing the
+    cursor through the rest) → `260 passed; 3 failed` —
+    `..._in_seq_order`, `..._does_not_republish_across_passes`, `..._resumes_from_its_high_water_on_restart`
+  - `mut-N5_advance_cursor_on_read_error` (`last_published = mark` in `read_range`'s Err arm) →
+    `262 passed; 1 failed` — `a_failed_read_does_not_end_the_loop_or_advance_the_cursor`, the ONLY
+    failure, exactly the test written for that property
+  The reasoning recorded when the gap was logged predicted both outcomes; recording that it was
+  CONFIRMED rather than left as a prediction, since "expected caught" is not evidence
+- [Run orchestrator] Stage 1 gate: `CONFORMS` — file-set clean (2 declared paths), typecheck override
+  (`cargo fmt --all -- --check && cargo check --workspace --all-targets`) exit 0, scope tests green
+- [Run orchestrator] MY DRAFTING ERROR, on the deviation the implementer declared
+  (`vec![5, 6]` rather than the dictated `vec![4, 5]` in `tailer_resumes_from_its_high_water_on_restart`).
+  The conflict is real and it is mine: amendment item 4 ("pin the probes to an exact `base == 4`") was
+  written for the PROBE-era design and I left it in after mandating the probe's deletion in item 2.
+  With readiness there is no probe to pin, so `vec![4, 5]` was available and simpler. The implementer
+  spotted the contradiction, chose the more specific and more recent instruction, and declared it —
+  correct behaviour under the contract. ACCEPTED as-is rather than churned: the extra base row is a
+  redundant liveness proof, not a weakening, every assertion involved is absolute equality, and
+  mutation (iii) reports `left: [6, 5] right: [5, 6]` against it. An amendment must retire the
+  instructions it supersedes; this one did not
+
+## 2026-08-12 execute: task 013 attempt 5 REJECTED — the payload axis is entirely unasserted
+
+- [Task 013 orchestrator] Attempt 5 closed the skip blind spot completely (mutation (vii) goes from
+  passing attempt 4's whole suite to failing 9 tests), passed Stage 1, passed the orchestrator's own
+  10/10 full-crate bar at 263 passed, and carried EIGHT mutation proofs in both directions. It is
+  REJECTED on a finding from challenger `panel-013-a5-mutation`, **independently reproduced by the
+  orchestrator in an isolated worktree**: the tailer may publish ARBITRARY EVENT PAYLOADS and the
+  entire suite stays green.
+  ```bash
+  test result: ok. 263 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 5.29s
+  ```
+
+  under a mutation that keeps every `seq` but replaces every published `event` with a fabricated
+  `NodeEvent::TaskCreated { task_id: Uuid::nil(), project_id: Uuid::nil() }`
+- [Task 013 orchestrator] ROOT CAUSE — the SAME SHAPE as the attempt-4 rejection, on a different
+  axis. Every assertion in both test modules is on `ev.seq` alone. Confirmed statically:
+  `grep -nE "\.event\b|NodeEvent::|matches!\(ev"` across both files returns only CONSTRUCTION sites
+  (rows being committed), never an assertion on what was RECEIVED; a count of payload assertions in
+  the test bodies is **0**. The db layer does not cover it either — `event_journal/mod.rs`'s 11 tests
+  all build `NodeEvent::TaskCreated { task_id: Uuid::new_v4(), .. }` and assert only seqs and counts.
+  So nothing in this workstream asserts that the event body DELIVERED equals the event body
+  COMMITTED, which is the tailer's actual job. Seq is simply the axis that was cheap to assert
+- [Task 013 orchestrator] A single-row payload assertion is NOT sufficient, proven by the challenger
+  testing its OWN proposed remedy and finding it incomplete — the discipline this run now requires.
+  With payload identity added to `assert_publishes_exactly` (which commits one row) and to the new
+  readiness test, mutation M1 goes red (257/6) but **M12 stays green**: reversing the payloads WITHIN
+  a batch while preserving seqs still passes `263 passed; 0 failed`. Payload identity must therefore
+  be asserted at every site where the tailer's output is collected into a `Vec` — the `vec![1,2,3]`
+  batch, `tailer_does_not_republish_across_passes`'s `first_pass`, and the `vec![5,6]` collection in
+  the restart test. `NodeEvent` has no `PartialEq`, so destructure the variant; no `crates/db` change
+  is needed and the file set is unaffected
+- [Task 013 orchestrator] NON-BLOCKING, recorded so it is not lost (F2): both fault-injection tests
+  establish "the fault actually fired" via fixed 225ms silence windows at 3x `TAIL_INTERVAL`, and that
+  silence is equally satisfied by a tailer that is not polling AT ALL. Demonstrated: with
+  `TAIL_INTERVAL` raised to 2000ms plus cursor-advance-on-error on BOTH arms — two genuine data-loss
+  bugs — both fault tests PASS (only `zero_receivers...` and `shutdown_stops_the_tailer` fail). Not a
+  live defect at the shipped 75ms, where the outage spans ~6 intervals and the outer-arm mutation does
+  kill `tailer_survives_a_transient_read_error`. But the only thing pinning `TAIL_INTERVAL` small is
+  `zero_receivers_does_not_stall_the_cursor`'s fixed 300ms gap; if that gap is ever closed by
+  lengthening the sleep or slowing the poll, both fault tests go silently vacuous
+- [Task 013 orchestrator] The challenger also confirmed, with evidence, that three behaviour-preserving
+  refactors survive (dropping the `mark` upper bound, moving the readiness send after the first pass,
+  `last_published = mark` after the batch loop) and correctly declined to file them as findings — the
+  suite is not coupled to implementation detail. And a no-op tailer body kills all 9 tailer tests plus
+  `shutdown_stops_the_tailer`, with the 7 surviving `event_bus` tests being the ones that drive the
+  sender by hand to test `subscribe_from` — correctly tailer-independent, not vacuous
+
+## 2026-08-12 execute: task 013 attempt 6 — payload identity asserted at every tailer-output site
+
+- [Task 013 implementer] SCOPE. Attempt 5's work was kept intact and built on, not restarted: the
+  readiness signal, the deletion of `probe_until_live`, the restored absolute seq assertions and all
+  eight of its mutation proofs stand. The only change is the axis it never asserted — the event BODY.
+  No test was added or removed (263 before, 263 after), which is what keeps the eight recorded proof
+  counts directly comparable
+- [Task 013 implementer] MECHANISM: a local `RowId { seq, task_id, project_id }` with derived
+  `PartialEq`, plus `delivered(&SequencedEvent) -> RowId` which DESTRUCTURES the variant (`NodeEvent`
+  has no `PartialEq`, and this task's file set excludes `crates/db`, so adding one was neither needed
+  nor permitted). Committing helpers (`commit_one`, `commit_batch`, `commit_one_to_hidden_journal`)
+  now return `RowId` instead of a bare seq, so every row carries a FRESH identifying payload and the
+  test can say which committed row is owed at which seq
+- [Task 013 implementer] WHY WHOLE-VECTOR EQUALITY, not a per-row payload check. The challenger
+  proved a single-row assertion insufficient: reversing payloads WITHIN a batch preserves every seq
+  AND leaves every individual row a legitimate member of the set, so only comparing the received
+  `Vec<RowId>` against the committed `Vec<RowId>` positionally catches it. The three sites where this
+  bites are the ones committing multiple rows in ONE transaction — `..._in_seq_order` (3),
+  `..._does_not_republish_across_passes` (3), `..._resumes_from_its_high_water_on_restart` (2) —
+  because atomic visibility is what makes a single poll pass read them as one batch. `commit_batch`
+  exists to make that "one transaction" property explicit rather than incidental
+- [Task 013 implementer] `project_id` IS ASSERTED ALONGSIDE `task_id`, undictated (the task names
+  `task_id` only). It costs nothing — both are already constructed per row — and it removes the
+  hiding place a mutation that fabricates only one of the two fields would otherwise have
+- [Task 013 implementer] ABSOLUTE SEQ LITERALS ARE PRESERVED, ADDITIVELY. `committed` is ground truth
+  for WHICH rows exist but says nothing about WHICH seqs they took, so every payload assertion is
+  preceded by a hardcoded `assert_eq!(seqs_of(&committed), vec![1, 2, 3])`-style stale-expectation
+  guard — the same pattern `assert_publishes_exactly` already used. The seq literals are what kill the
+  skip mutations (vi)/(vii); payload identity is strictly additional. This also means payload adds
+  ZERO new timing dependence: every payload site sits behind an absolute seq pin that already had to
+  hold, so nothing new can be flaky. Attempt 3 died of a fix that was unsound on correct code, and the
+  ten clean runs plus four concurrent runs below are the check on that
+- [Task 013 implementer] `a_failed_read_does_not_end_the_loop_or_advance_the_cursor` asserts the
+  delivered body against the REPAIRED payload, not the original. Undictated choice: the original body
+  never existed in a readable state (it is corrupted inside the same transaction that appends it), so
+  it is unobservable by construction. The repaired form is also the stronger claim — it pins the
+  delivered body to the journal row AS IT STANDS AT READ TIME, so a tailer serving a cached or
+  invented payload fails there even with the correct seq
+- [Task 013 implementer] `mod.rs`: payload identity added ONLY to `wait_until_tailer_publishes`, which
+  is the single site in that module observing the TAILER's output. The other seven `event_bus` tests
+  drive `sender` by hand to exercise `subscribe_from` and are deliberately tailer-independent (already
+  recorded as "correctly tailer-independent, not vacuous" in the attempt-5 review). Asserting payload
+  identity there would mean reconciling hand-sent `SequencedEvent`s against rows a live tailer is
+  publishing onto the same channel, which manufactures flakiness for no coverage. Deliberate omission,
+  not an oversight
+- [Task 013 implementer] Cosmetic: the dangling doc-comment fragment "… Two problems." at
+  `tailer.rs:84` is removed; the preceding sentence already carries the point
+- [Task 013 implementer] MUTATION PROOFS, all TEN, each in its OWN `git worktree add HEAD --detach`
+  with its OWN `CARGO_TARGET_DIR`, both removed after. HEAD lacks the uncommitted work, so each
+  mutant was seeded by copying the two files across and the seed was sha256-verified BEFORE mutating
+  (`tailer.rs` fb2b3805acbda5ad, `mod.rs` 5f41c437dde139a6). **BOTH DIRECTIONS for every one.**
+  - **(ix) fabricated payload** (`send` a `TaskCreated { task_id: nil, project_id: nil }` while
+    keeping `seq_ev.seq`) → **253 passed; 10 failed**. It passed attempt 5's ENTIRE suite at
+    `263 passed; 0 failed`. All 9 tailer tests fail, plus `shutdown_stops_the_tailer` via the new
+    assertion in `wait_until_tailer_publishes`
+  - **(x) batch payload permutation** (every seq kept, payloads reversed within the batch) →
+    **260 passed; 3 failed**, exactly the three multi-row-batch sites. This is the one that survives a
+    single-row-only fix, and it also passed attempt 5 at `263 passed; 0 failed`. All three fail, not
+    just one — confirming each of the three genuinely reads its rows in a single pass
+  - (i) `shutdown()` no-op → 262/1, `shutdown_stops_the_tailer` only
+  - (ii) initial mark falls back to 0 → 262/1, `tailer_retries_the_initial_high_water_mark_...` only
+  - (ii-b) same, readiness assertion DELETED → 262/1, same test, at the ABSOLUTE assertion:
+    `left: RowId { seq: 1, ... }  right: RowId { seq: 4, ... }`
+  - (iii) reverse publish order → 260/3, all at absolute equality
+  - (iv) `read_range` Err returns from the loop → 262/1, `a_failed_read_does_not_end_the_loop_...` only
+  - (v) advance only on send ok → 262/1, `zero_receivers_does_not_stall_the_cursor` only,
+    `left: [RowId { seq: 2, ... }]  right: [RowId { seq: 5, ... }]`
+  - (vi) drop first row + advance → 254/9, all absolute
+  - (vii) `break mark + 1` → 254/9, all absolute
+  EVERY COUNT MATCHES the attempt-5 ledger for (i)-(vii) exactly; only (ix) and (x) changed, from
+  survivors to kills. (vi) and (vii) run at 91.31s / 91.40s against a ~5.3s baseline — the burned
+  30s deadlines are the skip mutant's own fingerprint, not a hang
+- [Task 013 implementer] HARNESS DEFECT CAUGHT AND FIXED, recorded because a bad proof is worse than
+  no proof. (ii-b)'s first run neutralised the readiness assertion with `let _ = ready.try_recv()`,
+  which COMPLETES the oneshot, so the later `await_ready(ready)` panicked with tokio's
+  "called after complete". That is 262/1 scored against the harness, not against the absolute
+  assertion. Re-run with the assertion DELETED outright (and the now-unneeded `mut` dropped): the
+  failure moves to `tailer.rs:277`, the absolute assertion, `seq 1` where `seq 4` was owed — which is
+  what the attempt-5 ledger recorded (`left: 1, right: 4`)
+- [Task 013 implementer] FINAL EVIDENCE, CLEAN DIRECTION. Ten consecutive `cargo test -p services
+  --lib` (FULL crate) on a quiet machine (`ps -eo args | grep -c '[c]argo test -p services'` = 0
+  before the bar, checked as its own command so the check cannot match itself), all green,
+  **263 passed / 0 failed / 5 ignored** each: 7.10s, 5.25s, 5.25s, 5.23s, 5.26s, 5.28s, 5.31s, 5.30s,
+  5.27s, 5.24s. Source sha256 re-read before EVERY run and unchanged throughout. FOUR concurrent
+  full-crate runs under contention, also all green at 263/0: 5.49s, 5.40s, 5.55s, 5.37s.
+  `cargo fmt --all -- --check`, `cargo clippy -p services --all-targets --all-features -- -D warnings`
+  and `cargo check --workspace --all-targets` all exit 0. No `bindings/` directory produced, no
+  mutation worktrees or target dirs outstanding
+- [Task 013 implementer] UNTOUCHED, per the hard rule against any form of `git checkout`/`restore`:
+  `zero_receivers_does_not_stall_the_cursor`'s 300ms gap and `TAIL_INTERVAL` are exactly as attempt 5
+  shipped them, so the non-blocking F2 fragility is neither fixed nor worsened here
+- [Task 013 implementer] (x) AND (iii) BOTH REPORT `260 passed; 3 failed` ON THE IDENTICAL THREE
+  TESTS, so the counts alone cannot tell them apart. The panic bodies settle which axis caught which,
+  and this contrast IS the proof that the payload axis is now load-bearing. Under (x) the seqs are
+  IDENTICAL on both sides and only the bodies moved (positions 0 and 2 swapped) —
+  `..._publishes_committed_rows_in_seq_order`:
+  ```text
+  left:  [RowId { seq: 1, task_id: d83416d8… }, RowId { seq: 2, task_id: 4a7a5964… }, RowId { seq: 3, task_id: 2152b277… }]
+  right: [RowId { seq: 1, task_id: 2152b277… }, RowId { seq: 2, task_id: 4a7a5964… }, RowId { seq: 3, task_id: d83416d8… }]
+  ```
+
+  — whereas (iii) fails on the seq ORDER itself. Under (ix) the delivered body is the all-zero
+  fabrication at the correct seq, in `a_row_committed_after_readiness_is_never_dropped`:
+  ```text
+  left:  RowId { seq: 1, task_id: 00000000-0000-0000-0000-000000000000, project_id: 00000000-… }
+  right: RowId { seq: 1, task_id: c9372edf-1c41-4a8e-9dec-35a4f42b1fa7, project_id: 9b56465c-… }
+  ```
+
+  Same seq, different body: precisely the class attempt 5 could not see
+- [Task 013 implementer] CLEAN DIRECTION, stated per-mutation as attempt 5's ledger did: every target
+  test of all TEN mutations is `ok` in each of the 14 clean full-crate runs (10 sequential + 4
+  concurrent). 263/0 on every run leaves no target test unaccounted for
+- [Task 013 implementer] ANTICIPATED CHALLENGE — every row the suite commits is
+  `NodeEvent::TaskCreated`, so would a tailer that mangles a DIFFERENT variant's fields (say
+  `AttemptStarted`'s `executor`) slip through? No, and deliberately no second variant was added. The
+  tailer has NO per-variant code path: it clones an already-deserialized `NodeEvent` and sends it, so
+  one variant exercises the entire publish path end to end. Variant-level serde fidelity is
+  `crates/db`'s contract, already pinned by `event_type_matches_serde_tag_for_every_variant` across
+  all nine variants, and `crates/db` is outside this task's file set. Adding a second variant here
+  would shift the absolute seq literals for zero additional coverage
+- [Task 013 implementer] WORKING-TREE FILES I DID NOT AUTHOR AND DID NOT TOUCH: `.gitignore` and
+  `docs/plans/vk-swarm-event-bus/phase-3/006-...md` are both modified in the tree and neither is in
+  this task's file set. Noting one consequence rather than letting the gate discover it: the
+  `.wai-scratch/` line in that `.gitignore` change is what keeps this attempt's `cp` backups and
+  mutation-proof outputs out of `git status`, so the file set reads clean partly BECAUSE of an edit
+  made by a third party. Attempt 5's ledger explicitly disclaimed touching `.gitignore`, so the record
+  stays consistent: neither attempt authored it
+
+## 2026-08-12 execute: task 013 attempt 6 — orchestrator's independent verification
+
+- [Run orchestrator] Attempt 6 kept all of attempt 5 and added the payload axis via a local `RowId`
+  (seq + `task_id` + `project_id`, `PartialEq`), a `delivered()` destructurer that PANICS on any
+  non-`TaskCreated` body ("any other body was fabricated rather than read from the journal"), and
+  whole-`Vec<RowId>` equality at every collection site. `seqs_of()` keeps the absolute seq literals as
+  a separate guard, so the two axes are asserted independently rather than one replacing the other.
+  `NodeEvent` still needs no `PartialEq` and `crates/db` is untouched
+- [Run orchestrator] Ten consecutive full-crate `cargo test -p services --lib`, run by the
+  orchestrator: **10/10 green, 263 passed / 0 failed** each (5.25-7.17s), source sha re-verified
+  before every run (`tailer.rs` fb2b3805acbda5ad, `mod.rs` 5f41c437dde139a6)
+- [Run orchestrator] **Both payload mutations re-proved independently in an isolated worktree**
+  (`git worktree add HEAD --detach`, seeded by copying attempt 6's uncommitted sources, own
+  `CARGO_TARGET_DIR`, removed after). Both passed attempt 5's ENTIRE suite at `263 passed; 0 failed`:
+  - (ix) fabricated payload (`Uuid::nil()` for both fields, seq preserved) →
+    `FAILED. 253 passed; 10 failed` — ten tests, every tailer test plus the readiness test
+  - (x) batch payload permutation (seqs preserved, payloads reversed within the batch) →
+    `FAILED. 260 passed; 3 failed` — exactly the three `Vec`-collection sites
+    (`..._in_seq_order`, `..._does_not_republish_across_passes`, `..._resumes_from_its_high_water_on_restart`).
+    This is the mutation that survived the CHALLENGER's own proposed single-row remedy, which is why
+    the task required whole-vector equality rather than a per-row check
+- [Run orchestrator] REGRESSION CHECK, because adding an axis can quietly weaken an existing one:
+  mutation (vii) `break mark + 1` re-applied to attempt 6's tree still gives
+  `FAILED. 254 passed; 9 failed` — identical to attempt 5. The skip coverage is intact; the payload
+  assertions were added ALONGSIDE the absolute seq literals, not in place of them
+- [Run orchestrator] Stage 1 gate: `CONFORMS` — file-set clean (2 declared paths), typecheck override
+  exit 0, scope tests green. The dangling doc-comment fragment at `tailer.rs:84` is fixed
+
+## 2026-08-12 execute: task 013 attempt 6 REJECTED — variant coverage, and the meta-pattern named
+
+- [Task 013 orchestrator] Attempt 6 closed the payload axis correctly (both payload mutations now die,
+  skip coverage intact, 10/10 orchestrator bar, Stage 1 CONFORMS) and is REJECTED on FOUR surviving
+  mutations from challenger `panel-013-a6`, all four with remedies the challenger verified in both
+  directions
+- [Task 013 orchestrator] **SURVIVOR 1, reproduced independently by the orchestrator in an isolated
+  worktree:** a tailer that publishes ONLY `TaskCreated` and silently drops the other eight
+  `NodeEvent` variants, cursor advancing past them, passes the entire suite —
+  `test result: ok. 263 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 7.15s`.
+  STRUCTURAL, not accidental: every commit helper in both files builds `TaskCreated`, and
+  `delivered()` PANICS on any other variant, so the suite cannot express an expectation about the
+  other eight. **This has direct blast radius inside this plan** — tasks 006/007/008 emit
+  `TaskStatusChanged`, `AttemptStarted`/`Finished`/`Failed` and node-runner events. The bus would keep
+  carrying `TaskCreated` and look healthy while every event phase 3 exists to deliver was lost
+- [Task 013 orchestrator] SURVIVORS 2-4, on the challenger's evidence (not independently reproduced —
+  the orchestrator's own S2 mutation failed to apply, anchor count 0, so that run tested pristine code
+  and proves NOTHING; recorded so no one mistakes it for confirmation):
+  (2) `seq` may be the batch POSITION rather than the journal seq — indistinguishable on a contiguous
+  journal, and gaps are real because `compact` stage 2 deletes oldest rows ignoring the cursor floor,
+  which does not protect the tailer since it has no `trigger_cursors` row. `seq` is what consumers
+  persist as a cursor, so renumbering corrupts every downstream cursor permanently.
+  (3) a per-pass publication cap discards the remainder of a large catch-up batch — the sharpest
+  trigger is the suite's own outage test, whose whole point is that the cursor does not advance, which
+  guarantees a large batch on recovery.
+  (4) `EventBus::new` may ignore `broadcast_capacity` — so
+  `lagged_refills_from_journal_and_resumes_live` passes whether or not `Lagged` ever fires and
+  `subscribe_from`'s refill arm has NO live coverage
+- [Task 013 orchestrator] **SURVIVOR 4 IS A GAP IN TASK 005, WHICH IS ALREADY MARKED PASSED.** Its
+  `lagged_refills_from_journal_and_resumes_live` test never proves the `Lagged` arm was entered.
+  Decision: fix it in 013 rather than reopening 005, because `mod.rs` is in 013's file set and
+  reopening a passed task to add one assertion costs a full re-gate for no extra safety. Recorded so
+  the audit trail shows a passed task's hole was closed deliberately, not overlooked
+- [Run orchestrator] **THE META-PATTERN, now named because it has recurred three times.** Attempts 4,
+  5 and 6 were each rejected for the SAME shape of defect on a DIFFERENT axis: relative-vs-absolute
+  seq (4), seq-without-payload (5), payload-only-for-one-variant (6). Every one passed Stage 1, ten
+  consecutive full-crate runs, and every mutation proof written up to that point. The mechanism is
+  always identical — the suite is rigorous along the axes previously attacked and structurally unable
+  to express a claim about a new one. Mechanical gates cannot find this class: they verify the
+  assertions that EXIST. Only an adversary asking "what would still pass?" does. That is the
+  strongest evidence in this run for keeping the Stage-2 panel mandatory, and for the panel brief
+  naming the axes ALREADY closed so each round hunts a genuinely new one
+
+## 2026-08-12 execute: task 013 attempt 7 — variant/seq/batch coverage, and task 005's capacity hole
+
+- [Task 013 implementer] **ZERO PRODUCTION LINES CHANGED.** All four survivors are mutations of code
+  that is already CORRECT: `mod.rs:82` is `broadcast::channel(broadcast_capacity)` and already
+  honours its argument, and the tailer already publishes every variant, every journal seq and every
+  row of a batch. The defect was entirely in what the suite could EXPRESS. Attempt 7 is therefore
+  four new tests and nothing else — on a task rejected three times, an unnecessary production edit is
+  the worst available trade. Attempts 5 and 6's work is retained unchanged
+- [Task 013 implementer] **SURVIVOR 4 CLOSES A HOLE IN TASK 005, WHICH IS ALREADY MARKED PASSED.**
+  `new_honours_the_requested_broadcast_capacity` is added to `mod.rs` (013's file set) rather than by
+  reopening 005, per the task file's explicit instruction. Recorded so the audit trail shows a passed
+  task's gap was closed deliberately. Consequence worth naming: `lagged_refills_from_journal_and_
+  resumes_live` STILL does not prove the `Lagged` arm is entered — the new test proves the CAPACITY
+  is honoured, which is the precondition that makes provoking `Lagged` possible at all. Fully
+  asserting the refill arm belongs to whichever task next touches `subscribe_from`
+- [Task 013 implementer] REFERENCE REMEDY READ, NOT PASTED. The challenger's patch at
+  `.claude/worktrees/agent-a8261feb9ac00f4bb/task-013-attempt6-challenger-remedy.patch` was the
+  starting point; every assertion was re-derived against the actual sources before use. THREE
+  deliberate divergences, all verified: (a) a `variant_tag` helper whose `match` is EXHAUSTIVE with
+  no `_` arm, so adding a tenth `NodeEvent` variant fails to COMPILE and forces the test to be
+  extended — the challenger's `events.len() == 9` assertion cannot catch that, because
+  `one_of_every_variant` is hand-written and would still return 9. `NodeEvent::event_type()` cannot
+  serve this purpose: it lives in `crates/db`, so a new variant breaks that crate, not this test;
+  (b) a distinctness assertion over the nine tags, so a repeated variant (leaving one unasserted)
+  fails loudly; (c) the capacity test captures `rx.try_recv()` and calls `bus.shutdown()` BEFORE
+  matching, so the panic path cannot leak a running tailer
+- [Task 013 implementer] DB-LAYER FACTS VERIFIED FROM SOURCE, not from the task file's prose, because
+  the gap test's entire discriminating power rests on them: `high_water_mark` is
+  `SELECT COALESCE(MAX(seq), 0)` (`event_journal/queries.rs:67`), so it stays 4 after seqs 1 and 3
+  are deleted; `read_range` is `WHERE seq > ? AND seq <= ? ORDER BY seq ASC` (`queries.rs:45`); and
+  migration `20260812000000_add_event_journal.sql` puts NO `CHECK (event_type IN (...))` constraint
+  on the table, so committing all nine variants cannot fail on a constraint
+- [Task 013 implementer] UNDICTATED CHOICES. (1) Full-body comparison is
+  `Vec<(i64, serde_json::Value)>` via `serde_json::to_value`, which compares every field of every
+  variant including the serde `type` tag and needs no `PartialEq` on `NodeEvent`; the two
+  `TaskCreated`-only new tests keep the existing `RowId`/`delivered()` helpers, which are strictly
+  more readable where they apply. (2) N=200 for the batch test — comfortably above the 64 the
+  challenger's cap mutation used and above any plausible cap, while costing 0.27s. (3) The capacity
+  observable is capacity 2 + three synchronous sends + one `try_recv`, asserted as exactly
+  `Lagged(1)`; **verified empirically on clean code BEFORE any mutant was built** (tokio does not
+  round the requested capacity), and it is deterministic rather than timing-dependent — the sends and
+  the `try_recv` are synchronous and an explicit `high_water_mark == 0` precondition pins that the
+  tailer contributes nothing to the channel. (4) `a_batch_larger_than_the_broadcast_buffer_is_
+  published_whole` keeps the name this task dictated even though it is a MISNOMER: the channel is
+  sized 4x the batch ON PURPOSE, because at capacity 64 a 200-row batch hands the receiver
+  `RecvError::Lagged`, which `poll_for_event` reports as `None`, and the test would then fail for a
+  reason unrelated to the tailer. It pins "no per-pass cap", not buffer-overrun behaviour; the doc
+  comment says so
+- [Task 013 implementer] MUTATION PROOFS, ALL FOURTEEN, BOTH DIRECTIONS. Each in its OWN
+  `git worktree add HEAD --detach`, removed after; HEAD lacks the uncommitted work, so each was
+  seeded by copying the two files across and the seed was sha256-verified BEFORE mutating
+  (`tailer.rs` e26bdcd1a5302002, `mod.rs` 35393488f9472243). Every mutation asserted its anchor
+  matched EXACTLY ONCE and aborted otherwise, asserted the replacement landed exactly once, and
+  asserted the file's sha256 CHANGED — the orchestrator's attempt-6 S2 mutation silently failed to
+  apply and nearly scored a pristine run as evidence. CLEAN direction re-run inside the same isolated
+  harness: `ok. 267 passed; 0 failed`
+  - **(xi) publish only `TaskCreated`, advance past the other eight** → **266 passed; 1 failed**,
+    `every_event_variant_is_published_with_its_body_intact` ONLY.
+    `left: [(1, task_created…)]  right: [(1, task_created…), (2, task_status_changed…), …, (9,
+    reconcile_completed…)]`. It passed attempt 6 at `263 passed; 0 failed`
+  - **(xii) publish the BATCH POSITION as seq (`cursor + 1 + index`)** → **266 passed; 1 failed**,
+    `a_gap_in_the_journal_does_not_renumber_the_rows_after_it` ONLY.
+    `left: [RowId { seq: 1, task_id: 0915274b… }, RowId { seq: 2, task_id: d3af1ed3… }]
+    right: [RowId { seq: 2, task_id: 0915274b… }, RowId { seq: 4, task_id: d3af1ed3… }]` — identical
+    task_ids, renumbered seqs, which is the finding exactly. **Numbered from the CURSOR, not from 1:**
+    from 1 it would break nearly every tailer test, a fat kill count proving nothing about the gap
+    specifically; from the cursor it is indistinguishable from the real seq on every contiguous
+    journal in the suite, so only the gap test can tell. That asymmetry IS the proof
+  - **(xiii) cap publication at 64 rows per pass, cursor advanced to the mark** → **266 passed;
+    1 failed**, `a_batch_larger_than_the_broadcast_buffer_is_published_whole` ONLY. `left: 64
+    right: 200`. Note the mutation ALSO sets `last_published = mark` after the loop, which the task
+    file lists as explicitly-NOT-a-finding (semantically equivalent on its own), so the only failure
+    driver is the `.take(64)`
+  - **(xiv) `EventBus::new` hardcodes `broadcast::channel(1024)`** → **266 passed; 1 failed**,
+    `new_honours_the_requested_broadcast_capacity` ONLY; the panic reports
+    `got Ok(SequencedEvent { seq: 1, … })` where `Lagged(1)` was owed. **It does NOT fail
+    `lagged_refills_from_journal_and_resumes_live`** — which is not a gap in the proof, it IS the
+    finding: that test passes whether or not `Lagged` ever fires
+  - (i) `shutdown()` no-op → 266/1, `shutdown_stops_the_tailer` only
+  - (ii) initial mark falls back to 0 → 266/1, `tailer_retries_the_initial_high_water_mark_…` only
+  - (ii-b) same, readiness assertion neutralised → 266/1, same test. The assertion's CONDITION was
+    replaced with `true` rather than deleting the `try_recv` call: consuming the oneshot completes it
+    and makes the later `await_ready` panic, which is the harness defect recorded under attempt 6
+  - (iii) reverse publish order → **261/6** (was 260/3)
+  - (iv) `read_range` Err arm returns from the loop → 266/1, `a_failed_read_does_not_end_the_loop_…`
+    only
+  - (v) advance only on `send` ok → 266/1, `zero_receivers_does_not_stall_the_cursor` only
+  - (vi) drop first row + advance → **255/12** (was 254/9), 96.98s
+  - (vii) `break mark + 1` → **256/11** (was 254/9), 92.99s
+  - (ix) fabricated payload → **254/13** (was 253/10)
+  - (x) batch payload permutation → **261/6** (was 260/3)
+- [Task 013 implementer] **EVERY PRIOR PROOF'S ORIGINAL FAILING TESTS ARE STILL IN ITS FAILURE LIST** —
+  checked name by name, not by count. The five proofs whose counts grew grew by exactly the new tests
+  that legitimately cover the same axis, so the deltas are STRENGTHENING, not drift: (iii) and (x)
+  each pick up the three new multi-row-batch collection sites; (vi) and (ix) pick up all three new
+  tailer tests; (vii) picks up two. No proof lost a kill
+- [Task 013 implementer] **(vii) does NOT kill the gap test, and that is coherent rather than a
+  hole.** `break mark + 1` starts the cursor at 1 on a fresh journal, skipping seq 1 — but the gap
+  test DELETES seq 1, so its two survivors (2 and 4) are both above the mutant's cursor and both
+  arrive correctly. The gap test is aimed at renumbering, not at skipping, and (xii) is the mutation
+  that proves it. Recorded so the asymmetry is not later mistaken for a missing assertion
+- [Task 013 implementer] HARNESS DEFECT CAUGHT AND FIXED, recorded because a bad proof is worse than
+  no proof. The first version of the driver classified any `^error:` line as a compile failure, and
+  cargo prints `error: test failed, to rerun pass …` for TEST failures — so the first run of (xi)-(xiv)
+  reported "NO EVIDENCE: COMPILE FAILURE" for four mutants that had in fact compiled and been killed.
+  The detector now matches only `^error[E` / `^error: could not compile`, and the four proofs above
+  are from the corrected run. A compile failure is scored as NO EVIDENCE, never as a kill
+- [Task 013 implementer] Driver-version audit, pre-empting the obvious panel question: proofs (i)-(v),
+  (vi)/(vii)/(ix)/(x) and the corrected (xi)-(xiv) all ran under the FIXED driver. Only the CLEAN
+  baseline ran under the pre-fix one, and it reported `rc=0` with `267 passed` and no `error` line of
+  any kind, so the defective classification branch was never exercised on it
+- [Task 013 implementer] TEN CONSECUTIVE FULL-CRATE `cargo test -p services --lib`: **10/10 green,
+  `267 passed; 0 failed; 5 ignored` each** (5.67-7.86s), with `tailer.rs`'s sha256 re-verified
+  immediately before every run. 267 = attempt 6's 263 + the four new tests
+- [Task 013 implementer] The contract's `ps -eo args | grep -c '[c]argo test -p services'` guard
+  SELF-MATCHES when the checking command's own argv contains the literal string: it returned 1 during
+  the ten-run loop. Re-checked with the pattern reassembled at runtime (`printf 'c]argo test -p ser'`)
+  it is 0. No competing run existed; the timings (5.7s baseline) match the attempt-6 ledger's
+  5.25-7.17s. Recorded so the next attempt does not chase a phantom
+- [Task 013 implementer] GATES: `cargo fmt --all -- --check` exit 0 (the `imports_granularity` /
+  `group_imports` notices are pre-existing nightly-only-feature warnings, not findings);
+  `cargo clippy -p services --all-targets --all-features -- -D warnings` exit 0 with ZERO warning or
+  error lines; `cargo check --workspace --all-targets` exit 0
+- [Task 013 implementer] Mutation proofs used ONE shared `CARGO_TARGET_DIR` across the per-proof
+  worktrees, used STRICTLY SEQUENTIALLY. The isolation rule exists because two CONCURRENT challengers
+  corrupted each other's evidence on this task; sequential reuse does not reintroduce that, and it is
+  what made fourteen proofs affordable. Each proof still got its own fresh worktree
+- [Task 013 implementer] NOT FIXED, DELIBERATELY: everything on the task file's "Explicitly NOT
+  findings" list, plus the 225ms/300ms fixed silence windows and `TAIL_INTERVAL`, which the attempt-5
+  ledger records as recorded-not-required. Nothing outside `#[cfg(test)]` was touched in either file
+- [Task 013 implementer] WORKING-TREE FILES I DID NOT AUTHOR AND DID NOT TOUCH, unchanged from
+  attempt 6's disclaimer: `.gitignore` and
+  `docs/plans/vk-swarm-event-bus/phase-3/006-...md`. The `.wai-scratch/` line in that `.gitignore`
+  change is again what keeps this attempt's `cp` backups out of `git status`
+
+## 2026-08-12 execute: task 013 attempt 7 — orchestrator's independent verification
+
+- [Run orchestrator] Ten consecutive full-crate runs by the orchestrator: **10/10 green, 267 passed /
+  0 failed** each (5.61-7.59s), source sha re-verified before every run (`tailer.rs` e26bdcd1a5302002,
+  `mod.rs` 35393488f9472243). Test count 263 -> 267, exactly the four required tests
+- [Run orchestrator] **All FOUR survivors re-proved dead, independently, in an isolated worktree**,
+  each mutation asserting its anchor matched EXACTLY ONCE before applying (added after the
+  orchestrator's own S2 mutation silently failed to apply last round and produced a meaningless green
+  run — a self-inflicted near-miss now guarded mechanically):
+  - S1 publish only `TaskCreated`, drop the other eight variants → `266 passed; 1 failed`, ONLY
+    `every_event_variant_is_published_with_its_body_intact`. Was `263 passed; 0 failed` on attempt 6
+  - S2 `seq` as batch position rather than journal seq → `266 passed; 1 failed`, ONLY
+    `a_gap_in_the_journal_does_not_renumber_the_rows_after_it`
+  - S3 per-pass publication cap → `263 passed; 4 failed`, including
+    `a_batch_larger_than_the_broadcast_buffer_is_published_whole`. The orchestrator used a cap of 2
+    rather than the challenger's 64, which also trips the 3-row batch tests — expected, and a
+    stronger signal than the single-test kill
+  - S4 `EventBus::new` ignoring `broadcast_capacity` → `266 passed; 1 failed`, ONLY
+    `new_honours_the_requested_broadcast_capacity`. This closes the hole in task 005 noted above
+- [Run orchestrator] Stage 1 gate: `CONFORMS`
+
+## 2026-08-12 execute: PRE-EXISTING flake found by task 013's gate — split, not deferred
+
+- [Run orchestrator] Task 013 attempt 7's Stage-1 gate REJECTED on
+  `crates/services/tests/normalize_sync_test.rs::test_fast_execution_no_lost_logs` — a log-
+  normalization test with nothing to do with the event bus. **My ten-run bar had never measured it:
+  I ran `cargo test -p services --lib`, which excludes integration test targets, while the gate runs
+  `cargo test -p services`, which includes them. That is the SAME scoped-command error recorded
+  against attempt 3, resurfacing in a new place.** The bar for a task scoped to a crate must match the
+  gate's command, not a filtered subset of it
+- [Run orchestrator] ESTABLISHED PRE-EXISTING by controlled A/B, so it is not a regression from this
+  branch:
+  - pristine pre-013 code (fresh worktree at `6077d670`, task 005's commit): **fails 1/8**
+  - that same base worktree with attempt 7's `tailer.rs` + `mod.rs` copied in: passes 3/3
+  - main worktree with attempt 7: fails ~1/4 to 2/3 depending on machine load
+  Same code passing in one worktree and failing in another, plus reproduction on code predating task
+  013 entirely, rules out the event bus. The variable is machine load
+- [Run orchestrator] **NOT marked `#[ignore]`, deliberately.** CLAUDE.md sanctions a per-item ignore
+  with a tracked workstream, but this test exists precisely because fast executions were LOSING LOGS,
+  and it asserts `patch_count >= 1` after a 5s timeout. A failure means normalization produced no
+  patches for one message in five seconds — which is either a slow machine OR the original race still
+  live. Silencing it would remove the only guard against a real lost-log bug, a worse trade than an
+  occasional red run. Ten targeted runs failed to reproduce it for capture, so root cause is unknown
+  and the two hypotheses (handle timed out vs completed-with-zero-patches) are still open
+- [Run orchestrator] SPLIT as a tracked follow-up workstream created in THIS session, per "No Deferred
+  Remediation" — `dev-docs/workstreams/normalize-fast-execution-lost-logs-flake/README.md`, carrying
+  the measured rates, the A/B that proves it pre-existing, both hypotheses, and the reproduction
+  recipe. Escalated to the user in the same turn, because whether a possible product race in log
+  handling is worth its own investigation now is their call, not mine
+- [Run orchestrator] Consequence for gating: a Stage-1 rejection citing ONLY
+  `test_fast_execution_no_lost_logs` is this issue, not the task under gate. Any such rejection must
+  be confirmed by re-running and checking that no OTHER test fails — never by re-running until green
+
+## 2026-08-12 execute: USER DECISIONS on the flake and on task 013's stopping rule
+
+The orchestrator escalated two questions (whether to investigate the `normalize_sync_test.rs` flake
+now, and whether to run a fifth adversarial panel on task 013). The user asked for pros/cons and
+outcomes per option, then approved proceeding on the orchestrator's recommendation.
+
+- [Run orchestrator] **Flake: investigate, but SEQUENCED AFTER task 013 closes — not in parallel.**
+  The reason is contamination, and it is the same error this run has already made twice. Reproducing
+  the flake REQUIRES deliberately saturating the machine; the panel's mutation proofs require a quiet
+  one. Running both at once would manufacture a third contaminated result. The investigation's
+  deliverable is the one thing the workstream README records as missing: a captured failure under
+  sustained load, distinguishing "the handle timed out" (slow machine) from "completed with zero
+  patches" (a genuine lost-log race). Those are different bugs and only captured output separates
+  them.
+- [Run orchestrator] **Task 013: a FIFTH panel, with a closed-axes brief and a stopping rule fixed
+  BEFORE the evidence arrives.** Rationale for continuing rather than accepting attempt 7: the hit
+  rate across panels is 4 for 4, every finding on a NEW axis, and the most recent (variant coverage)
+  would have silently broken all of phase 3 — which is the very next thing this run executes. There
+  is no diminishing-returns signal yet. The brief names all seven closed axes so the round cannot be
+  spent re-proving them.
+- [Run orchestrator] **STOPPING RULE, recorded in advance so it cannot be rationalised afterwards:**
+  a clean verdict from this panel ENDS task 013. If it finds a defect, attempt 8 gets one further
+  panel and no more. A finding on an axis already listed as closed would mean the brief was wrong,
+  not that the suite is — and would be recorded as an orchestrator error, not an implementer one.
+- [Run orchestrator] **Mutation scope declared up front:** the panel proves mutations with
+  `cargo test -p services --lib` for signal isolation from the known flaky integration target. This
+  is a deliberate, stated scope choice for mutation DISCRIMINATION only. It is explicitly NOT the
+  gate bar — the Stage-1 bar remains the full-crate `cargo test -p services`. Declaring the scope up
+  front is the correction for the `--lib` error recorded twice above.
+- [Run orchestrator] Panel isolation: the challenger builds its own detached worktree at `de75b78f`
+  and copies the two uncommitted source files in, per the standing rule adopted after two challengers
+  collided in a shared worktree and overwrote each other's mutations.
+
+## 2026-08-12 execute: task 013 attempt 7 REJECTED by panel 5 — retry DURATION, and one-tailer
+
+Verdict `CITED DISSENT`, two findings, both on axes not previously attacked. **Fifth panel in a row
+to find a real defect on a new axis.** The orchestrator independently verified both citations by
+reading the named assertions rather than re-running the mutations (a read costs no machine load, and
+the panel's runs carried anchor guards).
+
+- [Run orchestrator] **Finding 1 — three assertions whose stated purpose is "does not give up" are
+  timing-bound, not property-bound.** Verified in source: `tailer_survives_a_transient_read_error`
+  holds its outage a 225ms sleep plus a 225ms silence `timeout` before
+  `assert!(!tailer_handle.is_finished())` — ~6 poll attempts at the shipped `TAIL_INTERVAL = 75ms`.
+  `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero` holds 750ms, ~4 retries
+  at the 100/200/400/800 backoff, and its assertion literally reads *"tailer must retry the initial
+  high-water mark, not give up"*. Panel mutations: main-loop give-up at 10 → `267 passed; 0 failed`
+  twice; initial-loop `break 0` at 10 → `267 passed; 0 failed` three times; both kill their tests at
+  N=1, so the assertions ARE wired to the branch and are DEFEATED rather than absent
+- [Run orchestrator] Why this is not the already-recorded non-blocking latency item: that record is
+  about the fixed 225ms SILENCE windows failing to prove the fault fired at a 2000ms `TAIL_INTERVAL`,
+  and is explicitly *"not a live defect at the shipped 75ms."* This is a different assertion failing
+  on a different axis (retry DURATION) and it carries permanent loss AT the shipped 75ms — ten
+  consecutive failures is ~750ms of DB unavailability, i.e. a WAL checkpoint or a pre-migration backup
+- [Run orchestrator] **Finding 2 — nothing pins that `EventBus::new` spawns exactly ONE tailer.**
+  Double-spawn survived 3/3 at `267 passed; 0 failed`, with a probe proving it is a real defect
+  (`delivered … exactly 2 time(s)` mutated vs `1 time(s)` control). Cause is structural: every
+  `mod.rs` test but `shutdown_stops_the_tailer` drives `sender` by hand and is tailer-independent,
+  and all twelve `tailer.rs` tests call `tailer::spawn` directly, so `EventBus::new` has no
+  end-to-end assertion at all. The panel honestly narrowed its own blast radius — `subscribe_from`
+  dedups on `ev.seq > last`, so SSE consumers are largely shielded; the cost lands on doubled polling,
+  halved effective buffer, and true duplicates for direct `sender().subscribe()` consumers
+- [Run orchestrator] **DECLARED RESIDUAL on the item-1 fix, stated rather than hidden:** no finite
+  wall-clock window can exclude an arbitrarily large finite give-up budget. Extending the outages to
+  1500ms/4000ms kills a threshold of 10 but not one of 100. The windows are chosen to exceed any
+  budget a plausible "add a retry limit" change would use. Claiming more than that would be the same
+  overstatement the panel corrected the orchestrator on earlier in this run
+- [Run orchestrator] Amendment mandates fixing the three defeated assertions **IN PLACE** rather than
+  adding shadow tests: a new test beside a still-toothless old one leaves the old one lying about what
+  it proves. It also mandates updating the comments that justify the old 225ms/750ms numbers — a stale
+  rationale above a changed constant is exactly the drift this process catches
+- [Run orchestrator] Panel-cleared axes recorded so no future round burns time on them: the
+  replay-to-live handoff is genuinely covered (moving `subscribe()` after the journal read kills
+  `no_journaled_event_is_skipped_across_the_handoff`, 3/3); and the concurrent-writer seq-vs-commit
+  ordering hazard is UNREACHABLE on SQLite because writers serialise (probe: `A got seq 1; B BLOCKED
+  (timed out) until A committed`)
+
+## 2026-08-12 execute: task 013 attempt 8 — retry-duration windows and the one-tailer assertion
+
+Attempt 8 is additive to attempt 7: three defeated "does not give up" assertions were extended IN
+PLACE, and one new test was added in `mod.rs` that drives `EventBus::new`. No earlier REQUIRED
+section was undone. Files touched: `tailer.rs` and `mod.rs` only.
+
+- [Implementer, task 013 attempt 8] **CORRECTION to the residual recorded for panel 5: the 4000ms
+  floor the amendment names does NOT kill the 10-retry initial-loop mutation.** The entry above
+  states "extending the outages to 1500ms/4000ms kills a threshold of 10". That is true for the main
+  loop and FALSE for the initial loop. Arithmetic: with the give-up check placed immediately after
+  `retry_count += 1`, the sleeps preceding the 10th attempt are `100+200+400+800+800*5 = 5500ms` at
+  the shipped `min(1000, 50 * (1 << retry_count.min(4)))` backoff. Any window below ~5.5s leaves the
+  mutant still inside its retry loop when the test performs the rename-back repair, at which point it
+  recovers normally and is completely invisible. **Verified empirically, not just derived:** with
+  mutation 2 applied and the window set to the amendment's 4000ms floor, the run is
+  `test result: ok. 1 passed; 0 failed` — the mutation SURVIVES the floor the amendment specified.
+  At 8000ms the same mutation fails the test. The amendment's "at least 4000ms" wording is what makes
+  both constraints satisfiable; the mutation-kill requirement is the binding one.
+- [Implementer, task 013 attempt 8] **Windows chosen: 1500ms / 1500ms / 8000ms.** The two main-loop
+  outages take the amendment's 1500ms verbatim (20 poll attempts at `TAIL_INTERVAL = 75ms`, against a
+  mutant that gives up at ~750ms). The initial-loop outage is 8000ms rather than 4000ms, for the
+  reason above: it clears the mutant's 5500ms fire point by ~45%, and the margin only needs to be
+  one-sided-generous because machine load stretches the mutant's sleeps and never shortens them. Cost
+  is ~8s of wall clock in one test; the `services` lib target went from ~6s to ~11-13s, which the
+  amendment states as accepted. The comments above all three constants were rewritten — a stale
+  225ms/750ms rationale over a changed number is itself the drift this process exists to catch.
+- [Implementer, task 013 attempt 8] **DECLARED RESIDUAL, restated rather than inherited:** no finite
+  wall-clock window can exclude an arbitrarily large finite give-up budget. These windows kill a
+  threshold of 10 on both arms; a threshold of 100 would still pass them (~7.5s of main-loop outage,
+  ~80s of initial-loop backoff). The claim being made is exactly "the tailer does not give up within
+  20 poll attempts / ~12 initial retries", and nothing stronger.
+- [Implementer, task 013 attempt 8] **UNDICTATED CHOICE — `drain_until_quiet` added to
+  `wait_until_tailer_publishes` in `mod.rs`.** Not required by the amendment. The helper's own
+  docstring already promises it returns such that "no stale probe event can be mistaken for a
+  post-shutdown publication", and that promise silently depended on the bus publishing each row once.
+  Under the required double-tailer mutation the helper can return with a duplicate still buffered, at
+  which point `shutdown_stops_the_tailer` — which panics on ANY event after `shutdown()` — goes red
+  for a reason that has nothing to do with shutdown, and the amendment explicitly requires that test
+  NOT be the one that fails. **Honest scoping: this is belt-and-braces, not load-bearing on this
+  machine.** With the drain removed and mutation 3 applied, `shutdown_stops_the_tailer` passed 3/3,
+  and the panel saw the same (`267 passed; 0 failed`, 3x). The reason is a race, not a guarantee: the
+  first probe row is usually published by only ONE tailer, because the second tailer's initial
+  `high_water_mark` read commonly resolves after the probe commit and it therefore starts above it.
+  If the probe loop ever needs a second iteration, both tailers are past init and the duplicate is
+  real. The drain converts "did not fail" from luck into a property, and costs 250ms in the two tests
+  that call the helper. Under correct code it consumes nothing.
+- [Implementer, task 013 attempt 8] The new test `the_bus_publishes_a_committed_row_exactly_once`
+  establishes liveness with the existing probe helper rather than a readiness signal, because
+  `EventBus::new` DROPS the tailer's readiness receiver and this task's file set does not extend to
+  changing that contract. The probe is sound here where it was not in attempt 4: this test asserts a
+  COUNT of copies of one seq, not an absolute seq, so the rebasing that hid a dropped first row has
+  nothing to hide. It subscribes via `bus.sender().subscribe()` and not `subscribe_from`, whose Live
+  arm dedups on `ev.seq > last` and would swallow the evidence.
+- [Implementer, task 013 attempt 8] Mutation proofs, all count-guarded with
+  `assert s.count(OLD) == 1` and all run on `-p services --lib event_bus` for discrimination (the
+  scope declared up front earlier in this run; the Stage-1 bar remains the full-crate
+  `cargo test -p services`): (1) main loop `return`s after 10 consecutive failures on EITHER arm →
+  `a_failed_read_does_not_end_the_loop_or_advance_the_cursor` and
+  `tailer_survives_a_transient_read_error` both FAIL, `20 passed; 2 failed`; (2) initial loop
+  `break 0` after 10 retries → `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero`
+  FAILS on the READINESS assertion ("it fabricated one"), `21 passed; 1 failed`; (3) `EventBus::new`
+  spawns a second tailer with `shutdown()` aborting both → `the_bus_publishes_a_committed_row_exactly_once`
+  FAILS with `left: 2, right: 1`, `21 passed; 1 failed`, and `shutdown_stops_the_tailer` passes.
+  Each mutation was reverted by `cp` from `.wai-scratch/a8/` and the suite reconfirmed green before
+  the next; no `git checkout`/`restore`/`stash` was used at any point.
+
+## 2026-08-12 execute: ORCHESTRATOR ERROR — my 4000ms floor was arithmetically wrong
+
+- [Run orchestrator] The panel-5 amendment I wrote specified "at least 4000ms" for
+  `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero`, claiming it would kill
+  a give-up threshold of 10. **It would not.** With the give-up check after `retry_count += 1`, the
+  cumulative backoff before the 10th attempt is `100+200+400+800+800*5 = 5500ms`, so at a 4000ms
+  window the mutant is still retrying when the table is repaired, recovers, and survives INVISIBLY.
+  A window I specified as a kill would have shipped a green run that proved nothing
+- [Run orchestrator] The implementer caught it and, correctly, did not merely assert the arithmetic —
+  it ran the counterfactual with the mutation applied and the window lowered to my figure:
+  ```text
+  COUNTERFACTUAL: window lowered 8000 -> 4000 with MUTATION 2 still applied
+  test ...tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 272 filtered out; finished in 4.90s
+  ```
+  It chose 8000ms (~45% margin over 5500ms; load only stretches the mutant's sleeps, never shortens
+  them). The declared deviation from the task text is ACCEPTED — the kill requirement is binding and
+  my floor contradicted it
+- [Run orchestrator] **This is my third drafting error on task 013** (after the probe-era `base == 4`
+  contradiction and the readiness-as-the-fix framing). All three share one shape: I specified a NUMBER
+  or a MECHANISM without deriving it from the code's actual timing. The standing correction is that
+  any threshold an amendment mandates must be derived from the constants in the source and stated with
+  that derivation shown, so the implementer can check my arithmetic instead of trusting it
+- [Run orchestrator] Attempt 8 independent verification, machine verified quiet by `pgrep -x cargo`
+  (0 — note the previously-used `ps | grep -c '[c]argo test'` probe SELF-MATCHES the orchestrator's
+  own shell command line and is not a reliable quietness check):
+  - ten consecutive FULL-CRATE runs (`cargo test -p services`, the gate's command, not `--lib`):
+    **10 green / 0 red**, `268 passed; 0 failed` every run, 10.93s-13.11s, source sha and HEAD
+    tripwired before each run
+  - Stage 1 gate: `CONFORMS: task 013 passed all deterministic gates`, `GATE_FAIL_CHECK=none`,
+    file-set clean at 2 declared paths
+- [Run orchestrator] The undictated `drain_until_quiet` helper is ACCEPTED and kept. It is bounded
+  (250ms quiet period, 2s hard cap), documented against the contract it enforces, and does not weaken
+  the assertion beside it — a tailer still publishing AFTER shutdown would still be caught, since
+  draining ends before `shutdown()` is called. The implementer declared it voluntarily and supplied
+  the counterfactual showing it is not load-bearing on this machine, which is what makes it safe to
+  keep rather than a silent behaviour change
+
+## 2026-08-12 execute: panel 6 on attempt 8 — CITED DISSENT (idle persistence). STOPPING RULE REACHED
+
+Sixth panel, sixth real defect, sixth distinct axis. Attempt 8 passed Stage 1, ten consecutive
+full-crate runs, and three mutation proofs before this.
+
+- [Run orchestrator] **Finding 1 (blocking) — IDLE PERSISTENCE, a new axis.** Every "does not give
+  up" assertion in the suite, including all of attempt 8's new duration work, constrains retries under
+  ERROR. Nothing constrains survival across an EMPTY poll pass. A mutation returning from the main
+  loop after N consecutive empty `Ok(seq_events)` reads SURVIVED at N=20, N=10 and N=8:
+  `268 passed; 0 failed` each. The counter is wired, not dead code — at N=5 the suite bites, and the
+  run time jumps from 10.7s to 31.77s (burned deadlines are the mutant's fingerprint):
+  ```text
+  MUTATION APPLIED: idle exit after 5 empty passes
+  panicked at crates/services/src/services/event_bus/tailer.rs:505:21:
+  expected to receive the committed row
+  test result: FAILED. 267 passed; 1 failed; 5 ignored; 0 measured; 0 filtered out; finished in 31.77s
+  ```
+- [Run orchestrator] The N=5 death is INCIDENTAL — it lands on `tailer_never_publishes_a_rolled_back_row`,
+  a rollback test that merely happens to contain ~6 empty passes. No test in either module is AIMED at
+  idle persistence. Accidental coverage that collapses at 8 passes is exactly the pattern behind the
+  prior five rejections
+- [Run orchestrator] The panel pre-empted both objections correctly, and I verified the reasoning
+  against the source: the 1500ms outage tests CANNOT catch this, because table-rename fires the outer
+  `high_water_mark` `Err` arm and payload corruption fires the inner `read_range` `Err` arm — neither
+  reaches `Ok(seq_events)`, so neither increments the counter. And this is NOT the recorded
+  non-blocking latency item, which concerns `TAIL_INTERVAL` at 2000ms and was declared not a defect at
+  the shipped 75ms; this is a `return` on the happy path and IS live at 75ms
+- [Run orchestrator] **Severity note: this is arguably worse than the axis-8 findings already accepted
+  as blocking.** Those need a DB blip to trigger. This needs NO fault at all — ~600ms of journal quiet
+  on an idle node, which is the normal state of production. The plausible real-world shape is not a
+  `return` but an adaptive idle backoff (`sleep(30s)` after N empty passes), which is equally invisible
+- [Run orchestrator] **Finding 2 (secondary, recorded not blocking) — `EventBus::Clone` is entirely
+  unexercised.** Giving clones an independent empty `tailer_handle` survives at `268 passed; 0 failed`.
+  Zero call sites exist today, so it is not live. But it falsifies a contract THIS task's own doc
+  comment states ("All clones share the same tailer handle"), and it reinstates the detached-tailer
+  leak the spec rejected in attempt 1. Task 014's REQUIRED `shutdown_stops_the_background_tasks` calls
+  `deployment.event_bus().shutdown()`; if that accessor returns a clone — the natural shape where
+  `DeploymentImpl` is cloned per request — shutdown becomes a silent no-op and 014's test passes anyway
+  because it only asserts silence
+- [Run orchestrator] **Panel observation with run-level consequences: no single test covers the real
+  end-to-end path `commit → tailer → broadcast → subscribe_from`.** Every `subscribe_from` test
+  hand-drives `sender` with fabricated `SequencedEvent`s; every tailer test uses a raw `tx.subscribe()`;
+  the new exactly-once test uses `bus.sender().subscribe()`. The panel could not isolate this by
+  mutation (both paths share `self.sender`), so it is an observation, not a finding — **but it bears
+  directly on the run-level reachability gate's requirement (b), a test driving the real seam rather
+  than a mock past it.** It must be resolved before this run can be declared done, in task 014/015 if
+  not here
+- [Run orchestrator] Panel cleared, by reading rather than by spending mutations: the 8000ms window
+  kills every threshold below 14 (backoff to attempt 13 is 7900ms) and is not fragile in the RED
+  direction; `drain_until_quiet` masks nothing, because leftover buffered events would make
+  `shutdown_stops_the_tailer` go RED not green, so the helper can only remove false reds; the new
+  exactly-once test is not vacuous and its count-based assertion cannot be rebased by the probe
+- [Run orchestrator] **STOPPING RULE REACHED.** The rule fixed in this ledger before panel 5's evidence
+  arrived allotted attempt 8 exactly one further panel. That panel has now run and found a blocking
+  defect. Per the rule, the loop halts here and the decision returns to the user rather than
+  self-authorising attempt 9. Recording that the rule's SHAPE was wrong: a count-based cap assumed
+  convergence that six rounds have not shown. A loop-until-dry rule (stop after a panel returns clean,
+  or after two consecutive rounds yield only non-blocking findings) matches the observed behaviour
