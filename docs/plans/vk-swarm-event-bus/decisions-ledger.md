@@ -1951,3 +1951,47 @@ full-crate runs, and three mutation proofs before this.
   self-authorising attempt 9. Recording that the rule's SHAPE was wrong: a count-based cap assumed
   convergence that six rounds have not shown. A loop-until-dry rule (stop after a panel returns clean,
   or after two consecutive rounds yield only non-blocking findings) matches the observed behaviour
+
+## 2026-08-14 execute: plan restructured after a 10,000-foot review; two risks verified
+
+The user asked for a step back at the managerial level: what gets us the intended outcome without
+paying for it in efficiency, security or complexity, and without a queue of post-hoc fixes.
+
+- [Run orchestrator] **Diagnosis: panels 5 and 6 found the same defect CLASS, one round apart** — the
+  poll loop terminating early under condition C (error-C, then idle-C). Unenumerated members remain
+  (lagged, pool-exhausted, panic-in-body). Every remedy was another multi-second wall-clock window,
+  which cannot close a class: the declared residual (a budget of 100 survives 8000ms) is permanent
+  under that approach, and the module suite went ~6s → ~11-13s to buy two members
+- [Run orchestrator] **Root cause is design, not coverage.** The suite cannot state "the tailer never
+  gives up" because production does not expose it — an opaque `tokio::spawn` whose liveness is only
+  inferable from timing side-effects. Task **016** makes the defect unrepresentable (a `PollOutcome`
+  with no terminating variant; a driver whose only exit is abort) rather than detecting instances, and
+  adds the health counters that close the product gap every blast-radius analysis has named: today a
+  dead tailer is invisible and every health surface reads green
+- [Run orchestrator] Task **017** covers what panel 6 could observe but not isolate by mutation — no
+  test drives `commit → tailer → broadcast → subscribe_from`. 268 tests prove the parts, none the
+  whole. This is the reachability gate's requirement (b) and blocks close, so it is a task, not a note
+- [Run orchestrator] Task **014 amended** with the two obligations that only become live where the bus
+  is wired in: the shared-tailer-handle contract across `EventBus` clones (panel 6 finding 2 — no call
+  sites exist today, `DeploymentImpl` is cloned per request, and 014's own shutdown test would pass
+  against a no-op because it only asserts silence), and the real HTTP seam test
+- [Run orchestrator] Neither open finding is deferred: both have tracked homes created in THIS session,
+  in this workstream, ahead of the tasks that would consume them
+
+### Risk verification (both cheap now, expensive after 010/014 ship)
+
+- [Run orchestrator] **Node API authentication — VERIFIED CONSISTENT, not a regression.** Task 010
+  states "Do NOT add authentication or filtering beyond `cursor`". Checked: the server crate applies no
+  auth layer to the API router. The `middleware::from_fn_with_state` hits in `routes/*` are model
+  loaders (path param → entity), not authentication. So `/api/events` matches the existing posture of
+  every other node route rather than opening a new class of exposure. It does mean the event stream is
+  as reachable as the rest of the node API wherever the node binds beyond loopback — worth stating, but
+  it is a property of the node API as a whole and not something this workstream introduces
+- [Run orchestrator] **Compaction vs a live cursor — BOUNDED, accepted.** `compact()` takes a floor from
+  `MIN(last_processed_seq)` over `trigger_cursors`, and `compact_never_crosses_min_trigger_cursor` plus
+  `compact_treats_a_zero_cursor_as_a_real_floor` already pin it (task 004, passed). The residual: a LIVE
+  SSE subscriber's cursor is in-memory and NOT in `trigger_cursors`, so a subscriber lagging past the
+  retention window could have its `Lagged` refill find rows already deleted. Bounded by
+  `retention_hours` and the `min_rows` floor — an SSE consumer would have to fall a full retention
+  period behind, which is not a realistic operating state. Recorded as a known bound rather than a
+  defect; if SSE consumers ever persist cursors, they must join the floor calculation
