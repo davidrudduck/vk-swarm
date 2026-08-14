@@ -174,6 +174,16 @@ pub fn spawn(
             }
         };
 
+        // The counter starts where the CURSOR starts. Leaving it at its `Default` 0 while the
+        // cursor sits at the high-water mark makes a busy journal read as "nothing has ever been
+        // published" until the first post-start publish — which on a quiet node may never arrive.
+        // That is the green-while-dead confusion these counters exist to remove, so it must not be
+        // reintroduced by the initial value. Stored BEFORE readiness so a caller that observes
+        // readiness observes a consistent cursor/counter pair.
+        health
+            .last_published_seq
+            .store(last_published, Ordering::Relaxed);
+
         // Signal AFTER `last_published` has been ASSIGNED (not between the read and the
         // assignment, which would reopen the window in the exact place this finding lives) and
         // BEFORE the first poll pass (a signal sent after a pass would leave rows committed during
@@ -329,10 +339,79 @@ mod tests {
             .expect("the tailer dropped its readiness sender without signalling");
     }
 
-    /// `spawn` for tests that don't care about `TailerHealth` — everything except
-    /// `tailer_health_advances_while_polling_and_records_failures`, which needs to hold onto the
-    /// `Arc` it passes in and so calls `spawn` directly. This just wires up a throwaway default so
-    /// the signature change task 016 requires does not have to be repeated at every call site.
+    /// The minimum number of CONSECUTIVE failed poll passes a held-open fault must produce before
+    /// a driver-liveness test will accept that the driver survived it.
+    ///
+    /// This number is the detection floor for the give-up defect class: any driver that abandons
+    /// the loop after fewer than this many consecutive failures stalls the counter below the
+    /// target and fails. It is deliberately ABOVE the ~20 passes the deleted 1500ms windows
+    /// covered, so attempt 2 is strictly stronger than the code it replaces rather than merely
+    /// equivalent.
+    const REQUIRED_CONSECUTIVE_FAILURES: u64 = 25;
+
+    /// Waits until the tailer has recorded at least `target` CONSECUTIVE failed poll passes,
+    /// returning the instant it arrives.
+    ///
+    /// This is the observable that replaces the two deleted 1500ms windows, and it is not the same
+    /// kind of thing. A fixed wall-clock window asserts a claim about the CLOCK and then infers the
+    /// driver from it: any give-up budget larger than the window passes, and every run on every
+    /// machine burns the full window whether or not it was needed. Waiting on
+    /// `consecutive_failures` asserts the claim directly — the driver must have executed `target`
+    /// poll passes and stayed in the loop through all of them — and returns as soon as it has,
+    /// rather than at a time chosen in advance.
+    ///
+    /// The deadline is a SAFETY NET, not the mechanism: it exists only so a stalled driver fails
+    /// with a diagnosis instead of hanging the suite. It is generous (30s, matching `await_ready`
+    /// and `poll_for_event`) precisely because it must never be the thing that decides the verdict.
+    async fn await_consecutive_failures(health: &TailerHealth, target: u64) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let seen = health.consecutive_failures.load(Ordering::Relaxed);
+            if seen >= target {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the tailer recorded only {seen} consecutive failures in 30s while the fault was \
+                 held open; at least {target} were required. A driver that gives up — returns, \
+                 breaks, or otherwise leaves the loop — after fewer than {target} consecutive \
+                 failures stalls this counter forever, which is exactly what this wait exists to \
+                 catch and what a fixed wall-clock window could not."
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
+    /// Asserts that NOTHING has been published, checked at the moment of the call rather than over
+    /// a window.
+    ///
+    /// Paired with `await_consecutive_failures`, this covers the ENTIRE outage — every pass from
+    /// the fault being induced to the counter arriving — instead of the leading 225ms of it. A
+    /// `Lagged` is a FAILURE, not an empty channel: it means rows were published during the outage
+    /// and then evicted from the buffer, which is precisely the loss this is checking for.
+    fn assert_nothing_published(
+        subscriber: &mut tokio::sync::broadcast::Receiver<SequencedEvent>,
+        context: &str,
+    ) {
+        match subscriber.try_recv() {
+            Ok(ev) => panic!("{context}; got seq {}", ev.seq),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                // Expected: the journal was unreadable, so there was nothing to publish.
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => panic!(
+                "{context}; the subscriber lagged by {n} events, so rows WERE published during the \
+                 fault and then evicted from the broadcast buffer"
+            ),
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                panic!("{context}; the broadcast channel closed unexpectedly")
+            }
+        }
+    }
+
+    /// `spawn` for tests that don't care about `TailerHealth` — everything except the health and
+    /// driver-liveness tests, which need to hold onto the `Arc` they pass in and so call `spawn`
+    /// directly. This just wires up a throwaway default so the signature change task 016 requires
+    /// does not have to be repeated at every call site.
     fn spawn_ignoring_health(
         pool: SqlitePool,
         sender: broadcast::Sender<SequencedEvent>,
@@ -733,13 +812,30 @@ mod tests {
         );
     }
 
+    /// The tailer must survive an OUTER-arm failure (`high_water_mark` unreadable) for at least
+    /// `REQUIRED_CONSECUTIVE_FAILURES` consecutive passes, then recover without having advanced its
+    /// cursor past the row committed during the outage.
+    ///
+    /// **Why this holds the fault open on a COUNTER and not a clock.** This test used to sleep a
+    /// fixed 1500ms here. Attempt 1 deleted that window on the ground that `PollOutcome` had made
+    /// give-up unrepresentable — which was false: `PollOutcome` constrains `poll_once`, the STEP.
+    /// The driver LOOP is separate, and it is where give-up lives. With the window gone, a driver
+    /// that returned after 10 consecutive failures passed all 270 tests, and the detection floor
+    /// fell from ~20 poll passes to 4.
+    ///
+    /// Restoring the sleep would restore the original weakness with it: a give-up budget above the
+    /// window still passes, and every run on every machine pays the full window. Waiting on
+    /// `consecutive_failures` instead kills any budget below 25, returns as soon as the counter
+    /// arrives, and makes the health counters load-bearing rather than decorative.
     #[tokio::test]
     async fn tailer_survives_a_transient_read_error() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
-        // Start the tailer first
+        // Start the tailer first, holding the health Arc: the driver's liveness through the outage
+        // is observed on `consecutive_failures`, so this test cannot use `spawn_ignoring_health`.
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
+        let health = Arc::new(TailerHealth::default());
+        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone(), Arc::clone(&health));
 
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
@@ -764,25 +860,18 @@ mod tests {
         let outage_row = commit_one_to_hidden_journal(&pool).await;
         assert_eq!(outage_row.seq, 2, "outage row should be seq 2");
 
-        // This used to hold the outage open for 1500ms (20 poll attempts) purely to bound retry
-        // duration before the `!is_finished()` assertion below — a wall-clock window standing in
-        // for a property the type system could not state. Task 016 makes that property structural
-        // instead: `PollOutcome` has no variant that ends the loop
-        // (`a_poll_step_can_never_terminate_the_loop`, killed by mutation proof 1), so `is_finished`
-        // cannot go true here regardless of how long the outage runs. What remains for THIS test to
-        // prove is only that the fault fires and the cursor holds, which the bounded wait below
-        // (3 * TAIL_INTERVAL) already establishes.
-        //
-        // Verify no additional event was published during outage (fault fired).
-        match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
-            Ok(Ok(ev)) => panic!(
-                "no event should publish during table-hidden outage; got seq {}",
-                ev.seq
-            ),
-            _ => {
-                // Expected: nothing published while table is hidden
-            }
-        }
+        // Hold the outage open until the DRIVER has demonstrably run at least 25 consecutive
+        // failing passes and stayed in its loop through every one of them. This is the assertion
+        // that the deleted 1500ms window was standing in for, made directly rather than inferred
+        // from elapsed time — and it fires as soon as the counter arrives.
+        await_consecutive_failures(&health, REQUIRED_CONSECUTIVE_FAILURES).await;
+
+        // Nothing may have published across the WHOLE outage — every one of those 25+ passes, not
+        // merely a leading 225ms slice of them.
+        assert_nothing_published(
+            &mut subscriber,
+            "no event may publish during the table-hidden outage",
+        );
 
         // Repair: rename the table back (SQLite auto-reprepares on SQLITE_SCHEMA)
         sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
@@ -909,13 +998,19 @@ mod tests {
         tailer_handle.abort();
     }
 
+    /// The INNER-arm twin of `tailer_survives_a_transient_read_error`: the high-water mark reads
+    /// fine, but `read_range` fails on a corrupt payload. Same structure, same reasoning — the
+    /// fault is held open on `consecutive_failures` rather than on a clock, for the reasons set out
+    /// on that test.
     #[tokio::test]
     async fn a_failed_read_does_not_end_the_loop_or_advance_the_cursor() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
-        // Start the tailer first
+        // Start the tailer first, holding the health Arc (see the sibling test): driver liveness
+        // through the outage is observed on `consecutive_failures`, not inferred from a sleep.
         let (tx, _rx) = broadcast::channel(64);
-        let (tailer_handle, ready) = spawn_ignoring_health(pool.clone(), tx.clone());
+        let health = Arc::new(TailerHealth::default());
+        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone(), Arc::clone(&health));
 
         // Subscribe to the broadcast channel
         let mut subscriber = tx.subscribe();
@@ -948,24 +1043,18 @@ mod tests {
         };
         assert_eq!(corrupt_seq, 2, "corrupt row should be seq 2");
 
-        // Same reasoning as `tailer_survives_a_transient_read_error`: this used to hold the outage
-        // open for 1500ms (20 read attempts, all failing at `serde_json::from_str`) purely to bound
-        // retry duration ahead of the `!is_finished()` assertion below. Task 016 makes "the loop
-        // does not end on a read error" structural instead — `PollOutcome` has no variant that ends
-        // it — so that assertion no longer depends on how long the outage runs. What remains for
-        // THIS test to prove is only that the fault fires and the cursor holds, which the bounded
-        // wait below (3 * TAIL_INTERVAL) already establishes.
-        //
-        // Verify nothing was published during the corruption (fault fired).
-        match tokio::time::timeout(std::time::Duration::from_millis(225), subscriber.recv()).await {
-            Ok(Ok(ev)) => panic!(
-                "no event should publish while payload is corrupted; got seq {}",
-                ev.seq
-            ),
-            _ => {
-                // Expected: nothing published
-            }
-        }
+        // Hold the corruption in place until the driver has demonstrably run at least 25
+        // consecutive failing passes — all of them failing at `serde_json::from_str` inside
+        // `read_range` — and stayed in its loop through every one. Same substitution as the sibling
+        // test: an observable the driver must actually produce, in place of a wall-clock window
+        // whose only claim was about elapsed time.
+        await_consecutive_failures(&health, REQUIRED_CONSECUTIVE_FAILURES).await;
+
+        // Nothing may have published across the WHOLE corruption window.
+        assert_nothing_published(
+            &mut subscriber,
+            "no event may publish while the payload is corrupted",
+        );
 
         // Repair: restore the payload with valid JSON.
         //
@@ -1486,12 +1575,30 @@ mod tests {
         let mut subscriber = tx.subscribe();
         await_ready(ready).await;
 
-        // A published row must advance polls_total, clear consecutive_failures, and record its
-        // seq as last_published_seq.
-        assert_publishes_exactly(&pool, &mut subscriber, 1).await;
+        // Assert the counters AS COUNTERS, across SEVERAL rows and SEVERAL passes.
+        //
+        // Publishing exactly one row — which is what this test used to do — makes every counter
+        // indistinguishable from the literal `1`. Both `polls_total` frozen at 1 and
+        // `last_published_seq` hardcoded to 1 survived the entire 270-test suite on attempt 1. A
+        // liveness signal that cannot be falsified is worse than none: it converts "unknown" into
+        // "healthy", which is the failure mode these counters exist to remove.
+        let polls_before = health.polls_total.load(Ordering::Relaxed);
+
+        // Four rows, each committed only after the previous one has been DELIVERED, so each
+        // necessarily lands on a later poll pass than the last.
+        for expected_seq in 1..=4 {
+            assert_publishes_exactly(&pool, &mut subscriber, expected_seq).await;
+        }
+
+        let polls_after = health.polls_total.load(Ordering::Relaxed);
         assert!(
-            health.polls_total.load(Ordering::Relaxed) >= 1,
-            "polls_total must advance once a poll pass has run"
+            polls_after > polls_before && polls_after >= polls_before + 3,
+            "polls_total must CLIMB STRICTLY as passes run: it read {polls_before} before four \
+             rows were published across four separate passes and {polls_after} after. Rows 2, 3 \
+             and 4 were each committed only after the previous row was delivered, so each was \
+             published by a pass whose increment provably happened after the first reading — at \
+             least 3 increments are owed. (Row 1's pass may have incremented before the first \
+             reading and is not counted.) A counter frozen at any constant reports no climb here."
         );
         assert_eq!(
             health.consecutive_failures.load(Ordering::Relaxed),
@@ -1500,8 +1607,9 @@ mod tests {
         );
         assert_eq!(
             health.last_published_seq.load(Ordering::Relaxed),
-            1,
-            "last_published_seq must equal the seq of the row just published"
+            4,
+            "last_published_seq must equal the seq of the LAST row published (4), not the first \
+             and not any constant"
         );
 
         // Induce an outage: consecutive_failures must climb.
@@ -1539,6 +1647,44 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+
+        tailer_handle.abort();
+    }
+
+    /// `last_published_seq` must start at the RESOLVED INITIAL MARK, not at 0.
+    ///
+    /// The cursor starts at the high-water mark, so on a non-empty journal a `last_published_seq`
+    /// of 0 is indistinguishable from "nothing has ever been published" — the exact
+    /// green-while-dead confusion this task's counters exist to remove — right up until the first
+    /// post-start publish, which on a quiet node may never come.
+    ///
+    /// Asserted immediately after readiness, which is sound: readiness fires once the mark is fixed
+    /// and BEFORE the first poll pass, and every pass that follows on this journal is `Idle`
+    /// (nothing is committed after readiness here), which by construction leaves
+    /// `last_published_seq` alone. So the value observed is the initialisation and nothing else.
+    #[tokio::test]
+    async fn tailer_health_starts_at_the_resolved_initial_mark_not_zero() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        // Three rows already in the journal BEFORE the tailer starts: the mark resolves to 3.
+        assert_eq!(
+            seqs_of(&commit_batch(&pool, 3).await),
+            vec![1, 2, 3],
+            "the journal assigned unexpected seqs; this test's absolute expectations are stale"
+        );
+
+        let (tx, _rx) = broadcast::channel(64);
+        let health = Arc::new(TailerHealth::default());
+        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone(), Arc::clone(&health));
+
+        await_ready(ready).await;
+
+        assert_eq!(
+            health.last_published_seq.load(Ordering::Relaxed),
+            3,
+            "last_published_seq must be initialised to the resolved initial mark (3), not 0; a 0 \
+             here reports 'nothing ever published' on a journal that already holds three rows"
+        );
 
         tailer_handle.abort();
     }

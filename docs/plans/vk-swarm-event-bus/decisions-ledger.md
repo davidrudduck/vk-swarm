@@ -2080,7 +2080,7 @@ the task left open; none was silent.
 **1. Add a terminating variant, return it after N idle passes** (`GaveUp` added to `PollOutcome`;
 `poll_once`'s idle arm returns it after 5 consecutive idle passes via a function-local
 `AtomicU64` streak counter) — kills `a_poll_step_can_never_terminate_the_loop`:
-```
+```bash
 thread 'services::event_bus::tailer::tests::a_poll_step_can_never_terminate_the_loop' panicked at crates/services/src/services/event_bus/tailer.rs:1446:13:
 assertion `left == right` failed: pass 4 against an empty journal must report Idle, not GaveUp
   left: GaveUp
@@ -2091,7 +2091,7 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 274 filtered out
 **2. `break 0` after 10 retries in the INITIAL mark loop** — kills
 `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero` (8000ms window fired,
 confirming it is still the guard that catches this):
-```
+```bash
 thread 'services::event_bus::tailer::tests::tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero' panicked at crates/services/src/services/event_bus/tailer.rs:1383:9:
 the tailer signalled readiness while the journal table was unreadable, so it did not retry the initial high-water mark — it fabricated one
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 274 filtered out; finished in 8.18s
@@ -2100,7 +2100,7 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 274 filtered out
 **3. `poll_once` returns `Idle` without advancing the cursor after a successful publish** (cursor
 advance line removed from the for-loop; the outcome arm always returns `Idle`) — kills THREE
 pre-existing cursor tests (leading with these, since the requirement was "an existing cursor test"):
-```
+```bash
 thread 'services::event_bus::tailer::tests::tailer_does_not_republish_across_passes' panicked at crates/services/src/services/event_bus/tailer.rs:632:26:
 tailer should not republish in the second pass
 
@@ -2114,6 +2114,7 @@ assertion `left == right` failed: tailer should have advanced its cursor despite
   left: [RowId { seq: 1, ... }]
  right: [RowId { seq: 5, ... }]
 ```
+
 (also killed, incidentally: `a_failed_read_does_not_end_the_loop_or_advance_the_cursor`,
 `tailer_survives_a_transient_read_error`, `a_poll_step_can_never_terminate_the_loop`,
 `tailer_health_advances_while_polling_and_records_failures`, and
@@ -2123,7 +2124,7 @@ assertion `left == right` failed: tailer should have advanced its cursor despite
 **4. `consecutive_failures` never reset on success** (both `store(0, ...)` reset sites removed from
 the `Idle` and `Published` match arms) — kills
 `tailer_health_advances_while_polling_and_records_failures`:
-```
+```bash
 thread 'services::event_bus::tailer::tests::tailer_health_advances_while_polling_and_records_failures' panicked at crates/services/src/services/event_bus/tailer.rs:1536:13:
 consecutive_failures did not reset to 0 after repair within 30s
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 274 filtered out; finished in 30.49s
@@ -2203,3 +2204,121 @@ ran, and the full suite re-confirmed green between mutations.
   separately confirmed by hand via `git status --porcelain`, so the conclusion stands — but "Stage 1
   CONFORMS" claimed more than had been established. Every task from 016 onward is committed first, then
   gated, and 016's gate was re-run that way (`file-set: only declared files changed (3 paths)`)
+
+## 2026-08-14 execute: task 016 attempt 2 — the driver observed on a COUNTER, not a clock
+
+- [016 impl] **The fix for all three findings is one substitution: wait on `consecutive_failures`
+  instead of on the wall clock.** Both driver-liveness tests (`tailer_survives_a_transient_read_error`,
+  outer arm; `a_failed_read_does_not_end_the_loop_or_advance_the_cursor`, inner arm) now induce the
+  fault, then poll `health.consecutive_failures` until it reaches `REQUIRED_CONSECUTIVE_FAILURES = 25`,
+  with a 30s deadline as a pure safety net. This asserts the claim the deleted 1500ms windows could
+  only infer — that the DRIVER executed 25 poll passes and stayed in its loop through all of them —
+  and it makes the counters load-bearing rather than decorative, which is what closes F1 and F3 by the
+  same stroke instead of bolting on three unrelated patches
+- [016 impl] The 25 is chosen ABOVE the ~20 poll passes the 1500ms windows covered, so attempt 2 is
+  strictly stronger than the code it replaces rather than merely equivalent. The detection floor goes
+  20 → 25; attempt 1's regression to 4 is reverted
+- [016 impl] The silence check changed shape with it. It was `timeout(225ms, subscriber.recv())`,
+  covering the leading 225ms of the outage; it is now `try_recv()` taken AFTER the counter arrives,
+  covering EVERY pass of the outage. `Lagged(n)` is a panic, not an empty channel: a lag means rows
+  were published during the fault and then evicted, which is precisely the loss being checked for
+
+### ORCHESTRATOR ERROR (the fifth on this workstream): "should be FASTER" is arithmetically wrong
+
+- [016 impl] The attempt-2 brief asserted the counter wait "returns as soon as the counter arrives
+  rather than burning a fixed 1500ms" and asked for the number "either way". Measured on a quiet
+  machine (`pgrep -x cargo` → 0), same host, isolated single-test runs:
+
+  | test | pre-attempt-1 (1500ms sleep) | attempt 1 (225ms) | attempt 2 (counter ≥ 25) |
+  |---|---|---|---|
+  | `tailer_survives_a_transient_read_error` | 1.80s, 1.80s | 0.58s, 0.59s | 2.29s, 2.28s, 2.28s |
+  | `a_failed_read_does_not_end_the_loop_or_advance_the_cursor` | 1.79s, 1.78s | 0.50s, 0.48s | 2.27s, 2.28s, 2.27s |
+
+  Attempt 2 is **~0.49s SLOWER per test than the 1500ms sleeps it replaces**, not faster. The
+  arithmetic is forced and was available before the brief was written: 25 consecutive failures cost at
+  least 25 × `TAIL_INTERVAL` = 25 × 75ms = **1875ms**, which exceeds 1500ms by construction. Any target
+  above 20 is necessarily slower than the window it replaces. The two are not tradeable — buying a
+  detection floor of 25 costs 1875ms whatever the mechanism — so the honest claim is **stronger, and
+  slower**, not "faster as well as stronger"
+- [016 impl] The wait was NOT shaved to make the number look better. What the counter does buy, and a
+  sleep cannot: it returns at the moment the property is established rather than at a time fixed in
+  advance, so under load it still reaches 25 where a fixed 1500ms window would have under-covered and
+  silently weakened; and it fails with a diagnosis (`recorded only N consecutive failures`) naming the
+  give-up budget, instead of a downstream `!is_finished()` assertion that names nothing
+- [016 impl] Standing correction, matching the four before it: **when a brief claims a change is
+  cheaper as well as stronger, do the arithmetic in the brief.** The cost floor here was one
+  multiplication of two numbers both already fixed in the file
+
+### F1 — `EventBus::tailer_health()` is now wired to something verifiable
+
+- [016 impl] New test `event_bus_tailer_health_tracks_the_bus_s_own_tailer` in `mod.rs`, at the
+  `EventBus` layer rather than calling `tailer::spawn` directly. It takes both readings THROUGH the
+  accessor and requires `polls_total` to climb STRICTLY between them, so a counter that reaches 1 and
+  stops fails alongside one stuck at 0 — "the tailer ran once, some time ago" and "the tailer is
+  running" are the two states a health surface exists to distinguish
+
+### F3 — the counters are asserted AS COUNTERS
+
+- [016 impl] `tailer_health_advances_while_polling_and_records_failures` published exactly one row, so
+  every counter was indistinguishable from the literal `1`. It now publishes FOUR rows across four
+  separate passes (each committed only after the previous was delivered) and requires `polls_total` to
+  climb strictly, by at least 3. The bound is 3 and not 4 deliberately: `poll_once` increments before it
+  reads, so the pass that publishes row 1 may have incremented BEFORE the first reading was taken. Rows
+  2, 3 and 4 were each committed after the previous delivery, hence after that reading, so three
+  increments are provably owed. `last_published_seq` is asserted `== 4`, the LAST seq, not the first
+- [016 impl] **`last_published_seq` is initialised to the RESOLVED INITIAL MARK** (production change,
+  `tailer.rs` `spawn`, stored before `ready_tx.send(())` so a caller observing readiness observes a
+  consistent cursor/counter pair). It previously read 0 while the cursor sat at the high-water mark,
+  which on a non-empty journal reports "nothing has ever been published" until the first post-start
+  publish — on a quiet node, possibly never. New test
+  `tailer_health_starts_at_the_resolved_initial_mark_not_zero`, written RED first: `left: 0, right: 3`
+- [016 impl] This is the ONLY production change in attempt 2. Attempt 1's extraction is preserved
+  byte-for-byte — no query, cursor rule, log site, `TAIL_INTERVAL`, or initial-mark backoff touched —
+  per the panel's line-by-line verdict that it changed no semantics
+
+### Mutation proofs — all six kill (anchor-guarded, `assert s.count(OLD) == 1`)
+
+- [016 impl] 1. Driver returns after 10 consecutive failures → BOTH liveness tests FAIL, and they fail
+  ON THE COUNTER WAIT, not on a downstream assertion: `panicked at tailer.rs:376:13: the tailer
+  recorded only 10 consecutive failures in 30s while the fault was held open; at least 25 were
+  required` (both tests, identical site). That the kill lands there is the point — attempt 1's window
+  "passed" for reasons unrelated to what it claimed to test
+- [016 impl] 2. `EventBus` hands the tailer a different `Arc` than `tailer_health()` returns → new
+  EventBus-layer test FAILS: `EventBus::tailer_health().polls_total stayed at 0 for 30s while the
+  bus's own tailer was running; the accessor is not observing the Arc the tailer updates`. This is the
+  mutation that survived attempt 1's whole 270-test suite
+- [016 impl] 3. `polls_total` frozen at 1 → counter test FAILS: `it read 1 before four rows were
+  published across four separate passes and 1 after`
+- [016 impl] 4. `last_published_seq` hardcoded to 1 at the publish site → counter test FAILS:
+  `left: 1, right: 4`
+- [016 impl] 5. Terminating `PollOutcome::Exhausted` after 10 idle passes, honoured by the driver →
+  `a_poll_step_can_never_terminate_the_loop` FAILS: `pass 9 against an empty journal must report Idle,
+  not Exhausted`. Attempt 1's proof still kills. The script adds the enum variant AND an arm to the
+  health `match` in the same edit, so a non-exhaustive-match compile error cannot masquerade as a kill
+- [016 impl] 6. `break 0` after 10 retries in the initial-mark loop →
+  `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero` FAILS: `the tailer
+  signalled readiness while the journal table was unreadable`. Attempt 1's proof still kills; the
+  8000ms window is untouched, as is `zero_receivers_does_not_stall_the_cursor`'s 300ms gap
+- [016 impl] The working tree was restored from a `cp` backup and re-verified GREEN (26/26 event_bus
+  tests) between every mutation, so no proof ran on a tree contaminated by the one before it
+
+### Verification
+
+- [016 impl] `cargo test -p services` (FULL crate, not `--lib`): 15 binaries, **389 passed, 0 failed,
+  10 ignored**; lib is `272 passed; 0 failed; 5 ignored`. Test count 270 → 272 (+2 new tests), clearing
+  the 268 floor. `cargo fmt --all -- --check` exit 0; `cargo clippy -p services --all-targets
+  --all-features -- -D warnings` exit 0. Machine confirmed quiet (`pgrep -x cargo` → 0) before each run
+- [016 impl] The FIRST full run hit the tracked flake — `test_fast_execution_no_lost_logs`,
+  `normalize_sync_test.rs:365`, `Expected at least 1 JsonPatch entry for fast execution, got 0` — which
+  is the known load-sensitive lost-log race in
+  `dev-docs/workstreams/normalize-fast-execution-lost-logs-flake/`, unrelated to the event bus and not
+  touched. No OTHER test failed in that run (lib was `272 passed; 0 failed`). Re-run with
+  `--no-fail-fast` so every binary reported rather than stopping at the first failing one: exit 0,
+  389 passed / 0 failed. Then re-run a THIRD time with the literal unflagged command the `Done when`
+  gate specifies, so the recorded artifact is not a `--no-fail-fast` variant: `cargo test -p services`
+  exit 0, 15 binaries, 389 passed / 0 failed / 10 ignored, lib `272 passed; 0 failed; 5 ignored`
+- [016 impl] Evidence shape, stated so it is not mistaken for a gap: only job 4 had a natural RED, and
+  it was captured (`left: 0, right: 3` — production initialised `last_published_seq` to 0). The other
+  three jobs are TEST STRENGTHENING; those tests pass on correct code by construction, so there is no
+  pre-fix red to capture and the MUTATIONS are their red proofs — mutation 1 for the two liveness
+  tests, mutation 2 for the EventBus-layer test, mutations 3 and 4 for the counter test

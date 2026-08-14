@@ -252,6 +252,7 @@ mod tests {
     use db::models::event::NodeEvent;
     use db::test_utils::create_test_pool_with_migrations;
     use futures::StreamExt;
+    use std::sync::atomic::Ordering;
     use uuid::Uuid;
 
     #[tokio::test]
@@ -941,5 +942,59 @@ mod tests {
                 // Expected: no events published
             }
         }
+    }
+
+    /// `EventBus::tailer_health()` must return the SAME `Arc` the bus handed its own tailer.
+    ///
+    /// This is the accessor a `/health` surface would read, and until this test existed it had
+    /// zero callers and zero tests: the only health test called `tailer::spawn` directly with an
+    /// `Arc` it owned. Handing the tailer a DIFFERENT `Arc` than the accessor returns therefore
+    /// survived the entire 270-test suite — and an endpoint built on it would have reported zeros
+    /// forever, reproducing exactly the green-while-dead mode task 016 exists to remove.
+    ///
+    /// Asserted as a CLIMB, not as a single non-zero reading: a counter that reaches 1 and stops is
+    /// as useless for liveness as one stuck at 0, because "the tailer ran once, some time ago" and
+    /// "the tailer is running" are the two states a health surface must distinguish. Both readings
+    /// are taken through the accessor, so nothing but the wired-up `Arc` can satisfy them.
+    #[tokio::test]
+    async fn event_bus_tailer_health_tracks_the_bus_s_own_tailer() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        let bus = EventBus::new(pool.clone(), 64);
+
+        // Generous deadlines throughout: they are safety nets so a dead counter fails with a
+        // diagnosis rather than hanging the suite, never the thing that decides the verdict.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+
+        // First reading: the bus's tailer must have run at least one pass, observed through the
+        // accessor. A bus that handed its tailer a different Arc never leaves 0 here.
+        let first = loop {
+            let seen = bus.tailer_health().polls_total.load(Ordering::Relaxed);
+            if seen >= 1 {
+                break seen;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "EventBus::tailer_health().polls_total stayed at 0 for 30s while the bus's own \
+                 tailer was running; the accessor is not observing the Arc the tailer updates"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        };
+
+        // Second reading: it must climb STRICTLY past the first.
+        loop {
+            let seen = bus.tailer_health().polls_total.load(Ordering::Relaxed);
+            if seen > first {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "EventBus::tailer_health().polls_total did not climb past {first} within 30s; a \
+                 counter that stops advancing cannot distinguish a live tailer from a dead one"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        bus.shutdown().await;
     }
 }
