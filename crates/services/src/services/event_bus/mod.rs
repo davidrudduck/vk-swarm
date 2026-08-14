@@ -72,9 +72,15 @@ impl EventBus {
     /// The tailer runs in the background, polling the journal for new events and
     /// publishing them to the broadcast channel. The task will continue running until
     /// explicitly stopped via [`shutdown()`](#method.shutdown).
+    ///
+    /// The tailer's readiness receiver is dropped here: nothing in this crate needs to observe the
+    /// moment the tailer's cursor is established. Task 014 (startup wiring) likely will — it must
+    /// prove the tailer is connected on a real deployment and faces the identical
+    /// spawn-versus-commit race — at which point this constructor should surface it rather than
+    /// discard it. Dropping the receiver is safe: `spawn` signals with `let _ = ready_tx.send(())`.
     pub fn new(pool: SqlitePool, broadcast_capacity: usize) -> Self {
         let (_tx, _rx) = broadcast::channel(broadcast_capacity);
-        let tailer = tailer::spawn(pool.clone(), _tx.clone());
+        let (tailer, _ready) = tailer::spawn(pool.clone(), _tx.clone());
         Self {
             pool,
             sender: _tx,
@@ -635,16 +641,18 @@ mod tests {
         }
     }
 
-    /// Commits one journal row and returns the seq it was assigned.
-    async fn commit_one(pool: &SqlitePool) -> i64 {
+    /// Commits one journal row and returns the seq it was assigned plus the `task_id` that
+    /// identifies its body.
+    async fn commit_one(pool: &SqlitePool) -> (i64, Uuid) {
         let mut tx = pool.begin().await.unwrap();
+        let task_id = Uuid::new_v4();
         let event = NodeEvent::TaskCreated {
-            task_id: Uuid::new_v4(),
+            task_id,
             project_id: Uuid::new_v4(),
         };
         let seq = event_journal::append(&mut *tx, &event).await.unwrap();
         tx.commit().await.unwrap();
-        seq
+        (seq, task_id)
     }
 
     /// Blocks until the tailer is provably publishing, by committing probe rows until one comes
@@ -654,23 +662,233 @@ mod tests {
     ///
     /// Returns only once the NEWEST probe row has been received, so no stale probe event can be
     /// mistaken for a post-shutdown publication.
+    ///
+    /// This is the ONLY place in this module that observes the TAILER's output — every other test
+    /// here drives `sender` by hand to exercise `subscribe_from`, and is deliberately
+    /// tailer-independent. So it is the only place a payload assertion belongs: matching the probe
+    /// row's body as well as its seq means a tailer publishing fabricated payloads cannot satisfy
+    /// the liveness precondition this helper exists to establish.
     async fn wait_until_tailer_publishes(
         pool: &SqlitePool,
         subscriber: &mut broadcast::Receiver<SequencedEvent>,
     ) {
         for _ in 0..10 {
-            let seq = commit_one(pool).await;
+            let (seq, task_id) = commit_one(pool).await;
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
             loop {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 match tokio::time::timeout(remaining, subscriber.recv()).await {
-                    Ok(Ok(ev)) if ev.seq == seq => return,
+                    Ok(Ok(ev)) if ev.seq == seq => {
+                        match ev.event {
+                            NodeEvent::TaskCreated {
+                                task_id: delivered, ..
+                            } => assert_eq!(
+                                delivered, task_id,
+                                "the tailer published seq {seq} carrying a body that is not the \
+                                 one committed at that seq"
+                            ),
+                            ref other => panic!(
+                                "the tailer published {other:?} at seq {seq}; the probe row is a \
+                                 TaskCreated"
+                            ),
+                        }
+                        // Return with an EMPTY pipe, which is what this helper's contract above
+                        // promises and what it silently relied on the bus for until now.
+                        drain_until_quiet(subscriber).await;
+                        return;
+                    }
                     Ok(Ok(_)) => continue,
                     _ => break,
                 }
             }
         }
         panic!("the tailer never published a probe row, so this test cannot observe shutdown");
+    }
+
+    /// Consumes anything still queued on `subscriber`, returning once the channel has stayed silent
+    /// for one quiet period (or a hard cap elapses).
+    ///
+    /// `wait_until_tailer_publishes` returns the instant it sees ONE copy of its probe row, and its
+    /// contract is that "no stale probe event can be mistaken for a post-shutdown publication".
+    /// That held only while the bus published each row exactly once. A bus that published a row
+    /// TWICE leaves the second copy buffered, and `shutdown_stops_the_tailer` — which panics on any
+    /// event at all after `shutdown()` — would then go red for a reason that has nothing to do with
+    /// shutdown, non-deterministically, depending on whether the second publisher got its tick in
+    /// before the abort. Duplicate publication is the subject of
+    /// `the_bus_publishes_a_committed_row_exactly_once` and belongs to that test alone; this keeps
+    /// it from leaking sideways into an unrelated assertion.
+    async fn drain_until_quiet(subscriber: &mut broadcast::Receiver<SequencedEvent>) {
+        let cap = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < cap {
+            match tokio::time::timeout(std::time::Duration::from_millis(250), subscriber.recv())
+                .await
+            {
+                Ok(Ok(_)) => continue,
+                _ => return,
+            }
+        }
+    }
+
+    /// `broadcast_capacity` must actually size the channel this bus publishes into.
+    ///
+    /// Nothing asserted it. `lagged_refills_from_journal_and_resumes_live` is the only test that
+    /// cares about the buffer size, and it passes whether or not `Lagged` ever fires: with a large
+    /// buffer its events simply arrive live, every seq expectation still holds, and the refill arm
+    /// it is named for is never entered. A constructor that ignored the argument and used a fixed
+    /// 1024-slot channel passed all 263 tests — so `subscribe_from`'s Lagged/refill arm had no live
+    /// coverage at all, and a caller could not bound the bus's memory.
+    ///
+    /// This asserts the capacity directly, at the only place it is observable: a capacity-2 channel
+    /// must drop exactly the one oldest event once a third is queued behind an unpolled receiver.
+    /// It is deterministic, not timing-dependent — the sends and the `try_recv` are synchronous, and
+    /// the journal is empty so the tailer contributes nothing to the channel and cannot perturb the
+    /// count.
+    ///
+    /// **This closes a hole in task 005, which is already marked passed.** `mod.rs` is in task 013's
+    /// file set, so it is fixed here rather than by reopening 005; see the decisions-ledger.
+    #[tokio::test]
+    async fn new_honours_the_requested_broadcast_capacity() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        let bus = EventBus::new(pool.clone(), 2);
+        let sender = bus.sender();
+        let mut rx = sender.subscribe();
+
+        assert_eq!(
+            event_journal::high_water_mark(&pool).await.unwrap(),
+            0,
+            "the journal must be empty, or the tailer could add events and skew the Lagged count"
+        );
+
+        for seq in 1..=3 {
+            sender
+                .send(SequencedEvent {
+                    seq,
+                    event: NodeEvent::TaskCreated {
+                        task_id: Uuid::new_v4(),
+                        project_id: Uuid::new_v4(),
+                    },
+                })
+                .ok();
+        }
+
+        let observed = rx.try_recv();
+        bus.shutdown().await;
+
+        match observed {
+            Err(broadcast::error::TryRecvError::Lagged(n)) => assert_eq!(
+                n, 1,
+                "a capacity-2 bus must drop exactly the one oldest event when three are queued"
+            ),
+            other => panic!(
+                "EventBus::new ignored the requested capacity of 2: three queued events did not \
+                 overrun the buffer (got {other:?}). A bus that silently uses a larger buffer makes \
+                 subscribe_from's Lagged/refill arm unreachable even for a caller that asks for a \
+                 tiny buffer precisely to provoke it."
+            ),
+        }
+    }
+
+    /// The bus must publish each committed journal row EXACTLY ONCE.
+    ///
+    /// This is task 013's property 4 — "one tailer per DBService" — stated as something observable
+    /// instead of as a shape the code happens to have. Nothing stated it before. Every other test
+    /// in this module drives `sender` by hand with fabricated `SequencedEvent`s and is deliberately
+    /// tailer-independent, and every test in `tailer.rs` calls `tailer::spawn` directly and never
+    /// touches `EventBus::new` at all — so a constructor that spawned a SECOND tailer on the same
+    /// channel (with `Clone` still correct and `shutdown()` still aborting both handles, so shutdown
+    /// semantics stayed intact) passed the entire 267-test suite three times over, while a scratch
+    /// probe showed the bus delivering one committed row twice.
+    ///
+    /// It is a real defect rather than harmless waste: two tailers double the journal polling
+    /// against the same SQLite pool, halve the effective broadcast buffer — which pushes
+    /// `subscribe_from` into its `Lagged`/refill path far sooner, at two extra queries each time —
+    /// and hand true duplicates to any direct `sender().subscribe()` consumer, which is exactly what
+    /// task 014's startup wiring is the natural place to become.
+    ///
+    /// `bus.sender().subscribe()` is the required instrument. `subscribe_from` is the wrong one:
+    /// its Live arm dedups on `ev.seq > last`, so it would swallow precisely the evidence.
+    #[tokio::test]
+    async fn the_bus_publishes_a_committed_row_exactly_once() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        // Drives EventBus::new, NOT tailer::spawn — that is the whole point. The tailer this
+        // observes is the one the constructor wired up, which is the only thing that can be wrong
+        // in the way this test exists to catch.
+        let bus = EventBus::new(pool.clone(), 64);
+        let mut subscriber = bus.sender().subscribe();
+
+        // `EventBus::new` drops the tailer's readiness receiver, so no happens-before edge is
+        // available here and a row committed before the initial `high_water_mark` resolves is
+        // CORRECTLY never published. Probing until a row comes back buys the edge, and it costs
+        // nothing in strength because this test asserts a COUNT, not an absolute seq — the trap
+        // that made attempt 4's probe hide a dropped first row does not apply.
+        wait_until_tailer_publishes(&pool, &mut subscriber).await;
+
+        let (seq, task_id) = commit_one(&pool).await;
+
+        // First delivery, on a generous deadline: what makes this slow is machine load, never
+        // correctness, so the budget is deadline-based rather than a fixed sleep.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut copies = 0usize;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, subscriber.recv()).await {
+                Ok(Ok(ev)) if ev.seq == seq => {
+                    match ev.event {
+                        NodeEvent::TaskCreated {
+                            task_id: delivered, ..
+                        } => assert_eq!(
+                            delivered, task_id,
+                            "the bus published seq {seq} carrying a body that is not the one \
+                             committed at that seq"
+                        ),
+                        ref other => panic!(
+                            "the bus published {other:?} at seq {seq}; the committed row is a \
+                             TaskCreated"
+                        ),
+                    }
+                    copies += 1;
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                _ => break,
+            }
+        }
+        assert_eq!(
+            copies, 1,
+            "the bus published nothing for seq {seq} within 30s; a duplicate-detection test is \
+             vacuous unless the row arrives at least once"
+        );
+
+        // Then a bounded FURTHER window for a second copy. A second tailer polls on its own
+        // independent TAIL_INTERVAL (75ms) tick, so its copy lands within roughly one interval of
+        // the first; 2000ms is ~26 intervals and needs no luck. Only copies of THIS seq are
+        // counted: a duplicate of an earlier probe row would otherwise inflate the tally and make
+        // the test fail for the right reason by accident.
+        let second_window = tokio::time::Instant::now() + std::time::Duration::from_millis(2000);
+        loop {
+            let remaining = second_window.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, subscriber.recv()).await {
+                Ok(Ok(ev)) if ev.seq == seq => copies += 1,
+                Ok(Ok(_)) => continue,
+                _ => break,
+            }
+        }
+
+        bus.shutdown().await;
+
+        assert_eq!(
+            copies, 1,
+            "the bus delivered the single committed row at seq {seq} {copies} time(s); \
+             `EventBus::new` must spawn exactly ONE tailer (task 013 property 4). A second tailer \
+             on the same channel doubles journal polling against one pool, halves the effective \
+             broadcast buffer, and gives every direct `sender().subscribe()` consumer true \
+             duplicates."
+        );
     }
 
     #[tokio::test]
@@ -694,7 +912,7 @@ mod tests {
         bus.shutdown().await;
 
         // Commit a journal row AFTER shutdown. A live tailer publishes it within TAIL_INTERVAL.
-        let post_shutdown_seq = commit_one(&pool).await;
+        let (post_shutdown_seq, _) = commit_one(&pool).await;
 
         // Nothing may arrive. The window is many multiples of TAIL_INTERVAL (75ms) so that a
         // still-running tailer has no plausible excuse for being silent.
