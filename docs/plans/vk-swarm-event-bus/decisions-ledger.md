@@ -2361,3 +2361,164 @@ ran, and the full suite re-confirmed green between mutations.
   is true only BELOW 25 — documentation imprecision, not a defect); `assert_nothing_published` treating
   `Lagged` as a panic is sound at capacity 64; `last_published_seq` initialised to the resolved mark is
   the deliberate cursor semantic; the `polls_total >= before + 3` bound is correctly justified
+
+## 2026-08-14 execute: 016 attempt 3 — one observable for both driver paths, and the brief's climb target was too small to kill its own mutants
+
+### The brief's derivation was wrong, and the arithmetic says so
+
+- [016 impl a3] **The task file's `await_polls_climb(health, +20, deadline)` with an 8s deadline
+  cannot kill either of the two idle mutants it is required to kill.** A climb target kills a give-up
+  budget B only if the target STRICTLY EXCEEDS B: a give-up at B freezes `polls_total` at B, and a
+  wait for anything at or below B is satisfied BEFORE the freeze becomes observable. The cadence wait
+  starts from a baseline of 1 (readiness is signalled before the first pass), so `+20` targets 21.
+  Required proof 1 is a give-up at 40 — 21 < 40, satisfied at ~1.6s, green. Required proof 2 is a 60s
+  backoff that begins at pass 40 — also never reached. Both mutants SURVIVE the briefed numbers
+- [016 impl a3] The brief's derivation table validates only the RATE discriminator
+  (deadline / climb = 8s / 20 = 400ms per pass) and the LOAD margin (8s / 1.5s = 5.3x). It never
+  checks the BUDGET discriminator, which is the axis the required proofs actually test. Two different
+  properties, one number, and only one of them was derived
+- [016 impl a3] **Correction: 50 climbs, 20s deadline.** Both of the brief's ratios are preserved
+  exactly — rate floor 20s / 50 = 400ms per pass (identical), load margin 20s / ~4.0s = 5.0x
+  (identical to 8s / 1.5s = 5.3x within measurement noise) — while the give-up detection floor moves
+  from 19 to 49, clearing the required 40 with margin. The cost is wall clock, and only wall clock:
+  ~4.0s per cadence test instead of ~1.5s. Detection cost by this mechanism is linear in the budget
+  and there is no way around that; the number was chosen to clear the contract, not padded past it
+- [016 impl a3] The kill is confirmed by the mutants' own failure text, which prints both the baseline
+  and the target: `it stood at 1 when this wait began and at least 51 were required`, against a
+  counter frozen at 40. At the briefed `+20` the same line would have read "at least 21 were
+  required" and never fired
+
+### Design decisions
+
+- [016 impl a3] `polls_total` replaces `consecutive_failures` as the CADENCE observable because it
+  increments at the top of `poll_once` on every pass whatever the outcome, so one wait covers the idle
+  path (panel 6's finding), the failure path (attempt 2's) and adaptive backoff (the shape where the
+  loop never ends, so `!is_finished()` can never fire). `consecutive_failures` moves only on
+  `PollOutcome::Failed` and is structurally incapable of guarding the idle path
+- [016 impl a3] The `consecutive_failures >= 25` waits on `tailer_survives_a_transient_read_error` and
+  `a_failed_read_does_not_end_the_loop_or_advance_the_cursor` are KEPT unchanged. They pin the
+  failure-path budget at a named site more precisely than the cadence test does. They are simply no
+  longer the only driver guard — proof M3 below kills all three tests at once, which is the intended
+  overlap, not redundancy
+- [016 impl a3] **CORRECTION, caught in review before this ledger shipped.** A first draft of this
+  entry claimed "the whole kill rests on the climb starting near zero". **That is false, and it is a
+  fresh instance of the exact error — asserting a threshold's role without deriving it — that got
+  attempts 1 and 2 rejected and that this attempt caught the brief committing at +20/8s.** The
+  arithmetic: under a give-up at budget B the counter climbs to B and freezes, so any baseline read
+  before the freeze satisfies `baseline <= B`; the kill condition `baseline + climb > B` reduces to
+  `climb > B - baseline`, which is HARDEST at `baseline = 0`. `REQUIRED_POLL_CLIMB` is therefore sized
+  against 0 (the conservative case) and holds for every baseline; a larger baseline only makes the
+  kill easier, and cannot cause a false red either, since correct code needs 50 MORE passes (~4s)
+  wherever it starts. Confirmed empirically by proof M3: baseline 1, mutant frozen at 11, target 51 —
+  at baseline 15 the mutant would freeze at 25 against a target of 65 and still die
+- [016 impl a3] `MAX_CADENCE_BASELINE_POLLS = 5` is KEPT, restated for what it actually buys: a
+  tripwire, not a load-bearing threshold. If a future edit ever pre-advances `polls_total` from
+  something other than this tailer's own driver, the cadence tests silently stop measuring what their
+  names say; this fails immediately with a number instead. Cheap, and honest about its role
+- [016 impl a3] `!tailer_handle.is_finished()` on the idle-cadence test is recorded as a DIAGNOSTIC,
+  not a proof: a budget between 50 and whatever the deadline permits passes the climb with the task
+  still alive at the check. It only makes an unexpected death report itself in the obvious place
+- [016 impl a3] `poll_once_pins_every_counter_to_an_exact_value` uses exact equality everywhere and
+  zero sleeps, driving `poll_once` 7 idle + 5 failed + 1 three-row-batch passes. `>=` is precisely
+  what let attempt 2's `fetch_add(3)` live: a counter that runs AHEAD satisfies every one-sided bound
+  in the file. The three-row batch in a SINGLE pass is what makes first-seq and last-seq differ — every
+  other health-observing test in this file publishes one row per pass, where they are the same value
+- [016 impl a3] `last_published_seq == 0` is asserted after the idle passes and again after the failed
+  passes. Sound because this test drives `poll_once` against a bare `TailerHealth::default()` with no
+  `spawn`, so no initial-mark store has happened. It adds a kill for "updated on idle" and "updated on
+  failure" at no cost
+- [016 impl a3] ONE `CADENCE_DEADLINE` serves both cadence tests. A failing pass was expected to cost
+  materially more than an idle one — errored `high_water_mark` plus a SQLite re-prepare on
+  `SQLITE_SCHEMA` — and MEASURED at ~1ms more (~81ms vs ~80ms per pass). Two tuned constants would have
+  been fiction
+
+### Measurements (8 isolated runs each, quiet 4-core machine)
+
+- [016 impl a3] `the_driver_keeps_polling_a_quiet_journal`: min 3.99s, median 4.00s, max 4.02s
+- [016 impl a3] `the_driver_keeps_polling_a_journal_it_cannot_read`: min 4.07s, median 4.07s, max 4.09s
+- [016 impl a3] `poll_once_pins_every_counter_to_an_exact_value`: min 0.17s, max 0.19s (no sleeps)
+- [016 impl a3] Under 2x CPU oversubscription (8 spinners, 4 cores): quiet 4.04-4.11s, faulted
+  4.10-4.15s. Under 4x (16 spinners): quiet 4.16s, faulted 4.29s, and the FULL suite still green.
+  **The cadence tests are sleep-bound, not CPU-bound** — the driver's cost is `TAIL_INTERVAL`, so CPU
+  contention barely moves them. Worst observed 4.29s against a 20s deadline is 4.7x margin, and the
+  measured insensitivity to load means the practical margin is far wider than that ratio suggests
+- [016 impl a3] Suite wall clock: lib `11.22s` → `11.77-14.19s` across 4 runs. Two ~4s tests added
+  only ~0.5-1s because libtest runs them in parallel with the existing 8000ms initial-mark test
+
+### Mutation proofs (all anchor-guarded, `assert s.count(OLD) == 1`, abort on mismatch)
+
+- [016 impl a3] All 10 anchors were dry-run first and each matched EXACTLY once. The tree was restored
+  from `.wai-scratch/a3/` between every mutation and byte-compared against the clean copy afterwards
+- [016 impl a3] 1. Driver returns after 40 consecutive `Idle` → `the_driver_keeps_polling_a_quiet_journal`
+  FAILS: `the tailer completed only 40 poll passes within 20s; it stood at 1 when this wait began and
+  at least 51 were required`. `FAILED. 28 passed; 1 failed`
+- [016 impl a3] 2. Driver sleeps 60s after 40 idle passes (loop never ends) → same test FAILS with the
+  same counter text at 40. `FAILED. 28 passed; 1 failed`. Note the mutant's task is still ALIVE here —
+  `is_finished()` cannot see this shape, and only the RATE bound catches it
+- [016 impl a3] 3. Driver returns after 10 consecutive `Failed` → THREE tests FAIL:
+  `the_driver_keeps_polling_a_journal_it_cannot_read` (`only 11 poll passes ... at least 51 were
+  required`), plus both retained `consecutive_failures >= 25` waits at tailer.rs:382.
+  `FAILED. 26 passed; 3 failed`
+- [016 impl a3] 4. `consecutive_failures` over-counts 3x → `poll_once_pins_every_counter_to_an_exact_value`
+  FAILS: `left: 15, right: 5`. This is attempt 2's F2 hazard, now dead. `FAILED. 28 passed; 1 failed`
+- [016 impl a3] 5. `last_published_seq` stores the batch's FIRST seq → same test FAILS: `left: 1,
+  right: 3`. `FAILED. 28 passed; 1 failed`. Implementation note so a panel reading the script does not
+  call it a mismatch: the mutation is written as `*cursor - count as i64 + 1`, which equals the
+  batch's first seq because the batch is contiguous (seqs 1,2,3 committed in one transaction). It
+  exercises exactly the first-vs-last discrimination the proof requires
+- [016 impl a3] 6. `polls_total` not incremented on a failed pass (increment moved into the `Ok(mark)`
+  arm) → TWO tests FAIL: the exact-count test (`left: 7, right: 12`) and the faulted-cadence test
+  (`only 1 poll passes ... at least 51 were required`). `FAILED. 27 passed; 2 failed`
+- [016 impl a3] 7a. Terminating `PollOutcome::Terminate` variant returned after 10 idle passes and
+  honoured by the driver → 18 tests FAIL including `a_poll_step_can_never_terminate_the_loop`.
+  Attempt 1's proof still kills
+- [016 impl a3] 7b. `break 0` after 10 initial-mark retries →
+  `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero` FAILS, alone.
+  `FAILED. 28 passed; 1 failed`. The 8000ms window and the 300ms gap are untouched
+- [016 impl a3] 7c. `EventBus` hands the tailer a different `Arc` than `tailer_health()` returns →
+  `event_bus_tailer_health_tracks_the_bus_s_own_tailer` FAILS, alone. `FAILED. 28 passed; 1 failed`
+- [016 impl a3] 7d. `polls_total` frozen at 1 → FIVE tests FAIL, including the new exact-count test
+  (`left: 1, right: 7`) and both new cadence tests. `FAILED. 24 passed; 5 failed`
+
+### Declared residuals
+
+- [016 impl a3] A give-up budget of 50 or MORE is not caught. Detection cost by this mechanism is
+  linear in the budget (~80ms per pass), and timing is the only mechanism available: virtual time is
+  hazarded in the task file because this code does real sqlx file I/O on a blocking pool, and
+  production changes beyond the counters are out of scope. The attempt-2 prose table names a
+  100-budget mutant as a survivor; it is diagnosis, not a listed proof, and buying it would cost
+  ~8.3s per test on a 4-core box. Stated here rather than discovered later
+- [016 impl a3] An adaptive backoff FASTER than ~400ms per pass is not distinguishable from a loaded
+  machine by timing alone and is not caught. Carried forward unchanged from the brief. That case is a
+  latency regression; the give-up case, which is silent death, is caught cleanly because the counter
+  freezes forever rather than merely slowing
+
+### Verification
+
+- [016 impl a3] `cargo test -p services` (FULL crate, not `--lib`, not filtered): exit 0, lib
+  `275 passed; 0 failed; 5 ignored`. Test count 272 → 275 (+3 new tests), clearing the 268 floor. Run
+  4x consecutively (12.45s / 12.36s / 12.20s / 14.19s) plus once under 4x CPU oversubscription
+  (13.80s), all green. The tracked `normalize_sync_test.rs` flake did NOT fire in any of the five runs
+- [016 impl a3] `cargo fmt --all -- --check` exit 0 (exit code captured from the command itself, not
+  through a pipeline). `cargo clippy -p services --all-targets --all-features -- -D warnings` exit 0.
+  Machine confirmed quiet via `pgrep -x cargo` before the runs
+- [016 impl a3] Files touched: `crates/services/src/services/event_bus/tailer.rs` ONLY (tests and test
+  helpers; no production line changed) and this ledger. `mod.rs` was byte-compared against its
+  pre-session state and is unmodified — attempt 2's EventBus-layer health test already covers it and
+  proof 7c confirms it still kills
+- [016 impl a3] Evidence shape: attempt 3 adds NO production change, so no new test has a natural
+  pre-fix RED. The mutations ARE the red proofs, and every one of the seven required groups is
+  recorded verbatim above
+- [016 impl a3] The tracked flake DID fire on the final gate run, on the seventh full-suite execution
+  of the session: `test_fast_execution_no_lost_logs`, `normalize_sync_test.rs:365`, the known
+  load-sensitive lost-log race in
+  `dev-docs/workstreams/normalize-fast-execution-lost-logs-flake/`. Unrelated to the event bus and not
+  touched. No OTHER test failed in that run — lib was `275 passed; 0 failed`. Re-run twice per the
+  task's STOP-trigger guidance: exit 0 both times, 15 binaries, **392 passed / 0 failed**, lib
+  `275 passed; 0 failed; 5 ignored`, with all three new tests listed `... ok`
+- [016 impl a3] After the baseline-claim correction above (comments and assertion messages only, no
+  logic change), the gate was re-run from scratch: proofs M1 and M3 re-confirmed KILLED at the same
+  sites, tree byte-compared clean after each; `cargo check --workspace` exit 0 (the `Done when` gate's
+  typecheck command, run in addition to the brief's three); `cargo fmt --all -- --check` exit 0;
+  `cargo clippy -p services --all-targets --all-features -- -D warnings` exit 0; `cargo test -p
+  services` exit 0, 15 binaries, **392 passed / 0 failed**, lib `275 passed; 0 failed; 5 ignored`

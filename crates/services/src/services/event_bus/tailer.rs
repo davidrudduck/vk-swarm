@@ -382,6 +382,121 @@ mod tests {
         }
     }
 
+    /// The number of poll passes a driver-CADENCE test requires the tailer to complete before it
+    /// will accept that the driver is still polling.
+    ///
+    /// This is the give-up detection floor for BOTH paths, and the number is load-bearing, so here
+    /// is the derivation rather than the number alone.
+    ///
+    /// `consecutive_failures` moves only on `PollOutcome::Failed`, so `await_consecutive_failures`
+    /// can only ever guard the FAILURE path. `polls_total` moves on EVERY pass whatever its
+    /// outcome, so one wait on it covers idle, failure and adaptive backoff at once — a driver that
+    /// abandons the loop on quiet, on error, or that slows to a crawl, all freeze or stall the same
+    /// counter.
+    ///
+    /// A climb target kills a give-up budget B only if the target STRICTLY EXCEEDS B, because a
+    /// give-up at B leaves the counter frozen at B, and a wait for anything at or below B is
+    /// satisfied before the freeze is observable. The waits below start from a baseline the tests
+    /// assert is under `MAX_CADENCE_BASELINE_POLLS`, so 50 clears the highest budget in this task's
+    /// required mutation proofs (40) with margin, and clears it on the counter rather than on
+    /// `is_finished()`.
+    ///
+    /// DECLARED RESIDUAL: a give-up budget of 50 or more is NOT caught by these tests. Detection
+    /// cost by this mechanism is linear in the budget — 50 passes measures ~4.0s of wall clock at
+    /// `TAIL_INTERVAL` — and timing is the only mechanism available here: virtual time is hazarded
+    /// in the task file because this code does real sqlx file I/O on a blocking pool, and
+    /// production changes beyond the counters are out of scope. The trade is stated rather than
+    /// discovered later.
+    const REQUIRED_POLL_CLIMB: u64 = 50;
+
+    /// The largest `polls_total` a cadence test tolerates at the moment it starts its wait.
+    ///
+    /// A TRIPWIRE on the wait's starting count. It is deliberately NOT load-bearing for the kill,
+    /// and saying so is the point of this comment.
+    ///
+    /// It is tempting to claim the kill depends on the baseline being near zero. It does not, and
+    /// the arithmetic says why. Under a give-up at budget B the counter climbs to B and freezes, so
+    /// any baseline read before the freeze satisfies `baseline <= B`. The wait's target is
+    /// `baseline + REQUIRED_POLL_CLIMB`, so the kill condition `target > B` reduces to
+    /// `REQUIRED_POLL_CLIMB > B - baseline`, which is hardest at `baseline = 0` and holds there for
+    /// every B below 50. A LARGER baseline only makes the kill easier, and cannot cause a false red
+    /// either: correct code needs 50 MORE passes (~4s) wherever it starts. So `REQUIRED_POLL_CLIMB`
+    /// is sized against the worst case of 0 and the baseline is free.
+    ///
+    /// What this assertion actually buys is a diagnosis: if a future edit ever pre-advances
+    /// `polls_total` from something other than this tailer's own driver — a shared counter, a
+    /// pre-readiness warm-up loop — the cadence tests stop measuring what their names say, and this
+    /// fails immediately with a number rather than degrading quietly. Cheap, and worth keeping for
+    /// that alone.
+    const MAX_CADENCE_BASELINE_POLLS: u64 = 5;
+
+    /// Deadline for a `REQUIRED_POLL_CLIMB` climb, on a quiet journal and on a faulted one alike.
+    ///
+    /// 50 passes at `TAIL_INTERVAL` (75ms) is 3.75s of sleeping, plus a `high_water_mark` per pass
+    /// against a tiny SQLite file. Both costs were MEASURED rather than assumed, 8 isolated runs
+    /// each on a quiet 4-core development machine:
+    ///
+    /// | test | min | max | per pass |
+    /// |---|---|---|---|
+    /// | quiet journal | 3.99s | 4.02s | ~80ms |
+    /// | journal renamed away (every pass fails) | 4.07s | 4.09s | ~81ms |
+    ///
+    /// A failing pass was expected to cost materially more — an errored `high_water_mark` plus a
+    /// SQLite re-prepare on `SQLITE_SCHEMA` — and measurably does not (~1ms), which is why one
+    /// deadline serves both rather than two tuned separately.
+    ///
+    /// Two independent things are bought at 20s:
+    ///
+    /// - LOAD MARGIN: 20s / ~4.1s = 4.9x. The test survives a machine nearly 5x slower than this
+    ///   one before the deadline, rather than the driver, decides the verdict.
+    /// - RATE FLOOR: 20s / 50 passes = 400ms per pass. Any adaptive backoff to 400ms or worse
+    ///   fails here, and a driver that stops polling entirely fails at the deadline with a count.
+    ///
+    /// DECLARED RESIDUAL: a backoff FASTER than ~400ms per pass is not distinguishable from a
+    /// loaded machine by timing alone and is not caught. That uncaught case is a latency
+    /// regression; the give-up case, which is silent death, is caught cleanly because the counter
+    /// freezes forever rather than merely slowing.
+    const CADENCE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+    /// Waits until the tailer has completed at least `climb` MORE poll passes than it had when the
+    /// wait began.
+    ///
+    /// This is the observable that covers the whole give-up class, and it is strictly stronger than
+    /// `await_consecutive_failures` in coverage: `polls_total` is incremented at the top of
+    /// `poll_once` on every pass, so it advances on `Idle`, on `Published` and on `Failed` alike.
+    /// A driver that returns after N quiet passes — panel 6's original finding, and the shape that
+    /// survived attempt 2's failure-path-only guard — freezes this counter exactly as a driver that
+    /// returns after N failures does.
+    ///
+    /// It also catches the shape where the loop never ends at all: an adaptive backoff to a long
+    /// sleep keeps `!is_finished()` true forever and keeps every counter climbing, just far too
+    /// slowly, so nothing that asks "is the task alive" can see it. Requiring a climb WITHIN a
+    /// deadline asks about the RATE, which is what actually degraded.
+    ///
+    /// The deadline is a rate bound and a safety net, not the mechanism: the wait returns the
+    /// instant the count arrives.
+    async fn await_polls_climb(health: &TailerHealth, climb: u64, deadline: std::time::Duration) {
+        let before = health.polls_total.load(Ordering::Relaxed);
+        let target = before + climb;
+        let expiry = tokio::time::Instant::now() + deadline;
+        loop {
+            let seen = health.polls_total.load(Ordering::Relaxed);
+            if seen >= target {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < expiry,
+                "the tailer completed only {seen} poll passes within {deadline:?}; it stood at \
+                 {before} when this wait began and at least {target} were required. A driver that \
+                 leaves its loop — on quiet, on error, or on anything else — freezes this counter \
+                 forever, and a driver that backs off to a slower cadence stalls it past the \
+                 deadline. Unlike consecutive_failures, polls_total advances on EVERY outcome, so \
+                 this one wait covers the idle path, the failure path and adaptive backoff."
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
     /// Asserts that NOTHING has been published, checked at the moment of the call rather than over
     /// a window.
     ///
@@ -1558,6 +1673,237 @@ mod tests {
             published_cursor,
             committed.last().unwrap().seq,
             "the cursor must advance to the last published seq"
+        );
+    }
+
+    /// The IDLE half of the driver guard, and the one attempt 2 did not have.
+    ///
+    /// `PollOutcome` makes give-up unrepresentable inside `poll_once`; it does not constrain the
+    /// DRIVER, which is where the loop lives. Attempt 2 guarded the driver on
+    /// `consecutive_failures`, a counter that moves only on `PollOutcome::Failed` — so a driver
+    /// that abandoned the loop after 40 consecutive `Idle` passes (3.0s of journal quiet, the
+    /// ordinary state of an idle node) passed all 272 tests, as did one that backed off to a 60s
+    /// poll and therefore never ended at all.
+    ///
+    /// This test needs NO fault: a quiet journal is the condition. It waits on `polls_total`, which
+    /// advances whatever the outcome, so the same wait that guards the faulted sibling guards this.
+    #[tokio::test]
+    async fn the_driver_keeps_polling_a_quiet_journal() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let (tx, _rx) = broadcast::channel(64);
+        let health = Arc::new(TailerHealth::default());
+        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone(), Arc::clone(&health));
+        let mut subscriber = tx.subscribe();
+
+        await_ready(ready).await;
+
+        // A tripwire, NOT the thing the kill depends on — see `MAX_CADENCE_BASELINE_POLLS` for the
+        // arithmetic. `REQUIRED_POLL_CLIMB` is sized against a baseline of 0 because that is the
+        // worst case, and a larger baseline only makes the kill easier.
+        let polls_before = health.polls_total.load(Ordering::Relaxed);
+        assert!(
+            polls_before < MAX_CADENCE_BASELINE_POLLS,
+            "polls_total already read {polls_before} at readiness, before this tailer's driver \
+             had run. The climb below is still sound — its target scales with the baseline — but a \
+             counter pre-advanced by something other than this driver means these cadence tests are \
+             no longer measuring what their names say"
+        );
+
+        await_polls_climb(&health, REQUIRED_POLL_CLIMB, CADENCE_DEADLINE).await;
+
+        // Quiet means quiet: those 50 passes had nothing to publish and must not have invented
+        // anything. This is what makes the passes above provably IDLE ones rather than merely
+        // counted ones.
+        assert_nothing_published(
+            &mut subscriber,
+            "no event may publish while the journal is empty",
+        );
+
+        // Diagnostic, NOT a kill: a give-up budget between REQUIRED_POLL_CLIMB and whatever the
+        // deadline permits passes the climb above with the task still alive here. The climb is the
+        // guard; this only makes an unexpected death report itself in the obvious place.
+        assert!(
+            !tailer_handle.is_finished(),
+            "the tailer task ended while polling a quiet journal"
+        );
+
+        tailer_handle.abort();
+    }
+
+    /// The FAULTED half of the driver guard: the same `polls_total` climb, held under a fault that
+    /// makes every pass fail, then repaired.
+    ///
+    /// `await_consecutive_failures` (kept, on the two tests that carry it) pins the failure-path
+    /// budget at a named site. This one asks a different question — that the driver keeps its
+    /// CADENCE while failing — and it is the wait that would still fire if `consecutive_failures`
+    /// itself were miscounted, which is the hazard attempt 2's guard introduced: an over-counting
+    /// `fetch_add(3)` reaches a target of 25 after 9 real passes, silently dropping the advertised
+    /// detection floor. `polls_total` is pinned exactly by
+    /// `poll_once_pins_every_counter_to_an_exact_value`, so this wait cannot be shortened the same
+    /// way.
+    ///
+    /// The repair assertion is the other half: surviving the fault is worth nothing if the tailer
+    /// comes back deaf.
+    #[tokio::test]
+    async fn the_driver_keeps_polling_a_journal_it_cannot_read() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let (tx, _rx) = broadcast::channel(64);
+        let health = Arc::new(TailerHealth::default());
+        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone(), Arc::clone(&health));
+        let mut subscriber = tx.subscribe();
+
+        await_ready(ready).await;
+
+        // Hold the fault open for the whole climb: every pass below fails in `high_water_mark`.
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Same tripwire as the sibling test, and the same non-dependence of the kill on it. Read
+        // AFTER the rename, so the passes counted below are the failing ones.
+        let polls_before = health.polls_total.load(Ordering::Relaxed);
+        assert!(
+            polls_before < MAX_CADENCE_BASELINE_POLLS,
+            "polls_total already read {polls_before} when the fault was induced, before this \
+             tailer's driver had meaningfully run. The climb below is still sound — its target \
+             scales with the baseline — but a counter pre-advanced by something other than this \
+             driver means these cadence tests are no longer measuring what their names say"
+        );
+
+        await_polls_climb(&health, REQUIRED_POLL_CLIMB, CADENCE_DEADLINE).await;
+
+        assert_nothing_published(
+            &mut subscriber,
+            "no event may publish while the journal table is renamed away",
+        );
+
+        // Repair, and require the tailer to come back: a driver that kept its counter climbing but
+        // stopped publishing would pass the climb alone.
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // ABSOLUTE seq 1: nothing was ever committed to this journal before now, so a tailer that
+        // skipped ahead during the outage — or replayed from 0 — cannot land here by accident.
+        assert_publishes_exactly(&pool, &mut subscriber, 1).await;
+
+        tailer_handle.abort();
+    }
+
+    /// Pins every counter to an EXACT value by driving `poll_once` a known number of times. No
+    /// spawned task, no `sleep`, so this runs in microseconds and is immune to machine load.
+    ///
+    /// This is what makes the cadence tests above sound. Their waits are only as trustworthy as the
+    /// counters they read, and attempt 2 demonstrated the failure mode: a production
+    /// `fetch_add(3)` in place of `fetch_add(1)` let `await_consecutive_failures(25)` return after
+    /// 9 real failing passes, dropping the advertised detection floor from 25 to 9 with the whole
+    /// suite green — and the only visible symptom was that the tests got FASTER.
+    ///
+    /// Every assertion here is exact equality. `>=` is precisely what let the over-counting
+    /// mutation live: a counter that runs ahead satisfies every one-sided bound in the file.
+    #[tokio::test]
+    async fn poll_once_pins_every_counter_to_an_exact_value() {
+        const IDLE_PASSES: u64 = 7;
+        const FAILED_PASSES: u64 = 5;
+
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let (tx, _rx) = broadcast::channel(64);
+        let health = TailerHealth::default();
+        let mut cursor = 0i64;
+
+        // --- Idle passes: polls_total counts them, nothing else moves. ---
+        for i in 0..IDLE_PASSES {
+            let outcome = poll_once(&pool, &tx, &mut cursor, &health).await;
+            assert_eq!(outcome, PollOutcome::Idle, "pass {i} on an empty journal");
+        }
+        assert_eq!(
+            health.polls_total.load(Ordering::Relaxed),
+            IDLE_PASSES,
+            "polls_total must equal the number of passes driven, exactly — not at least"
+        );
+        assert_eq!(
+            health.consecutive_failures.load(Ordering::Relaxed),
+            0,
+            "an idle pass must leave consecutive_failures at 0"
+        );
+        assert_eq!(
+            health.last_published_seq.load(Ordering::Relaxed),
+            0,
+            "an idle pass publishes nothing and must not touch last_published_seq"
+        );
+
+        // --- Failed passes: consecutive_failures counts them ONE per pass, and polls_total keeps
+        // counting too. The contract is "every pass, whatever its outcome"; moving the increment
+        // into the Ok(mark) arm freezes polls_total at IDLE_PASSES here.
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for i in 0..FAILED_PASSES {
+            let outcome = poll_once(&pool, &tx, &mut cursor, &health).await;
+            assert_eq!(
+                outcome,
+                PollOutcome::Failed,
+                "pass {i} against an unreadable journal"
+            );
+        }
+        assert_eq!(
+            health.polls_total.load(Ordering::Relaxed),
+            IDLE_PASSES + FAILED_PASSES,
+            "a FAILED pass must still increment polls_total: the counter is 'passes attempted, \
+             whatever their outcome', and it is the observable the driver-cadence tests wait on \
+             during exactly this fault"
+        );
+        assert_eq!(
+            health.consecutive_failures.load(Ordering::Relaxed),
+            FAILED_PASSES,
+            "consecutive_failures must equal the number of failed passes EXACTLY. Over-counting \
+             makes every wait on this counter return early — a fetch_add(3) turns a wait for 25 \
+             into 9 real passes — and no >= assertion anywhere in this file can see it"
+        );
+        assert_eq!(
+            health.last_published_seq.load(Ordering::Relaxed),
+            0,
+            "a failed pass publishes nothing and must not touch last_published_seq"
+        );
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // --- One pass publishing a MULTI-ROW batch. The multi-row shape is the point: every other
+        // health-observing test in this file publishes one row per pass, so count == 1 and first
+        // == last on every pass, and storing the batch's FIRST seq is indistinguishable from
+        // storing its last.
+        let committed = commit_batch(&pool, 3).await;
+        assert_eq!(
+            seqs_of(&committed),
+            vec![1, 2, 3],
+            "the journal assigned unexpected seqs; this test's absolute expectations are stale"
+        );
+        let outcome = poll_once(&pool, &tx, &mut cursor, &health).await;
+        assert_eq!(
+            outcome,
+            PollOutcome::Published { count: 3 },
+            "one pass over a 3-row batch must report all three"
+        );
+        assert_eq!(
+            health.polls_total.load(Ordering::Relaxed),
+            IDLE_PASSES + FAILED_PASSES + 1,
+            "a publishing pass counts as exactly one pass"
+        );
+        assert_eq!(
+            health.consecutive_failures.load(Ordering::Relaxed),
+            0,
+            "ONE successful pass must reset consecutive_failures to 0, not decrement it"
+        );
+        assert_eq!(
+            health.last_published_seq.load(Ordering::Relaxed),
+            3,
+            "last_published_seq must equal the LAST seq of the batch (3), not its first (1): the \
+             batch landed in a single pass, so first and last differ here and only here"
         );
     }
 
