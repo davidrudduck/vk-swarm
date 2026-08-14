@@ -2322,3 +2322,42 @@ ran, and the full suite re-confirmed green between mutations.
   three jobs are TEST STRENGTHENING; those tests pass on correct code by construction, so there is no
   pre-fix red to capture and the MUTATIONS are their red proofs — mutation 1 for the two liveness
   tests, mutation 2 for the EventBus-layer test, mutations 3 and 4 for the counter test
+
+## 2026-08-14 execute: 016 attempt 2 REJECTED — I fixed one of two driver paths; the fix added a liar
+
+- [Run orchestrator] **Sixth orchestrator error, and it is the fifth one's shape repeated one level
+  down.** Panel 7 taught that `PollOutcome` constrains `poll_once` (the step), not the driver (the
+  loop). I applied that insight to the FAILURE path only, specifying a wait on `consecutive_failures`
+  — a counter that moves solely on `PollOutcome::Failed`. Panel 6's original finding was about the
+  IDLE path. Result: a driver returning after 40 idle passes (3.0s of quiet), or after 100 (7.5s), or
+  backing off to a 60s poll, all pass `272 passed; 0 failed`
+- [Run orchestrator] The adaptive-backoff shape is the worst of the three because the loop NEVER ENDS:
+  `!is_finished()` can never fire and every counter keeps climbing, 800x slower. It needs no fault at
+  all — ~3s of journal quiet is the normal state of an idle node
+- [Run orchestrator] **F2 — the fix introduced a dependency that can lie, which a wall clock could
+  not.** `consecutive_failures.fetch_add(1)` → `fetch_add(3)` survives at `272 passed; 0 failed`, and
+  `await_consecutive_failures` then returns after 9 real failing passes instead of 25. The advertised
+  detection floor silently becomes 9 and the only symptom is the tests getting FASTER (1.12s vs
+  2.33s). Nothing pinned the counter to one increment per failed pass
+- [Run orchestrator] **Attempt 3's design uses ONE observable for both paths: `polls_total`**, which
+  increments on every pass regardless of outcome, so idle give-up, failure give-up and adaptive backoff
+  are all covered by the same mechanism. The counters are then pinned EXACTLY (`== K`, not `>=`) by
+  synchronous zero-sleep tests driving `poll_once` a known number of times, which removes the
+  circularity at its root rather than adding another assertion on top of it
+- [Run orchestrator] **The threshold arithmetic is DERIVED and shown in the task file this time**, in
+  direct response to five prior errors of exactly this kind. At `TAIL_INTERVAL = 75ms`: 20 passes is
+  1.50s healthy, 6.00s at 4x load; an 8s deadline therefore catches any per-pass interval ≥ 400ms
+  while leaving 2s of margin against load
+- [Run orchestrator] **DECLARED RESIDUAL:** an adaptive backoff BELOW ~400ms is not distinguishable
+  from a loaded machine by this test and is not caught. Perfect discrimination of "slower cadence" from
+  "slow machine" is not achievable by timing alone. The uncaught case is a latency regression; the
+  give-up case, which is silent death, is caught cleanly because the counter freezes forever
+- [Run orchestrator] Also fixed in attempt 3, both secondary: `last_published_seq` storing the batch's
+  FIRST seq survives (every health-observing test publishes one row at a time, so first == last on
+  every pass — the multi-row case is untested), and `polls_total` not incrementing on a failed pass
+  survives, contradicting its own documented contract "whatever their outcome"
+- [Run orchestrator] Recorded as accurate so no future round re-spends them: a budget of exactly 25
+  DIES (at `is_finished()`, so the earlier ledger claim that failures always name the observed budget
+  is true only BELOW 25 — documentation imprecision, not a defect); `assert_nothing_published` treating
+  `Lagged` as a panic is sound at capacity 64; `last_published_seq` initialised to the resolved mark is
+  the deliberate cursor semantic; the `polls_total >= before + 3` bound is correctly justified

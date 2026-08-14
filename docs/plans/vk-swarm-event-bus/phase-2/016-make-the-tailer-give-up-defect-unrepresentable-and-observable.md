@@ -266,3 +266,104 @@ value and firing point, `count` computed before the publish loop, cursor advance
 `send` regardless of its result, both error arms preserving their `warn!` text and not touching the
 cursor, and the initial-mark loop and `TAIL_INTERVAL` untouched. Keep all of it. The defect is in the
 tests, not the extraction.
+
+## REQUIRED after attempt 2 — I fixed one of the two paths, and the fix introduced a counter that can lie
+
+Attempt 2 did what it was asked and the panel confirmed it: a failure-path give-up budget below 25
+dies at the counter-wait site. But the brief was wrong in the same way, one level down.
+
+**Orchestrator error (the sixth).** Panel 7 established that `PollOutcome` constrains `poll_once`, not
+the driver. I applied that insight to the FAILURE path only, by specifying a wait on
+`consecutive_failures` — a counter that moves *only* on `PollOutcome::Failed`. Panel 6's original
+finding was about the **idle** path. Same loop, same shape, untouched:
+
+| driver-local give-up in `spawn`'s loop | result |
+|---|---|
+| after 10 consecutive **Failed** | DIES at the counter wait |
+| after 40 consecutive **Idle** (3.0s of quiet) | **`272 passed; 0 failed`** |
+| after 100 consecutive **Idle** (7.5s) | **`272 passed; 0 failed`** |
+| adaptive **Idle** backoff to 60s (loop never ends) | **`272 passed; 0 failed`** |
+
+The backoff shape is the worst of them: the loop never ends, so `!is_finished()` can never fire and
+every counter keeps climbing — 800x slower. Blast radius needs no fault at all: ~3s of journal quiet
+is the normal state of an idle node, and phase 4/5 SSE consumers stall while every health surface
+reads green.
+
+**And the fix created a new hazard.** The liveness tests now depend on `consecutive_failures` being
+correct, which a wall clock never did. Over-counting production code defeats them:
+
+```text
+MUTATION APPLIED: consecutive_failures over-counts 3x per failed pass
+test result: ok. 272 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 11.02s
+```
+
+`await_consecutive_failures` then returns after **9** real failing passes instead of 25. The advertised
+detection floor — the entire justification for attempt 2 — silently becomes 9, and the only visible
+symptom is that the tests got *faster* (1.12s vs 2.33s).
+
+### The fix: one observable covers both paths, and the counters get pinned exactly
+
+**1. Switch the liveness observable from `consecutive_failures` to `polls_total`.** It increments on
+EVERY pass regardless of outcome, so a single mechanism covers the idle path, the failure path, and
+adaptive backoff. Add `await_polls_climb(health, +20, deadline)` and use it in **two** driver tests:
+
+- **idle cadence**: tailer running against a quiet journal — `polls_total` must climb by 20
+- **faulted cadence**: tailer running with the journal unreadable — `polls_total` must climb by 20,
+  then repair and assert the post-repair row publishes at its absolute seq
+
+**Derivation, so the numbers can be checked rather than trusted** (`TAIL_INTERVAL = 75ms`):
+
+| | value |
+|---|---|
+| 20 passes, healthy | 1.50s |
+| 20 passes, 2x load | 3.00s |
+| 20 passes, 4x load | 6.00s |
+| deadline **8s** catches any per-pass interval | **≥ 400ms** |
+
+So: **20 climbs, 8s deadline.** Healthy returns in ~1.5s; survives 4x load with 2s of margin; a
+give-up never arrives and fails at the deadline; a backoff to 400ms or worse fails.
+
+**DECLARED RESIDUAL, stated rather than discovered later:** an adaptive backoff *below* ~400ms is not
+distinguishable from a loaded machine by this test, and is not caught. That is a deliberate trade —
+perfect discrimination of "slower cadence" from "slow machine" is not achievable by timing alone. The
+uncaught case is a latency regression, not silent death; the give-up case, which is silent death, is
+caught cleanly because the counter freezes forever.
+
+**2. Pin the counters EXACTLY, synchronously, with zero sleeps.** This removes F2's circularity at the
+root: drive `poll_once` directly a known number of times and assert exact equality, not `>=`.
+
+- K calls against a quiet journal → `polls_total == K` exactly
+- K calls against an unreadable journal → `consecutive_failures == K` exactly (kills `fetch_add(3)`)
+- one successful pass after failures → `consecutive_failures == 0`
+- **publish a MULTI-ROW batch in one pass** → `last_published_seq` equals the batch's LAST seq. This
+  is F3: every health-observing test today publishes one row at a time, so `count == 1` and first ==
+  last on every pass, and storing the batch's FIRST seq survives the whole suite.
+- a failed pass must still increment `polls_total` (F4: the contract says "whatever their outcome",
+  and moving the increment into the `Ok(mark)` arm currently survives).
+
+Once the counters are pinned exactly, the cadence tests may rely on them.
+
+**3. Keep the existing `consecutive_failures >= 25` waits** — they kill a failure-path budget below 25
+at a named site, which the cadence test does not do as precisely. They are no longer the ONLY driver
+guard, which is the point.
+
+### Mutation proofs (anchor-guarded, `assert s.count(OLD) == 1`) — all must kill
+1. Driver returns after 40 consecutive `Idle` passes → the idle-cadence test must FAIL.
+2. Driver sleeps 60s after 40 idle passes (loop never ends) → the idle-cadence test must FAIL.
+3. Driver returns after 10 consecutive `Failed` → the faulted-cadence test AND the existing counter
+   waits must FAIL.
+4. `consecutive_failures` over-counts 3x per failed pass → the exact-count test must FAIL.
+5. `last_published_seq` stores the batch's FIRST seq → the multi-row exact test must FAIL.
+6. `polls_total` not incremented on a failed pass → the exact-count test must FAIL.
+7. Attempt 1 and 2's proofs must still kill: terminating `PollOutcome` variant; `break 0` after 10
+   initial-mark retries; different `Arc` in `EventBus`; `polls_total` frozen at 1.
+
+### Recorded as accurate, do not re-attack
+- A give-up budget of exactly 25 DIES (at `is_finished()`, not the counter wait — the ledger's claim
+  that failures always name the budget is true only *below* 25; that is documentation imprecision, not
+  a defect).
+- `assert_nothing_published` treating `Lagged` as a panic is sound: capacity 64, a handful of events,
+  nothing consumed between fault and `try_recv`, so `Lagged` is unreachable.
+- `last_published_seq` initialised to the resolved mark is the deliberate cursor semantic, stored
+  before readiness so observers see a consistent pair.
+- The `polls_total >= before + 3` bound is correctly justified (the increment precedes the read).
