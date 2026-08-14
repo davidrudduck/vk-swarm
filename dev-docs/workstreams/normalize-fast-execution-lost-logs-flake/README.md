@@ -1,8 +1,8 @@
 ---
 workstream: normalize-fast-execution-lost-logs-flake
 doc_type: readme
-status: draft
-title: "normalize_sync_test.rs is load-sensitive — possible real lost-log race"
+status: ready
+title: "Fast executions silently lose logs — CONFIRMED race in normalization"
 depends_on: []
 adrs: []
 staging_pointers:
@@ -80,12 +80,43 @@ tests, each with polling tokio tasks and its own SQLite pool, in the same invoca
 load in the same command than before. Pre-existing cause, possibly increased frequency — both
 statements are true and the second should not be hidden behind the first.
 
+## RESOLVED 2026-08-14: it is a REAL LOST-LOG RACE, not test slowness
+
+Captured during task 016's verification bar. The distinguishing evidence is the **elapsed time**, not
+the message:
+
+```text
+panicked at crates/services/tests/normalize_sync_test.rs:365:5:
+Expected at least 1 JsonPatch entry for fast execution, got 0. Fast executions should not lose logs.
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+```
+
+Green runs of this binary take **0.55–0.59s**. The failing run took **0.52s**. The test awaits
+`tokio::time::timeout(Duration::from_secs(5), norm_handle)` — had the timeout elapsed, the binary
+could not have finished in half a second. **The handle COMPLETED and `count_json_patches` returned
+zero.**
+
+That is hypothesis H2 below, and it disproves H1 as the mechanism for this failure mode:
+normalization ran to completion and emitted no patch for a message that was pushed. A second
+observation the same day failed in **5.35s** inside a full-crate run, which IS timeout-shaped — so
+either both modes exist, or the slow case is the same defect with the handle parked. The
+sub-second case is unambiguous and is the one to chase.
+
+**Consequence: this is a product bug in log normalization, not test debt.** Users lose agent
+execution log output for fast executions, silently and intermittently. The test is doing exactly the
+job it was written for and should not be touched until the race is fixed.
+
 ## What is needed
 
-1. Reproduce with the failure message captured (10 targeted runs did not reproduce it; it needs
-   sustained load, or a stress harness that pins CPU while looping the test).
-2. Determine from the captured output whether the handle timed out or completed with zero patches —
-   those are different bugs. Timeout = slow; completed-with-zero = a genuine lost-log race.
+1. ~~Reproduce with the failure message captured~~ **DONE** — see above. Reproduces at roughly 1 in 6
+   to 1 in 8 full-crate runs under load; standalone on a quiet machine it did not reproduce in 12
+   attempts, and reproduced once in 8 when other agents were loading the machine.
+2. ~~Determine whether the handle timed out or completed with zero patches~~ **DONE — completed with
+   zero patches.** Race, not slowness.
+3. Find the race: why does the normalizer complete without emitting a patch for a message that was
+   pushed before `finished` was signalled? Suspect the ordering between the message-store push, the
+   finished signal, and the normalizer's stream subscription — a subscriber that attaches after the
+   final message and after `finished` sees an empty stream and exits cleanly with nothing to do.
 3. If it is a real race, fix it in the normalizer and keep the test as the regression guard.
 4. If it is purely timing, make the test wait on an observable condition rather than a 5s wall-clock
    budget — the same fix pattern task 013 applied to its own flaky tailer tests (a readiness/
