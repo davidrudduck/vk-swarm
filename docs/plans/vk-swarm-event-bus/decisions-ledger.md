@@ -3121,3 +3121,69 @@ GATE_FAIL_CHECK=none
 
 The full `cargo test -p services` run inside the gate was green — `normalize_sync_test.rs` did not
 fire on this pass.
+
+### Panel 11 (task 017 Stage-2): NO CITED DISSENT, six non-blocking findings
+
+Opus, own detached worktree at `2ebd5b01`, eight mutations, all seven briefed attack axes covered.
+Tree-clean proof supplied (`git diff 2ebd5b01 -- crates/` and `git status --porcelain -- crates/`
+both empty; review worktree removed; no surviving processes). Verified independently by the
+orchestrator: `git worktree list` shows the panel's worktree gone, and the only `pgrep -f
+'event_bus_end_to_end-'` hit was the probe's own command line.
+
+**The headline is a pass, and it is the one that mattered.** Reachability gate (b) is SATISFIED.
+Mutation M1 (`sender.send` removed, cursor still advancing) is the proof:
+
+```text
+test a_committed_row_reaches_a_live_subscriber ... FAILED
+test a_subscriber_that_joins_late_replays_from_its_cursor_then_goes_live ... FAILED
+test a_new_bus_on_the_same_pool_resumes_without_replaying_history ... FAILED
+test a_rolled_back_transaction_reaches_no_subscriber ... ok
+test every_event_variant_survives_the_full_round_trip ... ok
+test result: FAILED. 2 passed; 3 failed
+```
+
+Three of five tests genuinely traverse `commit -> tailer -> broadcast -> subscribe_from`. The
+panel also tried to FALSIFY the suite's central determinism argument (that once the replay window
+drains, only the tailer can deliver) and could not — M1 killing exactly tests 1/2/4 and sparing
+3/5 is empirical confirmation the drain-then-assert device works as documented.
+
+**Findings, all non-blocking, all folded into task 018 in THIS session** (018's file set already
+contains all three files; nothing is deferred):
+
+| id | finding | disposition |
+|---|---|---|
+| F1 | M3 (tailer skips first row of each batch) escapes the e2e suite 1 run in 4 | 018 re-proves after helper deletion, 4/4 required |
+| F2 | Test 2 and test 4 comments claim a "no duplicate" property `assert_quiet` structurally cannot observe | 018 corrects both comments |
+| F3 | `prove_tailer_is_live`'s probe-relative liveness reintroduces the pattern task 016 retired | 018 deletes the helper |
+| F4 | `assert_task_created_body` drops `project_id`, diverging from its sibling in `tailer.rs:249-250` | 018 asserts it |
+| F5 | Header arithmetic false: "at most 10 events per test" vs ~34 with 30 probes | resolved by deleting `PROBE_ATTEMPTS` |
+| F6 | Helper's `_ => break` misreports a journal error as "the tailer never went live" | resolved by deleting the helper |
+
+**Orchestrator's reading: F1, F3, F5 and F6 share ONE root cause — `prove_tailer_is_live` itself.**
+The workaround the implementer wrote around the startup race is also what gives three separate
+mutations somewhere to hide: it commits up to 30 rows in a tight loop (so a "skip the first of each
+batch" mutation can land on an unnamed row), and its liveness is probe-relative rather than
+absolute (so a tailer that drops its own first row merely rebases the frame — precisely the pattern
+`tailer.rs`'s `await_ready` doc records as the reason `probe_until_live()` was deleted in task 016;
+017 reintroduced it without noticing the sibling ledger entry).
+
+**That reading is a HYPOTHESIS and 018 is required to test it, not inherit it.** The orchestrator
+has made four falsified "this mutation will be killed" predictions in this run already (tasks 013
+and 016). 018 must re-run M3, M7 and M8 after the fix and paste verbatim results, with 4/4 kills
+required and an explicit instruction not to round 3/4 up to "killed".
+
+**Two findings the panel declined to inflate, correctly.** It nearly reported test 5's failure to
+exercise the tailer as a coverage hole, then disproved itself by reading
+`crates/db/src/models/event_journal/queries.rs:40-62` — `read_range` is a plain range query plus
+`serde_json::from_str` with no per-variant path, and `tailer.rs`'s
+`every_event_variant_is_published_with_its_body_intact` already covers all nine variants through
+the tailer. And it considered calling F2 blocking under the task's STOP trigger, then correctly
+scoped that trigger to hand-driving `sender`/fabricating a `SequencedEvent`, neither of which
+applies.
+
+**Test 3 stays as-is.** The panel could not construct a mutation only test 3 kills and said plainly
+it also cannot prove none exists. Its rollback half is unfalsifiable by construction — no
+delivery-path mutation can make a non-existent journal row appear. Trading a possibly-redundant
+test for a definitely-smaller safety net is a bad trade; 018 is instructed to leave it alone.
+
+**Task 017 marked `passed`.**

@@ -2,7 +2,7 @@
 id: "017"
 phase: 2
 title: "Add the end-to-end bus seam suite that hand-drives nothing"
-status: ready
+status: passed
 depends_on: ["013","016"]
 parallel: false
 conflicts_with: []

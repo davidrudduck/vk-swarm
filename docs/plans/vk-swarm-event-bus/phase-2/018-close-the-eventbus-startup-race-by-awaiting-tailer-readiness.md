@@ -180,3 +180,109 @@ say so rather than banking half of it — report it and stop.
 ## Done when
 
 `WAI_TYPECHECK_CMD="cargo check --workspace" WAI_TEST_CMD='cargo test -p "$(basename {scope})"' bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 018` exits 0
+
+---
+
+## REQUIRED — added after panel 11 on task 017
+
+Panel 11 returned `NO CITED DISSENT` on task 017 with six non-blocking findings. Four of them
+(F1, F3, F5, F6) have a **single shared root cause: `prove_tailer_is_live` itself.** This task
+already deletes that helper, so this section states the hypothesis that deleting it resolves all
+four — and REQUIRES you to prove it empirically rather than inherit the claim.
+
+**Do not take the hypothesis on trust. It is the orchestrator's reasoning, and the orchestrator has
+been wrong about exactly this class of derivation repeatedly in this run (see the ledger for tasks
+013 and 016 — four separate "this mutation will be killed" predictions that were falsified by
+counterfactual).** If a mutation below still escapes after the helper is gone, that is a finding,
+not a failure to explain away.
+
+### The three mutations that ESCAPED the 017 suite
+
+All three were run by panel 11 at commit `2ebd5b01` in a detached worktree. Each is killed
+deterministically by the `crates/services` **lib** suite, so no defect escapes the run as a whole —
+but each escaped the end-to-end suite, which is the run's evidence for reachability gate (b).
+
+**M3 — tailer skips the first row of each batch, cursor still advances** (`tailer.rs:85`):
+
+```rust
+for (m3_i, seq_ev) in seq_events.into_iter().enumerate() {
+    if m3_i == 0 { *cursor = seq_ev.seq; continue; }
+```
+
+Four consecutive runs of the e2e suite on a quiet box:
+
+```text
+run 0: FAILED. 4 passed; 1 failed   (test 1)
+run 1: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.66s
+run 2: FAILED. 4 passed; 1 failed   (test 4)
+run 3: FAILED. 4 passed; 1 failed   (test 4)
+```
+
+Run 1 escaped the entire suite. Mechanism: the suite asserts *a named row arrives*, never *every
+committed row arrives*, and whether the dropped row is one a test names is decided at runtime by
+the tailer's batch boundaries.
+
+**M7 — tailer drops the first row it would ever publish** (`tailer.rs:164`, `Ok(mark) => break mark + 1`):
+e2e `ok. 5 passed` x 2 runs. Lib: `FAILED. 16 passed; 15 failed`.
+
+**M8 — tailer fabricates `project_id = Uuid::nil()`, seq and `task_id` honest**:
+e2e `ok. 5 passed`. Lib: `FAILED. 16 passed; 15 failed`.
+
+### The hypothesis you must test
+
+Deleting `prove_tailer_is_live` should kill M3 and M7 deterministically, because the helper is the
+mechanism behind both escapes:
+
+- **M3.** The helper commits up to 30 probe rows in a tight loop, which is what lets multiple rows
+  land in one tailer batch and gives a "skip the first of each batch" mutation somewhere to hide.
+  With the helper gone, each test commits rows one at a time with an `await` between, so batches
+  are single-row and every row is dropped by the mutation.
+- **M7.** The helper's liveness is *probe-relative*: a dropped first row merely rebases the frame
+  and the next probe succeeds. This is the same pattern `tailer.rs`'s `await_ready` doc records as
+  the reason `probe_until_live()` was deleted in task 016 — *"which is why a tailer that silently
+  DROPPED the first row it would ever publish passed the entire suite."* Panel 11's F3 is that this
+  retired pattern was reintroduced by 017 without noticing the sibling ledger. Absolute-seq
+  assertions after this task's fix should restore the deterministic kill.
+- **F5 and F6** are textual consequences: F5 (the header's "at most 10 events per test" is false —
+  30 probes make it ~34) becomes true again once `PROBE_ATTEMPTS` is gone; F6 (the helper's
+  `_ => break` swallows `Ok(Some(Err(e)))`, so a journal error is misreported as "the tailer never
+  went live") disappears with the code that contains it.
+
+**REQUIRED: after the fix, re-run M3, M7 and M8 and paste the verbatim result of each.**
+
+- **M3 and M7 must each fail the e2e suite on 4 consecutive runs (4/4).** Anything less than 4/4 is
+  a surviving residual and must be reported as such — do NOT round 3/4 up to "killed".
+- **M8 requires a code fix, not just the deletion** — see below — so run it after that fix.
+
+### F4 — `assert_task_created_body` must assert `project_id`
+
+`event_bus_end_to_end.rs:146` matches `NodeEvent::TaskCreated { task_id, .. }`, discarding
+`project_id`. The sibling assertion in `tailer.rs:249-250` deliberately checks both, with the
+recorded reason: *"so a mutation that fabricates only one of the two fields has nowhere to hide
+either."* 017 diverged from its sibling without recording why.
+
+**REQUIRED:** thread the committed `project_id` through `commit_task_created` and assert it in
+`assert_task_created_body`. Then re-run M8; it must fail the e2e suite 4/4.
+
+### F2 — two false comments claiming a property the test cannot observe
+
+`event_bus_end_to_end.rs:272-274` claims test 2 proves *"no duplicate across the boundary"*, and
+lines 382-383 claim test 4 proves *"no stray replay of the two pre-restart events"*. Both are
+false: `subscribe_from`'s Live arm drops anything with `ev.seq <= state.last` (`mod.rs:200`), so a
+duplicate is consumed before the stream ever yields it. Panel 11 proved it — publishing every row
+twice leaves the e2e suite `ok. 5 passed` x 3 runs while the lib suite reports
+`the bus delivered the single committed row at seq 2 2 time(s)`.
+
+**REQUIRED:** correct both comments to state what the assertion actually proves, and name
+`the_bus_publishes_a_committed_row_exactly_once` (in `event_bus/mod.rs`) as where the exactly-once
+property genuinely lives. **Do not attempt to make the e2e suite observe duplicates** — that would
+mean reaching around `subscribe_from`'s dedupe, which is the hand-driving this suite forbids. This
+is a comment fix, not a coverage gap.
+
+### What is NOT in scope here
+
+Panel 11 could not construct a mutation that only test 3 (`a_rolled_back_transaction_reaches_no_subscriber`)
+kills, and stated plainly that it also cannot prove none exists. Its rollback half is unfalsifiable
+by construction: no delivery-path mutation can make a non-existent journal row appear. **Leave test
+3 alone.** It is cheap, it is honest about what it checks, and removing it would be trading a
+possibly-redundant test for a definitely-smaller safety net.
