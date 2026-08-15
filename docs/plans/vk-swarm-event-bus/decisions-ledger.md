@@ -5542,3 +5542,93 @@ character-identical modulo alias and dropping the `resume_state` clause from the
 caught; the orphan INNER JOIN cannot silently drop a row (FK is `ON DELETE CASCADE`, and a LEFT JOIN
 orphan count on the live DB returns 0); and the STOP-trigger enumeration was re-derived REPO-WIDE
 (15 `UPDATE execution_processes` sites, only two write status, both instrumented).
+
+### Panel 17B (task 007, transaction remit): CITED DISSENT — 1 BLOCKING, 4 non-blocking
+
+Opus, own detached worktree at `51686b2d`, scratch probes as NEW untracked files under
+`crates/db/tests/` (never edits to tracked files), all removed; tree-clean proof supplied for both
+its worktree and the shared one.
+
+**F17B-1 (BLOCKING) — `mark_orphaned_as_failed` gained a `SQLITE_BUSY_SNAPSHOT` (517) failure mode
+the pre-007 shape did not have.** Task 007 turned a single autocommit `UPDATE` into a **deferred
+transaction that reads first and writes second**. Under WAL, a deferred tx that takes a read snapshot
+and then upgrades to a write after another connection has committed gets 517 — and **SQLite's busy
+handler does not retry that code**, so `busy_timeout` never applies.
+
+```text
+F1 conn A read 1 running rows inside its deferred tx
+F1 conn B independent commit -> Ok(1)
+F1 conn A UPDATE (snapshot upgrade) -> Err(SqliteError { code: 517, "database is locked" })
+
+G1 post-007 (deferred tx, SELECT->UPDATE): 6 / 200 iterations returned Err
+G1 pre-007  (single autocommit UPDATE):    0 / 200 iterations returned Err
+```
+
+The panel stated its own caveat before I could: the 6/200 came from a tight loop against a writer
+firing every 200µs, while real startup calls this once. **The rate is amplified; the mechanism and
+the pre-vs-post delta are not.** A shape that could not fail becoming one that can is the finding.
+
+**Reachability is structural.** `crates/server/src/main.rs:126-146` spawns `cleanup_orphan_executions`
+as a background task, and the immediately following sibling `tokio::spawn` runs
+`backfill_before_head_commits`, which loops `update_before_head_commit` — writes to
+`execution_processes`, the very table under sweep. **Blast radius is silent:**
+`services/container.rs:541` `?`-propagates and `main.rs:135` swallows it into
+`tracing::warn!("Failed to cleanup orphan executions")`. The whole orphan batch stays `running` and
+**zero `attempt_failed` events are emitted — the exact SC2 hole this task exists to close.**
+
+**This is the SECOND time the read-then-upgrade shape has bitten this run.** Panel 15B found it in
+006's `Task::delete` pool path; the fix there was `DELETE ... RETURNING`. The same fix applies here:
+`UPDATE ... RETURNING id`, then load identities for exactly those ids — write-first, and it makes
+`rows_affected` and the event count structurally identical, which also closes F17B-2.
+
+**F17B-2 (NON-BLOCKING) — the identity JOIN can miss rows the state write hit.** The SELECT has
+`JOIN task_attempts`; the UPDATE does not. A row whose parent attempt is absent transitions but emits
+nothing (`A1 status after -> completed, journal -> []`; `A2 rows_affected=2 events=1`). **Live
+occurrences: zero** across all three local DBs, read-only. It falsifies two shipped claims: the
+`lifecycle.rs` comment that "`owner` is None only when `id` did not match any row", and the ledger's
+"same predicate". Closed structurally by F17B-1's remediation.
+
+**F17B-3 (NON-BLOCKING) — NULL executor yields `"executor": ""`.** Independently found by panel 17A
+(F17A-3) with the same mechanism. 17B adds the sharper framing: **the shipped tests assert
+`!executor.is_empty()` with the message "SC2 requires non-empty executor identity" — but the CODE
+never enforces it.** The assertion passes only because every fixture sets executor; the guard is
+decorative. It also traced the nullability through `executor` → `base_coding_agent` → `profile` and
+confirmed migration `20250813000001` preserves NULLs via `WHERE profile IS NOT NULL`.
+
+**F17B-4 (NON-BLOCKING) — same as 17A-1, reached independently.** Adds that the one caller-side
+guard, `was_stopped` (`lifecycle.rs:25-35`), returns true for `Killed | Completed` but **not
+`Failed`**, and is evaluated in a statement separate from the write — a TOCTOU window. It states
+plainly it could NOT prove a live double-call.
+
+**F17B-5 (NON-BLOCKING) — `update_completion` is ~3.1x slower** (`308ms` vs `99ms` over 200 calls;
+≈1.54ms vs 0.50ms each), with the writer lock now held across a JOIN. The bulk path is fine:
+500 rows, 33.7ms, exact 1:1 correspondence.
+
+**Clean axes:** rollback correct at all three sites (and the panel notes 007 ships NO rollback test
+for `update_completion` or `mark_orphaned_as_failed`, which 006 does per site); zero matching rows
+yields no error and no write; a 500-row batch keeps exact correspondence; the `resume_state='pending'`
+row is excluded from both statements; **no caller holds an open transaction** — all three take
+`&SqlitePool` and every caller was enumerated; the `create` transaction spans no git I/O
+(`before_head_commit` is computed strictly before the call); both positional `query_as` tuples match
+their SELECT column order; and the vacuous-rename trap was avoided deliberately.
+
+### ORCHESTRATOR ADJUDICATION — the two panels' remediations CONFLICT, and that is the finding
+
+**Panel 17A** says: fix the write-vs-transition defect by folding `ep.status` into the owner JOIN and
+**moving that SELECT BEFORE the UPDATE**.
+
+**Panel 17B** proves: a deferred transaction that **reads then upgrades to a write** acquires a
+non-retryable 517 failure mode.
+
+`update_completion` today is **write-first** — UPDATE at `lifecycle.rs:64`, SELECT at `:80` (verified
+by reading it). It therefore has NO snapshot-upgrade exposure. **Applying 17A's remediation literally
+would introduce 17B's defect into a function that does not currently have it.**
+
+Neither panel could see this: 17A did not know 17B's finding existed, and 17B was not looking at the
+transition defect. **The conflict is only visible from the orchestrator's seat, which is the argument
+for two panels with disjoint remits rather than one panel with a wide one.**
+
+I am NOT dictating the resolution. The implementer must satisfy both constraints — gate emission on a
+real transition AND avoid read-then-upgrade — and prove the second with a test. Candidate shapes are
+listed in the task amendment; whichever is chosen must be justified with evidence, not chosen because
+it appears first.
