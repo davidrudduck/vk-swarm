@@ -122,8 +122,10 @@ disagrees with the table above, that disagreement is the most valuable thing you
 
 ## Allowed moves
 
-- ONLY `crates/services/tests/event_bus_end_to_end.rs`. No production change: if the restructure
-  appears to need one, that is a STOP.
+- For the mutation work above: ONLY `crates/services/tests/event_bus_end_to_end.rs`. No production
+  change: if the restructure appears to need one, that is a STOP. (`tailer.rs` is in this task's
+  `files:` **solely** for the one-line comment fix in the SECONDARY section below — it is not in
+  scope for anything here.)
 - Do not weaken any assertion. Every `expect_next_seq` stays exact-seq.
 - Do not restructure tests 2–5 to match. Test 2 already commits three rows before subscribing;
   tests 3–5 test different properties. If you believe one of them would ALSO gain a kill from the

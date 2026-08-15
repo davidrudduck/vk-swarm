@@ -4081,3 +4081,57 @@ cargo check --workspace           -> exit 0
 File set: `crates/services/src/services/event_bus/mod.rs`,
 `crates/services/tests/event_bus_end_to_end.rs`, and this ledger. `tailer.rs` byte-identical
 (`git diff` on it is empty).
+
+### Panel 13 (task 018 attempt 2 Stage-2): NO CITED DISSENT. Task 018 PASSED.
+
+Opus, own detached worktree at `587322cd`, all six briefed axes. Tree-clean proof supplied, worktree
+removed, 16 load generators killed individually by exact recorded PID (851331-851346) with a
+`kill -0` sweep, `pgrep -x cargo`/`-x rustc` both empty, `vks-node-server` untouched. Orchestrator
+independently verified: worktree gone, its relocated `CARGO_TARGET_DIR` removed, run tree clean.
+
+**Every mutation it applied was killed. What failed was its attempt to find a survivor** — and the
+list of things it could NOT do is the actual result here:
+
+- Could not construct a broken-readiness mutation that slips past the new timing test. Tried
+  no-await (revert 018's fix), early-signal (readiness fires before the cursor is established,
+  `FAILED. 21 passed; 12 failed`), and `pending()`. All killed.
+- Could not make the timing test flake: 6/6 green at **load average 17.7** with 4x CPU
+  oversubscription — beyond the implementer's own 6-way check.
+- Could not find anything the deleted 10-attempt helper caught that strict-next misses. Its own
+  independent sweep (no-op shutdown, M7, M3, duplicate-publish) killed all four at the new sites.
+- Could not falsify any factual claim in the two replacement comments.
+
+**Two of the implementer's claims were UNDER-stated, which is the rarer direction.** The ledger
+records M7 as an additional kill site "not new crate-wide coverage"; panel 13 found **M3 is also now
+killed at both rewritten sites**, which the ledger does not claim. M3 is one of the two mutations
+that partially escape the e2e suite, so the strict-next replacement is a strict strengthening rather
+than the wash the implementer described.
+
+It also verified the drain hoist by measurement rather than by ordering argument: under a
+duplicate-publish mutation the failure stays confined to
+`the_bus_publishes_a_committed_row_exactly_once` across 3 runs while `shutdown_stops_the_tailer`
+stays green, proving nothing depended on the old in-helper ordering.
+
+`tailer.rs` confirmed byte-identical across the WHOLE task, not just attempt 2:
+`git diff 86e85038~1 587322cd -- crates/services/src/services/event_bus/tailer.rs` → empty.
+
+**Two non-blocking findings, both routed to task 019 in THIS session (nothing deferred):**
+
+- **F13-2** — both newly-written comments cite `event_bus/mod.rs:200` for the Live-arm dedupe, which
+  attempt 1 moved to `:254` by making `new` async. Verified: `grep -n "if ev.seq > state.last"` →
+  `254:`. Ironic given item 4 of the same commit correctly caught a stale anchor in the ledger.
+- **F13-1** — `tailer.rs:150` still reads "a caller that drops the receiver (as `EventBus::new`
+  does)". Same class as the `mod.rs:974` comment 018 fixed, one file over. NOT fixed in 018 because
+  its own section 2 fenced `tailer.rs` and a byte-identical `tailer.rs` was an attempt-2 deliverable
+  panel 13 confirmed — touching it would have invalidated a verified property mid-task. 019's
+  `files:` widened to include `tailer.rs` for that single line.
+
+**The sharpest part of F13-1 is about sweeps, not comments.** Attempt 2 DID run a stale-premise grep
+sweep, over both its files, with the pattern
+`probe\|wait_until_tailer_publishes\|drops the tailer\|readiness receiver`. `tailer.rs:150` reads
+"drops the **receiver**" — the sweep would have missed it even with `tailer.rs` in scope. A sweep
+that reports "no further instances" is only as good as its patterns, so 019 is instructed to record
+which patterns it used, letting the next reader judge coverage instead of trusting it.
+
+**Task 018 marked `passed`** after two attempts, one blocking rejection, and three panels
+(11 on 017, 12 and 13 on 018).
