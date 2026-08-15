@@ -2796,3 +2796,195 @@ Four attempts, four panels. Production code changed in exactly two places across
 seeding `last_published_seq` from the resolved initial mark. Everything else was test expressiveness.
 277 lib tests; 13 mutation proofs kill. Declared residuals: give-up budget ≥50 on any path; adaptive
 backoff faster than ~400ms/pass (effective floor ~300ms, held incidentally); multi-row-only budgets.
+
+## 2026-08-15 task 017: the end-to-end bus seam suite
+
+New file: `crates/services/tests/event_bus_end_to_end.rs`. Five tests, exactly as specified. No
+production code touched. `cargo test -p services` exit 0: lib target 277 passed / 5 ignored
+(doctests, pre-existing), this suite's 5 tests all passed, and every other integration-test target
+(13 files, largest 30 tests) and the doctest run all green with zero failures anywhere in the crate.
+`cargo fmt --all -- --check` and `cargo clippy -p services --all-targets --all-features -- -D
+warnings` both exit 0.
+
+- [Task 017] **Sibling divergence, declared per the task's own instruction.** `electric_task_sync.rs`
+  uses top-level `#[tokio::test]` functions (no wrapping `mod`); `filesystem_repo_discovery.rs`
+  wraps its tests in `mod filesystem_tests`. Followed `electric_task_sync.rs` — it is the DB-backed
+  sibling (`create_test_pool_with_migrations`), while `filesystem_repo_discovery.rs` never touches
+  the database and its `mod` wrapper exists only to scope its own `create_dir_structure`/
+  `create_git_repo` helpers away from other files in the same `tests/` binary (not needed here,
+  since my helpers are named distinctly).
+- [Task 017] **Deadline constants**: `DEADLINE = 10s` for "this must eventually arrive" waits,
+  `QUIET_WINDOW = 2s` for "this must NOT arrive" checks. `TAIL_INTERVAL` is pinned at 75ms (task 013
+  ledger), so 10s is >130 poll cycles of headroom — generous enough that a miss is a real defect,
+  not machine load. `QUIET_WINDOW` matches the 2s window `shutdown_stops_the_tailer` already uses in
+  `event_bus/mod.rs` for the identical class of negative assertion, rather than inventing a new
+  magic number.
+- [Task 017] **Body-equality via `serde_json::to_value`, not `PartialEq`.** `NodeEvent` derives
+  `Debug, Clone, Serialize, Deserialize, TS` — no `PartialEq` — so test 5's "comparing full
+  serialized bodies" (the task's own words) is the only avenue available, not a choice made around
+  the type.
+- [Task 017] **Determinism device, used in tests 1, 2 and 4: prime-then-assert to force the live
+  (tailer) path deterministically, not by scheduling luck.** `EventBus::subscribe_from`
+  (`event_bus/mod.rs`) reads the journal directly in its `Initializing` arm; once that
+  `ReplayingJournal` batch is fully drained (`index == events.len()`), the state transitions
+  to `Live` and the ONLY remaining path to the subscriber is the broadcast channel the tailer feeds
+  — UNLESS the channel overruns (`Lagged`), which re-enters a journal read via the refill arm. That
+  arm cannot fire in this suite (capacity 64 against ≤10 events per test, nowhere near enough to
+  overrun), so within this suite specifically, draining the replay batch is a one-way door. So
+  committing a "warm-up" event first and consuming it (via the strict `expect_next_seq`, which
+  never skips a mismatch) provably exhausts that read before the event under test is
+  committed — guaranteeing the event under test can ONLY arrive via
+  `commit -> tailer -> broadcast -> subscribe_from`, deterministically, with no reliance on task
+  scheduling or a fixed sleep. This is not dictated by the task text; it was necessary because a
+  naive "subscribe, then commit one event" design is timing-ambiguous (see below).
+- [Task 017] **Deviation from dictated text, declared explicitly.** Test 1's task description says
+  "append ONE event inside a transaction, commit". The shipped test commits TWO (a warm-up plus the
+  event under test). A literal one-commit version is timing-ambiguous: because `subscribe_from`
+  returns a lazy stream that does nothing until first polled, "subscribe, then commit once, then
+  poll" can be satisfied by `subscribe_from`'s own direct journal read landing after the commit,
+  never touching the tailer at all — the identical vacuity mode test 4's first draft actually fell
+  into (below), verified by the same mutation. The second commit is the fix, and is required for
+  the test to test what its name says ("reaches a LIVE subscriber") rather than what test 2 already
+  covers (replay-then-live). Both events are `TaskCreated`; the assertions target only the second.
+- [Task 017] **Declared residual, not tested here.** A tailer that starts publishing from seq 0
+  instead of the high-water mark on restart is UNOBSERVABLE through `EventBus::subscribe_from` by
+  construction: its `Live` arm drops anything with `ev.seq <= state.last` (`event_bus/mod.rs`'s
+  dedup, "critical invariant 2"), so republished old history is silently absorbed before any
+  `subscribe_from`-based test could see it. That is a tailer-internal contract, correctly out of
+  this suite's reach, and is already covered by task 013's
+  `tailer_resumes_from_its_high_water_on_restart`. Test 4's own vacuity defence (below) guards a
+  different thing — `subscribe_from`'s OWN cursor-bound replay read, not the tailer's start point —
+  and its doc comment is worded to say exactly that, not more.
+- [Task 017] **Test 4 caught its own vacuity via mutation, and was rewritten.** The first draft of
+  `a_new_bus_on_the_same_pool_resumes_without_replaying_history` subscribed at the high-water mark
+  and then committed once before ever polling the (lazy) stream — since `subscribe_from` does
+  nothing until first polled, that single poll's `Initializing` arm read the journal AFTER the
+  commit had already landed, so the assertion was satisfied by `subscribe_from`'s own direct replay
+  read alone. Proven empirically: commenting out `tailer.rs`'s `sender.send(seq_ev.clone())` (the
+  publish call), leaving the cursor-advance in place so events were silently dropped rather than
+  published, left this test GREEN while tests 1
+  (`a_committed_row_reaches_a_live_subscriber`) and 2 (the handoff test) correctly went RED
+  (`timed out ... waiting for seq N`) on the same mutation. Rewritten to commit TWO events after the
+  restart: the first serves the "not the pre-restart seq 1" vacuity defence AND (by being consumed)
+  exhausts the replay window per the device above; the second is thereby forced through the live
+  tailer path exactly like tests 1/2. Re-verified against the SAME mutation: all three
+  (`a_committed_row_reaches_a_live_subscriber`, the handoff test, and the rewritten restart test) now
+  fail with `timed out ... waiting for seq N`; tests 3 and 5 (which do not depend on the tailer —
+  see below) stayed green throughout, as expected. Mutation reverted; `diff` against the pre-mutation
+  backup confirmed clean; full suite re-run green afterward.
+- [Task 017] **Tests 3 and 5 deliberately do not force the live/tailer path**, and this is not a gap.
+  Test 3 (rollback) subscribes AFTER both the rolled-back and the committed write, so its single
+  assertion is delivered via `subscribe_from`'s own direct journal read — appropriate, since the
+  property under test is journal-first invisibility of the uncommitted row through the real
+  `subscribe_from` API (as opposed to task 004's existing raw-SQL check of the journal table alone),
+  not liveness. Test 5 (variant fidelity) subscribes after all nine variants are already committed,
+  for the same reason: the property under test is serde round-trip fidelity through the bus's public
+  read path, not the tailer. Neither shortcuts the binding constraint (no hand-built
+  `SequencedEvent`, no `sender().send()`) — both observe exclusively through `subscribe_from`, which
+  is what the constraint requires.
+- [Task 017] **`shutdown()` called explicitly at the end of every test**, and on `bus1` mid-test in
+  test 4 before spawning `bus2` on the same pool. A bare `drop` only detaches the tailer's background
+  task rather than stopping it (task 013 ledger); `shutdown()` is the documented way to stop it, and
+  avoids leaving a background tailer polling a soon-to-be-dropped temp-dir pool for the rest of the
+  test process. Not required for test 4's correctness (bus1's and bus2's tailers publish onto
+  separate broadcast channels), but matches production hygiene and the task's own caution against
+  orphaned background work.
+- [Task 017] No STOP triggers were hit: `EventBus`, `subscribe_from`, and `event_journal::append` /
+  `high_water_mark` were all public enough to drive the suite from `crates/services/tests/`, and no
+  test's assertion pointed at a defect in 013/016's production code — every red run traced to a
+  mutation I introduced on purpose (see above), reverted before the final green run.
+- [Task 017] **What the seam suite revealed that the unit tests did not**: TWO things, both specific
+  to this suite's job (driving real wall-clock commits against a lazily-initialized
+  `subscribe_from` stream, which neither task 013's `tailer.rs` suite — never touches
+  `subscribe_from` — nor task 005/013's `event_bus/mod.rs` suite — always hand-drives `sender()`
+  directly, never waits on a lazy stream against real commits — could have surfaced.
+  1. The test-4-first-draft vacuity trap, described above.
+  2. **Real, unmutated flakiness**, found by the flake-hunting step the advisor review for this
+     task required and described in detail below. Both are properties of THIS suite's design
+     (how it drives the real stream under real scheduling), not defects in 013/016's shipped
+     production code — no shipped code was touched to fix either.
+- [Task 017] **Real flakiness found and fixed: a 10x repeat loop was 8/10, not 10/10.** On
+  unmutated code, `a_committed_row_reaches_a_live_subscriber` and
+  `a_new_bus_on_the_same_pool_resumes_without_replaying_history` intermittently timed out waiting
+  for a live-delivered event, even at a 10s deadline — verbatim: `timed out after 10s waiting for
+  seq 2` / `seq 4`.
+  **Root cause, singular, verified against the actual failure traces (an initial two-cause theory
+  was disproved on re-reading the same logs — see below):** `EventBus::new()` deliberately drops
+  the tailer's own readiness signal (`tailer::spawn`'s doc comment, `event_bus/tailer.rs`) — "the
+  tailer's readiness receiver is dropped here... A row committed before the initial
+  `high_water_mark` resolves is CORRECTLY never published (property 1: start at the mark, not
+  0)." `tokio::spawn` only SCHEDULES the tailer task; how long its first `high_water_mark()` read
+  takes to actually run and resolve is unbounded under real machine load, and a commit made before
+  it resolves is silently and PERMANENTLY dropped by design — indistinguishable, from outside
+  `EventBus`'s public surface, from a bug. This session's concurrent multi-agent load (many
+  sibling agents' `cargo` processes sharing this 4-core box — `nproc`=4, observed load average up
+  to 8.4) widens that race window far beyond what a quiet machine would show, which is why it
+  surfaced here and not in task 013/016's own suites — but the mechanism itself is a documented,
+  deterministic property of the shipped code, not a probabilistic one.
+  **Disproved alternative**: raising the deadline to 60s (a single wait, no retry) did not
+  eliminate the flake, which first read as evidence of a SECOND, independent cause (severe
+  scheduling delay on an already-live channel). Re-tracing every one of those 60s failures against
+  which code path actually delivered each preceding event showed they were ALL cases where the
+  failing wait's OWN predecessor event had arrived via `subscribe_from`'s direct replay read, not
+  via the tailer — meaning the tailer had never yet been proven live at the point of failure. All
+  measured failures are the single cause above; there is no second, independently-measured cause,
+  and the ledger's first pass at this entry (since corrected) overclaimed one.
+  **Fix**: added `prove_tailer_is_live` — retries a fresh probe commit (discarding stale arrivals)
+  until one round-trips, sized at 3s/attempt x 30 attempts (90s worst case) — and used it for
+  every wait that is provably tailer-dependent AND occurs before the tailer has otherwise been
+  demonstrated live: test 1's post-warm-up event, test 4's second (post-restart) event. This
+  mirrors the SAME pattern `event_bus/mod.rs`'s own `wait_until_tailer_publishes` already uses and
+  that ten prior panels on this module already accepted for exactly this class of problem — my
+  first draft's deviation from that established, reviewed precedent (toward single deterministic
+  commits right after `EventBus::new()`) is what introduced the flake.
+- [Task 017] **A second defect surfaced while fixing the first: test 4's own `prove_tailer_is_live`
+  call violated that helper's documented precondition** ("only sound to call once the caller has
+  already exhausted `subscribe_from`'s replay window"). Test 4 was calling it on a stream that had
+  never been polled — so its first probe was trivially satisfied by `subscribe_from`'s OWN
+  `Initializing` replay read (`read_range(high_water, high_water+1)`), proving nothing about the
+  tailer, one indirection out from the exact vacuity trap this test's first draft already fell
+  into. Confirmed by re-reading the 9/15 loop's failure: `prove_tailer_is_live` had consumed
+  exactly ONE probe with zero retries before the run went red on the NEXT wait — if the tailer had
+  genuinely been live, that next wait would have succeeded; if genuinely dead, the helper would
+  have burned several probes retrying, not zero. **Fixed** by making test 4's first post-restart
+  event what it actually is: a single deterministic commit consumed by the strict, exact-seq
+  `expect_next_seq` (mirroring test 1's own warm-up), asserting `first_post_seq == high_water + 1`
+  — stronger than the `> high_water` this entry originally shipped with, and restoring the
+  precondition for the SECOND event's `prove_tailer_is_live` call. Verified empirically: across
+  all pre-fix repeat-loop failures (31 total runs across three rounds at various deadlines: 10x at
+  10s, 6x at 60s, 15x at the first retry-based fix), test 4's first event
+  NEVER once failed — only ever "seq 4" (the second) — consistent with the first event always
+  arriving via replay, independent of tailer readiness.
+- [Task 017] **Test 2's handoff assertion was kept exact, not weakened.** An intermediate draft
+  swapped test 2's handoff to `prove_tailer_is_live` too, weakening "the very next seq, exactly"
+  to "strictly greater than the replayed batch" — appropriate under the (disproved) two-cause
+  theory above, but unnecessary once only the `EventBus::new()`-startup race is real: by the time
+  test 2 reaches its handoff, the bus has already had three prior commits' worth of real elapsed
+  awaits to establish its tailer, a materially different situation from `EventBus::new()`
+  immediately followed by one commit. Kept as a single deterministic commit with the strict
+  `expect_next_seq`, budgeted at a new `WARM_LIVE_DEADLINE` = 30s (matching the deadline
+  `event_bus/mod.rs`'s own `the_bus_publishes_a_committed_row_exactly_once` and
+  `event_bus_tailer_health_tracks_the_bus_s_own_tailer` already use for the equivalent class of
+  wait, not a new magic number) rather than the 10s general `DEADLINE`. This keeps the task's
+  dictated "no gap" property EXACT for test 2, and confines the weaker "strictly greater than"
+  form to the one place (test 4's second event) where it is actually load-bearing.
+  **Declared residual, not eliminated.** Test 2's handoff relies on ELAPSED TIME (three prior
+  commits plus their replay deliveries) making the `EventBus::new()` startup race IMPROBABLE, not
+  IMPOSSIBLE — it is not structurally immune the way test 1 and test 4 now are, and it DID fail
+  once pre-fix at the 10s budget (15x loop, run 7). Under the single-cause model above, that
+  failure was a PERMANENT drop (the tailer's cursor landed past seq 4), and a larger deadline
+  cannot fix a permanent drop — 30s only widens the window for the ordinary, already-established-
+  tailer case, not the rare race case. 0/20 at 30s is consistent with the wider window making the
+  race rare enough not to observe, and is also consistent with a residual ~3% rate persisting
+  unobserved. If test 2 ever flakes in CI, the fix is `prove_tailer_is_live` with the weaker
+  `handoff.seq > last_replayed_seq` assertion — already written and discarded once this session,
+  not a larger deadline.
+  **Final verification**: 20/20 clean repeats of the full suite; the tailer-disabled mutation
+  (`sender.send` commented out) still correctly turns all three tailer-dependent tests red
+  (test 1 and test 4's second event via `prove_tailer_is_live`'s "never went live" panic; test 2
+  via its own `expect_next_seq` timeout at the corrected 30s budget — verbatim
+  `timed out after 29.999999684s waiting for seq 4`), confirming none of the fixes smuggled in a
+  vacuous pass. A genuine cosmetic bug found in the same pass — `expect_next_seq`'s timeout
+  message hardcoded the `DEADLINE` constant regardless of which deadline was actually passed in,
+  so it would have misreported test 2's real (30s) budget as 10s — was fixed by computing the
+  message from the actual `deadline` argument.
