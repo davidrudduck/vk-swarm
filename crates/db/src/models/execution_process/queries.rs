@@ -25,6 +25,11 @@ fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
     }
 }
 
+/// Attempt 2 (task 007), item 4 — duplicated from `lifecycle::UNKNOWN_EXECUTOR` for the same
+/// reason `journal_err_to_sqlx` is duplicated (this task's file set does not include `mod.rs`).
+/// See that copy's doc comment for why this exact sentinel shape was chosen.
+const UNKNOWN_EXECUTOR: &str = "unknown (legacy NULL task_attempts.executor)";
+
 impl ExecutionProcess {
     /// Find execution process by ID
     pub async fn find_by_id(pool: &SqlitePool, id: Uuid) -> Result<Option<Self>, sqlx::Error> {
@@ -128,57 +133,76 @@ impl ExecutionProcess {
     /// Excludes rows with resume_state IN ('pending', 'resumed') for SC8 safety.
     /// Returns the number of processes marked as failed.
     ///
-    /// Task 007: this is a real terminal-failure path (after a node crash, every orphaned
-    /// process transitions to `failed` here) that the original phase-3 breakdown missed. SELECTs
-    /// the exact rows about to transition, INSIDE the same transaction and against the identical
-    /// predicate, before the UPDATE runs — counting `rows_affected()` after the fact can prove
-    /// how many rows moved but not WHICH ones, and "one `AttemptFailed` per transitioned process"
-    /// needs each row's task/attempt/executor identity.
+    /// Task 007 attempt 2 (panel 17B, item 2): write-first. Attempt 1 SELECTed the rows about to
+    /// transition, then UPDATEd — a deferred transaction that reads before it writes, which 17B
+    /// proved earns a non-retryable `SQLITE_BUSY_SNAPSHOT` (517) under WAL if another connection
+    /// commits to the same table between the read and the write (measured 6/200 vs 0/200 for the
+    /// pre-007 single-statement shape; `no_read_then_upgrade` test below). This is the SECOND time
+    /// that shape has bitten this run — task 006 panel 15B found the identical hazard in
+    /// `Task::delete`'s pool path, fixed the same way: `UPDATE ... RETURNING`.
+    ///
+    /// The UPDATE itself is now the FIRST and ONLY write-adjacent statement, `RETURNING` each
+    /// transitioned row's `id`/`task_attempt_id` — which also closes item 3 (17B-2) structurally:
+    /// the event count is the length of what the UPDATE itself just told us moved, not a
+    /// separately-derived count that could drift from a differently-scoped SELECT. Identity
+    /// (`task_id`, `executor`) is loaded per row AFTER the write, keyed off exactly the
+    /// `task_attempt_id`s the UPDATE returned — a read after the write holds no upgrade hazard.
     pub async fn mark_orphaned_as_failed(
         pool: &SqlitePool,
         current_instance_id: &str,
     ) -> Result<u64, sqlx::Error> {
         #[derive(sqlx::FromRow)]
-        struct OrphanedRow {
+        struct TransitionedRow {
             execution_process_id: Uuid,
             task_attempt_id: Uuid,
-            task_id: Uuid,
-            executor: String,
         }
 
         let mut tx = pool.begin().await?;
 
         // Runtime API: new SQL text, not a re-use of an existing macro query.
-        let orphaned: Vec<OrphanedRow> = sqlx::query_as(
-            r#"SELECT ep.id AS execution_process_id, ep.task_attempt_id AS task_attempt_id,
-                      ta.task_id AS task_id, ta.executor AS executor
-               FROM execution_processes ep
-               JOIN task_attempts ta ON ta.id = ep.task_attempt_id
-               WHERE ep.status = 'running'
-                 AND (ep.server_instance_id IS NULL OR ep.server_instance_id != ?)
-                 AND (ep.resume_state IS NULL OR ep.resume_state NOT IN ('pending', 'resumed'))"#,
+        let transitioned: Vec<TransitionedRow> = sqlx::query_as(
+            r#"UPDATE execution_processes
+               SET status = 'failed', updated_at = datetime('now')
+               WHERE status = 'running'
+                 AND (server_instance_id IS NULL OR server_instance_id != ?)
+                 AND (resume_state IS NULL OR resume_state NOT IN ('pending', 'resumed'))
+               RETURNING id AS execution_process_id, task_attempt_id"#,
         )
         .bind(current_instance_id)
         .fetch_all(&mut *tx)
         .await?;
 
-        let result = sqlx::query!(
-            r#"UPDATE execution_processes
-               SET status = 'failed', updated_at = datetime('now')
-               WHERE status = 'running'
-                 AND (server_instance_id IS NULL OR server_instance_id != ?)
-                 AND (resume_state IS NULL OR resume_state NOT IN ('pending', 'resumed'))"#,
-            current_instance_id
-        )
-        .execute(&mut *tx)
-        .await?;
+        for row in &transitioned {
+            // A read AFTER the write (this transaction already holds the write lock from the
+            // UPDATE above). `executor` decoded as `Option<String>` — see item 4 / `create`'s
+            // identical handling above for why.
+            let owner: Option<(Uuid, Option<String>)> =
+                sqlx::query_as("SELECT task_id, executor FROM task_attempts WHERE id = ?")
+                    .bind(row.task_attempt_id)
+                    .fetch_optional(&mut *tx)
+                    .await?;
 
-        for row in &orphaned {
+            // `owner` being `None` means this row transitioned (proven — it's in `transitioned`)
+            // but its owning `TaskAttempt` is gone: unreachable today (FK is `ON DELETE CASCADE`),
+            // not something this function can rule out by construction. Degrades to "no event"
+            // for this one row rather than fabricating identity or failing the whole batch.
+            let Some((task_id, executor)) = owner else {
+                continue;
+            };
+            let executor = executor.unwrap_or_else(|| {
+                tracing::warn!(
+                    execution_process_id = %row.execution_process_id,
+                    task_attempt_id = %row.task_attempt_id,
+                    "task_attempts.executor is NULL (legacy data) — emitting with a sentinel identity"
+                );
+                UNKNOWN_EXECUTOR.to_string()
+            });
+
             let event = NodeEvent::AttemptFailed {
-                task_id: row.task_id,
+                task_id,
                 attempt_id: row.task_attempt_id,
                 execution_process_id: row.execution_process_id,
-                executor: row.executor.clone(),
+                executor,
                 reason: "orphan recovery: process was running under a stale server instance"
                     .to_string(),
             };
@@ -189,7 +213,7 @@ impl ExecutionProcess {
 
         tx.commit().await?;
 
-        Ok(result.rows_affected())
+        Ok(transitioned.len() as u64)
     }
 
     /// Set the resume_state for an execution process.
@@ -464,12 +488,22 @@ impl ExecutionProcess {
         .await?;
 
         // Runtime API, not a macro: new SQL text (this task's Change section forbids a new
-        // `query_as!` — the `.sqlx` offline cache cannot be regenerated in this run).
-        let (task_id, executor): (Uuid, String) =
+        // `query_as!` — the `.sqlx` offline cache cannot be regenerated in this run). `executor`
+        // decoded as `Option<String>`, not `String`: `task_attempts.executor` is nullable at the
+        // schema level and sqlx's SQLite driver silently decodes a NULL into a bare `String`
+        // target as `""` rather than erroring (attempt 2 item 4, confirmed empirically).
+        let (task_id, executor): (Uuid, Option<String>) =
             sqlx::query_as("SELECT task_id, executor FROM task_attempts WHERE id = ?")
                 .bind(data.task_attempt_id)
                 .fetch_one(&mut *tx)
                 .await?;
+        let executor = executor.unwrap_or_else(|| {
+            tracing::warn!(
+                task_attempt_id = %data.task_attempt_id,
+                "task_attempts.executor is NULL (legacy data) — emitting with a sentinel identity"
+            );
+            UNKNOWN_EXECUTOR.to_string()
+        });
 
         let event = NodeEvent::AttemptStarted {
             task_id,
@@ -873,6 +907,7 @@ mod lifecycle_event_tests {
     };
     use executors::executors::BaseCodingAgent;
     use executors::profile::ExecutorProfileId;
+    use std::str::FromStr;
 
     async fn seed_project(pool: &SqlitePool) -> Uuid {
         let pid = Uuid::new_v4();
@@ -917,6 +952,28 @@ mod lifecycle_event_tests {
         .fetch_all(pool)
         .await
         .unwrap()
+    }
+
+    async fn seed_running_process_with(
+        pool: &SqlitePool,
+        attempt_id: Uuid,
+        server_instance_id: &str,
+        resume_state: Option<&str>,
+    ) -> Uuid {
+        let pid = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO execution_processes \
+             (id, task_attempt_id, status, run_reason, executor_action, server_instance_id, resume_state) \
+             VALUES (?, ?, 'running', 'codingagent', '{}', ?, ?)",
+        )
+        .bind(pid)
+        .bind(attempt_id)
+        .bind(server_instance_id)
+        .bind(resume_state)
+        .execute(pool)
+        .await
+        .unwrap();
+        pid
     }
 
     fn create_data(task_attempt_id: Uuid) -> CreateExecutionProcess {
@@ -1015,39 +1072,19 @@ mod lifecycle_event_tests {
         let project_id = seed_project(&pool).await;
         let task_id = seed_task(&pool, project_id).await;
 
-        async fn seed_running_process(
-            pool: &SqlitePool,
-            attempt_id: Uuid,
-            server_instance_id: &str,
-            resume_state: Option<&str>,
-        ) -> Uuid {
-            let pid = Uuid::new_v4();
-            sqlx::query(
-                "INSERT INTO execution_processes \
-                 (id, task_attempt_id, status, run_reason, executor_action, server_instance_id, resume_state) \
-                 VALUES (?, ?, 'running', 'codingagent', '{}', ?, ?)",
-            )
-            .bind(pid)
-            .bind(attempt_id)
-            .bind(server_instance_id)
-            .bind(resume_state)
-            .execute(pool)
-            .await
-            .unwrap();
-            pid
-        }
-
         let mut expected: Vec<(Uuid, Uuid, Uuid, String)> = Vec::new(); // (task_id, attempt_id, process_id, executor)
         for i in 0..3 {
             let executor = format!("EXEC_{i}");
             let attempt_id = seed_attempt(&pool, task_id, &executor).await;
-            let process_id = seed_running_process(&pool, attempt_id, "stale-instance", None).await;
+            let process_id =
+                seed_running_process_with(&pool, attempt_id, "stale-instance", None).await;
             expected.push((task_id, attempt_id, process_id, executor));
         }
         // Must NOT transition: resume_state = 'pending'.
         let pending_attempt = seed_attempt(&pool, task_id, "EXEC_PENDING").await;
         let _pending_process =
-            seed_running_process(&pool, pending_attempt, "stale-instance", Some("pending")).await;
+            seed_running_process_with(&pool, pending_attempt, "stale-instance", Some("pending"))
+                .await;
 
         let count = ExecutionProcess::mark_orphaned_as_failed(&pool, "current-instance")
             .await
@@ -1092,6 +1129,268 @@ mod lifecycle_event_tests {
             seen, expected,
             "each orphaned process must produce exactly one AttemptFailed carrying its own \
              task/attempt/execution-process id and executor identity"
+        );
+    }
+
+    // --- Attempt 2 (task 007, item 5): rollback test — 006 ships one per site, 007 shipped none. ---
+
+    /// `mark_orphaned_as_failed`'s per-row append happens inside the same transaction as the
+    /// `UPDATE ... RETURNING`; a failed append must roll back the WHOLE batch, not just the one
+    /// row whose append failed. Same fault-injection technique as the sibling test in
+    /// `lifecycle.rs` and `task/queries.rs`.
+    #[tokio::test]
+    async fn mark_orphaned_as_failed_rolls_back_when_append_fails() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = seed_task(&pool, project_id).await;
+        let attempt_id = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
+        let process_id = seed_running_process_with(&pool, attempt_id, "stale-instance", None).await;
+
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = ExecutionProcess::mark_orphaned_as_failed(&pool, "current-instance").await;
+        let err = result.expect_err("a failed journal append must surface as an error");
+        assert!(
+            format!("{err:?}").contains("event_journal"),
+            "the failure must be the journal append, not an earlier statement: {err:?}"
+        );
+
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM execution_processes WHERE id = ?")
+                .bind(process_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            status, "running",
+            "a failed journal append must roll back the whole batch's status write, not just \
+             the one row whose append failed"
+        );
+        let rows = read_journal_rows(&pool).await;
+        assert!(rows.is_empty(), "no event may have landed: {rows:?}");
+    }
+
+    // --- Attempt 2 (task 007, item 4): NULL executor ---
+
+    /// `task_attempts.executor` is nullable; a NULL must not silently emit `"executor": ""`
+    /// (F17A-3/F17B-3), mirroring the identical test in `lifecycle.rs`.
+    #[tokio::test]
+    async fn null_executor_emits_sentinel_not_empty_string() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = seed_task(&pool, project_id).await;
+
+        let attempt_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref) \
+             VALUES (?, ?, NULL, 'b', 'main', '/tmp/wt')",
+        )
+        .bind(attempt_id)
+        .bind(task_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let _process_id =
+            seed_running_process_with(&pool, attempt_id, "stale-instance", None).await;
+
+        ExecutionProcess::mark_orphaned_as_failed(&pool, "current-instance")
+            .await
+            .unwrap();
+
+        let rows = read_journal_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        let event: NodeEvent = serde_json::from_str(&rows[0].1).unwrap();
+        match event {
+            NodeEvent::AttemptFailed { executor, .. } => {
+                assert_ne!(
+                    executor, "",
+                    "a NULL executor must not silently become an empty string"
+                );
+                assert_eq!(executor, UNKNOWN_EXECUTOR);
+            }
+            other => panic!("expected AttemptFailed, got {other:?}"),
+        }
+    }
+
+    // --- Attempt 2 (task 007, panel 17B item 1 / THE CONFLICT): no read-then-upgrade ---
+
+    fn is_busy_snapshot(err: &sqlx::Error) -> bool {
+        err.as_database_error()
+            .and_then(|e| e.code())
+            .map(|c| c == "517")
+            .unwrap_or(false)
+    }
+
+    /// Prod-like pool: WAL + `busy_timeout` + `max_connections(10)`, matching `crates/db/src/lib.rs`
+    /// — 17B's own harness pattern, mirroring `lifecycle.rs`'s identical helper.
+    async fn build_contention_pool() -> (SqlitePool, tempfile::TempDir) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("contention.db");
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str(&format!(
+            "sqlite://{}",
+            db_path.display()
+        ))
+        .unwrap()
+        .create_if_missing(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(2)
+            .max_connections(10)
+            .acquire_timeout(std::time::Duration::from_secs(10))
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        (pool, temp_dir)
+    }
+
+    /// REQUIRED by the attempt-2 amendment: proves `mark_orphaned_as_failed`'s write-first
+    /// `UPDATE ... RETURNING` shape does NOT read-then-upgrade. 200 iterations, each seeding a
+    /// fresh orphaned 'running' row and calling the real function once, while a background
+    /// writer commits to the SAME table every ~200µs for the whole run (17B's own methodology;
+    /// F17B-1 measured 6/200 for attempt 1's SELECT-then-UPDATE shape and 0/200 for the pre-007
+    /// single-statement shape). This must score 0/200 too, because the UPDATE is now the FIRST
+    /// statement the transaction issues — no prior SELECT ever opens it as a read.
+    #[tokio::test]
+    async fn mark_orphaned_as_failed_does_not_read_then_upgrade() {
+        const ITERATIONS: usize = 200;
+
+        let (pool, _tmp) = build_contention_pool().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = seed_task(&pool, project_id).await;
+
+        let decoy_attempt = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
+        let decoy_process =
+            seed_running_process_with(&pool, decoy_attempt, "current-instance", None).await;
+
+        let writer_pool = pool.clone();
+        let writer = tokio::spawn(async move {
+            loop {
+                let _ = sqlx::query(
+                    "UPDATE execution_processes SET pid = COALESCE(pid, 0) + 1 WHERE id = ?",
+                )
+                .bind(decoy_process)
+                .execute(&writer_pool)
+                .await;
+                tokio::time::sleep(std::time::Duration::from_micros(200)).await;
+            }
+        });
+
+        let mut busy_snapshot_errors = 0usize;
+        let mut other_errors = 0usize;
+        for _ in 0..ITERATIONS {
+            let attempt_id = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
+            seed_running_process_with(&pool, attempt_id, "stale-instance", None).await;
+
+            match ExecutionProcess::mark_orphaned_as_failed(&pool, "current-instance").await {
+                Ok(_) => {}
+                Err(e) if is_busy_snapshot(&e) => busy_snapshot_errors += 1,
+                Err(_) => other_errors += 1,
+            }
+        }
+        writer.abort();
+
+        eprintln!(
+            "no_read_then_upgrade(mark_orphaned_as_failed, real write-first shape): \
+             {busy_snapshot_errors}/{ITERATIONS} SQLITE_BUSY_SNAPSHOT, {other_errors} other errors"
+        );
+        assert_eq!(
+            busy_snapshot_errors, 0,
+            "write-first mark_orphaned_as_failed must not read-then-upgrade under contention"
+        );
+        assert_eq!(
+            other_errors, 0,
+            "no other errors expected at this contention level"
+        );
+    }
+
+    /// Calibration control: reconstructs attempt 1's REJECTED shape (SELECT the orphaned rows,
+    /// then UPDATE, in one deferred transaction — attempt 1's code, hand-rolled here since it is
+    /// gone from the tree) against the IDENTICAL harness, to prove it is capable of reproducing
+    /// F17B-1's finding rather than being silently toothless.
+    #[tokio::test]
+    async fn control_read_then_write_shape_reproduces_busy_snapshot() {
+        const ITERATIONS: usize = 200;
+
+        let (pool, _tmp) = build_contention_pool().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = seed_task(&pool, project_id).await;
+
+        let decoy_attempt = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
+        let decoy_process =
+            seed_running_process_with(&pool, decoy_attempt, "current-instance", None).await;
+
+        let writer_pool = pool.clone();
+        let writer = tokio::spawn(async move {
+            loop {
+                let _ = sqlx::query(
+                    "UPDATE execution_processes SET pid = COALESCE(pid, 0) + 1 WHERE id = ?",
+                )
+                .bind(decoy_process)
+                .execute(&writer_pool)
+                .await;
+                tokio::time::sleep(std::time::Duration::from_micros(200)).await;
+            }
+        });
+
+        let mut busy_snapshot_errors = 0usize;
+        for _ in 0..ITERATIONS {
+            let attempt_id = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
+            seed_running_process_with(&pool, attempt_id, "stale-instance", None).await;
+
+            let mut tx = pool.begin().await.unwrap();
+            // Attempt 1's shape: SELECT the orphaned rows (read) first...
+            let orphaned: Vec<(Uuid,)> = sqlx::query_as(
+                "SELECT id FROM execution_processes \
+                 WHERE status = 'running' AND (server_instance_id IS NULL OR server_instance_id != ?)",
+            )
+            .bind("current-instance")
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+            assert!(!orphaned.is_empty());
+
+            // ...then UPDATE (write — the upgrade).
+            let result = sqlx::query(
+                "UPDATE execution_processes SET status = 'failed' \
+                 WHERE status = 'running' AND (server_instance_id IS NULL OR server_instance_id != ?)",
+            )
+            .bind("current-instance")
+            .execute(&mut *tx)
+            .await;
+
+            match result {
+                Ok(_) => {
+                    let _ = tx.commit().await;
+                }
+                Err(e) => {
+                    if is_busy_snapshot(&e) {
+                        busy_snapshot_errors += 1;
+                    }
+                    drop(tx);
+                }
+            }
+        }
+        writer.abort();
+
+        eprintln!(
+            "no_read_then_upgrade(control, attempt-1 read-then-write shape): \
+             {busy_snapshot_errors}/{ITERATIONS} SQLITE_BUSY_SNAPSHOT"
+        );
+        assert!(
+            busy_snapshot_errors > 0,
+            "calibration control must reproduce at least one SQLITE_BUSY_SNAPSHOT — 0 here would \
+             mean the harness cannot detect the hazard, and the real test above would be proving \
+             nothing"
         );
     }
 }

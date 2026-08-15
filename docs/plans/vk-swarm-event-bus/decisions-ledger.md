@@ -5632,3 +5632,235 @@ I am NOT dictating the resolution. The implementer must satisfy both constraints
 real transition AND avoid read-then-upgrade — and prove the second with a test. Candidate shapes are
 listed in the task amendment; whichever is chosen must be justified with evidence, not chosen because
 it appears first.
+
+## 2026-08-15 task 007 attempt 2 — resolving THE CONFLICT, and items 2-5
+
+Re-engaged (same implementer, continued context) at HEAD `f987e30a`. Read the task file's
+`## REQUIRED — attempt 2` section in full before touching anything, per instruction.
+
+### THE CONFLICT — chosen shape: gate in the UPDATE's own WHERE clause (candidate (a))
+
+`update_completion`'s single write statement is now:
+
+```sql
+UPDATE execution_processes
+SET status = ?, exit_code = ?, completed_at = ?, completion_reason = ?, completion_message = ?
+WHERE id = ? AND status = 'running'
+RETURNING task_attempt_id
+```
+
+This is candidate (a) from the amendment, not (b) (CTE) or (c) (`BEGIN IMMEDIATE`). Reasoning:
+
+- **It satisfies both constraints in ONE statement, not two reconciled ones.** The `AND status =
+  'running'` clause makes `RETURNING task_attempt_id` present iff this call just performed a real
+  `running -> terminal` transition — `NULL`/no-row means either "no such id" or "already
+  non-running," both "no event." That directly closes 17A-1/17A-2 (F17A-1, F17A-2). The statement
+  is simultaneously the FIRST thing the transaction does, so SQLite's deferred-transaction machinery
+  never takes a read snapshot to later upgrade — that directly closes 17B-1, and does so
+  structurally rather than by choosing a lock-acquisition strategy that races anything.
+- **(b) (CTE) was rejected without building it**: 17B's own conflict framing says "prove it rather
+  than assuming" for (b) specifically, because whether SQLite's write-CTE machinery reads the
+  pre-image atomically WITH the UPDATE (as one write-adjacent statement) or evaluates the CTE as a
+  separate up-front read step is a real, non-obvious question this attempt did not need to answer:
+  (a) sidesteps it entirely by not needing a pre-image at all — `RETURNING` already tells us whether
+  the WHERE clause matched, which is the only fact needed.
+- **(c) (`BEGIN IMMEDIATE`) was rejected on the amendment's own stated caveat** — 17B did not verify
+  sqlx 0.8.6 exposes it, and (a) needs no lock-mode change to satisfy both constraints, so there was
+  nothing to gain by resolving that unknown.
+- **Verified, not assumed, that this compiles and behaves as intended** — see Verification below;
+  the `RETURNING task_attempt_id` shape was run against the full suite before being treated as done.
+
+**Behavioural change, assessed per the amendment's own requirement:** an already-non-`running` row
+is no longer overwritten by a later `update_completion` call — 0 rows match, the write and the event
+both become no-ops. Checked all four production callers (traced, not guessed):
+- `services/container.rs:562` (`mark_process_failed_with_task_update`) and `:1572`
+  (`start_execution`'s failure path) — both act on a process this same code path just observed as
+  `running` moments earlier, with no other writer between the observation and the call.
+- `local-deployment/container.rs:642` (the exit monitor) — guarded by
+  `!ExecutionProcess::was_stopped(...)` immediately before the call; `was_stopped` returns `true` for
+  `Killed`/`Completed`. **Gap noted, not fixed** (out of this attempt's explicit scope — item 1 is
+  about `update_completion`'s OWN internal correctness, not this caller-side guard): `was_stopped`
+  does NOT cover `Failed`, and it is evaluated in a statement separate from the write (TOCTOU
+  window) — 17B (F17B-4) found the same gap independently and "could NOT prove a live double-call."
+  Recorded as a residual below, not touched.
+- `local-deployment/container.rs:2007` (`stop_execution`) — only reaches this function while
+  `get_child_from_store` still finds a tracked child; the exit monitor removes that entry only after
+  it has itself already written a terminal status, so by the time it's gone `stop_execution`'s own
+  `get_child_from_store` call fails first and the function returns early, never reaching
+  `update_completion`.
+
+None of the four appears to depend on re-overwriting an already-terminal row's
+`exit_code`/`completion_reason`/`completion_message`. No test in the existing suite (crate-wide,
+254 tests pre-attempt-2) broke from this change — see Verification.
+
+### Item 1 (BLOCKING, F17A-1/F17A-2) — closed by THE CONFLICT's resolution
+
+Same fix as above; no separate change. Three new boundary tests pin the property 17A-2 proved was
+previously untested:
+- `running_write_emits_nothing`
+- `repeated_identical_terminal_write_emits_once` (17A-1's own P1)
+- `completed_then_killed_emits_once_not_two_contradictory_events` (17A-1's own P2) — additionally
+  asserts the row's `status` column stays `completed`, proving the second (`Killed`) call is a true
+  no-op, not a write that merely suppressed its own event.
+
+**Bite proof, done two ways, both required-shape:**
+1. `bite_proof_ungated_shape_reproduces_17a1_p1_and_p2` — a local, non-production closure
+   reconstructing attempt 1's exact shape (unconditional UPDATE, unconditional owner SELECT,
+   unconditional emit), run against the SAME harness, reproduces 17A-1's P1 (3 events) and P2 (both
+   `attempt_finished` AND `attempt_failed` for one process) verbatim. Permanent regression
+   documentation; does not touch production code.
+2. **Literal mutation of the real function**, per the amendment's explicit instruction ("mutate it
+   away, the new boundary tests must fail"): copied `lifecycle.rs` to `.wai-scratch/` (working-rules
+   compliant — no `git` mutation), removed ` AND status = 'running'` from the real
+   `update_completion`'s WHERE clause, ran the two boundary tests:
+
+```text
+thread '...repeated_identical_terminal_write_emits_once' panicked:
+assertion `left == right` failed: 3 identical Completed writes on one process must emit exactly once
+  left: 3
+ right: 1
+
+thread '...completed_then_killed_emits_once_not_two_contradictory_events' panicked:
+  left: 2
+ right: 1
+test result: FAILED. 36 passed; 2 failed
+```
+
+   Restored `lifecycle.rs` from the `.wai-scratch` copy, `diff`-verified byte-identical, re-ran:
+   `test result: ok. 38 passed; 0 failed`. `.wai-scratch` deleted after.
+
+### Item 2 (BLOCKING, F17B-1) — `mark_orphaned_as_failed` made write-first
+
+`UPDATE ... RETURNING id AS execution_process_id, task_attempt_id` is now the function's ONLY
+write-adjacent statement — no SELECT precedes it. Identity (`task_id`, `executor`) is loaded per
+returned row AFTER the write. Return value is `transitioned.len() as u64` (structurally equal to
+what `rows_affected()` would give, since both are the same UPDATE — using the `Vec` we already have
+avoids a second source of truth). Same fix task 006 panel 15B gave `Task::delete`'s pool path
+(`DELETE ... RETURNING`) — this is the SECOND time this exact hazard has bitten this run.
+
+Rollback test added (`mark_orphaned_as_failed_rolls_back_when_append_fails`, item 5's own ask) —
+006 ships one per site, 007 attempt 1 shipped none for either of its two functions; both now have one.
+
+### Item 3 (NON-BLOCKING, F17B-2) — corrected, not separately fixed
+
+The false claims are corrected:
+- `lifecycle.rs`'s new comment explains precisely what `None` means now (id-not-found OR
+  already-non-running), and separately documents that `owner` (the identity lookup) being `None`
+  means "transitioned but the `TaskAttempt` is gone" — no longer conflated with "id did not match."
+- This ledger's own prior "same predicate" line (Undictated choice 4, first 2026-08-15 007 entry) is
+  superseded by item 2's rewrite: `mark_orphaned_as_failed` no longer has two separately-evaluated
+  predicates (a SELECT's and an UPDATE's) that could theoretically diverge — there is one UPDATE,
+  and identity is looked up per the exact `task_attempt_id`s it returned. The residual 17B-2
+  actually names (a row whose `task_attempts` parent is gone) is still structurally possible in
+  both functions and is now handled uniformly: the row is skipped for event purposes (`continue` in
+  `mark_orphaned_as_failed`, an `if let Some(...)` no-op in `update_completion`), never fabricated,
+  never fails the batch. Not exercised by a test (FK `ON DELETE CASCADE` makes it unreachable from
+  any code path that respects the constraint, confirmed unchanged from panel 17A's own
+  clean-axis note).
+
+### Item 4 (NON-BLOCKING, F17A-3/F17B-3) — NULL executor decodes as `Option<String>`, sentinel on `None`
+
+**Verified empirically before trusting the panels' claim**, per this run's own stated norm of
+re-deriving rather than trusting: wrote a throwaway integration test
+(`crates/db/tests/_null_probe.rs`, deleted immediately after, never committed) that inserts a
+`task_attempts` row with `executor = NULL` and decodes it via
+`sqlx::query_as::<_, (Uuid, String)>(...)`. Result: `Ok((task_id, ""))` — no error. Confirms sqlx's
+SQLite driver silently coerces a NULL into `""` for a non-`Option` `String` target; the panels'
+claim holds exactly as stated.
+
+**Chosen remediation: decode as `Option<String>`, substitute a sentinel on `None`, log a
+`tracing::warn!`.** Considered and rejected the other two options the task named:
+- *Refuse to emit*: would silently and permanently drop SC2 events for every legacy row with a NULL
+  executor, forever (nothing back-fills this column) — worse than a placeholder identity, since it
+  reintroduces exactly the "missing terminal event" hole SC2 exists to close, for a class of rows
+  this task cannot itself fix.
+- *Fail the write*: would make `update_completion`/`create`/`mark_orphaned_as_failed` — none of
+  which are event-bus-only code paths, all three ALSO perform the actual state mutation the rest of
+  the system depends on — fail a real execution's lifecycle transition because of a data-quality gap
+  in an unrelated legacy column. The event bus is additive to core execution state (ADR-0017); it
+  must not gate it.
+
+The sentinel is `"unknown (legacy NULL task_attempts.executor)"` — deliberately not
+`SCREAMING_SNAKE_CASE` like every real value (`"CLAUDE_CODE"`, `"AMP"`, `"QA_MOCK"`, confirmed against
+migration `20250903091032_executors_to_screaming_snake.sql`), so it cannot be mistaken for a real
+executor by a human or a consumer pattern-matching on casing. Applied identically at all three sites
+(`create`, `update_completion`, `mark_orphaned_as_failed`); the constant is duplicated in `queries.rs`
+and `lifecycle.rs` (no `mod.rs` in this task's file set — same reasoning as `journal_err_to_sqlx`'s
+existing duplication). One test per file (`null_executor_emits_sentinel_not_empty_string`) proves the
+sentinel appears and `""` never does — the attempt-1 tests' `!executor.is_empty()` assertions were
+true only because every fixture set `executor`; these are the first tests to actually exercise a NULL.
+
+### Item 5 — corrections and residuals
+
+- **Breakdown enumeration corrected** (F17A-5). This ledger's first 2026-08-15 007 entry (Undictated
+  choice 1) claimed `SetupScript`/`CleanupScript`/`DevServer`/`Breakdown` all "carry no executor
+  profile." Wrong for Breakdown: `ExecutorAction::base_executor()` returns `None` only for
+  `ScriptRequest`; Breakdown is constructed with `CodingAgentInitialRequest`, which DOES carry a
+  profile. **Correcting here rather than editing that entry**, to keep an audit trail rather than
+  silently rewriting history: the claim should read
+  "`SetupScript`/`CleanupScript`/`DevServer` executor actions carry no executor profile; Breakdown's
+  does but was wrongly grouped with them." **The decision itself is unaffected**: `task_id` is still
+  absent from `CreateExecutionProcess`/the execution-process row regardless of run reason, so the
+  `task_attempts` JOIN/read is unavoidable for ALL run reasons including Breakdown, which is what
+  actually motivated sourcing `executor` from the same read rather than from `executor_action`.
+- **Rollback tests added** for both `update_completion` and `mark_orphaned_as_failed` (see items 1
+  and 2 above) — 006 ships one per lifecycle-touching function; 007 attempt 1 shipped none.
+- **`(Completed, None)` bus/table contradiction — recorded as a residual, not fixed** (F17A-4,
+  design note per the amendment, not a defect). Unchanged from attempt 1: when `update_completion` is
+  called with `status = Completed, exit_code = None`, the row's own `status` column is written as
+  `'completed'` while the journal records `attempt_failed` — the table and the bus disagree, for the
+  duration this row exists. Unreachable from every production caller today (traced in the first
+  2026-08-15 007 entry; unchanged by this attempt). The honest fix — a nullable exit code or a
+  distinct enum variant on `NodeEvent::AttemptFinished` — is task 003's schema to own, not this
+  task's `files:` to touch.
+- **`update_completion`'s ~3.1x slowdown — recorded as a residual, not addressed** (F17B-5: ≈1.54ms
+  vs ≈0.50ms per call, writer lock held across the identity JOIN). Not re-measured this attempt; the
+  shape change (write-first UPDATE, then a separate read) is the same shape 17B measured, so the
+  number is expected to carry over unchanged. The bulk path (`mark_orphaned_as_failed`) remains fast
+  per-batch (17B: 500 rows / 33.7ms) since its per-row identity reads are the same cost class either
+  way.
+- **`was_stopped`'s `Failed`-blind TOCTOU window — recorded as a residual, not touched** (F17B-4).
+  Out of this attempt's explicit scope (item 1 is `update_completion`'s own internal gating, not this
+  separate caller-side guard used by one of its four callers); `was_stopped` lives in this task's
+  file set (`lifecycle.rs`) but touching its behavior is not one of the "Allowed moves" this task (or
+  its amendment) grants. 17B itself could not prove a live double-call.
+
+### Verification for attempt 2
+
+- `cargo test -p db`: 264 passed (up from 252 after attempt 1), 0 failed, 7 ignored, 11 doctests (2
+  ignored). New tests: 7 in `lifecycle.rs` (3 boundary + 1 bite-proof-closure + 1 rollback + 1
+  NULL-executor + 1 no-read-then-upgrade) + 1 calibration control, 3 in `queries.rs` (1 rollback + 1
+  NULL-executor + 1 no-read-then-upgrade) + 1 calibration control = 12 new tests total (252 + 12 =
+  264).
+- **No-read-then-upgrade, verbatim** (200 iterations each, prod-like pool: WAL, `busy_timeout(5s)`,
+  `max_connections(10)`, a background writer committing to the same table every ~200µs for the whole
+  run):
+
+  ```text
+  no_read_then_upgrade(update_completion, real write-first shape): 0/200 SQLITE_BUSY_SNAPSHOT, 0 other errors
+  no_read_then_upgrade(control, attempt-1 read-then-write shape): 9/200 SQLITE_BUSY_SNAPSHOT
+  no_read_then_upgrade(mark_orphaned_as_failed, real write-first shape): 0/200 SQLITE_BUSY_SNAPSHOT, 0 other errors
+  no_read_then_upgrade(control, attempt-1 read-then-write shape): 26/200 SQLITE_BUSY_SNAPSHOT
+  ```
+
+  The real (write-first) shape scored 0/200 on both functions, reproduced across 4 repeated runs
+  each (stability check, not flake-fishing on a single lucky run). The calibration controls
+  (attempt 1's actual SELECT-then-UPDATE shape, hand-reconstructed since attempt 1's code is gone
+  from the tree) reproduced non-zero `SQLITE_BUSY_SNAPSHOT` counts every run (9-26/200 depending on
+  run, same order of magnitude as F17B-1's own 6/200), proving the harness is capable of detecting
+  the hazard the real shape avoids — the 0/200 result is not because the harness is toothless.
+- **Bite proof for the transition guard, verbatim**: see item 1 above (`left: 3, right: 1` and
+  `left: 2, right: 1`, restored byte-identical after).
+- `cargo fmt --all -- --check`: exit 0 (ran `cargo fmt --all` once after adding the new tests;
+  clean after).
+- `cargo clippy -p db --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo clippy --all --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo check --workspace --all-targets`: exit 0 — confirms no caller (`services`,
+  `local-deployment`) needed any change; no signature changed on either function.
+- `git status --porcelain`: only `crates/db/src/models/execution_process/lifecycle.rs` and
+  `crates/db/src/models/execution_process/queries.rs` modified, plus this ledger entry. (The
+  `.sqlx` cache deletion from attempt 1's SECONDARY task is already committed at `51686b2d` and
+  untouched by this attempt.)
+
+Task-gate.sh not run by this implementer, same deferral as attempt 1 and as task 006's entries — it
+validates a committed `git` state and this run does not commit.
