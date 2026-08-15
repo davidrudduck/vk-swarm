@@ -5956,3 +5956,161 @@ anything shipped**); orphan zero-row, 500-row and idempotent sweeps all 1:1; the
 exclusion pinned; FK cascade enforced so `owner is None` is genuinely unreachable; the transition
 gate and `is_terminal` guard both proven live by mutation; the contention result stable across 5
 consecutive repeats; and the SECONDARY `.sqlx` deletion verified shipped.
+
+## 2026-08-15 task 007 attempt 3 — correcting the inverted trace, pinning the sentinel
+
+Re-engaged (same implementer, continued context) at HEAD `19d6ea83`. Read the task file's
+`## REQUIRED — attempt 3` section in full before touching anything. **The core resolution (THE
+CONFLICT, candidate (a)) is independently vindicated by panel 18** (injected 17A's literal proposed
+remediation into the real `update_completion`, scored 15/200 `SQLITE_BUSY_SNAPSHOT`) — no production
+logic changed this attempt except item 2's `create` fix; everything else is comments, a new test
+module helper, a rename, and two new tests.
+
+### Item 1 (BLOCKING, F18-1) — the caller-trace was inverted; corrected, declared, and pinned
+
+**Attribution, stated plainly per the orchestrator's own framing, not to relitigate it but because
+it should be on the record in the same place the error is:** attempt 2's assessment of
+`stop_execution` traced the mechanism correctly (the exit monitor removes the child from
+`child_store` only after writing a terminal status) but drew the opposite conclusion from it (that
+`stop_execution` therefore CANNOT reach `update_completion` on a terminal row). The correct reading
+is that the child stays findable for the ENTIRE window between the exit monitor's terminal write
+(`container.rs:642`) and its own removal of the child (`:918`, 276 lines and three operations later:
+log normalization, a git commit, MsgStore teardown) — so `stop_execution`'s
+`get_child_from_store` SUCCEEDS throughout that window, and `routes/execution_processes.rs:192-201`
+imposes no status precondition before calling it. Verified independently this attempt by re-reading
+`container.rs:635-660`, `:780-795`, `:910-920` directly (not re-trusting the previous trace), and by
+reading `routes/execution_processes.rs:192-202` for the missing precondition. The orchestrator
+accepted the inverted trace without independently re-deriving it at the time; this attempt's fix is
+the correction, not a rebuttal — the mechanism named was always right, only the conclusion drawn from
+it was backwards.
+
+**Disposition (orchestrator's, unchanged, restated for the record): do NOT restore the overwrite.**
+The pre-gate behaviour — a process that finished on its own being overwritten to falsely claim it was
+user-`killed` — misreported what happened. Restoring it would mean dropping the transition gate and
+reintroducing F17A-1's duplicate-event defect. The discard is accepted and now declared rather than
+emergent.
+
+**Corrected:**
+- `lifecycle.rs`'s `update_completion` doc comment: replaced the inverted "only reaches this
+  function while `get_child_from_store` still finds a tracked child, which the exit monitor removes
+  only once it has itself written a terminal status" (implying the window is empty) with the
+  corrected trace and an explicit statement that the discard is deliberate and accepted, plus the
+  UI consequence (below).
+- This ledger — **superseding, not editing**, attempt 2's THE CONFLICT bullet 3 (which asserted
+  `stop_execution` "only reaches this function while `get_child_from_store` still finds a tracked
+  child, which the exit monitor removes only once it has itself written a terminal status" — same
+  inverted claim, now corrected by this entry).
+
+**User-visible consequence, verified by reading the frontend directly (not assumed from the task
+file's own description, though it matches):** `ProcessesTab.tsx:284-296` renders `completion_reason`
+as a badge with `completion_message` as its `title` tooltip whenever `completion_reason` is
+`Some(_)`. `ProjectTasks.tsx:142-166`'s `shouldShow` is `true` when `status === 'failed'`
+(unconditionally — ANY `completion_reason`, including `None`) OR `status === 'completed'` with
+`completion_reason` in `{eof, error, result_error}`. A Stop landing in the exit-monitor's window
+against a `Failed`/`"eof"` row (the common "agent disconnected" case) used to overwrite the row to
+`Killed`/`"killed"` — banner suppressed (`'killed' != 'failed'`, and `'killed'` is not in the
+`'completed'` branch's reason set either). It now leaves `Failed`/`"eof"` untouched — banner IS
+shown, a different badge is rendered, and the Stop's own `completion_message` ("user pressed stop" or
+similar) never reaches the row.
+
+**Test added** (`stop_onto_already_terminal_row_discards_the_write_and_emits_nothing`,
+`lifecycle.rs`): models the actual production shape — `Failed`/`"eof"` write (the exit monitor),
+THEN a `Killed`/`"killed"`/`"user pressed stop"` write (a Stop landing in the window) — and asserts
+ALL THREE of `status`, `completion_reason`, AND `completion_message` are unchanged by the second
+call (the pre-existing `completed_then_killed_...` test only pinned `status`), plus exactly one
+journal event total.
+
+### Item 2 (BLOCKING, F18-2) — sentinel pinned at `create`, de-tautologised everywhere
+
+Two gaps, both from the amendment's own diagnosis, both fixed:
+
+1. **`create`'s sentinel was unexercised.** Added
+   `create_null_executor_emits_sentinel_not_empty_string` (`queries.rs`) — a NULL-executor
+   `task_attempts` row, `ExecutionProcess::create` against it, asserts the emitted
+   `AttemptStarted.executor` is the sentinel, not `""`.
+2. **Both existing sentinel tests were tautological** (`assert_eq!(executor, UNKNOWN_EXECUTOR)`
+   compares the emitted value to the constant it was literally built from). Replaced with a shared
+   `assert_is_unknown_executor_sentinel(executor: &str)` helper (duplicated in both files' test
+   modules, matching the existing `journal_err_to_sqlx`-style duplication — no `mod.rs` in this
+   task's `files:`) that asserts (a) the exact LITERAL string, independent of either copy of the
+   constant, and (b) a shape property no real executor value has (`executor.contains(' ')` — every
+   real value, `"CLAUDE_CODE"`/`"AMP"`/`"QA_MOCK"`, is one space-free `SCREAMING_SNAKE_CASE` token).
+   Applied to all three sentinel-producing tests (`create`, `update_completion`,
+   `mark_orphaned_as_failed` — the last renamed from `null_executor_emits_sentinel_not_empty_string`
+   to `mark_orphaned_as_failed_null_executor_emits_sentinel_not_empty_string` for disambiguation now
+   that all three sites have one).
+
+**Both required bite proofs, verbatim** (`.wai-scratch` swap-test-restore, no `git` mutation; both
+restored and `diff`-verified byte-identical afterward):
+
+Mutation 1 — reverted `create`'s `unwrap_or_else(|| { warn!(...); UNKNOWN_EXECUTOR.to_string() })`
+to `unwrap_or_default()` (the exact defect F17A-3/F17B-3/item-4 named):
+
+```text
+thread '...create_null_executor_emits_sentinel_not_empty_string' panicked:
+assertion `left != right` failed: a NULL executor must not silently become an empty string
+  left: ""
+ right: ""
+test result: FAILED. 0 passed; 1 failed
+```
+
+Mutation 2 — set `UNKNOWN_EXECUTOR` to `"CLAUDE_CODE"` in BOTH `lifecycle.rs` and `queries.rs` (a
+real executor value, matching F18-2's own prescribed check):
+
+```text
+thread '...mark_orphaned_as_failed_null_executor_emits_sentinel_not_empty_string' panicked:
+assertion `left == right` failed: must match the sentinel LITERAL — ...: 'CLAUDE_CODE'
+  left: "CLAUDE_CODE"
+ right: "unknown (legacy NULL task_attempts.executor)"
+thread '...create_null_executor_emits_sentinel_not_empty_string' panicked: (same assertion)
+thread '...null_executor_emits_sentinel_not_empty_string' panicked: (same assertion, lifecycle.rs)
+test result: FAILED. 0 passed; 3 failed
+```
+
+All three sentinel-value assertions fired — including for `mark_orphaned_as_failed` and
+`update_completion`, which were already passing before this attempt but were passing tautologically;
+the mutation proves the de-tautologised versions now actually discriminate.
+
+### Item 3 — corrections and residuals
+
+- **`queries.rs`'s overclaiming comment fixed.** It said the event count "could not drift" from
+  `rows_affected`; the `else { continue; }` (owner-not-found branch) means the RETURN VALUE
+  (`transitioned.len()`) cannot drift from the UPDATE's own affected-row count, but the EVENT count
+  still can, by exactly the F17B-2/item-3 residual (unreachable today via `ON DELETE CASCADE`, not
+  ruled out by construction). Comment now states this precisely instead of overclaiming "could not
+  drift" outright.
+- **`lifecycle.rs`'s calibration control relabelled**, not deleted (task offered either). Renamed
+  `control_read_then_write_shape_reproduces_busy_snapshot` ->
+  `control_prior_status_read_reproduces_busy_snapshot`; docstring corrected to state it reconstructs
+  17A's *proposed remediation* (never shipped), not attempt 1's actual code (which was already
+  write-first, per THE CONFLICT section). Kept rather than deleted so this file carries its own
+  in-tree, repeatable regression guard against reintroducing a read-before-write shape, alongside
+  (not instead of) panel 18's stronger but one-off injection-into-real-code proof.
+- **Residuals, recorded, not fixed** (all three named by the amendment as declare-only):
+  - `executor = ''` (empty string, not SQL NULL) still emits `""` — the sentinel substitution only
+    triggers on `Option::None`; an empty-but-non-null `executor` column value decodes as `Some("")`
+    and passes through unchanged. 0 live occurrences (F18-3).
+  - `update_completion` on a nonexistent `id` returns `Ok(())`, indistinguishable from "row existed,
+    was already non-running, no-op." Unchanged from attempt 2; not a regression this attempt (F18-6).
+  - Both `no_read_then_upgrade` tests assert `other_errors == 0` in addition to
+    `busy_snapshot_errors == 0` — under sufficiently heavy CI load, an ordinary retryable
+    `SQLITE_BUSY` (code 5, which the busy handler DOES retry, but could still exhaust
+    `busy_timeout(5s)` under extreme contention) would fail these tests for a reason unrelated to
+    the read-then-upgrade property they exist to guard. Noted as a flake-risk residual, not
+    mitigated — loosening the assertion was judged worse than an occasional CI-load false red, since
+    silently accepting `other_errors > 0` could mask a REAL new failure mode.
+
+### Verification for attempt 3
+
+- `cargo test -p db`: 266 passed (264 -> 266: +1 `stop_onto_already_terminal_row_discards_...`,
+  +1 `create_null_executor_emits_sentinel_not_empty_string`), 0 failed, 7 ignored.
+- Both bite proofs: verbatim above.
+- `cargo fmt --all -- --check`: exit 0 (ran `cargo fmt --all` once; clean after).
+- `cargo clippy -p db --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo clippy --all --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo check --workspace --all-targets`: exit 0.
+- `git status --porcelain`: only `lifecycle.rs`, `queries.rs`, plus this ledger entry — no
+  production logic changed outside item 2 (`create`'s sentinel handling), matching the amendment's
+  "change no production logic except item 2" constraint exactly.
+
+Task-gate.sh not run by this implementer — same deferral as attempts 1 and 2.

@@ -58,16 +58,40 @@ impl ExecutionProcess {
     /// 17A's own proposed fix (move a SELECT before the UPDATE) would have reintroduced exactly
     /// that hazard; this shape avoids the conflict entirely rather than picking a side.
     ///
-    /// **Behavioural change from attempt 1 (and from pre-007):** an already-terminal row is no
-    /// longer overwritten by a later call — 0 rows match, nothing is written, nothing is emitted.
-    /// Checked all four production callers: `container.rs:562/:1572` and
-    /// `local-deployment/container.rs:642` only ever reach this function while the row is still
-    /// `running` (the last is additionally guarded by `was_stopped` for the `Killed`/`Completed`
-    /// case, though not `Failed` — see the ledger residual on `was_stopped`'s TOCTOU window);
-    /// `local-deployment/container.rs:2007` (`stop_execution`) only reaches this function while
-    /// `get_child_from_store` still finds a tracked child, which the exit monitor removes only
-    /// once it has itself written a terminal status. None appears to depend on re-overwriting an
-    /// already-terminal row's `exit_code`/`completion_reason`/`completion_message`.
+    /// **Behavioural change from attempt 1 (and from pre-007), DELIBERATE and DECLARED (attempt
+    /// 3, F18-1 — corrected from an inverted trace attempt 2 shipped here and in the ledger):** an
+    /// already-terminal row is no longer overwritten by a later call — 0 rows match, nothing is
+    /// written, nothing is emitted. `container.rs:562`/`:1572` only ever reach this function while
+    /// the row is still `running`. `local-deployment/container.rs:642` (the exit monitor) is
+    /// guarded by `!was_stopped(...)` for `Killed`/`Completed`, though not `Failed` — TOCTOU
+    /// residual, ledger. **`local-deployment/container.rs:2007` (`stop_execution`) DOES reach this
+    /// function on an already-terminal row, routinely, not only in a race:** the exit monitor
+    /// writes the terminal status at `container.rs:642` but does not remove the child from
+    /// `child_store` until `container.rs:918`, AFTER log normalization, a git commit
+    /// (`try_commit_changes`), and MsgStore teardown — a wide window (the earlier "only reaches
+    /// this function while `get_child_from_store` still finds a tracked child, which the exit
+    /// monitor removes only once it has itself written a terminal status" claim had the
+    /// implication backwards: the child STAYS findable through that whole window, it doesn't
+    /// disappear). `stop_execution`'s own `get_child_from_store` call therefore SUCCEEDS in that
+    /// window, and `routes/execution_processes.rs:192-201` imposes no status precondition before
+    /// calling it — a user pressing Stop right after an agent finishes lands here.
+    ///
+    /// **The write and its event are silently discarded in that window, and this is accepted, not
+    /// merely tolerated:** the alternative is dropping the transition gate and reintroducing
+    /// F17A-1's duplicate/contradictory-event defect (`Completed` then `Killed` on one process).
+    /// The pre-gate behaviour — overwriting a row that finished on its own to falsely claim it was
+    /// user-`killed` — misreported what happened; this gate makes the row tell the truth about
+    /// which outcome actually landed first, at the cost of losing the LATER call's own status.
+    /// **User-visible consequence:** `ProcessesTab.tsx:286-296` renders `completion_reason` as a
+    /// badge with `completion_message` as its tooltip; `ProjectTasks.tsx:142-166` shows an error
+    /// banner when `status == 'failed'` (unconditionally) or `status == 'completed'` with
+    /// `completion_reason` in `{eof, error, result_error}`. A Stop landing in the exit monitor's
+    /// window used to leave `killed`/`'killed'` (banner suppressed for a `'completed'`-turned-
+    /// `'killed'` row; for a `'failed'`-turned-`'killed'` row the banner was ALSO suppressed, since
+    /// `'killed' != 'failed'`). It now leaves whatever the exit monitor already wrote (e.g.
+    /// `failed`/`'eof'`) — banner shown (if the terminal status was `failed`), the Stop's own
+    /// `completion_message` ("user pressed stop" or similar) never lands. Pinned by
+    /// `stop_onto_already_terminal_row_discards_the_write_and_emits_nothing` below.
     ///
     /// The owning `TaskAttempt` is loaded via a SEPARATE read AFTER the write (not before it —
     /// see above), keyed off the `task_attempt_id` the UPDATE itself returned, to source
@@ -688,6 +712,69 @@ mod lifecycle_event_tests {
         );
     }
 
+    /// Attempt 3, item 1 (F18-1): pins the DECLARED discard as a specified behaviour, not an
+    /// emergent one. Models the actual production shape rather than a synthetic one — the exit
+    /// monitor (`local-deployment/container.rs:642`) writes a terminal `Failed`/`"eof"` row, and
+    /// `stop_execution` (`:2007`) can still reach `update_completion` up to 276 lines later
+    /// (`child_store` removal happens only at `:918`) and calls it again with `Killed`. The second
+    /// call's `status`, `completion_reason`, AND `completion_message` must all be discarded — not
+    /// just `status` (the previous test only proved that much) — and it must emit no second event.
+    #[tokio::test]
+    async fn stop_onto_already_terminal_row_discards_the_write_and_emits_nothing() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = seed_task(&pool, project_id).await;
+        let attempt_id = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
+        let process_id = seed_running_process(&pool, attempt_id).await;
+
+        // The exit monitor's write: the agent disconnected without a Result message.
+        ExecutionProcess::update_completion(
+            &pool,
+            process_id,
+            ExecutionProcessStatus::Failed,
+            None,
+            Some("eof"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // stop_execution's write, landing in the window where child_store still finds the
+        // (already-exited) child. Succeeds (Ok(())) but transitions nothing.
+        ExecutionProcess::update_completion(
+            &pool,
+            process_id,
+            ExecutionProcessStatus::Killed,
+            None,
+            Some("killed"),
+            Some("user pressed stop"),
+        )
+        .await
+        .unwrap();
+
+        let row: (String, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT status, completion_reason, completion_message FROM execution_processes WHERE id = ?",
+        )
+        .bind(process_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row,
+            ("failed".to_string(), Some("eof".to_string()), None),
+            "the Stop's status, completion_reason, AND completion_message must all be discarded \
+             — the row must keep exactly what the exit monitor wrote"
+        );
+
+        let rows = read_journal_rows(&pool).await;
+        assert_eq!(
+            rows.len(),
+            1,
+            "the discarded Stop must emit no second event: {rows:?}"
+        );
+        assert_eq!(rows[0].0, "attempt_failed");
+    }
+
     /// Bite proof for the three tests above: without the transition gate, `update_completion`
     /// reproduces 17A-1's own findings exactly. Reconstructs the pre-attempt-2 (attempt 1) shape
     /// directly — SELECT owner (unconditionally), then UPDATE (unconditionally), emit whenever
@@ -847,7 +934,27 @@ mod lifecycle_event_tests {
         assert!(rows.is_empty(), "no event may have landed: {rows:?}");
     }
 
-    // --- Attempt 2 (task 007, item 4): NULL executor ---
+    // --- Attempt 2 (task 007, item 4)/attempt 3 (item 2): NULL executor ---
+
+    /// De-tautologised sentinel assertion (attempt 3, F18-2): NOT `assert_eq!(executor,
+    /// UNKNOWN_EXECUTOR)` — comparing the emitted value to the imported constant it was BUILT
+    /// from is a tautology that passes even if the constant were changed to a real executor value
+    /// (`"CLAUDE_CODE"`). Asserts a literal (so drift between the two copies of the constant,
+    /// `lifecycle.rs:32`/`queries.rs:31`, is caught by EITHER file's test) AND a shape property no
+    /// real executor value has: every real value is a single `SCREAMING_SNAKE_CASE` token with no
+    /// spaces (`"CLAUDE_CODE"`, `"AMP"`, `"QA_MOCK"`); the sentinel is deliberately prose-shaped.
+    fn assert_is_unknown_executor_sentinel(executor: &str) {
+        assert_eq!(
+            executor, "unknown (legacy NULL task_attempts.executor)",
+            "must match the sentinel LITERAL — comparing against the imported UNKNOWN_EXECUTOR \
+             constant instead is what attempt 2 shipped, and it is a tautology: '{executor}'"
+        );
+        assert!(
+            executor.contains(' '),
+            "a real executor identity never contains a space — this shape check must fail if the \
+             sentinel were ever set to a real value like \"CLAUDE_CODE\": '{executor}'"
+        );
+    }
 
     /// `task_attempts.executor` is nullable; a NULL must not silently emit `"executor": ""`
     /// (F17A-3/F17B-3). Proves the sentinel, not the decorative-but-unenforced assertion attempt
@@ -890,7 +997,7 @@ mod lifecycle_event_tests {
                     executor, "",
                     "a NULL executor must not silently become an empty string"
                 );
-                assert_eq!(executor, UNKNOWN_EXECUTOR);
+                assert_is_unknown_executor_sentinel(&executor);
             }
             other => panic!("expected AttemptFinished, got {other:?}"),
         }
@@ -999,13 +1106,21 @@ mod lifecycle_event_tests {
         );
     }
 
-    /// Calibration control for the test above: reconstructs attempt 1's REJECTED shape (SELECT
-    /// before UPDATE, inside one deferred transaction — attempt 1's code, hand-rolled here since
-    /// it is gone from the tree) against the IDENTICAL harness, to prove the harness is actually
-    /// capable of reproducing panel 17B's finding rather than being silently toothless. If this
-    /// control ever stopped producing failures, the test above would be proving nothing.
+    /// Calibration control for the test above (attempt 3, F18-4: relabelled — the previous name
+    /// and docstring claimed this reconstructs "attempt 1's REJECTED shape." **That was false.**
+    /// `update_completion`'s attempt-1 code was ALREADY write-first (UPDATE first, owner SELECT
+    /// after — THE CONFLICT section, task file), so it never had this hazard; the shape below is
+    /// 17A's *proposed remediation* (read the prior status before the UPDATE to gate on a real
+    /// transition), which is what panel 18 injected into the real function and scored 15/200 on
+    /// (ledger). This control hand-reconstructs that SAME hypothetical shape, independently, to
+    /// prove the harness here is capable of reproducing the hazard rather than being silently
+    /// toothless. Panel 18's own injection-into-real-code result (C1) already proves the same
+    /// point more strongly (against production code, not a reconstruction) but was done in its own
+    /// detached worktree and isn't itself a shipped, repeatable test — kept, not deleted, so this
+    /// file also carries a permanent, in-tree regression guard against reintroducing a
+    /// read-before-write shape into `update_completion`.
     #[tokio::test]
-    async fn control_read_then_write_shape_reproduces_busy_snapshot() {
+    async fn control_prior_status_read_reproduces_busy_snapshot() {
         const ITERATIONS: usize = 200;
 
         let (pool, _tmp) = build_contention_pool().await;

@@ -142,11 +142,16 @@ impl ExecutionProcess {
     /// `Task::delete`'s pool path, fixed the same way: `UPDATE ... RETURNING`.
     ///
     /// The UPDATE itself is now the FIRST and ONLY write-adjacent statement, `RETURNING` each
-    /// transitioned row's `id`/`task_attempt_id` — which also closes item 3 (17B-2) structurally:
-    /// the event count is the length of what the UPDATE itself just told us moved, not a
-    /// separately-derived count that could drift from a differently-scoped SELECT. Identity
-    /// (`task_id`, `executor`) is loaded per row AFTER the write, keyed off exactly the
-    /// `task_attempt_id`s the UPDATE returned — a read after the write holds no upgrade hazard.
+    /// transitioned row's `id`/`task_attempt_id` — which relocates item 3 (17B-2), not closes it
+    /// (corrected, attempt 3: this comment previously overclaimed "could not drift"). The
+    /// RETURN VALUE cannot drift from the UPDATE's own affected-row count — `transitioned.len()`
+    /// IS that count, not a separately-derived one. The EVENT count can still be lower than
+    /// `transitioned.len()`: the `else { continue; }` below skips emission (not the count) for a
+    /// row whose `TaskAttempt` is gone, so "returns N" and "emitted N events" can diverge by
+    /// exactly the residual F17B-2/item-3 already names (unreachable today via `ON DELETE
+    /// CASCADE`, not something this function rules out by construction). Identity (`task_id`,
+    /// `executor`) is loaded per row AFTER the write, keyed off exactly the `task_attempt_id`s
+    /// the UPDATE returned — a read after the write holds no upgrade hazard.
     pub async fn mark_orphaned_as_failed(
         pool: &SqlitePool,
         current_instance_id: &str,
@@ -1178,16 +1183,28 @@ mod lifecycle_event_tests {
         assert!(rows.is_empty(), "no event may have landed: {rows:?}");
     }
 
-    // --- Attempt 2 (task 007, item 4): NULL executor ---
+    // --- Attempt 2 (task 007, item 4)/attempt 3 (item 2): NULL executor ---
 
-    /// `task_attempts.executor` is nullable; a NULL must not silently emit `"executor": ""`
-    /// (F17A-3/F17B-3), mirroring the identical test in `lifecycle.rs`.
-    #[tokio::test]
-    async fn null_executor_emits_sentinel_not_empty_string() {
-        let (pool, _tmp) = create_test_pool_with_migrations().await;
-        let project_id = seed_project(&pool).await;
-        let task_id = seed_task(&pool, project_id).await;
+    /// De-tautologised sentinel assertion (attempt 3, F18-2) — mirrors `lifecycle.rs`'s identical
+    /// helper (duplicated, not shared: no `mod.rs` in this task's file set). NOT
+    /// `assert_eq!(executor, UNKNOWN_EXECUTOR)`: comparing the emitted value to the imported
+    /// constant it was BUILT from is a tautology that passes even if the constant were changed to
+    /// a real executor value. Asserts the literal (catches drift between `lifecycle.rs:32` and
+    /// `queries.rs:31`) AND a shape property no real executor value has (contains a space).
+    fn assert_is_unknown_executor_sentinel(executor: &str) {
+        assert_eq!(
+            executor, "unknown (legacy NULL task_attempts.executor)",
+            "must match the sentinel LITERAL — comparing against the imported UNKNOWN_EXECUTOR \
+             constant instead is what attempt 2 shipped, and it is a tautology: '{executor}'"
+        );
+        assert!(
+            executor.contains(' '),
+            "a real executor identity never contains a space — this shape check must fail if the \
+             sentinel were ever set to a real value like \"CLAUDE_CODE\": '{executor}'"
+        );
+    }
 
+    async fn seed_attempt_with_null_executor(pool: &SqlitePool, task_id: Uuid) -> Uuid {
         let attempt_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref) \
@@ -1195,9 +1212,22 @@ mod lifecycle_event_tests {
         )
         .bind(attempt_id)
         .bind(task_id)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
+        attempt_id
+    }
+
+    /// `task_attempts.executor` is nullable; a NULL must not silently emit `"executor": ""`
+    /// (F17A-3/F17B-3) at `mark_orphaned_as_failed`, mirroring the identical test in
+    /// `lifecycle.rs` for `update_completion`.
+    #[tokio::test]
+    async fn mark_orphaned_as_failed_null_executor_emits_sentinel_not_empty_string() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = seed_task(&pool, project_id).await;
+
+        let attempt_id = seed_attempt_with_null_executor(&pool, task_id).await;
         let _process_id =
             seed_running_process_with(&pool, attempt_id, "stale-instance", None).await;
 
@@ -1214,9 +1244,40 @@ mod lifecycle_event_tests {
                     executor, "",
                     "a NULL executor must not silently become an empty string"
                 );
-                assert_eq!(executor, UNKNOWN_EXECUTOR);
+                assert_is_unknown_executor_sentinel(&executor);
             }
             other => panic!("expected AttemptFailed, got {other:?}"),
+        }
+    }
+
+    /// REQUIRED by attempt 3, item 2 (F18-2): a NULL-executor test THROUGH `ExecutionProcess::create`
+    /// — the site item 4 was written to fix, and the one no test exercised. F18-2's own bite proof:
+    /// reverting `create`'s `unwrap_or_else(...)` to `unwrap_or_default()` was caught by nothing,
+    /// because neither `null_executor_emits_sentinel_not_empty_string` (`update_completion`) nor
+    /// `mark_orphaned_as_failed_null_executor_emits_sentinel_not_empty_string` drives `create` at all.
+    #[tokio::test]
+    async fn create_null_executor_emits_sentinel_not_empty_string() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = seed_task(&pool, project_id).await;
+        let attempt_id = seed_attempt_with_null_executor(&pool, task_id).await;
+
+        ExecutionProcess::create(&pool, &create_data(attempt_id), Uuid::new_v4(), None, None)
+            .await
+            .unwrap();
+
+        let rows = read_journal_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        let event: NodeEvent = serde_json::from_str(&rows[0].1).unwrap();
+        match event {
+            NodeEvent::AttemptStarted { executor, .. } => {
+                assert_ne!(
+                    executor, "",
+                    "a NULL executor must not silently become an empty string"
+                );
+                assert_is_unknown_executor_sentinel(&executor);
+            }
+            other => panic!("expected AttemptStarted, got {other:?}"),
         }
     }
 
