@@ -273,3 +273,91 @@ tests claim.
 -- -D warnings`, `cargo check --workspace --all-targets` — all exit 0. Plus, verbatim: the
 no-read-then-upgrade test result, and a bite proof for the transition guard (mutate it away, the new
 boundary tests must fail).
+
+---
+
+## REQUIRED — attempt 3, after panel 18
+
+**The core resolution is CORRECT and stays.** Panel 18 injected 17A's literally-proposed remediation
+into the real `update_completion` and got 15/200 `SQLITE_BUSY_SNAPSHOT` — the required test has teeth
+against production code, and candidate (a) was the right call. The transition gate, the write-first
+orphan rewrite, the concurrency behaviour (40 rounds, exactly one event each) and every boundary case
+were attacked and held. **Change no production logic except item 2 below.**
+
+Two blocking items. Both are small.
+
+### 1. BLOCKING — the caller-trace justifying the WHERE gate is INVERTED; correct it and declare the consequence
+
+The shipped doc comment (`lifecycle.rs:67-70`) and the ledger say `stop_execution` never reaches
+`update_completion` on an already-terminal row, because the exit monitor removes the child from the
+store only after writing terminal status. **The mechanism is real; the conclusion reverses it.**
+Verified independently:
+
+```text
+container.rs:642  update_completion(...)                       <- terminal write
+container.rs:657  migrate_execution_logs(...)
+container.rs:788  try_commit_changes(...)                      <- a git commit
+container.rs:918  child_store.write().await.remove(&exec_id)   <- 276 lines later
+```
+
+The child remains in the store throughout, so `get_child_from_store` succeeds and `stop_execution`
+DOES reach `update_completion` on a terminal row. `routes/execution_processes.rs:193-199` imposes no
+status precondition.
+
+**Do NOT restore the overwrite.** The orchestrator's disposition: the pre-existing behaviour was
+arguably the bug — a process that ran to completion and was then Stopped had its row rewritten to
+claim it was `killed`, which misreports what happened. The gate makes the row tell the truth, and
+restoring the overwrite would mean dropping the gate and reintroducing 17A-1's duplicate-event
+defect.
+
+**REQUIRED instead:**
+- Correct `lifecycle.rs:67-70` to state that this caller DOES reach the function on a terminal row,
+  throughout a wide window, and that its write is deliberately discarded.
+- Correct the ledger's attempt-2 THE CONFLICT bullet 3 in a NEW entry (do not edit history).
+- Record the user-visible consequence explicitly: `ProcessesTab.tsx:286-296` renders
+  `completion_reason` as a badge with `completion_message` as tooltip, and `ProjectTasks.tsx:142-166`
+  gates an error banner on `completion_reason ∈ {eof, error, result_error}`. A Stop landing in that
+  window used to produce `killed`/`'killed'` (banner suppressed); it now leaves `failed`/`'eof'`
+  (banner shown, tooltip lost). **Declared and accepted, not unreachable.**
+- Add a test pinning the discard, so it is a specified behaviour rather than an emergent one: a Stop
+  onto an already-terminal row leaves status, `completion_reason` and `completion_message` unchanged,
+  and emits no second event.
+
+### 2. BLOCKING — pin the sentinel where it is unpinned, and de-tautologise its tests
+
+Two mutations each leave `38 passed; 0 failed`:
+
+- Reverting `ExecutionProcess::create`'s sentinel to `unwrap_or_default()` — the exact defect item 4
+  named — is caught by nothing. Both sentinel tests drive `update_completion` and
+  `mark_orphaned_as_failed`; **neither drives `create`**, the site producing `attempt_started`.
+- Changing the sentinel to a REAL executor value (`"CLAUDE_CODE"`) also passes, because both tests
+  `assert_eq!(executor, UNKNOWN_EXECUTOR)` against the constant imported from the module under test.
+  That is a tautology on the constant's own value, and it makes drift between the two copies
+  (`lifecycle.rs:32`, `queries.rs:31`) structurally untestable.
+
+**REQUIRED:** a NULL-executor test through `ExecutionProcess::create`; and assert the sentinel's
+value in a way a real executor value would fail — a literal in at least one test, or a shape
+assertion (contains whitespace, or `!= to_uppercase()`). Real executors are SCREAMING_SNAKE_CASE.
+
+**Prove both bite:** revert `create`'s sentinel → the new test must fail. Set the sentinel to
+`"CLAUDE_CODE"` → the value assertion must fail. Paste both.
+
+### 3. Corrections, no behaviour change
+
+- **`queries.rs:145-149` overclaims.** It says the event count "could not drift" from
+  `rows_affected`, but `:189`'s `else { continue; }` skips emission while `:216` still counts the row.
+  The ledger's own prose is accurate; make the comment match it.
+- **The `lifecycle.rs` calibration control is mislabelled.** It reconstructs 17A's *proposed
+  remediation*, not attempt 1's code — attempt 1's `update_completion` was write-first. The harness is
+  valid; the label is false. Panel 18's C1 makes that control redundant, so either delete it or
+  relabel it accurately. (`queries.rs`'s control IS faithful to attempt 1 — leave it.)
+- **Record as residuals:** `executor = ''` still emits `""` (the sentinel covers SQL NULL only, 0 live
+  occurrences); `update_completion` on a nonexistent id returns `Ok(())` indistinguishably from
+  success; and both no-read-then-upgrade tests assert `other_errors == 0`, so a plain retryable
+  `SQLITE_BUSY` under heavy CI load would fail them for a non-defect reason.
+
+## Verification for attempt 3
+
+`cargo test -p db`, `cargo fmt --all -- --check`, `cargo clippy -p db --all-targets --all-features
+-- -D warnings`, `cargo check --workspace --all-targets` — all exit 0. Plus both bite proofs from
+item 2, verbatim.
