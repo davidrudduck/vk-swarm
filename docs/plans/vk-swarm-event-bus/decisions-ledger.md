@@ -4917,3 +4917,120 @@ macro-query prohibition is satisfied and no `.sqlx` file is unstaged; the dismis
 with `dashboard.rs:62` unchanged; no double-emission at two layers across `crates/server`,
 `crates/services`, `crates/local-deployment`; delete of a nonexistent id journals nothing; ordering
 correct at all four sites.
+
+### Panel 15B (task 006, delete-redesign remit): CITED DISSENT — 3 findings + 1 doc, 0 BLOCKING
+
+Opus, own detached worktree at `4772da26`, removed with target dir; md5 tree-clean proof supplied;
+pristine baseline reproduced (236 passed, clippy exit 0, `check --workspace --all-targets` exit 0).
+
+**Remit 2 is AFFIRMATIVELY ANSWERED, which was the question that could have rejected 006.** The
+implementer's FIFO determinism claim is TRUE and the panel proved it by experiment rather than
+argument: under `.begin()`, `A1 visible inside outer tx after failure = true` and
+`A1 outer commit result = Ok(())`. The queued `ROLLBACK TO SAVEPOINT` IS ordered before the caller's
+next command. **Not a race.** The savepoint path is sound under the caller shapes that exist and
+several that do not.
+
+**F15B-1 — the savepoint test is VACUOUS, and I specified it that way. ORCHESTRATOR ERROR (13th).**
+
+`delete_via_savepoint_rolls_back_cleanly_on_append_failure` **passes against the exact `.acquire()`
+defect it was added to prove fixed**:
+
+```text
+test lifecycle_event_tests::delete_via_pool_is_atomic_when_append_fails ... FAILED
+test lifecycle_event_tests::delete_via_savepoint_rolls_back_cleanly_on_append_failure ... ok
+test panel15b_runtime_attacks::a1_outer_commit_after_savepoint_failure... ... FAILED
+test panel15b_runtime_attacks::a4b_failed_savepoint_then_more_work_then_commit ... FAILED
+```
+
+Cause: the test ends by rolling the OUTER transaction back, so "the task still exists" is satisfied
+whether or not the savepoint rollback did anything. **That assertion is verbatim what I required** —
+my message specified "after rolling back the outer transaction, the task still exists and no
+`task_deleted` row landed". The implementer implemented my specification correctly and my
+specification was the defect.
+
+**The discriminating move is to COMMIT the outer transaction, not roll it back.** Under `.acquire()`,
+committing exposes it immediately:
+
+```text
+panicked: A1: DELETE still visible inside the outer tx => savepoint rollback NOT applied
+panicked: A4b: the failed delete must not have persisted through the caller's commit
+```
+
+**The error class, stated so I stop repeating it:** I demanded a test whose assertion the cleanup step
+itself satisfies. A rollback that restores the world makes "the world is restored" unfalsifiable. The
+general rule this run should carry forward: *when a test's final act is to undo the state it asserts
+on, the assertion is about the undo, not about the code under test.*
+
+**F15B-2 — the HRTB workaround is no longer necessary, and both the comment and the ledger claim it
+is.** The `impl Future` + split `'a`/`'c` + `#[allow(clippy::manual_async_fn)]` shape was required by
+the `.acquire()` body. It is NOT required by the `.begin()` body, and nobody re-tested after the
+switch. Collapsing to a plain `async fn` with the `.begin()` body:
+
+```text
+cargo check -p db --all-targets       -> EXIT=0
+cargo check -p server                 -> EXIT=0
+cargo check --workspace --all-targets -> EXIT=0
+```
+
+With `.acquire()` restored under the same `async fn`, the documented failure reproduces exactly,
+including the axum site the ledger names (`routes/tasks/mod.rs:42`). Mechanism:
+`Acquire::Connection = &'c mut SqliteConnection` carries the bound's lifetime through the reborrow
+and forces the HRTB obligation; `.begin()` returns an owned `Transaction<'c, _>` and dissolves it.
+
+The ledger's re-verification proved the workaround still COMPILES, not that it is still NEEDED — a
+distinction worth remembering, because the check that was run could not have told the difference.
+The live cost is a doc comment instructing a future reader that collapsing "reintroduces" the error.
+That is now false and it is load-bearing guidance.
+
+**F15B-3 — `.begin()` on the POOL path adds a non-retryable failure surface.** My reasoning when I
+superseded the STOP trigger ("a savepoint on an already-open connection acquires no new lock") is
+correct for the SAVEPOINT path — the panel proved it directly (A3: `max_connections(1)`, outer tx
+holding the only connection, delete inside it, no deadlock). **It did not cover the pool path**,
+where `.begin()` creates a deferred transaction that reads (`SELECT project_id`) then upgrades to a
+write (`DELETE`). SQLite does not invoke the busy handler for that upgrade:
+
+```text
+B1 DELETE (busy_timeout=5s) = Err(SqliteError { code: 517, "database is locked" }) after 418.19µs
+A5 SHAPE-A (begin+select+delete) = Err(code: 517)     SHAPE-B (autocommit) = Ok(changes: 1)
+B2 .begin()  : ok=34 busy=6  journaled=34
+B2 .acquire(): ok=40 busy=0  journaled=40
+```
+
+**Atomicity held in every single run** (`journaled == ok`, 34/34 and 40/40): this is an error-rate
+cost, not a torn write, and `.acquire()` traded a retryable error for a torn write, which is strictly
+worse. **`.begin()` remains the right call.** The natural unwidened run was `ok=60 busy=0`; the 6/40
+figure required a 3ms sleep injected between the SELECT and the DELETE, so production exposure is
+narrow and unquantified. The panel said so plainly rather than presenting the widened number alone.
+
+**The panel corrected its own instrument mid-review and reported it rather than burying it:** its
+first classifier was `contains("code: 517") || contains("code: 5")`, whose second arm subsumes the
+first, so the split was never recorded. Re-run with a proper `else if`, all six failures are plain
+`SQLITE_BUSY` (code 5) and zero are 517 — so B2 does NOT show BUSY_SNAPSHOT reaching the real
+function. That correction changes what the finding claims and it volunteered it.
+
+**Remediation worth taking: `DELETE FROM tasks WHERE id = $1 RETURNING project_id`** collapses
+SELECT+DELETE into one write-first statement, removing the read-then-upgrade pattern entirely and
+one round trip with it.
+
+**Not measured, declared as open:** writer-lock hold DURATION. A3 answers the "no new connection"
+half of remit 6; A5/B1/B2 answer the failure-behaviour half.
+
+**F15B-4 — three call sites, not two.** Independently confirms panel 15A's F4 and my own correction.
+The SHAPE enumeration was complete (both remote sites are pool-shaped and both covered); only the
+count was wrong.
+
+**Clean axes — compile-only attacks that found nothing**, all under `cargo check -p db --all-targets`:
+a generic-over-generic wrapper itself bounded `E: Acquire<'c, ...>` calling `Task::delete`, in BOTH
+shapes and at both real caller instantiations (the shape most likely to resurface "not general
+enough"); `Box::pin(..) as Pin<Box<dyn Future + Send + '_>>` (no auto-trait leakage); the future
+bound to a local with `yield_now().await` between bind and await; `&mut PoolConnection<Sqlite>` and
+`&mut Transaction` passed directly rather than reborrowed; `tokio::spawn` with an owned pool clone
+and with its own transaction; explicit `assert_send` on both the future and the enclosing block.
+
+**Runtime clean axes:** A2 (the pool test is not vacuous — the error really is
+`no such table: event_journal`, so the DELETE ran and was rolled back); A3/A3b (no deadlock on a
+one-connection pool, either path); A4 (two sequential deletes in one outer tx, depth 1→2→1→2→1, the
+second savepoint reusing the released name); A4b (caller ignores the error and keeps using its
+transaction: post-failure UPDATE `Ok(1)`, commit `Ok(())`); C1 (`core.rs:663`'s exact early-return
+shape with the tx dropped rather than explicitly rolled back — the child's `parent_task_id` is
+restored and the savepoint RELEASE does not make the outer nullify durable).
