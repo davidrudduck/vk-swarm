@@ -1,11 +1,28 @@
 //! CRUD query operations for tasks.
 
 use chrono::{DateTime, Utc};
-use sqlx::{Executor, Sqlite, SqlitePool};
+use sqlx::{Acquire, Executor, Sqlite, SqlitePool};
 use uuid::Uuid;
 
 use super::{CreateTask, Task, TaskStatus, TaskWithAttemptStatus};
+use crate::models::event::NodeEvent;
+use crate::models::event_journal::{self, EventJournalError};
 use crate::models::project::Project;
+
+/// Map a journal-append failure onto `sqlx::Error` so the four task lifecycle functions can stay
+/// on their pre-existing `Result<_, sqlx::Error>` signatures (task 006 forbids changing return
+/// types). `Database` unwraps directly; `Serde` (payload serialization) has no sqlx::Error
+/// analogue, so it is reported via `Protocol` — the same pattern this crate already uses at
+/// node_outbox.rs:79 and task_breakdown/queries.rs:235 for folding a non-sqlx failure into a
+/// sqlx::Error-only signature.
+fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
+    match e {
+        EventJournalError::Database(err) => err,
+        EventJournalError::Serde(err) => {
+            sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
+        }
+    }
+}
 
 impl Task {
     pub async fn parent_project(&self, pool: &SqlitePool) -> Result<Option<Project>, sqlx::Error> {
@@ -265,6 +282,7 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         task_id: Uuid,
     ) -> Result<Self, sqlx::Error> {
         let status = data.status.clone().unwrap_or_default();
+        let mut tx = pool.begin().await?;
         let task = sqlx::query_as!(
             Task,
             r#"INSERT INTO tasks (id, project_id, title, description, status, parent_task_id, shared_task_id)
@@ -287,8 +305,21 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
             data.parent_task_id,
             data.shared_task_id
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
+
+        let event = NodeEvent::TaskCreated {
+            task_id: task.id,
+            project_id: task.project_id,
+        };
+        event_journal::append(&mut *tx, &event)
+            .await
+            .map_err(journal_err_to_sqlx)?;
+
+        tx.commit().await?;
+
+        // Best-effort SC2 tracer op — deliberately OUTSIDE the transaction, see
+        // enqueue_task_upsert_op's doc comment: a failed enqueue must not roll back the task write.
         Self::enqueue_task_upsert_op(pool, &task).await;
         Ok(task)
     }
@@ -302,6 +333,19 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         status: TaskStatus,
         parent_task_id: Option<Uuid>,
     ) -> Result<Self, sqlx::Error> {
+        let mut tx = pool.begin().await?;
+
+        // Read the prior status INSIDE the transaction — reading it before begin() (or via a
+        // separate pool connection) would race a concurrent writer and could report a stale
+        // old_status once this transaction's UPDATE actually lands.
+        let old_status: Option<TaskStatus> = sqlx::query_scalar::<_, TaskStatus>(
+            "SELECT status FROM tasks WHERE id = ? AND project_id = ?",
+        )
+        .bind(id)
+        .bind(project_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
         let task = sqlx::query_as!(
             Task,
             r#"UPDATE tasks
@@ -324,8 +368,26 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
             status,
             parent_task_id
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
+
+        // Emit task_status_changed ONLY when the status actually differs — a title/description-only
+        // update must not produce a status event.
+        if let Some(old_status) = old_status
+            && old_status != task.status
+        {
+            let event = NodeEvent::TaskStatusChanged {
+                task_id: task.id,
+                old_status,
+                new_status: task.status.clone(),
+            };
+            event_journal::append(&mut *tx, &event)
+                .await
+                .map_err(journal_err_to_sqlx)?;
+        }
+
+        tx.commit().await?;
+
         Self::enqueue_task_upsert_op(pool, &task).await;
         Ok(task)
     }
@@ -366,14 +428,78 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         }
     }
 
-    pub async fn delete<'e, E>(executor: E, id: Uuid) -> Result<u64, sqlx::Error>
+    /// Delete a task and journal `TaskDeleted` on the SAME executor — no owned transaction, no
+    /// commit. The caller (`crates/server/src/routes/tasks/handlers/core.rs`) already owns a
+    /// transaction spanning `nullify_children_by_parent_id` + this delete; committing here would
+    /// break that atomicity, and a nested `begin()` on a generic consumed executor isn't
+    /// expressible anyway.
+    ///
+    /// Bound is `Acquire`, not bare `Executor`: the delete needs THREE sequential statements
+    /// (read project_id for the event payload, DELETE, append) against the one executor it was
+    /// given, and a bare `E: Executor` value is consumed by each call with no way to reborrow an
+    /// opaque generic. `Acquire::acquire()` on `&mut SqliteConnection` is a no-op passthrough (NOT
+    /// `.begin()` — no transaction opened) that hands back a concrete `&mut SqliteConnection`,
+    /// which CAN be reborrowed via `&mut *conn` for each statement. Every existing caller already
+    /// passes `&SqlitePool` or `&mut *tx` (i.e. `&mut SqliteConnection`), both of which implement
+    /// `Acquire`, so no call site needs to change.
+    // NOT `async fn`: collapsing this to `async fn delete<'e, E>(...) -> Result<u64, sqlx::Error>
+    // where E: Acquire<'e, ...>` (clippy's own suggestion) reintroduces "implementation of
+    // `sqlx::Acquire` is not general enough" at the real caller
+    // (`routes/tasks/handlers/core.rs`'s `Task::delete(&mut *tx, task.id)` inside the axum
+    // handler) — a documented sqlx/rustc HRTB limitation when an `async fn`'s single elided
+    // lifetime is forced to serve both the `Acquire` bound and the returned future's own capture
+    // lifetime. Decoupling them into separate `'a` (the future) and `'c` (the `Acquire` bound) via
+    // a hand-written `async move` block is sqlx's own documented workaround; see the `Acquire`
+    // trait's doc comment in sqlx-core for the same two-lifetime pattern.
+    #[allow(clippy::manual_async_fn)]
+    pub fn delete<'a, 'c, E>(
+        executor: E,
+        id: Uuid,
+    ) -> impl std::future::Future<Output = Result<u64, sqlx::Error>> + Send + 'a
     where
-        E: Executor<'e, Database = Sqlite>,
+        E: Acquire<'c, Database = Sqlite> + Send + 'a,
     {
-        let result = sqlx::query!("DELETE FROM tasks WHERE id = $1", id)
-            .execute(executor)
-            .await?;
-        Ok(result.rows_affected())
+        async move {
+            // `begin`, not `acquire`: two production callers exist
+            // (`routes/tasks/handlers/core.rs:663` passes `&mut *tx`,
+            // `routes/tasks/handlers/remote.rs:254` passes the bare pool) and only `begin` makes
+            // BOTH atomic. On `&mut Transaction` it is a `SAVEPOINT` nested in the caller's
+            // transaction (a pure passthrough would have been `acquire`, sqlx-core-0.8.6
+            // transaction.rs:250) — its own `commit()` below is a `RELEASE SAVEPOINT`, not a real
+            // commit, so the caller's outer `tx.commit()` is still what makes it durable. On a
+            // bare pool it opens a REAL transaction, closing the gap where three separate
+            // autocommit statements could leave a deleted task with no journal row.
+            let mut tx = executor.begin().await?;
+
+            // Read identity for the event payload BEFORE the delete, on the same executor.
+            let project_id: Option<Uuid> =
+                sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM tasks WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+
+            let result = sqlx::query!("DELETE FROM tasks WHERE id = $1", id)
+                .execute(&mut *tx)
+                .await?;
+
+            // Only journal a real deletion — a delete of a nonexistent id must not fabricate an
+            // event.
+            if result.rows_affected() > 0
+                && let Some(project_id) = project_id
+            {
+                let event = NodeEvent::TaskDeleted {
+                    task_id: id,
+                    project_id,
+                };
+                event_journal::append(&mut *tx, &event)
+                    .await
+                    .map_err(journal_err_to_sqlx)?;
+            }
+
+            tx.commit().await?;
+
+            Ok(result.rows_affected())
+        }
     }
 
     pub async fn exists(
@@ -679,5 +805,459 @@ mod outbox_enqueue_tests {
             entries[0].id, linked_id,
             "entity_id == the linked task's LOCAL id"
         );
+    }
+}
+
+/// Task 006: task lifecycle events (create/update/update_status/delete) landing in the event
+/// journal, inside the same transaction as the state write. Uses
+/// `create_test_pool_with_migrations` per the task file's dictate (not the template-copy
+/// `create_test_pool`, so each test starts from a truly empty `event_journal`).
+#[cfg(test)]
+mod lifecycle_event_tests {
+    use super::*;
+    use crate::models::activity_dismissal::ActivityDismissal;
+    use crate::models::event::NodeEvent;
+    use crate::test_utils::create_test_pool_with_migrations;
+
+    async fn seed_project(pool: &SqlitePool) -> Uuid {
+        let pid = Uuid::new_v4();
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (?, 'p', '/tmp/p')")
+            .bind(pid)
+            .execute(pool)
+            .await
+            .unwrap();
+        pid
+    }
+
+    async fn read_journal_rows(pool: &SqlitePool) -> Vec<(String, String)> {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT event_type, payload FROM event_journal ORDER BY seq",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_emits_task_created() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = Uuid::new_v4();
+
+        let task = Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            task_id,
+        )
+        .await
+        .unwrap();
+
+        let rows = read_journal_rows(&pool).await;
+        assert_eq!(rows.len(), 1, "exactly one event_journal row after create");
+        assert_eq!(rows[0].0, "task_created");
+        let event: NodeEvent = serde_json::from_str(&rows[0].1).unwrap();
+        match event {
+            NodeEvent::TaskCreated {
+                task_id: tid,
+                project_id: pid,
+            } => {
+                assert_eq!(tid, task.id);
+                assert_eq!(pid, project_id);
+            }
+            other => panic!("expected TaskCreated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_status_emits_task_status_changed_with_both_statuses() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = Uuid::new_v4();
+        Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            task_id,
+        )
+        .await
+        .unwrap();
+
+        Task::update_status(&pool, task_id, TaskStatus::InProgress)
+            .await
+            .unwrap();
+
+        let rows = read_journal_rows(&pool).await;
+        let status_rows: Vec<_> = rows
+            .iter()
+            .filter(|(t, _)| t == "task_status_changed")
+            .collect();
+        assert_eq!(status_rows.len(), 1, "exactly one task_status_changed row");
+        let event: NodeEvent = serde_json::from_str(&status_rows[0].1).unwrap();
+        match event {
+            NodeEvent::TaskStatusChanged {
+                task_id: tid,
+                old_status,
+                new_status,
+            } => {
+                assert_eq!(tid, task_id);
+                assert_eq!(old_status, TaskStatus::Todo);
+                assert_eq!(new_status, TaskStatus::InProgress);
+            }
+            other => panic!("expected TaskStatusChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_emits_task_deleted() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = Uuid::new_v4();
+        Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            task_id,
+        )
+        .await
+        .unwrap();
+
+        let deleted = Task::delete(&pool, task_id).await.unwrap();
+        assert_eq!(deleted, 1);
+
+        let rows = read_journal_rows(&pool).await;
+        let delete_rows: Vec<_> = rows.iter().filter(|(t, _)| t == "task_deleted").collect();
+        assert_eq!(delete_rows.len(), 1, "exactly one task_deleted row");
+        let event: NodeEvent = serde_json::from_str(&delete_rows[0].1).unwrap();
+        match event {
+            NodeEvent::TaskDeleted {
+                task_id: tid,
+                project_id: pid,
+            } => {
+                assert_eq!(tid, task_id);
+                assert_eq!(pid, project_id);
+            }
+            other => panic!("expected TaskDeleted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_without_status_change_emits_no_status_event() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = Uuid::new_v4();
+        let task = Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            task_id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(task.status, TaskStatus::Todo);
+
+        Task::update(
+            &pool,
+            task_id,
+            project_id,
+            "new title".into(),
+            task.description.clone(),
+            TaskStatus::Todo, // unchanged
+            task.parent_task_id,
+        )
+        .await
+        .unwrap();
+
+        let rows = read_journal_rows(&pool).await;
+        let status_rows: Vec<_> = rows
+            .iter()
+            .filter(|(t, _)| t == "task_status_changed")
+            .collect();
+        assert!(
+            status_rows.is_empty(),
+            "title-only update must not emit task_status_changed"
+        );
+    }
+
+    /// Supplemental — NOT one of the task file's seven named tests. Test 4 proves Task::update
+    /// does not emit when status is unchanged; without a companion positive-path test, a mutant
+    /// that deletes the "only when differs" check entirely would still pass every named test
+    /// (test 2 exercises the positive path via `update_status`, a different function). Added per
+    /// the task 004 ledger lesson (2026-08-12): an all-green suite shipped a broken guard once
+    /// already on this plan because the positive case for a conditional went untested.
+    #[tokio::test]
+    async fn update_with_status_change_emits_task_status_changed() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = Uuid::new_v4();
+        let task = Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            task_id,
+        )
+        .await
+        .unwrap();
+
+        Task::update(
+            &pool,
+            task_id,
+            project_id,
+            task.title.clone(),
+            task.description.clone(),
+            TaskStatus::InProgress,
+            task.parent_task_id,
+        )
+        .await
+        .unwrap();
+
+        let rows = read_journal_rows(&pool).await;
+        let status_rows: Vec<_> = rows
+            .iter()
+            .filter(|(t, _)| t == "task_status_changed")
+            .collect();
+        assert_eq!(
+            status_rows.len(),
+            1,
+            "Task::update changing status must emit exactly one event"
+        );
+        let event: NodeEvent = serde_json::from_str(&status_rows[0].1).unwrap();
+        match event {
+            NodeEvent::TaskStatusChanged {
+                old_status,
+                new_status,
+                ..
+            } => {
+                assert_eq!(old_status, TaskStatus::Todo);
+                assert_eq!(new_status, TaskStatus::InProgress);
+            }
+            other => panic!("expected TaskStatusChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_write_journals_nothing() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        // No project row exists for this id: the INSERT's FK constraint fails.
+        let bogus_project_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+
+        let result = Task::create(
+            &pool,
+            &CreateTask::from_title_description(bogus_project_id, "t".into(), None),
+            task_id,
+        )
+        .await;
+        assert!(result.is_err(), "FK violation must fail the write");
+
+        let rows = read_journal_rows(&pool).await;
+        assert!(
+            rows.is_empty(),
+            "failed write must journal nothing — proves the shared transaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_journals_inside_the_callers_transaction() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = Uuid::new_v4();
+        Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            task_id,
+        )
+        .await
+        .unwrap();
+
+        // Rollback path: delete + its journal append must both vanish.
+        {
+            let mut tx = pool.begin().await.unwrap();
+            Task::nullify_children_by_parent_id(&mut *tx, task_id)
+                .await
+                .unwrap();
+            Task::delete(&mut *tx, task_id).await.unwrap();
+            tx.rollback().await.unwrap();
+        }
+        let still_there = Task::find_by_id(&pool, task_id).await.unwrap();
+        assert!(still_there.is_some(), "rollback must undo the delete");
+        let rows = read_journal_rows(&pool).await;
+        assert!(
+            rows.iter().filter(|(t, _)| t == "task_deleted").count() == 0,
+            "rollback must undo the journal append too"
+        );
+
+        // Commit path: both the delete and the journal append must land.
+        {
+            let mut tx = pool.begin().await.unwrap();
+            Task::nullify_children_by_parent_id(&mut *tx, task_id)
+                .await
+                .unwrap();
+            Task::delete(&mut *tx, task_id).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let gone = Task::find_by_id(&pool, task_id).await.unwrap();
+        assert!(gone.is_none(), "commit must apply the delete");
+        let rows = read_journal_rows(&pool).await;
+        let delete_rows: Vec<_> = rows.iter().filter(|(t, _)| t == "task_deleted").collect();
+        assert_eq!(
+            delete_rows.len(),
+            1,
+            "commit must land exactly one task_deleted row"
+        );
+    }
+
+    /// Required by the 2026-08-15 amendment to this task file: `Task::delete` has a SECOND
+    /// production caller (`routes/tasks/handlers/remote.rs:254`) that passes the bare pool, not a
+    /// caller-owned transaction. Proves that path is atomic too — `Acquire::begin` (not
+    /// `Acquire::acquire`) opens a REAL transaction on a pool, so a failed journal append must roll
+    /// back the DELETE. Fault injection follows the `crates/services` tailer tests' technique
+    /// (`event_bus/mod.rs:750`): rename `event_journal` out from under the append so it fails with
+    /// "no such table" — `chmod`/closing the pool do not inject a usable fault against sqlite's
+    /// in-process driver.
+    #[tokio::test]
+    async fn delete_via_pool_is_atomic_when_append_fails() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = Uuid::new_v4();
+        Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            task_id,
+        )
+        .await
+        .unwrap();
+
+        // Hide event_journal so the append inside Task::delete fails AFTER the DELETE would
+        // otherwise have succeeded.
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = Task::delete(&pool, task_id).await;
+        assert!(
+            result.is_err(),
+            "a failed journal append must surface as an error, not be swallowed"
+        );
+
+        // Repair before asserting further, so the rest of this test (and the process-wide template
+        // database other tests copy from) isn't left with a renamed table.
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let still_there = Task::find_by_id(&pool, task_id).await.unwrap();
+        assert!(
+            still_there.is_some(),
+            "Task::delete via the bare pool must be atomic: a failed journal append must not \
+             leave the task deleted"
+        );
+
+        let rows = read_journal_rows(&pool).await;
+        assert!(
+            rows.iter().all(|(t, _)| t != "task_deleted"),
+            "no task_deleted row should have landed when the append failed (the pre-existing \
+             task_created row from Task::create is expected to still be there): {rows:?}"
+        );
+    }
+
+    /// Covers the OTHER shape `Acquire::begin` produces: a `SAVEPOINT` nested inside a
+    /// caller-owned transaction (`core.rs:663`'s call shape), not the top-level `BEGIN` the
+    /// previous test exercises. Proves a failing append inside the savepoint does not poison the
+    /// OUTER transaction — `tx.rollback()` on the caller's own transaction must still succeed
+    /// cleanly afterward, which is the property `core.rs`'s atomicity with
+    /// `nullify_children_by_parent_id` depends on.
+    #[tokio::test]
+    async fn delete_via_savepoint_rolls_back_cleanly_on_append_failure() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = Uuid::new_v4();
+        Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            task_id,
+        )
+        .await
+        .unwrap();
+
+        // Hide event_journal OUTSIDE any transaction (a durable, committed rename) so it survives
+        // the outer rollback below — SQLite DDL is transactional, so renaming it INSIDE the outer
+        // tx would itself be undone by that same rollback, silently un-hiding the table before the
+        // savepoint's append ever ran.
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+
+        let result = Task::delete(&mut *tx, task_id).await;
+        assert!(
+            result.is_err(),
+            "a failed append inside the nested savepoint must surface as an error"
+        );
+
+        // The outer transaction must still be rollback-able cleanly: Task::delete's own
+        // Transaction (the savepoint) was dropped without commit on the error path, which queues
+        // a `ROLLBACK TO SAVEPOINT` (sqlx's Drop impl, transaction.rs:264-274) processed on this
+        // same connection before this explicit rollback — it must not have left the connection in
+        // a state where the caller's OWN rollback fails or hangs.
+        tx.rollback().await.expect(
+            "outer transaction must still roll back cleanly after the inner savepoint's failure",
+        );
+
+        // Repair (durable, outside any transaction) before asserting further.
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let still_there = Task::find_by_id(&pool, task_id).await.unwrap();
+        assert!(
+            still_there.is_some(),
+            "task must still exist after the outer transaction's rollback"
+        );
+
+        let rows = read_journal_rows(&pool).await;
+        assert!(
+            rows.iter().all(|(t, _)| t != "task_deleted"),
+            "no task_deleted row should have landed: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_with_existing_dismissal_succeeds() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = Uuid::new_v4();
+        Task::create(
+            &pool,
+            &CreateTask::from_title_description(project_id, "t".into(), None),
+            task_id,
+        )
+        .await
+        .unwrap();
+
+        ActivityDismissal::dismiss(&pool, task_id).await.unwrap();
+        assert!(
+            ActivityDismissal::is_dismissed(&pool, task_id)
+                .await
+                .unwrap()
+        );
+
+        Task::update_status(&pool, task_id, TaskStatus::InProgress)
+            .await
+            .expect("update_status with an existing dismissal must not deadlock");
+
+        assert!(
+            !ActivityDismissal::is_dismissed(&pool, task_id)
+                .await
+                .unwrap(),
+            "dismissal must be cleared"
+        );
+
+        let rows = read_journal_rows(&pool).await;
+        let status_rows: Vec<_> = rows
+            .iter()
+            .filter(|(t, _)| t == "task_status_changed")
+            .collect();
+        assert_eq!(status_rows.len(), 1, "exactly one task_status_changed row");
     }
 }

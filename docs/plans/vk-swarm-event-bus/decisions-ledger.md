@@ -4656,7 +4656,131 @@ authorization. Flagging for the orchestrator rather than starting a server unpro
 from and does not gate the `task-gate.sh` Done-when, which only requires the automated test/typecheck
 commands above.
 
-**Task 006 implementation complete pending gate script + review.**
+### Follow-up (same day, 2026-08-15): `Task::delete`'s pool-path call site was not atomic
+
+Orchestrator caught, via independent sqlx-source verification, that `Task::delete` has a second
+production caller this task file and `plan.md` both missed: `routes/tasks/handlers/remote.rs:254`
+passes `&deployment.db().pool` (bare pool), not a caller-owned transaction, for the
+dangling-`shared_task_id` local-delete fallback (F-2026-08-05-01). With `Acquire::acquire`, that path's
+three statements (SELECT project_id, DELETE, append) ran as three separate SQLite autocommits — a
+failed append after a successful DELETE would leave the task gone with no journal row, violating the
+same journal-first-atomicity guarantee `delete_journals_inside_the_callers_transaction` only proved for
+the `&mut *tx` path. I hadn't evaluated `Acquire::begin` as an alternative before shipping; the task
+file was amended (`2081ee33`) to require it. Both my own re-verification and the amendment agree; fixed
+as directed.
+
+**Fix**: `Task::delete` now calls `executor.begin()` instead of `executor.acquire()`, and commits the
+resulting `Transaction` before returning (`tx.commit().await?`, replacing the bare `Ok(...)` return).
+
+**The mechanism, precisely, from two files, not one.** `sqlx-core-0.8.6/src/transaction.rs:277-291`
+(`begin_ansi_transaction_sql`/`commit_ansi_transaction_sql`) shows the SQL selected by depth — but that
+alone only tells you what one function does with a `depth: usize` argument it's handed; it does not by
+itself say what "depth" tracks or where that value comes from. That fact is in
+`sqlx-sqlite-0.8.6/src/connection/worker.rs`: `transaction_depth` is an `AtomicUsize` field on the
+CONNECTION's shared worker state (`worker.rs:39`), not on the `Transaction` Rust object, and it is read
+fresh by `Command::Begin` and `Command::Commit` (`worker.rs:209-266`) every time either command is
+processed on that connection. That is what makes "depth-aware SQL selection" a property of the
+*connection at the moment the command runs*, not an inference about what `Acquire::begin` happens to do
+in isolation — a second `.begin()` call on the SAME connection sees the depth the FIRST `.begin()` left
+behind, which is exactly the nesting mechanism.
+
+Concretely: on `&SqlitePool` (a fresh connection, depth 0), `begin()` issues a real `BEGIN` and delete's
+own `commit()` issues a real `COMMIT` — closing the gap. On `&mut *tx` (already depth 1, from
+`core.rs`'s own `pool.begin()`), `begin()` issues `SAVEPOINT _sqlx_savepoint_1` and delete's own
+`commit()` issues `RELEASE SAVEPOINT` — NOT a durability commit; the outer `core.rs` transaction's own
+`.commit()` is still what makes the delete durable, so atomicity with `nullify_children_by_parent_id` is
+unchanged. No caller signature changed on either path.
+
+**STOP trigger disposition, and why `.begin()` is compatible with the trigger's INTENT rather than
+merely permitted by amendment fiat.** The STOP trigger banning "delete's own transaction" was written
+assuming one tx-owning caller, and its stated hazard was a SECOND connection contending for SQLite's
+single writer lock — the same hazard my own doc comment on the dismissal-helper generalization names
+for a different call site. A `SAVEPOINT` issued via `.begin()` on `&mut *tx` runs on the SAME
+already-open connection that already holds whatever lock the outer transaction acquired; it requests no
+new connection and no new lock. That is the sentence that makes `.begin()` satisfy what the trigger was
+actually protecting against, not just what its literal words happened to say. The trigger's other half
+(no `delete_with_event` entry point) still stands and was not touched.
+
+**Self-account, since the orchestrator asked for it plainly (Q2 of the review round that found this):**
+I picked `.acquire()` over `.begin()` reflexively, not after evaluating both. The STOP trigger's literal
+text — "You are about to give `Task::delete` its own transaction... STOP" — reads as a flat ban on
+`Task::delete` opening anything called a transaction, and `.acquire()` is the option that visibly opens
+nothing. I did not check whether `.begin()` was depth-aware, i.e. whether it would behave differently
+depending on what it was called on, before ruling it out on the trigger's wording alone. That the
+correct fix was reachable by asking "does `Acquire` have a depth-aware option" rather than "which
+`Acquire` method visibly avoids the word forbidden by the trigger" is the gap. The task file's own
+words forbade more than its rationale required, and I followed the words instead of surfacing the
+tension — which is on the task file, per the orchestrator's read, but the follow-through (not asking
+whether `.begin()` had been considered) was mine to catch and didn't, until asked directly.
+
+**Required test — proving the pool path is atomic, and proving the test itself bites:**
+
+Added `delete_via_pool_is_atomic_when_append_fails`: create a task via the pool, rename
+`event_journal` -> `event_journal_hidden` (the fault-injection technique `crates/services`' tailer
+tests use at `event_bus/mod.rs:750` — `chmod` and closing the pool inject nothing usable against
+sqlite's in-process driver, per the amendment's own note), call `Task::delete(&pool, task_id)`, assert
+it errors, rename the table back, then assert the task **still exists** and no `task_deleted` row
+landed (a pre-existing `task_created` row from the setup `Task::create` call IS expected, so the
+assertion filters by event_type rather than asserting the journal is empty — an early version of this
+test asserted `rows.is_empty()` and failed on that pre-existing row, which was a bug in the test, not
+the implementation; caught by running it once before treating it as evidence).
+
+Bite proof — temporarily reverted `.begin()` to `.acquire()` (via `.wai-scratch` file copy, not git;
+diff-verified byte-identical afterward), ran ONLY this test:
+
+```text
+# with .acquire() (reverted):
+test models::task::queries::lifecycle_event_tests::delete_via_pool_is_atomic_when_append_fails ... FAILED
+thread '...' panicked at crates/db/src/models/task/queries.rs:1145:9:
+Task::delete via the bare pool must be atomic: a failed journal append must not leave the task deleted
+test result: FAILED. 0 passed; 1 failed
+
+# with .begin() (restored):
+test models::task::queries::lifecycle_event_tests::delete_via_pool_is_atomic_when_append_fails ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+**Second required test — the SAVEPOINT shape, not just the pool shape.** `Acquire::begin` produces two
+different SQL shapes depending on caller (`BEGIN` on a fresh pool connection, `SAVEPOINT` when the
+connection is already at depth ≥1); the pool-path test above only exercises the first. Added
+`delete_via_savepoint_rolls_back_cleanly_on_append_failure`: open an OUTER transaction, hide
+`event_journal` (renamed BEFORE `pool.begin()` — SQLite DDL is transactional, so renaming it INSIDE the
+outer tx would itself be undone by the same rollback this test performs, silently un-hiding the table
+before the savepoint's append ever runs), call `Task::delete(&mut *tx, task_id)` — its internal
+`SAVEPOINT`'s append fails — assert the call errors, then assert the OUTER `tx.rollback()` still
+succeeds cleanly, then assert the task exists again.
+
+This pins the specific mechanism from `sqlx-core-0.8.6/src/transaction.rs:260-275`: `Transaction`'s
+`Drop` impl, when neither `commit` nor `rollback` was called, invokes `TransactionManager::start_rollback`
+— NOT a synchronous rollback, but a fire-and-forget `Command::Rollback { tx: None }` enqueued on that
+connection's worker channel (`sqlx-sqlite-0.8.6/src/connection/worker.rs:399-403`), to be processed on
+the connection's NEXT command. `Task::delete`'s failed inner `Transaction` (the savepoint, at depth 2)
+drops this way when the `?` on the failed append returns early. The next command on that SAME connection
+is this test's own explicit `tx.rollback()` — so the queued `ROLLBACK TO SAVEPOINT` (still reading
+depth 2 at the moment the WORKER processes it, per `worker.rs:281`, since nothing decremented depth
+synchronously at drop time) runs FIRST, restoring depth to 1 and undoing the `DELETE`; THEN the test's
+own `Command::Rollback` runs at depth 1, correctly seeing a plain `ROLLBACK` rather than a second
+savepoint rollback. Both queue on the SAME channel in FIFO order because they are the same connection,
+which is what makes the ordering deterministic rather than a race. Verified empirically, not only from
+source: the test passed on the first run against the `.begin()` implementation —
+`test ...delete_via_savepoint_rolls_back_cleanly_on_append_failure ... ok`.
+
+**Re-verification after both tests** (all from `/data/Code/vk-swarm-worktrees/event-bus`):
+- `cargo test -p db task`: 73 unit passed (71 -> 73, the two new tests), 0 failed, plus all five
+  integration binaries green.
+- `cargo test -p db` (full crate): 236 passed (234 -> 236), 0 failed, 7 ignored, 11 doctests green.
+- `cargo fmt --all -- --check`: exit 0.
+- `cargo clippy -p db --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo clippy --all --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo check --workspace`: exit 0.
+- `cargo check --workspace --all-targets`: exit 0 (confirms the HRTB fix from the original
+  implementation — `impl Future` return shape, split `'a`/`'c` lifetimes, `#[allow(
+  clippy::manual_async_fn)]` — is unaffected by swapping `acquire()` for `begin()` inside the body;
+  kept unchanged as directed).
+- `git status --porcelain`: still only the three declared files plus this ledger.
+
+**Task 006 implementation complete, including the pool-path atomicity follow-up, pending gate script +
+review.**
 
 ### ORCHESTRATOR ERROR (11th) — task 006 assumed `Task::delete` always receives a transaction; it does not
 
