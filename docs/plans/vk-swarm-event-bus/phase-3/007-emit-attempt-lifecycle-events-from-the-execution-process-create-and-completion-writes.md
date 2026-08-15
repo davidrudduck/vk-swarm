@@ -9,6 +9,7 @@ conflicts_with: []
 files:
   - "crates/db/src/models/execution_process/queries.rs"
   - "crates/db/src/models/execution_process/lifecycle.rs"
+  - "crates/db/.sqlx/query-1e339e959f8d2cdac13b3e2b452d2f718c0fd6cf6202d5c9139fb1afda123d29.json"
 irreversible: false
 scope_test: "crates/db"
 allowed_change: edit
@@ -129,3 +130,32 @@ attempt id, and executor identity.
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 007` exits 0
+
+---
+
+## SECONDARY — delete one orphaned `.sqlx` cache entry (panel 16, F16-1)
+
+Unrelated to attempt lifecycle events; here because CLAUDE.md forbids carrying a finding into a
+later session and this task's `files:` can legitimately declare the path.
+
+Task 006 replaced `sqlx::query!("DELETE FROM tasks WHERE id = $1", id)` with a runtime-API
+`DELETE ... RETURNING`. The tracked offline-cache entry that macro generated is now orphaned — no
+source references that query text:
+
+```text
+crates/db/.sqlx/query-1e339e959f8d2cdac13b3e2b452d2f718c0fd6cf6202d5c9139fb1afda123d29.json
+  -> 'DELETE FROM tasks WHERE id = $1'
+```
+
+**`git rm` it.** Confirm first that nothing references that exact query text
+(`grep -rn 'DELETE FROM tasks WHERE id = \$1' --include='*.rs' crates/`) — `sync.rs:382` has a
+DIFFERENT delete-by-`shared_task_id` query whose entry must NOT be touched.
+
+It cannot break the build (nothing runs `cargo sqlx prepare --check`), so if removing it turns
+anything red, STOP — that means something still needs it and the orphan analysis is wrong.
+
+**Why this is declarable at all**, since the run has recorded the opposite about `.sqlx`:
+`task-gate.sh`'s `is_declared()` checks `DECL[path]` for an EXACT match *before* the
+directory-expansion loop whose dotted-basename heuristic breaks on `.sqlx` (agent-plugins #105). A
+specific `query-<hash>.json` file can therefore be declared; only the directory scope cannot. Do not
+generalise this into declaring `crates/db/.sqlx` — that still covers nothing.

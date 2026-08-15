@@ -5211,7 +5211,7 @@ the orchestrator's fuller account.
 
 ### Verification for attempt 2 (all from `/data/Code/vk-swarm-worktrees/event-bus`)
 
-- `cargo test -p db`: **244 passed, 0 failed, 7 ignored** (unit) + all six integration test binaries
+- `cargo test -p db`: **244 passed, 0 failed, 7 ignored** (unit) + all five integration test binaries
   green + 11 doctests green.
 - `cargo fmt --all -- --check`: exit 0 (one round found two reflow diffs from the new assertions;
   applied via `cargo fmt --all`, re-checked clean).
@@ -5225,3 +5225,68 @@ the orchestrator's fuller account.
 
 **Task 006 attempt 2 complete: eight remediations applied, two required bite proofs captured verbatim,
 one unplanned compile-time confirmation of item 6's net, pending panel re-review.**
+
+### Panel 16 (task 006 attempt 2): CITED DISSENT — 2 NON-BLOCKING, 0 blocking. Task 006 PASSED.
+
+Opus, own detached worktree at `961a3684`, worktree and target dir removed, tree-clean proof
+supplied. **All eight remediations verified as actually remediating** — every new test had its
+claimed mutation applied and every one bit:
+
+| # | mutation | result |
+|---|---|---|
+| M1 | delete `&& old_status != status` | `update_status_same_status_emits_no_status_event` FAILED |
+| M2/M3/M4 | swallow the append error in `create` / `update` / `update_status` | all three FAILED at their own tests |
+| M5 | `task_id: Uuid::nil()` in `Task::update`'s event | BOTH the new probe AND the fixed shipped test FAILED |
+| M7 | nonexistent-delete returns 1 | `delete_nonexistent_emits_nothing` FAILED |
+| M8 | `Rc<()>` held across the awaits in `delete` | the `assert_send` guard fires at `cargo check -p db --lib` |
+
+**It obtained the item-5 proof MORE STRONGLY than the implementer could**, by neutralising only
+`_assert_delete_future_is_send` and running against the FINAL collapsed code:
+
+```text
+test ...delete_via_savepoint_rolls_back_cleanly_on_append_failure ... ok
+test ...delete_savepoint_failure_is_undone_even_if_the_caller_commits ... FAILED
+test ...failed_savepoint_leaves_the_outer_transaction_usable ... FAILED
+full suite: 241 passed; 3 failed  (the third being attempt 1's own amendment test, which also bites)
+```
+
+And it explicitly adjudicated the evidence question I asked it to judge: the implementer's claim was
+that a three-test run is *"no longer obtainable on the shipped code without also disabling this
+net"* — literally accurate, since disabling the net is exactly what makes it obtainable. **No
+papering over.** The panel's run confirms rather than contradicts theirs.
+
+**Item 6's guard is real, not trivial.** `M8` fails at the source with
+`future cannot be sent between threads safely ... required by a bound in assert_send`, before any
+downstream caller — which is the whole point of preferring it to an opaque axum `Handler` error.
+
+**Item 7's semantics verified unchanged.** `project_id BLOB NOT NULL`
+(`20260102051142_drop_is_remote_from_tasks.sql:17`), so `is_some()` cannot be confounded by NULL;
+nonexistent id returns 0 and journals nothing; `core.rs:665` still branches correctly on
+`rows_affected == 0`. It also disproved a suspected latent trap: multi-row `DELETE ... RETURNING`
+with `fetch_optional` does NOT truncate — 5 matching rows, `remaining_after_5row_delete=0`.
+
+**One honest characterisation rather than a finding:** moving the dismissal clear off the transaction
+onto the pool does NOT make `update_status_rolls_back_when_append_fails` discriminate, because the
+realistic defect self-blocks on SQLite's writer lock first (5.19s vs 0.21s) and is caught by a
+DIFFERENT pre-existing test (`update_status with an existing dismissal must not deadlock`). The
+sub-gap assertion is present and correct; the panel could not make it the discriminating one and
+said so.
+
+**F16-1 (NON-BLOCKING) — orphaned `.sqlx` cache entry.** Item 7 removed the
+`sqlx::query!("DELETE FROM tasks WHERE id = $1", id)` macro; its tracked cache entry
+`crates/db/.sqlx/query-1e339e...d29.json` remains, with no remaining source referencing that query
+text. Verified present and tracked. It cannot break the build — nothing runs
+`cargo sqlx prepare --check` — and 006's `files:` could not have carried the deletion.
+
+**Routed to task 007, whose `files:` now declares the exact path.** Note this is possible despite
+agent-plugins issue #105 (filed today): `is_declared()` tests `DECL[path]` for an EXACT match BEFORE
+the directory-expansion loop that the dotted-basename heuristic breaks. So a specific
+`.sqlx/query-<hash>.json` file CAN be declared; only the directory scope cannot.
+
+**F16-2 (NON-BLOCKING) — corrected in place.** The ledger claimed six integration test binaries;
+`ls crates/db/tests/*.rs | wc -l` returns 5. Fixed above.
+
+**Task 006 marked `passed`** after two attempts and three panels (15A emission, 15B delete redesign,
+16 remediation verification). Across all three, zero blocking defects were ever found in the
+production code; every finding was a test gap, a stale comment, or an orchestrator specification
+error.

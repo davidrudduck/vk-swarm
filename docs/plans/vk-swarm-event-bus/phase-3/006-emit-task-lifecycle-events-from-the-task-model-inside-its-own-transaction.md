@@ -2,7 +2,7 @@
 id: "006"
 phase: 3
 title: "Emit task lifecycle events from the task model inside its own transaction"
-status: ready
+status: passed
 depends_on: ["005"]
 parallel: false
 conflicts_with: []
