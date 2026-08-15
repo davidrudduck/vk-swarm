@@ -5864,3 +5864,95 @@ true only because every fixture set `executor`; these are the first tests to act
 
 Task-gate.sh not run by this implementer, same deferral as attempt 1 and as task 006's entries — it
 validates a committed `git` state and this run does not commit.
+
+### Panel 18 (task 007 attempt 2): CITED DISSENT — 2 BLOCKING, 4 non-blocking
+
+**The central adjudication is INDEPENDENTLY VINDICATED, and this is the strongest result in the
+review.** Panel 18 injected 17A's *literally proposed* remediation (read prior status before the
+UPDATE) into the REAL `update_completion` and ran the required test:
+
+```text
+test ...update_completion_does_not_read_then_upgrade ... FAILED
+  left: 15
+ right: 0
+```
+
+15/200 `SQLITE_BUSY_SNAPSHOT`. So the required test has teeth **against the real function**, and
+17A's fix really would have introduced 17B's defect. The orchestrator adjudication that the two
+panels' remediations conflicted was correct, and candidate (a) was the right resolution.
+
+**F18-1 (BLOCKING) — the caller-trace justification is factually INVERTED, and the dropped write is
+user-visible.** The shipped doc comment and ledger claim `stop_execution` never reaches
+`update_completion` on a terminal row, because the exit monitor removes the child from the store only
+after writing a terminal status. The mechanism is real; the conclusion reverses it. Verified by the
+orchestrator directly:
+
+```text
+container.rs:642  update_completion(...)          <- terminal write
+container.rs:657  migrate_execution_logs(...)
+container.rs:788  try_commit_changes(...)         <- a git commit
+container.rs:918  child_store.write().await.remove(&exec_id)   <- removal, 276 lines later
+```
+
+The child stays in the store for that entire span, so `get_child_from_store` succeeds and
+`stop_execution` DOES reach `update_completion` on an already-terminal row. `routes/execution_processes.rs:193-199`
+imposes no status precondition.
+
+Measured consequence: `update_completion(Killed, None, Some("killed"), Some("user pressed stop"))`
+onto an already-`failed` row **wrote nothing** — status, `completion_reason` and `completion_message`
+all discarded — and returned `Ok(())`.
+
+**And it is user-visible**, verified: `ProcessesTab.tsx:286-296` renders `completion_reason` as a
+badge with `completion_message` as its tooltip, and `ProjectTasks.tsx:142-166` gates an error banner
+on `completion_reason ∈ {eof, error, result_error}`. Pre-attempt-2 a Stop in that window produced
+`killed`/`'killed'` — banner suppressed. Now the row keeps `failed`/`'eof'` — banner shown, different
+badge, tooltip lost.
+
+**Orchestrator disposition: ACCEPT the behavioural change, but declare it — do not restore the
+overwrite.** The pre-existing behaviour was arguably the bug: a process that ran to completion and
+was then Stopped had its row rewritten to say `killed`, which misreports what happened. The WHERE
+gate makes the row tell the truth. Restoring the overwrite would mean dropping the gate and
+reintroducing the duplicate-event defect 17A found. **But the amendment explicitly required "assess
+whether any caller depends on that overwrite … and say what you found either way", and that
+assessment was answered with a mechanism that is the reverse of the code — so the consequence was
+never weighed.** Attribution is shared: the implementer traced it backwards, and I accepted the trace
+without verifying it.
+
+**F18-2 (BLOCKING) — item 4's remediation is applied at three sites and pinned at two, and the
+sentinel test is tautological.** Two mutations, each leaving `38 passed; 0 failed`:
+
+- Reverting `ExecutionProcess::create`'s sentinel to `unwrap_or_default()` — the exact defect
+  F17A-3/F17B-3 named — is caught by nothing. Both sentinel tests exercise `update_completion` and
+  `mark_orphaned_as_failed`; **neither exercises `create`**, the site that produces `attempt_started`.
+- Changing the sentinel to a REAL executor value (`"CLAUDE_CODE"`) also passes, because both tests
+  `assert_eq!(executor, UNKNOWN_EXECUTOR)` against the constant imported from the module under test —
+  a tautology on the constant's own value. The same construction makes drift between the two copies
+  (`lifecycle.rs:32`, `queries.rs:31`) structurally untestable.
+
+This is item 4's own complaint surviving verbatim: all three original `!executor.is_empty()`
+assertions are still present and still vacuous.
+
+**F18-3 (non-blocking) — the sentinel covers SQL NULL only.** `executor = ''` still emits
+`"executor": ""` — the identical payload item 4 was written to eliminate. Same reachability class,
+0 live occurrences across all three DBs.
+
+**F18-4 (non-blocking) — the `lifecycle.rs` calibration control is mislabelled.** It reconstructs
+17A's *proposed remediation*, not attempt 1's code; attempt 1's `update_completion` was write-first,
+as the task file's own THE CONFLICT section states. Harness calibration remains valid, the label is
+false, and C1 makes that control redundant anyway. (`queries.rs`'s control IS faithful to attempt 1.)
+
+**F18-5 (non-blocking) — a code comment overclaims.** `queries.rs:145-149` says the event count
+"could not drift" from `rows_affected`, but the `else { continue; }` at `:189` skips emission while
+`:216` still counts the row — F17B-2's shape relocated, not closed. The ledger's own prose is
+accurate; the comment is not.
+
+**F18-6 (non-blocking)** — `update_completion` on a nonexistent id returns `Ok(())`; unchanged from
+before, but "no such row" and "already terminal" are now indistinguishable from "transition
+succeeded".
+
+**Clean axes:** concurrent double-completion across 40 rounds on a multi-thread runtime — exactly one
+event each round, event type always agreeing with the winning status column (**this was untested by
+anything shipped**); orphan zero-row, 500-row and idempotent sweeps all 1:1; the `resume_state`
+exclusion pinned; FK cascade enforced so `owner is None` is genuinely unreachable; the transition
+gate and `is_terminal` guard both proven live by mutation; the contention result stable across 5
+consecutive repeats; and the SECONDARY `.sqlx` deletion verified shipped.
