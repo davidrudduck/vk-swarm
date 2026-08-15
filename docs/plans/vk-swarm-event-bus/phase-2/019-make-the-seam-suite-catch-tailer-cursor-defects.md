@@ -2,7 +2,7 @@
 id: "019"
 phase: 2
 title: "Make the seam suite catch tailer cursor defects by giving the tailer a non-zero start mark"
-status: ready
+status: passed
 depends_on: ["017","018"]
 parallel: false
 conflicts_with: []

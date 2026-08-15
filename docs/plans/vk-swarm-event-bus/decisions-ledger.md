@@ -4431,3 +4431,45 @@ oversight to be closed by default.
 
 Escalated to the spec owner with both branches. Phase 3 dispatch is held only insofar as the answer
 changes task 006's `files:`; if breakdown becomes its own task, 006 proceeds unchanged.
+
+### Panel 14 (task 019 Stage-2): CITED DISSENT — 0 blocking, 2 non-blocking. Task 019 PASSED.
+
+Third independent reproduction of all three tables: control 4/4 green at 2.63-2.66s, M7 4/4 FAILED,
+M3 4/4 FAILED, every failure naming `a_committed_row_reaches_a_live_subscriber`.
+
+**It measured the counterfactual nobody had.** M7 applied with test 1 reverted to its OLD shape:
+`ok. 5 passed; 0 failed` x4. So the old shape really is 0/4 against M7 and **the restructure is
+demonstrably the cause of the kill** — not machine state, not a side effect of 018.
+
+**It also proved the replay-window property survived, decisively.** Removing the tailer's publication
+entirely makes test 1 time out on **seq 2, not seq 1** — direct proof the warm-up row still arrives
+via `subscribe_from`'s own journal replay, so the replay window is still exhausted before the row
+under test and test 1's determinism argument survives the move.
+
+And it confirmed the task's "nothing is exposed" framing: M7 against the lib suite is
+`FAILED. 262 passed; 17 failed` — killed 17 ways over.
+
+**F14-1 (NON-BLOCKING) — the restructure traded a kill away and nothing recorded the trade.**
+Test 1 now exercises the tailer publishing exactly ONE row instead of two, which loses the
+"one-shot publisher" class (publishes the first row it ever tails, then never again, cursor still
+advancing). Old shape caught it 2/2 (`timed out ... waiting for seq 2`); new shape passes in 0.25s.
+**Suite-level coverage is retained** — test 2 still catches it (`timed out ... waiting for seq 4`) —
+which is why it is non-blocking. But the task file asked only about kills tests 2-5 might GAIN, never
+about one test 1 might LOSE, so as written a later reader would take test 1 to be strictly stronger
+than before. **Recorded here: the one-shot-publisher class now lives in test 2, not test 1.** That
+residency is deliberate as of this entry rather than accidental.
+
+**F14-2 (NON-BLOCKING) — this commit introduced a stale premise in the file it edited.**
+`event_bus_end_to_end.rs:180` still says the warm-up pair "exists **solely** to provably exhaust
+`subscribe_from`'s replay window", fourteen lines above the new comment explaining its second,
+equally load-bearing purpose. "Solely" was true before the restructure and false after it. None of
+the seven documented sweep patterns match "exists solely to" — the same miss-shape as the
+`tailer.rs:150` "drops the receiver" case the task file itself warned about, one commit later.
+Routed to task 020's secondary section.
+
+**Two alarms the panel raised and DISPROVED itself**, reported for the record: the ledger's M7 anchor
+reads `tailer.rs:164` while HEAD has `break mark,` at `:165` — `git show d5e2ebed~1` proves it was
+`:164` when measured and fix 2 added a line above it. And a tailer ignoring its mark entirely is
+invisible in both shapes, but that belongs to `tailer_resumes_from_its_high_water_on_restart`.
+
+**Task 019 marked `passed`. Phase 2 is complete.**
