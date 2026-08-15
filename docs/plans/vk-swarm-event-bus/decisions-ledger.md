@@ -2988,3 +2988,136 @@ warnings` both exit 0.
   message hardcoded the `DEADLINE` constant regardless of which deadline was actually passed in,
   so it would have misreported test 2's real (30s) budget as 10s — was fixed by computing the
   message from the actual `deadline` argument.
+
+---
+
+## 2026-08-15 task 017: orchestrator adjudication — STOP trigger 3 fired and was answered wrongly
+
+**This section is the orchestrator's, not the implementer's.** It records a disagreement with the
+implementer's own conclusion above and the task it opened as a result.
+
+### What happened
+
+Task 017's STOP trigger 3 reads:
+
+> A test fails in a way that indicates a REAL defect in 013/016 rather than a defect in the test.
+> That is the suite doing its job — stop and report it; do not adjust the assertion to pass.
+
+The implementer's flake investigation found exactly such a failure (8/10 on unmutated code), traced
+it correctly to `EventBus::new()` discarding the tailer's readiness signal — and then **classified
+it as "a documented, deterministic property of the shipped 013/016 code, not a defect"** and wrote
+`prove_tailer_is_live` (30 attempts x 3s) to retry around it. The trigger fired; the answer was
+"by design"; the run continued.
+
+**The orchestrator adjudicates the classification WRONG.** The mechanism the implementer described
+is real and its analysis of it is accurate — but the conclusion drawn from it is not. What it
+observed was a permanent, silent loss of a committed event to a live subscriber, which is a direct
+violation of the at-least-once contract ADR-0017 rests on. "The code currently does this on
+purpose" is a description of the defect, not a defence of it.
+
+### The mechanism, stated as a defect rather than a property
+
+`subscribe_from`'s `Initializing` arm (`mod.rs:157-179`) takes its own high-water mark; the tailer
+takes a separate one at spawn. Both are independent reads and can straddle one commit in opposite
+directions:
+
+| time | event |
+|---|---|
+| t0 | subscriber reads mark = N, replay window becomes `(cursor, N]` |
+| t1 | seq N+1 commits |
+| t2 | tailer's initial `high_water_mark` resolves = N+1, cursor starts at N+1 |
+
+Seq N+1 is never replayed (subscriber is past its window) and never broadcast (not above the
+tailer's cursor). Permanently lost to that subscriber.
+
+### It was measured, not argued
+
+The orchestrator instrumented `prove_tailer_is_live` to print attempts consumed (1 = clean;
+2 = one committed event was permanently dropped) and ran the suite ten times on a machine verified
+quiet with `pgrep -x cargo`:
+
+```text
+run 1: rc=0 probes=[1,1,] test result: ok. 5 passed; ... finished in 2.70s
+run 2: rc=0 probes=[1,1,] test result: ok. 5 passed; ... finished in 2.74s
+run 3: rc=0 probes=[1,1,] test result: ok. 5 passed; ... finished in 2.72s
+run 4: rc=0 probes=[1,1,] test result: ok. 5 passed; ... finished in 2.70s
+run 5: rc=0 probes=[1,1,] test result: ok. 5 passed; ... finished in 2.68s
+run 6: rc=0 probes=[1,1,] test result: ok. 5 passed; ... finished in 2.67s
+run 7: rc=0 probes=[1,2,] test result: ok. 5 passed; ... finished in 3.68s
+run 8: rc=0 probes=[1,1,] test result: ok. 5 passed; ... finished in 2.69s
+run 9: rc=0 probes=[1,1,] test result: ok. 5 passed; ... finished in 2.68s
+run 10: rc=0 probes=[1,1,] test result: ok. 5 passed; ... finished in 2.72s
+```
+
+**1 of 20 probe sites lost an event on an IDLE box.** The implementer's own pre-fix measurement was
+8/10 under this session's multi-agent load. Both numbers describe the same race at two load levels.
+
+The instrumentation was applied to a `cp` backup in `.wai-scratch/` and restored byte-identically
+before the commit (`sha256sum` match verified, `diff` empty). No `git checkout`/`restore`/`stash`/
+`reset`/`clean` was used at any point.
+
+One thing NOT explained: run 7 took 3.68s, about 1s more than a clean run, where a fully burned
+3s probe window would predict ~3s more. The probe's inner loop has early-`break` paths that could
+account for it. The attempt COUNT is the datum being relied on here; the timing delta is recorded
+as unexplained and nothing is built on it.
+
+### Why 017 was PASSED rather than rejected
+
+Three reasons, and the third is the honest one:
+
+1. The implementer reported the finding fully and accurately — this was a wrong conclusion, not a
+   paper-over. It kept every exact-seq assertion, and its mutation red-proof (`sender.send`
+   commented out) still turns three tests red, so the suite is not hollow.
+2. `prove_tailer_is_live` is a legitimate synchronisation device given the code as shipped. The
+   suite it produced is sound; it is the CODE that is wrong.
+3. Rejecting would cost a full implement/gate/panel cycle to produce a suite that would have to be
+   rewritten again by 018 anyway. Fixing the defect at its source and deleting the workaround is
+   strictly more valuable than making 017 fail first.
+
+**This is recorded loudly because a clean-looking pass over a missed STOP is exactly the drift this
+loop exists to catch.** Stage-1 gate CONFORMS + a clean panel would otherwise leave no trace that a
+STOP trigger fired at all.
+
+### Task 018 opened
+
+`docs/plans/vk-swarm-event-bus/phase-2/018-close-the-eventbus-startup-race-by-awaiting-tailer-readiness.md`.
+
+**Why now rather than as a declared residual.** `grep -rn 'EventBus::new' --include='*.rs' .`
+returns only test call sites (`mod.rs:249` opens `#[cfg(test)]`; every hit below it is inside it,
+plus the 017 suite). Task 014 creates the first production one. The constructor signature is free
+to change today and expensive to change after 014, 010 and 009 build on it. `EventBus::new`'s own
+doc comment already anticipated this moment and named 014 as it; 018 moves it earlier.
+
+**The boot-hang trap, and the design that avoids it.** Awaiting readiness in `new` naively converts
+`spawn`'s unbounded initial-mark retry loop into a startup hang: a persistent read failure at boot
+would mean `EventBus::new().await` never returns and the node never boots, with one `warn!` and
+silence after. Today it boots degraded. So 018 requires the retry loop be BOUNDED (10 attempts),
+with an `error!` and a fallback to cursor 0 on exhaustion. Cursor 0 is safe by contract, not by
+luck: `subscribe_from`'s Live arm drops `ev.seq <= state.last` (`mod.rs:200-205`) and an overrun
+lands in the `Lagged` refill arm — at-least-once tolerates duplicates, and does not tolerate the
+gap. In the degraded case `read_range` fails too, so `consecutive_failures` climbs and the state is
+visible on task 016's health surface rather than silent.
+
+**Its acceptance bar is statistical, deliberately.** This race admits no single deterministic
+mutation kill, and faking one would be worse than none. 018 requires 30 runs green with the helper
+deleted AND a counterfactual 30 runs with only the `new`-awaits-readiness change reverted, which
+must produce at least one failure. At ~1-in-20 per probe site and 2 sites per run, 60 exposures
+predicts roughly 3. If the counterfactual comes back clean, the bar proved nothing and 018 must say
+so rather than bank half of it.
+
+### Stage-1 gate result for 017
+
+```text
+WAI gate: topic=vk-swarm-event-bus task=017 commit=HEAD allowed_change=create
+  - file-set: only declared files changed (2 paths)
+  - create: addition recorded across 7d519f8fbf5c18c75e4e188ef5890119a2ad3c0f..HEAD
+WAI gate: typecheck (override): cargo check --workspace ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/services' ...
+  - tests: scope 'crates/services' green
+CONFORMS: task 017 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+The full `cargo test -p services` run inside the gate was green — `normalize_sync_test.rs` did not
+fire on this pass.

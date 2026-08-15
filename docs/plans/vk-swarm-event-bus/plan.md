@@ -52,6 +52,7 @@ UI is explicitly out of scope — the board already streams live over /api/tasks
 | 013 | 2 | Add the journal tailer that publishes committed rows onto the broadcast channel | dep: 005 | conflicts: none |
 | 016 | 2 | Make the tailer give-up defect unrepresentable, and the tailer observable | dep: 013 | conflicts: none |
 | 017 | 2 | Add the end-to-end bus seam suite that hand-drives nothing | dep: 013 016 | conflicts: none |
+| 018 | 2 | Close the EventBus startup race by awaiting tailer readiness | dep: 013 016 017 | conflicts: none |
 | 006 | 3 | Emit task lifecycle events from the task model inside its own transaction | dep: 005 | conflicts: none |
 | 007 | 3 | Emit attempt lifecycle events from the execution-process create and completion writes | dep: 006 | conflicts: none |
 | 008 | 3 | Emit hive connectivity events from the node_runner event loop | dep: 007 | conflicts: none |
