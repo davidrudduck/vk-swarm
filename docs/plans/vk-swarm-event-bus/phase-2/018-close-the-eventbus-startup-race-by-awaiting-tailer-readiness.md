@@ -333,3 +333,99 @@ kills, and stated plainly that it also cannot prove none exists. Its rollback ha
 by construction: no delivery-path mutation can make a non-existent journal row appear. **Leave test
 3 alone.** It is cheap, it is honest about what it checks, and removing it would be trading a
 possibly-redundant test for a definitely-smaller safety net.
+
+---
+
+## REQUIRED — attempt 2, after panel 12 rejected attempt 1
+
+Attempt 1 was **rejected on one blocking finding**. The implementation is sound and stays: `new`
+async, the bounded wait, `READY_TIMEOUT`, the helper deletion, F4's `project_id`. Do NOT redo any of
+it, and do NOT re-run the 30-run acceptance bar — it passed and nothing below invalidates it.
+
+Four fixes. All are small. The blocking one is first.
+
+### 1. BLOCKING — finish the F2 correction that the ledger records as already done
+
+Each of the two comments had **two** false clauses. The duplicate half was corrected; the
+stray-replay half was left verbatim:
+
+```text
+event_bus_end_to_end.rs:253   // further — in particular no belated replay of seqs 1..=4 — arrives after the handoff. The
+event_bus_end_to_end.rs:369   // No stray replay of the two pre-restart events sneaks in afterward. A duplicate of either
+```
+
+Both are false by the **same rule the corrected half of the same comment cites two lines earlier** —
+`subscribe_from`'s Live arm drops `ev.seq <= state.last` (`mod.rs:200`):
+
+- `:253` — at `assert_quiet`, `state.last` is 4, so seqs 1..=4 are dropped before the stream yields
+  them. The silence cannot prove a belated replay of them did not happen.
+- `:369` — the subscriber is `bus2.subscribe_from(high_water)`, so `last` is 2 from the first poll
+  and seqs 1-2 are below the cursor by construction.
+
+Delete or qualify each retained clause so the comment states only what the assertion actually
+proves. Then say plainly what the silence DOES prove, if anything beyond "no event with a seq above
+the cursor arrived".
+
+**This is blocking because the ledger recorded it complete.** The defect is the false completion
+claim, not the comment. When you correct the code, also correct the ledger's `### F2` entry — it
+names the stray-replay clause as corrected while its own justification covers only the duplicate
+half.
+
+### 2. `mod.rs:974` was falsified by this task's own change
+
+```text
+974:        // `EventBus::new` drops the tailer's readiness receiver, so no happens-before edge is
+```
+
+`new` no longer drops it. That false premise is the whole stated justification for
+`wait_until_tailer_publishes` (`mod.rs:824`), a 10-probe retry loop — the same pattern this task
+deleted from the e2e suite, surviving in the lib suite on a rationale this task invalidated.
+
+Correct the comment. Then **assess whether the helper is still needed** now that `new` awaits
+readiness, and record your answer either way. If it can be replaced with an exact-seq assertion,
+do it and prove the mutation still dies. If it cannot, say precisely why — that reason is worth
+more than the removal.
+
+### 3. Pin that the wait ENDS when readiness fires, not merely that it ends
+
+The required hang-proof test pins "returns within budget". It does not pin "the wait ends **because**
+readiness fired". Panel 12 proved the gap by replacing the awaited future with `pending()` — never
+observe readiness, always sleep the full budget:
+
+```text
+test ...new_returns_even_if_the_tailer_never_signals_readiness ... ok
+whole lib suite: ok. 32 passed; 0 failed; ... finished in 44.64s   (baseline 12.51s)
+```
+
+Everything green. In production every `EventBus::new()` would silently cost the full 10s and every
+health surface would read green — the exact green-while-degraded class task 016 exists to close,
+reappearing one layer up.
+
+**REQUIRED:** an assertion in a healthy-pool test that `new` returns in well under `READY_TIMEOUT`.
+The lib suite runs 32 tests with many bus constructions in ~12.5s total, so a real construction is
+milliseconds; pick a bound with generous headroom over scheduling noise but far below 10s, and
+justify the number in the ledger from a measurement rather than a guess.
+
+**Mutation proof required:** `timeout(ready_timeout, pending())` must make this test FAIL. Paste it.
+
+### 4. Correct the ledger's self-contradiction about test 5
+
+The M8 section calls `every_event_variant_survives_the_full_round_trip` both "a stricter check that
+was already catching M8 before F4" and one of the tests that "pass unaffected". Both cannot be true.
+The code settles it: test 5 subscribes AFTER committing all nine variants
+(`event_bus_end_to_end.rs:443`), so every variant arrives via `Initializing` direct replay and never
+touches the tailer — it cannot catch a tailer-publish mutation in either direction.
+
+Fix the ledger text. **Do NOT restructure test 5** — that is a coverage question, it shares a
+mechanism with the M3/M7 residuals, and it belongs to task 019's territory, not here. Record it as
+an observation for 019 to weigh.
+
+## Verification for attempt 2
+
+- `cargo test -p services` exit 0, `cargo fmt --all -- --check` exit 0,
+  `cargo clippy -p services --all-targets --all-features -- -D warnings` exit 0,
+  `cargo check --workspace` exit 0.
+- The mutation proof for item 3, verbatim.
+- If you touched `wait_until_tailer_publishes` under item 2, the mutation proof that its replacement
+  still kills what it killed.
+- Do NOT re-run the 30-run acceptance bar.

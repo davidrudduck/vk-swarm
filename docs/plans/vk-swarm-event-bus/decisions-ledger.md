@@ -3624,3 +3624,91 @@ predictions about exactly this kind of mutation.
 first paragraph — both mutations are already killed deterministically by the lib suite, and the e2e
 suite already satisfies reachability gate (b) on (b)'s own terms via panel 11's M1 result. Nobody
 reading 019 later should mistake it for a hole in the run.
+
+### Panel 12 (task 018 Stage-2): CITED DISSENT — 1 blocking, 3 non-blocking. Task 018 REJECTED.
+
+Opus, own detached worktree at `86e85038`, all seven briefed axes, worktree removed and tree-clean
+proof supplied (`git diff 86e85038 -- crates/` and `git status --porcelain -- crates/` both empty).
+Orchestrator independently verified the blocking finding at `event_bus_end_to_end.rs:253` and `:369`
+and the non-blocking one at `mod.rs:974` before accepting them.
+
+**F1 — BLOCKING. A REQUIRED remediation was recorded as done in the ledger and was only half-made.**
+Task 018's F2 obligation was to correct two comments claiming a no-duplicate property `assert_quiet`
+cannot observe. Each comment had TWO false clauses; the duplicate half was corrected and the
+stray-replay half was retained verbatim:
+
+```text
+253:    // further — in particular no belated replay of seqs 1..=4 — arrives after the handoff. The
+369:    // No stray replay of the two pre-restart events sneaks in afterward. A duplicate of either
+```
+
+Both are false by the SAME rule the corrected half of the same comment cites two lines earlier —
+`subscribe_from`'s Live arm drops `ev.seq <= state.last` (`mod.rs:200`). At `:253` `state.last` is
+4, so seqs 1..=4 are dropped before the stream yields them; at `:369` the subscriber starts at
+`high_water` = 2, so seqs 1-2 are below the cursor by construction. Each comment now cites the rule
+that falsifies its own neighbouring sentence.
+
+Panel proof — tailer republishes the whole journal every pass (`read_range(pool, 0, mark)`):
+
+```text
+run 0: test result: ok. 5 passed; 0 failed; ... finished in 2.64s
+run 1: test result: ok. 5 passed; 0 failed; ... finished in 2.62s
+run 2: test result: ok. 5 passed; 0 failed; ... finished in 2.69s
+run 3: test result: ok. 5 passed; 0 failed; ... finished in 2.68s
+```
+
+...while the lib suite goes red exactly where the CORRECTED half points, confirming the codebase is
+well covered and only the comments are wrong:
+
+```text
+test services::event_bus::tests::the_bus_publishes_a_committed_row_exactly_once ... FAILED
+assertion `left == right` failed: the bus delivered the single committed row at seq 2 27 time(s)
+test services::event_bus::tailer::tests::tailer_does_not_republish_across_passes ... FAILED
+```
+
+**The finding is the false ledger claim, not the comment quality.** A remediation recorded as
+complete that was not made is exactly the drift this loop exists to catch, which is why it blocks.
+
+**F2 — NON-BLOCKING.** The same commit falsified a comment three lines below one it edited:
+`mod.rs:974` still asserts "`EventBus::new` drops the tailer's readiness receiver". That false
+premise is the entire stated justification for `wait_until_tailer_publishes` (`mod.rs:824`), a
+10-probe retry loop — the same pattern this task deleted from the e2e suite, surviving in the lib
+suite on a rationale 018 invalidated.
+
+**F3 — NON-BLOCKING, and the most substantive.** The readiness AWAIT is unobservable; only "did not
+hang" is pinned. Mutating `timeout(ready_timeout, ready)` to `timeout(ready_timeout, pending())` —
+never observe readiness, always sleep the full budget — leaves everything green:
+
+```text
+test ...new_returns_even_if_the_tailer_never_signals_readiness ... ok
+whole lib suite: ok. 32 passed; 0 failed; ... finished in 44.64s   (baseline 12.51s)
+```
+
+In production every `EventBus::new()` would silently cost the full 10s `READY_TIMEOUT` and every
+surface would read green. This is the same green-while-degraded class task 016 exists to close,
+reappearing one layer up. The panel also confirmed (rather than discovered) the implementer's own
+disclosed uncovered arm: `Ok(Err(_)) => unreachable!()` leaves 32/32 passing.
+
+**F4 — NON-BLOCKING.** The ledger's M8 section calls test 5 both "a stricter check that was already
+catching M8 before F4" and one of the tests that "pass unaffected". Both cannot hold. Code settles
+it: test 5 subscribes AFTER committing all nine variants (`event_bus_end_to_end.rs:443`), so every
+variant arrives via `Initializing` direct replay and never touches the tailer at all — it cannot
+catch a tailer-publish mutation in either direction.
+
+**Axis 3 returned NO finding, and the panel was right to push back.** I briefed it that test 2's
+retired residual was "the axis most likely to yield a finding". It declined, with evidence: unlike
+017's residual-by-prose, this retirement is EARNED by the code — `new` returns only after `ready`
+fires, and the ledger's own counterfactual shows test 2 itself failing 6/30 with the await removed
+against 30/30 with it. The only defect is one unconditional adverb ("retired outright... elapsed
+time or not") where the code is conditional on readiness resolving, which it folded into F3 rather
+than double-counting.
+
+**Orchestrator process lesson: that brief was leading and I should not write another like it.**
+Telling a panel where I expect a finding invites it to manufacture one to match. This panel refused
+and said so explicitly. Future panel briefs name the AXES to attack, not the expected verdict on
+any of them.
+
+**Panel's closing observation, recorded because it is about me rather than the code:** the
+counterfactual-rate discrepancy and four falsified "this will be killed" predictions in this run
+"are all the same failure mode: predicted kills banked without measurement." That is accurate. It
+is why 019's evidence was measured before the task was written rather than after.
