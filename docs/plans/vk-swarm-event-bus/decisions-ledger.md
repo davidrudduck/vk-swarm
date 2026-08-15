@@ -3537,3 +3537,90 @@ caught deterministically by the `crates/services` lib suite (task 013's own test
 invisible to `cargo test -p services` as a whole — but the e2e suite's claim to be "the run's
 evidence for reachability gate (b)" (panel 11's framing) does not fully hold for M3 and M7 the way
 it now does for M8. This is reported rather than rounded up, per the task's explicit instruction.
+
+### Orchestrator notes on task 018's results
+
+**The counterfactual came in ~4x higher than I predicted, and I have not reconciled it.** Task 018's
+file predicted "roughly 3" failures in 30 runs, derived from the 1-in-20-per-probe-site rate I
+measured by instrumenting `prove_tailer_is_live`. The implementer measured **6 of 30**, and
+attributed them to a different signature: timeouts on `WARM_LIVE_DEADLINE` for the row under test,
+not probe burn.
+
+Two readings, and the evidence in hand does not choose between them:
+
+1. My instrumented measurement understated the race. The probe counter only increments when a probe
+   is *consumed*, so any race the retry loop absorbed without burning a whole attempt was invisible
+   to it.
+2. Deleting the helper exposed a second path to the same failure that the retry loop had been
+   masking independently of the startup race.
+
+Either way the defect was **worse** than the ledger recorded, not better, so 018's value is higher
+than the "insurance" framing I used when I opened it. Recording the discrepancy rather than picking
+the flattering reading; nothing downstream is built on either number.
+
+**What the M3/M7 residuals do and do not mean.** Both mutations remain killed deterministically by
+the `crates/services` lib suite (task 013's own tests), so `cargo test -p services` is not blind to
+them and the run is not exposed. What is narrower than panel 11's framing suggested is the
+END-TO-END suite specifically: it was described as the run's evidence for reachability gate (b),
+and it still satisfies (b) on its own terms — M1 (tailer's `sender.send` removed) kills three of its
+five tests, which is exactly the "drives the real seam rather than a mock past it" property (b)
+asks for. Detecting every tailer-internal defect was never (b)'s requirement, and the lib suite
+already does it. Any follow-up here is STRENGTHENING, not defect-closing, and must not be
+prioritised as though the run had a hole in it.
+
+**M7's blindness is structural and pre-dates 018.** `break mark + 1` can only ever damage the one
+seq immediately following the mark taken at bus construction. In every test in this suite the
+subscriber's `Initializing` arm runs at its first `.next()`, which happens AFTER that row is
+committed — so the row arrives through `subscribe_from`'s own direct journal replay and never
+touches the broadcast at all. The old retry helper could not have caught it either (its liveness
+was probe-relative), so 018 did not introduce this and its deletion did not cause it. My hypothesis
+that deleting the helper would restore a deterministic kill was simply wrong, and the implementer
+falsified it with 0/4 rather than reporting a number it could round up.
+
+### Orchestrator verification: the M3/M7 blindness has a proven one-line fix (task 019)
+
+Rather than bank the residual, I tested a fix by hand before writing it into a task — the advisor's
+point being that handing an implementer another unverified orchestrator hypothesis is precisely the
+mistake made twice already this run.
+
+**The fix:** move test 1's warm-up commit to BEFORE `EventBus::new`, so the tailer's initial mark is
+1 instead of 0 and the row under test is the first row the tailer must ever publish. On an empty
+journal the mark is 0, seq 1 sits inside `subscribe_from`'s replay window, and a cursor defect that
+can only damage that row is invisible by construction.
+
+Run on `86e85038`, machine verified quiet, all mutations applied and restored via `cp` from
+`.wai-scratch/` with `diff`-verified restores (no `git checkout`/`restore`/`stash`/`reset`/`clean`):
+
+```text
+M7 (Ok(mark) => break mark + 1), restructured test, 4 runs:
+run 1: test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 30.20s
+run 2: test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 30.21s
+run 3: test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 30.21s
+run 4: test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 30.21s
+
+CONTROL (unmutated, restructured), FULL suite, 4 runs:
+run 1: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 2: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 3: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.62s
+run 4: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.73s
+
+M3 (skip first row of each batch), restructured, 4 runs: FAILED 4/4,
+failing test: a_committed_row_reaches_a_live_subscriber
+```
+
+**M7 0/4 → 4/4. M3 1/4 → 4/4. Control 4/4 green at an unchanged 2.7s.** The restructure costs
+nothing and buys two deterministic kills.
+
+It works only because 018 landed — `EventBus::new` now awaits readiness, so the tailer's cursor is
+established before the test's next commit. Before 018 this shape would have been flaky, which is
+why it could not have been written into 017.
+
+Task 019 opened with the evidence inline AND an explicit instruction to re-confirm all three rather
+than trust the table: my numbers justify making the change, they do not substitute for the
+implementer's own run. Four of my hypotheses have been falsified in this run, three of them
+predictions about exactly this kind of mutation.
+
+**019 is explicitly scoped as STRENGTHENING, not defect-closing**, and its task file says so in its
+first paragraph — both mutations are already killed deterministically by the lib suite, and the e2e
+suite already satisfies reachability gate (b) on (b)'s own terms via panel 11's M1 result. Nobody
+reading 019 later should mistake it for a hole in the run.
