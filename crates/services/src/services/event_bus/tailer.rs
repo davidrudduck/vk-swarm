@@ -1792,6 +1792,168 @@ mod tests {
         tailer_handle.abort();
     }
 
+    /// The number of PUBLISHED poll passes the published-cadence test requires before it will
+    /// accept that the driver is still publishing.
+    ///
+    /// `PollOutcome` has THREE variants and the two cadence tests above cover two of them. Both
+    /// wait on `polls_total`, which advances on every pass — so they guard the SHAPE "the driver
+    /// stopped polling", and neither guards the shape "the driver stopped after N passes that
+    /// PUBLISHED". `the_driver_keeps_polling_a_quiet_journal` never publishes at all (that is its
+    /// premise), and `the_driver_keeps_polling_a_journal_it_cannot_read` publishes exactly once,
+    /// after its wait has already returned. A driver that gave up after 5 published passes
+    /// therefore passed all 275 tests.
+    ///
+    /// This budget is NOT covered by `REQUIRED_POLL_CLIMB`'s declared residual. That residual
+    /// trades away budgets of 50 or more on the PASS axis, justified because detection cost there
+    /// is linear in elapsed time. The justification does not transfer: a published-pass budget is
+    /// consumed by ROWS, not by time. Phase 3 emits an event on every task mutation, so a live node
+    /// burns five published passes within seconds of going live, after which every SSE consumer
+    /// parks forever while all three counters read healthy.
+    ///
+    /// 50 matches the other two paths so the declared floor is uniform across all three variants
+    /// rather than leaving one path with a number nobody can remember. As with `REQUIRED_POLL_CLIMB`,
+    /// a target of 50 kills any published-pass budget B strictly below 50.
+    const REQUIRED_PUBLISHED_PASSES: i64 = 50;
+
+    /// Deadline for the whole `REQUIRED_PUBLISHED_PASSES` sequence.
+    ///
+    /// This test is the only cadence test that WRITES on every iteration, so its cost model was
+    /// expected to differ from its two sleep-bound siblings. Measured rather than inherited — and
+    /// the expectation turned out to be wrong:
+    ///
+    /// | condition | loop wall | per iteration | slowest iteration |
+    /// |---|---|---|---|
+    /// | sleep-bound floor (`TAIL_INTERVAL` 75ms x 50) | 3.75s | 75ms | — |
+    /// | test alone | 4.46s | 89ms | 176ms |
+    /// | in-suite, alongside the other 276 tests | 4.76s | 95ms | 177ms |
+    /// | + 32 CPU burners + sustained `dd oflag=direct` | 4.50s | 90ms | 174ms |
+    ///
+    /// Read those rows honestly: the machine carried a sustained load average near 300 (concurrent
+    /// agent activity) throughout ALL of them, so they are not three independent load levels. What
+    /// they do show is that adding 32 more burners plus sustained direct I/O to an already-saturated
+    /// box moved the loop wall by under 1%.
+    ///
+    /// A write per iteration does NOT make this test materially DB-bound, so the "if commits make it
+    /// DB-bound rather than sleep-bound" pessimism the deadline was sized against does not occur:
+    /// the test pool is WAL (`create_test_pool_with_migrations`), so the committing writer does not
+    /// exclude the tailer's readers, and each test owns its own `TempDir` so parallel suite
+    /// execution produces no cross-test file contention either. Cost stays dominated by
+    /// `TAIL_INTERVAL`.
+    ///
+    /// Two things are bought, and they are NOT the same:
+    ///
+    /// - LOAD MARGIN: 30s against the worst observed 4.76s is 6.3x. Sized properly it should be
+    ///   sized against the worst ITERATION, not the mean: 50 x 177ms = 8.85s, which is 3.4x at 30s
+    ///   and only 2.3x at 20s. That pessimistic bound is what keeps the deadline at 30s.
+    /// - RATE FLOOR: 30s / 50 passes = 600ms per iteration — WEAKER than the siblings' 400ms, and
+    ///   the axis the 30s was never derived on. It is not binding, which is why 30s is kept rather
+    ///   than tightened: all three tests drive the SAME driver, the siblings already pin its
+    ///   cadence at 400ms, and this test's unique job is the published-BUDGET axis (`50 > B`) — a
+    ///   kill that does not depend on the deadline at all, because a give-up simply never delivers
+    ///   row B+1. Tightening to 20s would restore a uniform 400ms floor at the cost of halving the
+    ///   worst-iteration margin, and would buy no coverage this file does not already have.
+    ///
+    /// What this test DOES and does NOT catch on the published axis, enumerated rather than implied:
+    ///
+    /// | give-up budget shape | caught? |
+    /// |---|---|
+    /// | B consecutive `Published` passes, B < 50 | yes |
+    /// | B cumulative `Published` passes, B < 50 | yes |
+    /// | B published ROWS, B < 50 | yes |
+    /// | budget consumed only by `count > 1` passes | NO — see the residual above |
+    ///
+    /// DECLARED RESIDUAL: by construction every pass this test provokes publishes exactly ONE row
+    /// (see the test body for why that is guaranteed rather than typical), so a give-up budget
+    /// consumed only by MULTI-row passes — burst traffic — is not caught here, nor by the batch
+    /// tests, which publish one batch and finish. Stated rather than discovered later; chasing
+    /// sub-members of a variant is the treadmill this task exists to end.
+    const PUBLISHED_CADENCE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// The PUBLISHED half of the driver guard — `PollOutcome`'s third variant, and the one two
+    /// consecutive attempts left uncovered.
+    ///
+    /// Each iteration commits ONE row and waits for its delivery before committing the next. That
+    /// ordering is what makes "50 published passes" a STRUCTURAL guarantee rather than a timing
+    /// inference: `poll_once` reads its high-water mark BEFORE the publish loop, so a row committed
+    /// after the previous row was delivered is strictly above the mark of the pass that delivered
+    /// it, and cannot be picked up by that same pass. Every row therefore costs its own
+    /// `Published` pass. Confirmed empirically as well as structurally: on the green run
+    /// `polls_total` advanced by EXACTLY 50 across the 50 iterations, so every pass in the window
+    /// was a publishing one and no idle pass interleaved.
+    ///
+    /// Deriving the count from DELIVERIES rather than from a counter is also strictly stronger than
+    /// a fourth counter would be — it proves the row landed on the channel, not merely that a
+    /// branch was taken — and it needs no production change.
+    #[tokio::test]
+    async fn the_driver_keeps_publishing_as_rows_arrive() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let (tx, _rx) = broadcast::channel(64);
+        let health = Arc::new(TailerHealth::default());
+        let (tailer_handle, ready) = spawn(pool.clone(), tx.clone(), Arc::clone(&health));
+        let mut subscriber = tx.subscribe();
+
+        await_ready(ready).await;
+
+        // One deadline for the WHOLE sequence, not per iteration: a driver that gives up part-way
+        // must fail at a bounded time rather than hang the suite, and a driver that merely runs
+        // slow must not be able to buy itself 50 fresh deadlines.
+        let expiry = tokio::time::Instant::now() + PUBLISHED_CADENCE_DEADLINE;
+
+        for pass in 1..=REQUIRED_PUBLISHED_PASSES {
+            let committed = commit_one(&pool).await;
+            assert_eq!(
+                committed.seq, pass,
+                "the journal assigned an unexpected seq on published pass {pass}; this test's \
+                 absolute expectations are stale"
+            );
+
+            match poll_for_event(&mut subscriber, expiry).await {
+                Some(ev) => assert_eq!(
+                    delivered(&ev),
+                    committed,
+                    "the tailer published {:?} on published pass {pass}, where the row committed at \
+                     seq {} was owed",
+                    delivered(&ev),
+                    committed.seq
+                ),
+                None => {
+                    let polls = health.polls_total.load(Ordering::Relaxed);
+                    panic!(
+                        "the tailer delivered only {} of {REQUIRED_PUBLISHED_PASSES} rows before \
+                         the {PUBLISHED_CADENCE_DEADLINE:?} deadline; it stalled waiting for the \
+                         row committed at seq {}, with polls_total reading {polls} and the task \
+                         {}. A driver that gives up after N PUBLISHED passes stops here and \
+                         nowhere else: both other cadence tests wait on polls_total, which a \
+                         publish-path give-up leaves climbing (quiet journal) or never exercises \
+                         at all. A FROZEN polls_total means the driver left its loop entirely; a \
+                         CLIMBING one with no delivery means it is still polling but no longer \
+                         publishing.",
+                        pass - 1,
+                        committed.seq,
+                        if tailer_handle.is_finished() {
+                            "already finished"
+                        } else {
+                            "still alive"
+                        }
+                    )
+                }
+            }
+        }
+
+        // Surviving 50 published passes is worth nothing if the tailer comes back deaf on the
+        // 51st. ABSOLUTE seq: exactly REQUIRED_PUBLISHED_PASSES rows preceded this one on a fresh
+        // journal, so a tailer that skipped ahead or replayed cannot land here by accident.
+        assert_publishes_exactly(&pool, &mut subscriber, REQUIRED_PUBLISHED_PASSES + 1).await;
+
+        // Diagnostic, NOT the kill — the same role it plays in the sibling cadence tests.
+        assert!(
+            !tailer_handle.is_finished(),
+            "the tailer task ended while rows were arriving steadily"
+        );
+
+        tailer_handle.abort();
+    }
+
     /// Pins every counter to an EXACT value by driving `poll_once` a known number of times. No
     /// spawned task, no `sleep`, so this runs in microseconds and is immune to machine load.
     ///

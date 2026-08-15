@@ -997,4 +997,90 @@ mod tests {
 
         bus.shutdown().await;
     }
+
+    /// `tailer_health()`'s doc comment promises the counters are "shared across all clones of this
+    /// `EventBus` exactly as `tailer_handle` is". That was a documented invariant with no test:
+    /// giving the clone a fresh `TailerHealth::default()` instead of `self.tailer_health.clone()`
+    /// survived the entire 275-test suite, because
+    /// `event_bus_tailer_health_tracks_the_bus_s_own_tailer` never clones.
+    ///
+    /// It matters because `EventBus` is cloned into handlers and services — that is the whole
+    /// reason `tailer_handle` is behind an `Arc` — so a `/health` surface reading a CLONE's
+    /// accessor would report zeros forever while the tailer ran fine. Same green-while-dead mode as
+    /// F1, one indirection further out. Task 014 creates the first real callers.
+    ///
+    /// The primary assertion is BEHAVIOURAL and asserted through the CLONE: a detached counter
+    /// never leaves 0, and one that ticked once and stopped is as useless to a health surface as
+    /// one stuck at 0, so the readings interleave — clone, then original past that, then clone past
+    /// THAT. Pointer identity is asserted too, as a deterministic supplement that states the doc
+    /// comment's claim literally rather than inferring it.
+    #[tokio::test]
+    async fn tailer_health_is_shared_with_every_clone_of_the_bus() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        let bus = EventBus::new(pool.clone(), 64);
+        let cloned = bus.clone();
+
+        // The doc comment's claim, stated literally: the clone's accessor and the original's must
+        // resolve to the same `TailerHealth`, which is the only way both can observe one tailer.
+        assert!(
+            std::ptr::eq(bus.tailer_health(), cloned.tailer_health()),
+            "EventBus::clone() handed the clone a DIFFERENT TailerHealth than the original's \
+             accessor returns; the counters are documented as shared across all clones exactly as \
+             tailer_handle is"
+        );
+
+        // Generous deadline: a safety net so a detached counter fails with a diagnosis rather than
+        // hanging the suite, never the thing that decides the verdict.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+
+        // Reading 1, through the CLONE. Only the original was ever handed to the tailer, so a clone
+        // holding its own `TailerHealth` never leaves 0 here.
+        let via_clone = loop {
+            let seen = cloned.tailer_health().polls_total.load(Ordering::Relaxed);
+            if seen >= 1 {
+                break seen;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the CLONE's tailer_health().polls_total stayed at 0 for 30s while the bus's tailer \
+                 was running; the clone is not observing the counters the tailer updates"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        };
+
+        // Reading 2, through the ORIGINAL, strictly past the clone's reading.
+        let via_original = loop {
+            let seen = bus.tailer_health().polls_total.load(Ordering::Relaxed);
+            if seen > via_clone {
+                break seen;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the ORIGINAL's tailer_health().polls_total did not climb past the {via_clone} the \
+                 clone observed within 30s; the two handles are not reading one climbing counter"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        };
+
+        // Reading 3, back through the CLONE, strictly past the original's — so the climb is
+        // observed alternately through both handles rather than once through each.
+        loop {
+            let seen = cloned.tailer_health().polls_total.load(Ordering::Relaxed);
+            if seen > via_original {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the CLONE's tailer_health().polls_total did not climb past the {via_original} the \
+                 original observed within 30s; a counter that stops advancing cannot distinguish a \
+                 live tailer from a dead one, whichever handle reads it"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        // Shutdown through the clone: the tailer handle is shared too, so this stops the one tailer
+        // both handles were observing.
+        cloned.shutdown().await;
+    }
 }

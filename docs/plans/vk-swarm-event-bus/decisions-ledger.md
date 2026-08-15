@@ -2569,3 +2569,187 @@ ran, and the full suite re-confirmed green between mutations.
 - [Run orchestrator] **The `consecutive_failures >= 25` waits are now strictly redundant** with
   `polls_total`. Redundancy is not a defect, but this ledger must stop counting them as independent
   coverage — an earlier entry did
+
+## 2026-08-15 execute: task 016 attempt 4 — the `Published` path, and the deadline axis nobody derived
+
+### What was added (tests only; NO production line changed)
+
+- [016 impl a4] `the_driver_keeps_publishing_as_rows_arrive` (`tailer.rs`): with the tailer running,
+  commit ONE row and wait for its delivery, 50 times, under a single 30s deadline for the whole
+  sequence; then assert a 51st row still publishes at its ABSOLUTE seq. Closes `PollOutcome`'s third
+  variant, which had zero cadence coverage
+- [016 impl a4] `tailer_health_is_shared_with_every_clone_of_the_bus` (`mod.rs`): clone the bus, then
+  observe `polls_total` climbing ALTERNATELY through the clone and the original (clone → original past
+  that → clone past THAT), plus a `std::ptr::eq` identity assertion. Closes panel 9 F3
+- [016 impl a4] Files touched: `crates/services/src/services/event_bus/tailer.rs`,
+  `crates/services/src/services/event_bus/mod.rs`, and this ledger. Nothing else; `git status` shows
+  exactly those two source files modified
+
+### Why the published-pass count is STRUCTURAL, not a timing inference
+
+- [016 impl a4] Each iteration waits for row N's DELIVERY before committing row N+1. `poll_once` reads
+  its high-water mark BEFORE the publish loop, so row N+1 is strictly above the mark of the pass that
+  delivered row N and cannot be picked up by that same pass. Every row therefore costs its own
+  `Published` pass — the count is exact by construction, not statistical
+- [016 impl a4] Confirmed empirically: instrumented green runs measured `polls_total` advancing by
+  **exactly 50** across the 50 iterations. Not 51, not 100 — no `Idle` pass interleaves. This also
+  settles the risk that the required mutant ("give up after 5 CONSECUTIVE `Published`") might never
+  fire because an idle pass reset its streak. It fires; see proof N1, which reports `polls_total`
+  reading exactly 5
+- [016 impl a4] Deriving the count from DELIVERIES rather than adding a fourth counter is deliberate
+  and is also STRONGER: it proves the row landed on the channel, not merely that a branch was taken.
+  A fourth counter would have been a production change, which this attempt's brief makes a STOP
+
+### ORCHESTRATOR ERROR (the ninth): 30s was derived on load margin, never on the rate floor
+
+- [016 impl a4] **The 50 is right; the 30s was reasoned on one axis again.** The brief derives 30s
+  entirely as LOAD MARGIN (2.5x against a pessimistic 12s "if commits make it DB-bound"). A deadline
+  on a cadence test does a second job the brief never costed: it sets the RATE FLOOR. 30s / 50 passes
+  = **600ms per pass**, against the two sibling cadence tests' 20s / 50 = **400ms**. The new test is
+  therefore the WEAKEST cadence guard in the file, and nothing in the derivation noticed
+- [016 impl a4] **The premise behind choosing 30s over 20s is also false.** The brief's reason was
+  "this test commits on every pass and is therefore more DB-bound than sleep-bound". Measured, it is
+  not: the test pool is WAL (`create_test_pool_with_migrations`), so the committing writer does not
+  exclude the tailer's readers, and each test owns its own `TempDir`, so parallel suite execution adds
+  no cross-test file contention. Cost stays dominated by `TAIL_INTERVAL`
+- [016 impl a4] **Verdict: keep 30s, for a different and better reason than the one given.** The
+  weaker rate floor is NOT binding — all three cadence tests drive the SAME driver, the siblings
+  already pin its cadence at 400ms, and this test's unique job is the published-BUDGET axis
+  (`50 > B`), a kill that does not depend on the deadline at all because a give-up simply never
+  delivers row B+1. And sized against the worst ITERATION rather than the mean (50 x 177ms = 8.85s),
+  30s is 3.4x margin where 20s would be 2.3x. Recorded so the next reader sees the floor is uniform
+  by ARGUMENT, not by number
+
+### Measurements (and an honesty note about the load conditions)
+
+- [016 impl a4] | condition | loop wall | per iteration | slowest iteration |
+  |---|---|---|---|
+  | sleep-bound floor (`TAIL_INTERVAL` 75ms x 50) | 3.75s | 75ms | — |
+  | test alone | 4.46s | 89ms | 176ms |
+  | in-suite, alongside the other 276 tests | 4.76s | 95ms | 177ms |
+  | + 32 CPU burners + sustained `dd oflag=direct` | 4.50s | 90ms | 174ms |
+- [016 impl a4] **Those are not three independent load levels, and the table must not be read as
+  three data points.** `uptime` reported a sustained load average of 295-303 across ALL of them —
+  orphaned CPU spinners from another worktree's measurement session were saturating this 4-core box
+  for the entire attempt. What the rows DO establish is that adding 32 further burners plus sustained
+  direct I/O to an already-saturated machine moved the loop wall by **under 1%**. Given this task's
+  history is thresholds asserted on unchecked axes, presenting the rows as independent evidence would
+  have been the same error one level down
+- [016 impl a4] **NOT load-fragile in the red direction.** Worst observed 4.76s against 30s is 6.3x;
+  the pessimistic worst-iteration bound 8.85s is 3.4x. Independent corroboration: every mutation run
+  in this attempt executed under that same load-300 machine, and in each one the 30 NON-mutated
+  event_bus tests — including all three cadence tests — passed while only the targeted test failed
+- [016 impl a4] Suite wall clock read 53.66-57.13s in this attempt against attempt 3's ledgered
+  12.20-14.19s. That is the saturated machine, NOT a regression from these two tests: measured alone
+  they cost ~9.1s combined, and the mutation runs show single-filter event_bus runs stretching from
+  51s to 173s purely with load
+
+### Mutation proofs — 13 of 13 KILLED (anchor-guarded, `assert s.count(OLD) == 1`, abort on mismatch)
+
+- [016 impl a4] Harness `.wai-scratch/a4/mutate.py`. Between every mutation both files are restored
+  from the snapshot that was MEASURED green and then BYTE-COMPARED against it; a failed or partial
+  restore aborts rather than poisoning the next proof. Byte-identity to an already-green snapshot is
+  used in place of a green test run between each — cargo rebuilds from source, so identical source is
+  identical behaviour, and it costs ~7min less per proof on this machine. The batch log carries zero
+  `Traceback`/`AssertionError`/`ANCHOR MISMATCH` lines, and the tree was byte-identical to both clean
+  snapshots at the end
+- [016 impl a4] **N1. Driver returns after 5 consecutive `Published` passes** → the new
+  published-cadence test FAILS, ALONE: `the tailer delivered only 5 of 50 rows before the 30s
+  deadline; it stalled waiting for the row committed at seq 6, with polls_total reading 5 and the task
+  already finished`. `FAILED. 30 passed; 1 failed`. Note `polls_total reading 5` — the self-diagnosing
+  message distinguishes "left the loop" from "still polling, no longer publishing", and here reports
+  the former
+- [016 impl a4] **N2. `EventBus::clone` gives the clone a fresh `TailerHealth`** → the new clone test
+  FAILS, ALONE, at the `ptr::eq` identity assertion. `FAILED. 30 passed; 1 failed`
+- [016 impl a4] **N2b (extra, not required). Same mutation WITH the `ptr::eq` assertion also deleted**
+  → the test still FAILS, on the BEHAVIOURAL climb: `the CLONE's tailer_health().polls_total stayed at
+  0 for 30s while the bus's tailer was running`. `FAILED. 30 passed; 1 failed`. This proves the
+  primary mechanism carries the kill and the pointer check is a supplement, not the thing doing the
+  work — the question a panel would otherwise be right to ask
+- [016 impl a4] All ten prior proofs re-run and all still KILL, each naming the expected test(s):
+  M1 idle-40 → quiet-journal cadence (1 failed); M2 60s idle backoff → quiet-journal cadence
+  (1 failed); M3 failed-10 → faulted cadence + both `consecutive_failures` waits (3 failed);
+  M4 `fetch_add(3)` → exact-count test (1 failed); M5 batch-FIRST seq → exact-count test (1 failed);
+  M6 `polls_total` skips failed passes → exact-count + faulted cadence (2 failed);
+  M7a terminating `PollOutcome` variant → 20 failed incl. `a_poll_step_can_never_terminate_the_loop`;
+  M7b `break 0` after 10 initial-mark retries → the 8000ms initial-mark test alone (1 failed);
+  M7c different `Arc` in `EventBus::new` → BOTH EventBus health tests (2 failed, was 1 before this
+  attempt); M7d `polls_total` frozen at 1 → 6 failed, now including the new clone test
+- [016 impl a4] Coverage note from M7d: the new published-cadence test correctly does NOT fail under
+  `polls_total` freezing. It reads that counter only for its diagnostic message, never for its
+  verdict — which is why it can guard a path the `polls_total` waits structurally cannot
+
+### Declared residuals
+
+- [016 impl a4] **NEW.** Every pass this test provokes publishes exactly ONE row, by construction. A
+  give-up budget consumed only by MULTI-row (`count > 1`) passes — burst traffic — is not caught here,
+  and not by the batch tests either, which publish one batch and finish. Stated rather than discovered
+  later. Deliberately NOT tested: chasing sub-members of a single variant is the treadmill this task
+  exists to end, and the enumeration below shows the axis itself is closed
+- [016 impl a4] Published-axis coverage, enumerated rather than implied: B consecutive `Published`
+  passes with B<50 → CAUGHT; B cumulative `Published` passes with B<50 → CAUGHT; B published ROWS with
+  B<50 → CAUGHT; budget consumed only by `count > 1` passes → NOT caught (above). This enumeration is
+  the answer to the brief's question "has the published path a discriminator I have again failed to
+  identify" — one, and it is now declared
+- [016 impl a4] Attempt 3's two residuals carry forward unchanged: a give-up budget of 50 or more on
+  the pass axis, and an adaptive backoff faster than ~400ms per pass
+
+### Verification (all green)
+
+- [016 impl a4] `cargo test -p services` (FULL crate, not `--lib`, not filtered): exit 0 on THREE
+  consecutive runs. 15 binaries, **394 passed / 0 failed** each; lib `277 passed; 0 failed; 5 ignored`
+  (275 → 277, +2 new tests, clearing the 268 floor). The tracked `normalize_sync_test.rs` flake did
+  NOT fire in any of the three
+- [016 impl a4] `cargo fmt --all -- --check` exit **0** (captured as an immediate assignment on the
+  command itself, not through a pipeline). Pre-checked against the snapshots with `rustfmt --check`
+  before the mutation batch so a rewrap could not silently invalidate the byte-exact anchors
+- [016 impl a4] `cargo clippy -p services --all-targets --all-features -- -D warnings` exit **0**
+- [016 impl a4] Evidence shape: attempt 4 adds NO production change, so no new test has a natural
+  pre-fix RED. The mutations ARE the red proofs, and all 13 are recorded verbatim above
+
+## 2026-08-15 execute: 016 attempt 4 — third path closed; my ninth error; 292 orphans reaped
+
+- [Run orchestrator] **Ninth orchestrator error, caught again by the implementer.** I justified the
+  new test's 30s deadline (vs the siblings' 20s) on the ground that "commits make it DB-bound rather
+  than sleep-bound". Measured, that is false: `create_test_pool_with_migrations` uses **WAL**, so the
+  committing writer never excludes the tailer's readers, and each test owns its own `TempDir`. Adding
+  32 CPU burners plus sustained `dd oflag=direct` moved the loop wall by **under 1%** (4.46s → 4.50s)
+- [Run orchestrator] **The axis I failed to derive this time was the RATE floor.** A cadence deadline
+  does two jobs and I costed only load margin. 30s/50 = **600ms per pass**, against the siblings'
+  20s/50 = 400ms — so the test I specified is the WEAKEST cadence guard in the file, and nothing in my
+  derivation noticed. The implementer kept 30s on a sounder argument (sized against the worst
+  ITERATION, 50 × 177ms = 8.85s, giving 3.4x where 20s would give 2.3x) and noted the weak floor is not
+  binding because all three cadence tests drive the same driver and the siblings already pin 400ms
+- [Run orchestrator] The 50 is stronger than I derived, and structurally so: each iteration waits for
+  row N's delivery before committing row N+1, and `poll_once` reads its high-water mark BEFORE the
+  publish loop, so every row costs its own `Published` pass. Instrumented runs measured `polls_total`
+  advancing by exactly 50 across 50 iterations. That also disposes of the risk that a "5 CONSECUTIVE
+  published" mutant might never fire because an idle pass resets the streak — it fires
+- [Run orchestrator] **New discriminator, declared now rather than discovered later:** every pass this
+  test provokes publishes exactly ONE row by construction, so a give-up budget consumed only by
+  multi-row (`count > 1`) passes is uncaught. Enumerated: consecutive-Published < 50 CAUGHT;
+  cumulative-Published < 50 CAUGHT; published ROWS < 50 CAUGHT; multi-row-only budgets NOT CAUGHT
+- [Run orchestrator] 13 mutation proofs kill, including all ten from attempts 1-3. Two changed
+  character usefully: `M7c` (different `Arc` in `EventBus::new`) now kills TWO tests rather than one,
+  and `M7d` (`polls_total` frozen at 1) picks up the new clone test while correctly NOT failing the
+  published-cadence test — which reads `polls_total` only for its diagnostic message, never for its
+  verdict, and is precisely why it guards a path the `polls_total` waits structurally cannot
+
+### Operational: 292 orphaned load generators reaped — my own side effect
+
+- [Run orchestrator] Panel 9's load-fragility measurement left **292 spin loops** running in
+  `/data/Code/vk-swarm-worktrees/panel-016-a3`, a worktree already torn down. They had been running
+  7h48m, claiming 378% CPU on a 4-core box and holding load average at ~294. I dispatched that panel,
+  so this was my mess to clean
+- [Run orchestrator] Reaped by exact PID with the cwd re-verified immediately before each kill — never
+  by pattern, per the standing rule that a pattern kill in a vibe-kanban worktree can take down the
+  parent server and corrupt its database. 292 killed, 0 remaining, run queue back to 0 and ~92% idle
+- [Run orchestrator] **Every number in attempt 4's report was taken under that load** and the
+  implementer said so explicitly rather than presenting three "load levels" as independent evidence.
+  The clean-machine re-measurement: full-crate 10/10 green at `277 passed; 0 failed`, 12.10-14.70s;
+  all three cadence tests together **4.32s**; the clone test 0.32s — against ~9.1s under load
+- [Run orchestrator] It cuts the other way for panel 9's verdict, which is worth stating: its
+  "NOT load-fragile" finding was measured AT load ~300, so the conclusion is stronger than it claimed,
+  not weaker. The lesson for this run's hygiene is that a panel authorised to stress the machine must
+  be told to reap its own load generators, and the orchestrator must verify the box is idle before
+  trusting any subsequent timing
