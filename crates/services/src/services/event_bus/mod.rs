@@ -22,6 +22,17 @@ use sqlx::SqlitePool;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
+use tracing::error;
+
+/// How long [`EventBus::new`] waits for the tailer's readiness signal before giving up on closing
+/// the startup race and returning anyway.
+///
+/// The tailer's own initial-mark retry loop (`tailer::spawn`) backs off up to 1000ms per attempt
+/// and never gives up, so 10s covers roughly 12 attempts of that loop — generous headway over the
+/// ~1-in-20 straddle this constant exists to close. A journal still unreadable after 10s at boot is
+/// a node with problems well beyond event delivery, and `spawn`'s own retry-forever loop keeps
+/// trying in the background regardless of what `new` decides here.
+const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Error type for EventBus operations.
 #[derive(Debug, Error)]
@@ -79,15 +90,58 @@ impl EventBus {
     /// publishing them to the broadcast channel. The task will continue running until
     /// explicitly stopped via [`shutdown()`](#method.shutdown).
     ///
-    /// The tailer's readiness receiver is dropped here: nothing in this crate needs to observe the
-    /// moment the tailer's cursor is established. Task 014 (startup wiring) likely will — it must
-    /// prove the tailer is connected on a real deployment and faces the identical
-    /// spawn-versus-commit race — at which point this constructor should surface it rather than
-    /// discard it. Dropping the receiver is safe: `spawn` signals with `let _ = ready_tx.send(())`.
-    pub fn new(pool: SqlitePool, broadcast_capacity: usize) -> Self {
+    /// Awaits the tailer's readiness signal (bounded by [`READY_TIMEOUT`]) before returning. Once
+    /// readiness resolves, the tailer's cursor is fixed, so every commit from this point on is
+    /// strictly above it and is owed to subscribers: the startup race where a commit lands between
+    /// `subscribe_from`'s own high-water read and the tailer's initial one — losing that commit
+    /// permanently — becomes unrepresentable. See the decisions-ledger for task 018.
+    ///
+    /// `spawn`'s initial-mark loop itself is retry-forever and is not bounded by this call — only
+    /// the WAIT here is bounded. If the journal is still unreadable after `READY_TIMEOUT`, this
+    /// logs loudly and returns the bus anyway, with the tailer continuing to retry in the
+    /// background; a row committed before the tailer's cursor is eventually established is
+    /// silently but correctly not broadcast, exactly as it is today. That degraded case is
+    /// unchanged from before this task; every other case is now race-free.
+    pub async fn new(pool: SqlitePool, broadcast_capacity: usize) -> Self {
+        Self::new_with_ready_timeout(pool, broadcast_capacity, READY_TIMEOUT).await
+    }
+
+    /// Implementation behind [`new`](Self::new), with the readiness timeout as a parameter so tests
+    /// can drive the timeout path quickly instead of waiting out the full [`READY_TIMEOUT`].
+    async fn new_with_ready_timeout(
+        pool: SqlitePool,
+        broadcast_capacity: usize,
+        ready_timeout: std::time::Duration,
+    ) -> Self {
         let (_tx, _rx) = broadcast::channel(broadcast_capacity);
         let tailer_health = Arc::new(TailerHealth::default());
-        let (tailer, _ready) = tailer::spawn(pool.clone(), _tx.clone(), Arc::clone(&tailer_health));
+        let (tailer, ready) = tailer::spawn(pool.clone(), _tx.clone(), Arc::clone(&tailer_health));
+
+        match tokio::time::timeout(ready_timeout, ready).await {
+            Ok(Ok(())) => {
+                // The tailer's cursor is now fixed; the startup race is closed.
+            }
+            Ok(Err(_)) => {
+                // The sender was dropped without signalling — the tailer task ended before it
+                // could establish a cursor. Degrade exactly as the timeout case below does.
+                error!(
+                    "event bus tailer readiness sender dropped without signalling; the tailer may \
+                     have ended before establishing its cursor. Proceeding without the startup-race \
+                     guarantee; events committed before the tailer's cursor is established may not \
+                     be broadcast"
+                );
+            }
+            Err(_) => {
+                error!(
+                    ready_timeout_secs = ready_timeout.as_secs(),
+                    "event bus tailer did not signal readiness within the timeout; its initial \
+                     high-water mark is still being retried in the background. Proceeding without \
+                     the startup-race guarantee; events committed in this window may not be \
+                     broadcast"
+                );
+            }
+        }
+
         Self {
             pool,
             sender: _tx,
@@ -260,7 +314,7 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         // Create and populate the bus
-        let bus = EventBus::new(pool.clone(), 64);
+        let bus = EventBus::new(pool.clone(), 64).await;
         let sender = bus.sender();
 
         // Journal 3 events
@@ -325,7 +379,7 @@ mod tests {
         }
 
         // Subscribe from cursor 3 (skip 1,2,3; get 4,5)
-        let bus = EventBus::new(pool.clone(), 64);
+        let bus = EventBus::new(pool.clone(), 64).await;
         let mut stream = bus.subscribe_from(3).unwrap();
 
         let mut seqs = vec![];
@@ -344,7 +398,7 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         // Create bus
-        let bus = EventBus::new(pool.clone(), 64);
+        let bus = EventBus::new(pool.clone(), 64).await;
         let sender = bus.sender();
 
         // Journal 3 events
@@ -417,7 +471,7 @@ mod tests {
             tx.commit().await.unwrap();
         }
 
-        let bus = EventBus::new(pool.clone(), 64);
+        let bus = EventBus::new(pool.clone(), 64).await;
         let sender = bus.sender();
         let mut stream = bus.subscribe_from(0).unwrap();
 
@@ -464,7 +518,7 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         // Create bus with TINY capacity to force Lagged
-        let bus = EventBus::new(pool.clone(), 2);
+        let bus = EventBus::new(pool.clone(), 2).await;
         let sender = bus.sender();
 
         // Journal 5 events
@@ -565,7 +619,7 @@ mod tests {
     async fn first_occurrences_are_ascending() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
-        let bus = EventBus::new(pool.clone(), 16);
+        let bus = EventBus::new(pool.clone(), 16).await;
         let sender = bus.sender();
 
         // Journal 3 events
@@ -640,8 +694,16 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
         pool.close().await;
 
-        // Try to subscribe — the first journal read should fail
-        let bus = EventBus::new(pool, 64);
+        // Try to subscribe — the first journal read should fail.
+        //
+        // UNDICTATED CHOICE (task 018): drives `new_with_ready_timeout` with a short timeout
+        // rather than the public `new`. A closed pool makes the tailer's initial `high_water_mark`
+        // fail immediately and forever (see task 013's retry-forever loop), so its readiness never
+        // fires; with the public `new`'s full 10s `READY_TIMEOUT` this test would now cost 10s for
+        // no additional coverage of the property under test (that `subscribe_from` surfaces a
+        // journal read error). A short timeout keeps it fast without touching what it asserts.
+        let bus =
+            EventBus::new_with_ready_timeout(pool, 64, std::time::Duration::from_millis(50)).await;
         let mut stream = bus.subscribe_from(0).unwrap();
 
         // The first item should be an error
@@ -656,6 +718,80 @@ mod tests {
                 panic!("expected error to surface on closed pool");
             }
         }
+    }
+
+    /// **REQUIRED (task 018).** `EventBus::new` must RETURN even when the tailer's readiness never
+    /// fires, rather than hang forever. `tailer::spawn`'s initial-mark loop is retry-forever by
+    /// design and stays that way (task 013, panels 5/6) — see the decisions-ledger for task 018's
+    /// withdrawn section 2 — so `new` bounds its own WAIT via `tokio::time::timeout` instead of
+    /// bounding the tailer's retry loop.
+    ///
+    /// Drives `new_with_ready_timeout` directly with a short timeout so this test does not have to
+    /// wait out the full 10s `READY_TIMEOUT`: the mechanism under test is the `tokio::time::timeout`
+    /// wrapper around the readiness receiver, which behaves identically at any duration, so a short
+    /// one proves the same thing faster.
+    ///
+    /// The table is renamed away BEFORE the bus is constructed, so the tailer's very first
+    /// `high_water_mark` call fails and its retry-forever loop cannot resolve within the short
+    /// timeout — the same fault
+    /// `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero` (`tailer.rs`)
+    /// holds open, which `new` must survive without hanging rather than by falling back to a
+    /// fabricated cursor (that design was tried and withdrawn — see the ledger).
+    ///
+    /// Mutation proof (task 018's REQUIRED bar): make `new_with_ready_timeout` `.await` the
+    /// readiness receiver unconditionally, with no `tokio::time::timeout` wrapper — this test must
+    /// then hang and fail, not pass.
+    #[tokio::test]
+    async fn new_returns_even_if_the_tailer_never_signals_readiness() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        // Hide the table BEFORE constructing the bus, so the tailer's initial high_water_mark call
+        // fails immediately and its retry-forever loop never resolves.
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let short_timeout = std::time::Duration::from_millis(200);
+
+        // An outer deadline many times the configured timeout: a safety net so a driver that
+        // ignores `ready_timeout` and awaits unconditionally fails this test with a diagnosis
+        // instead of hanging the whole suite.
+        let start = tokio::time::Instant::now();
+        let bus = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            EventBus::new_with_ready_timeout(pool.clone(), 64, short_timeout),
+        )
+        .await
+        .expect(
+            "EventBus::new_with_ready_timeout did not return within 5s (25x its configured 200ms \
+             readiness timeout); it is awaiting the tailer's readiness signal unconditionally \
+             instead of bounding the wait",
+        );
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed >= short_timeout,
+            "returned after {elapsed:?}, before the configured {short_timeout:?} readiness timeout \
+             even elapsed; the journal table is hidden and the tailer cannot have signalled \
+             readiness that fast"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "returned after {elapsed:?}, far longer than the configured {short_timeout:?} \
+             readiness timeout; `new_with_ready_timeout` is not bounding its wait by the timeout \
+             it was given"
+        );
+
+        // Repair, so the tailer — still retrying in the background per its own retry-forever
+        // contract — can eventually establish a real cursor, and no orphaned poll keeps failing
+        // against a renamed table for the rest of the test process.
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        bus.shutdown().await;
     }
 
     /// Commits one journal row and returns the seq it was assigned plus the `task_id` that
@@ -767,7 +903,7 @@ mod tests {
     async fn new_honours_the_requested_broadcast_capacity() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
-        let bus = EventBus::new(pool.clone(), 2);
+        let bus = EventBus::new(pool.clone(), 2).await;
         let sender = bus.sender();
         let mut rx = sender.subscribe();
 
@@ -832,7 +968,7 @@ mod tests {
         // Drives EventBus::new, NOT tailer::spawn — that is the whole point. The tailer this
         // observes is the one the constructor wired up, which is the only thing that can be wrong
         // in the way this test exists to catch.
-        let bus = EventBus::new(pool.clone(), 64);
+        let bus = EventBus::new(pool.clone(), 64).await;
         let mut subscriber = bus.sender().subscribe();
 
         // `EventBus::new` drops the tailer's readiness receiver, so no happens-before edge is
@@ -913,7 +1049,7 @@ mod tests {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
         // Create an EventBus with a spawned tailer
-        let bus = EventBus::new(pool.clone(), 64);
+        let bus = EventBus::new(pool.clone(), 64).await;
 
         // Subscribe BEFORE the shutdown-and-commit window. A tokio broadcast receiver never
         // receives history: a subscriber created afterwards cannot observe a still-running
@@ -960,7 +1096,7 @@ mod tests {
     async fn event_bus_tailer_health_tracks_the_bus_s_own_tailer() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
-        let bus = EventBus::new(pool.clone(), 64);
+        let bus = EventBus::new(pool.clone(), 64).await;
 
         // Generous deadlines throughout: they are safety nets so a dead counter fails with a
         // diagnosis rather than hanging the suite, never the thing that decides the verdict.
@@ -1018,7 +1154,7 @@ mod tests {
     async fn tailer_health_is_shared_with_every_clone_of_the_bus() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
 
-        let bus = EventBus::new(pool.clone(), 64);
+        let bus = EventBus::new(pool.clone(), 64).await;
         let cloned = bus.clone();
 
         // The doc comment's claim, stated literally: the clone's accessor and the original's must

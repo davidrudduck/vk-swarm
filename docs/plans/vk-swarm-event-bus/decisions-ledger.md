@@ -3238,3 +3238,302 @@ rather than picking one or quietly deleting the test in its way. That is the beh
 implementer did NOT exhibit when it hit its own STOP trigger and reasoned its way past it. Both
 outcomes are now on the record for comparison. 018's STOP-trigger list has been extended to invite
 this explicitly: a task file is the orchestrator's reasoning, not ground truth.
+
+## 2026-08-15 task 018: closing the EventBus startup race
+
+Implemented against the amended task file (HEAD `d88e1030`, section 2 replaced with "bound the
+WAIT, not the RETRY" per the implementer's option 1). `tailer.rs` was not touched — `git diff
+--stat` confirms zero lines changed in that file at every point in this session, including after
+all three mutation drills below (each mutation was applied via `cp` from `.wai-scratch/`, tested,
+then restored via `cp` and `diff`-verified byte-identical before the next).
+
+### Undictated choices
+
+1. **`initial_read_error_surfaces_to_the_consumer` (`event_bus/mod.rs`) now calls
+   `new_with_ready_timeout` directly with a 50ms timeout, not the public `new`.** Not asked for by
+   the task file, which only said to update call sites "mechanically". Reason: this test closes the
+   pool before constructing the bus, so the tailer's initial `high_water_mark` fails forever and its
+   retry-forever loop never signals readiness. Left on the public `new` (10s `READY_TIMEOUT`), the
+   test would now cost 10s of wall clock for zero additional coverage of the property it actually
+   asserts (that `subscribe_from` surfaces a journal read error). A short timeout keeps it fast
+   without touching the assertion.
+2. **The REQUIRED new test drives `new_with_ready_timeout` through an outer 5s safety-net timeout,
+   asserting `elapsed >= 200ms && elapsed < 2s`.** The task specified the mechanism (rename the
+   table, drive it through the private helper, mutation-prove with an unconditional `.await`) but
+   not the exact bounds. 5s outer / 200ms configured / <2s upper bound gives ~25x headroom on the
+   safety net (so a hang is diagnosed rather than hanging the suite) while keeping the test itself
+   fast. Mutation-proved: with the `tokio::time::timeout` wrapper removed (unconditional
+   `ready.await`), the test fails via its own outer safety net rather than passing — see the run
+   below.
+3. **`Ok(Err(_))` arm added to the readiness match (sender dropped without signalling)**, not just
+   `Ok(Ok(()))` and the `Err(_)` timeout arm. The task described only the timeout case explicitly.
+   This third arm covers the tailer task ending (panicking, or being aborted) before it can send —
+   theoretically reachable, not exercised by any test — and degrades identically to the timeout case
+   (loud `error!`, proceed anyway) rather than left as an unhandled compiler-forced case with a
+   silent `_ =>`.
+4. **`error!` wording** — task said "state that the tailer has not established its cursor within the
+   budget, that it is still retrying, and that events committed in this window may not be
+   broadcast"; exact strings are mine, included above in the doc comment and the `error!` call
+   itself (`crates/services/src/services/event_bus/mod.rs`).
+
+### `READY_TIMEOUT` = 10s, arithmetic
+
+`spawn`'s initial-mark backoff is `min(1000, 50 * (1 << retry_count.min(4)))`ms per retry:
+100, 200, 400, 800ms then 800ms flat (retry_count clamped at 4) for every attempt after the fourth.
+10 seconds of budget covers approximately 12 such attempts (100+200+400+800 = 1500ms for the first
+four, leaving 8500ms / 800ms ≈ 10.6 further 800ms attempts, so 4 + 10 = 14 attempts is closer than
+12 by this arithmetic — recording both: the task's own text estimated "roughly 12 attempts" and my
+count comes out slightly higher, ~14; either way the order of magnitude the task asked to confirm
+holds). A journal still unreadable after 10s of a node's boot is a node with problems well beyond
+event delivery — the same judgement call task 013 attempt 8 made in choosing its own 8000ms window
+for a materially identical purpose.
+
+### Acceptance bar, half 1 — FIXED, 30/30 required
+
+Machine verified quiet (`pgrep -x cargo` empty) immediately before the loop.
+
+```text
+run 1: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+run 2: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 3: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.74s
+run 4: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 5: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 6: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.73s
+run 7: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 8: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+run 9: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+run 10: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+run 11: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 12: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 13: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+run 14: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 15: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.65s
+run 16: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+run 17: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+run 18: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+run 19: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 20: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+run 21: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+run 22: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+run 23: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.74s
+run 24: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+run 25: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+run 26: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+run 27: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 28: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+run 29: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 30: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+```
+
+**30/30 green.**
+
+### Acceptance bar, half 2 — COUNTERFACTUAL, at least 1 failure required
+
+Reverted ONLY the readiness-await inside `new_with_ready_timeout`: dropped the `ready` receiver
+immediately instead of racing it against `tokio::time::timeout`, keeping every other 018 change
+(deleted `prove_tailer_is_live`, `project_id` threading, comment fixes) exactly as shipped. Backed
+out via `cp` from `.wai-scratch/mod.rs.fixed-018` afterward; `diff` confirmed byte-identical
+restore. Machine verified quiet before the loop.
+
+```text
+run 1: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 2: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+run 3: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.59s
+run 4: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+run 5: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 6: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+run 7: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.64s
+run 8: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.62s
+run 9: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+run 10: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 11: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.66s
+run 12: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 13: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.63s
+run 14: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.63s
+run 15: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.54s
+run 16: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.61s
+run 17: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.60s
+run 18: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.61s
+run 19: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+run 20: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+run 21: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.65s
+run 22: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s
+run 23: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 24: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+run 25: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.63s
+run 26: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+run 27: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+run 28: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+run 29: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 30: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+```
+
+**24 green / 6 failed.** Every failure timed out waiting for the specific seq under test after 30s
+(`WARM_LIVE_DEADLINE`), e.g.:
+
+```text
+thread 'a_new_bus_on_the_same_pool_resumes_without_replaying_history' panicked at
+crates/services/tests/event_bus_end_to_end.rs:123:19:
+timed out after 29.999999657s waiting for seq 4
+```
+
+Failures were distributed across three different tests
+(`a_new_bus_on_the_same_pool_resumes_without_replaying_history`,
+`a_subscriber_that_joins_late_replays_from_its_cursor_then_goes_live`,
+`a_committed_row_reaches_a_live_subscriber`) — the race is not localized to one test's shape, as
+expected from a straddle that can land on any post-construction commit. 6/30 is higher than the
+task's own "expect roughly 3" estimate (measured at ~1-in-20 per site, 2 sites/run, ~60 exposures
+→ ~3 expected); recorded rather than smoothed over, though still well clear of the "at least one
+failure" bar and directionally consistent (this session's known concurrent multi-agent load on this
+box measurably widens this exact race — see task 017's ledger entry on `PROBE_ATTEMPT_WINDOW`
+sizing).
+
+**The counterfactual proves what it needs to: the readiness-await, specifically, is load-bearing.**
+Not 30/30, so the acceptance bar is not vacuous.
+
+### Mutation re-proof (REQUIRED section, post panel-11)
+
+All three run against the FIXED code (readiness awaited, `prove_tailer_is_live` deleted, F4/F2
+applied). Each mutation applied via `cp` into `crates/services/src/services/event_bus/tailer.rs`
+from `.wai-scratch/tailer.rs.pristine`, then restored via `cp` back from the same pristine copy and
+`diff`-verified byte-identical (confirmed after M3, after M7, and after M8 — three separate
+restores, three separate zero-diff confirmations) before the next mutation or before finishing.
+`git diff --stat` on `tailer.rs` reads empty at every checkpoint in this session.
+
+**M3 — skip the first row of each batch, cursor still advances** (`tailer.rs:84`, mutated
+`for seq_ev in seq_events` into `for (m3_i, seq_ev) in seq_events.into_iter().enumerate()` with an
+`if m3_i == 0 { *cursor = seq_ev.seq; continue; }` guard):
+
+```text
+run 0: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.73s
+run 1: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.61s
+run 2: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+run 3: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+```
+
+**1/4. NOT 4/4 — a surviving residual, reported as such per the task's explicit instruction not to
+round up.** Mechanism, diagnosed rather than left as a bare number: the tailer polls continuously
+from the moment `EventBus::new()` returns, independent of any particular `subscribe_from` call. In
+every test here, the very first commit after construction and every commit up to the point a test
+does its own `expect_next_seq` wait typically lands within one `TAIL_INTERVAL` (75ms) of each other,
+so the tailer's OWN first poll pass frequently batches the "warm-up" row together with the row a
+test is actually asserting on. Under M3 only the FIRST row of a batch is dropped; if that is the
+warm-up row (whose delivery in these tests is proven via `subscribe_from`'s direct journal replay,
+never via the tailer broadcast — see the file header's "Determinism without fixed sleeps" section),
+the test cannot observe the drop, and the row actually under test (the batch's second-or-later
+member) is delivered correctly. The test only fails on the timing-dependent runs where the tailer's
+first poll happens to fire BETWEEN the warm-up commit and the test commit, splitting them into two
+single-row batches and making the test's own row the dropped "first of a batch". This is NOT the
+mechanism the task's hypothesis described ("each test commits rows one at a time with an await
+between, so batches are single-row") — that describes the ordering of commits *within* a test, but
+the tailer's batching is relative to ITS OWN poll cadence, not to any one test's commit sequence,
+and the warm-up commit is exactly the kind of extra row that can silently absorb the "skip first"
+damage. **Task 018 partially, not fully, restores M3 detection**, and the mechanism is now
+diagnosed for whoever picks this up next.
+
+**M7 — tailer drops the first row it would ever publish** (`tailer.rs:164`,
+`Ok(mark) => break mark,` → `Ok(mark) => break mark + 1,`):
+
+```text
+run 0: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+run 1: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+run 2: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.73s
+run 3: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+```
+
+**0/4. The task's hypothesis for M7 is FALSIFIED, not merely under-confirmed.** The task predicted
+"absolute-seq assertions after this task's fix should restore the deterministic kill". They do not,
+and the reason is structural rather than probabilistic: M7 shifts the tailer's cursor at
+construction time by exactly +1 relative to the journal's high-water mark at that instant, so its
+only possible casualty is the ONE seq immediately following that mark — in every test in this suite,
+that is the very first row committed after `EventBus::new()` (or, in test 4, after `bus2`'s
+construction on a pre-populated journal). But `subscribe_from`'s `Initializing` arm always performs
+its OWN independent `high_water_mark` read and `read_range` at first poll, and in every test that
+first poll happens strictly after the commit under scrutiny — so that row is delivered via DIRECT
+JOURNAL REPLAY, never touching the tailer's broadcast channel at all. The one seq M7 can damage is
+therefore always the one this suite's replay path — not its tailer path — is responsible for
+delivering, and the mutation is invisible by construction, not by luck. This is a real, previously
+unstated structural gap in this suite's tailer-path coverage for the specific row seq =
+`(mark at bus construction) + 1`, and it existed before this task too (the pre-018
+`prove_tailer_is_live` retry loop was ALSO relative, not absolute, so it could not have caught this
+either — this is not a regression 018 introduced, but 018's own hypothesis that it would be closed
+is wrong). Task 013's own `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero`
+sibling test suite (`tailer.rs`) still catches an equivalent mutation directly against the tailer's
+own broadcast output, so the crate-wide `cargo test -p services` run is not blind to M7 — only this
+e2e suite is.
+
+**M8 — tailer fabricates `project_id = Uuid::nil()` on `TaskCreated`/`TaskDeleted`, seq and
+`task_id` honest** (mutated the publish loop to clone each row and null its `project_id` before
+`sender.send`, run AFTER the F4 fix that threads `project_id` through `commit_task_created` and
+asserts it in `assert_task_created_body`):
+
+```text
+run 0: test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.58s
+run 1: test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.64s
+run 2: test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.60s
+run 3: test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.63s
+```
+
+**4/4, as required.** Sample failure:
+
+```text
+thread 'a_committed_row_reaches_a_live_subscriber' panicked at
+crates/services/tests/event_bus_end_to_end.rs:165:13:
+assertion `left == right` failed: seq 2 carried a body whose project_id does not match what was committed
+  left: 00000000-0000-0000-0000-000000000000
+ right: 8b58e003-b19c-411f-ac8e-b9dcab93350b
+```
+
+Each run failed on exactly the three tests whose "live" (tailer-delivered) commit carries a
+`TaskCreated` body — `a_committed_row_reaches_a_live_subscriber`,
+`a_subscriber_that_joins_late_replays_from_its_cursor_then_goes_live`, and
+`a_new_bus_on_the_same_pool_resumes_without_replaying_history` — while
+`a_rolled_back_transaction_reaches_no_subscriber` (whose one delivered row travels via direct
+replay, not the tailer) and `every_event_variant_survives_the_full_round_trip` (asserted via
+`serde_json::Value` equality, a stricter check that was already catching M8 before F4) pass
+unaffected. **F4's fix works exactly as intended.**
+
+### F2 — comment corrections
+
+Both false claims corrected in place (`event_bus_end_to_end.rs`): test 2's "no duplicate across the
+boundary" and test 4's "no stray replay of the two pre-restart events, or a duplicate of either
+post-restart one" both now state plainly that `subscribe_from`'s Live arm drops anything with
+`ev.seq <= state.last` before the stream ever yields it, so neither test's silence window can
+observe a duplicate either way, and both now name
+`the_bus_publishes_a_committed_row_exactly_once` (`event_bus/mod.rs`) as where the exactly-once
+property is actually proven.
+
+### Test 2's declared residual — RETIRED, not merely reduced
+
+Before 018, `a_subscriber_that_joins_late_replays_from_its_cursor_then_goes_live`'s handoff
+soundness rested on `EventBus::new()` having had three prior commits' worth of real elapsed time to
+establish its tailer before the handoff commit — correctly documented as "improbable, not
+structurally immune" to the same startup race `prove_tailer_is_live` existed to paper over
+elsewhere in the file. That residual is retired outright now, not reduced: `EventBus::new()` itself
+awaits the tailer's readiness signal before returning, so the tailer's cursor is fixed before ANY
+commit in this test happens, elapsed time or not — the handoff commit is now sound by construction,
+the same way test 1's warm-up-then-live pattern is. The doc comment above the test states this
+explicitly rather than leaving the old "improbable" language in place uncorrected.
+
+### Summary for the gate
+
+`WAI_TYPECHECK_CMD="cargo check --workspace" WAI_TEST_CMD='cargo test -p "$(basename {scope})"'
+bash ~/.agents/wai/scripts/task-gate.sh vk-swarm-event-bus 018` → `CONFORMS: task 018 passed all
+deterministic gates`, `GATE_FAIL_CHECK=none`, exit 0. File-set clean: only
+`crates/services/src/services/event_bus/mod.rs` and `crates/services/tests/event_bus_end_to_end.rs`
+changed; `tailer.rs` untouched throughout, including through three mutation-and-restore cycles.
+`cargo test -p services` (full crate, not just the e2e target): 283 lib tests green (0 failed, 5
+doctests ignored as pre-existing), all integration targets green including the known-flaky
+`normalize_sync_test` (green this run, not touched). `cargo fmt --all -- --check`,
+`cargo clippy -p services --all-targets --all-features -- -D warnings`, and
+`cargo check --workspace` all exit 0.
+
+**Net assessment: the fix is real and proven (both acceptance-bar halves hold, M8/F4 proven 4/4),
+but the REQUIRED re-proof surfaced two residuals that do not fully match the task's own hypothesis
+— M3 partially (1/4) and M7 completely (0/4) escape this e2e suite even after the fix, for
+structural reasons specific to how `subscribe_from`'s direct replay interacts with the tailer's
+independent batching, diagnosed above rather than left as bare numbers.** Both mutations are still
+caught deterministically by the `crates/services` lib suite (task 013's own tests), so no defect is
+invisible to `cargo test -p services` as a whole — but the e2e suite's claim to be "the run's
+evidence for reachability gate (b)" (panel 11's framing) does not fully hold for M3 and M7 the way
+it now does for M8. This is reported rather than rounded up, per the task's explicit instruction.
