@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - "crates/services/tests/event_bus_end_to_end.rs"
+  - "crates/services/src/services/event_bus/tailer.rs"
 irreversible: false
 scope_test: "crates/services"
 allowed_change: edit
@@ -140,3 +141,64 @@ disagrees with the table above, that disagreement is the most valuable thing you
 ## Done when
 
 `WAI_TYPECHECK_CMD="cargo fmt --all -- --check && cargo check --workspace" WAI_TEST_CMD='cargo test -p "$(basename {scope})"' bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 019` exits 0, and the three run tables above are reproduced in the ledger.
+
+---
+
+## SECONDARY — two stale-anchor fixes inherited from task 018 (panel 13, F13-1 and F13-2)
+
+**These are unrelated to the mutation work above.** They are here because 019 already owns the e2e
+suite and because CLAUDE.md forbids carrying a finding into a later session, not because they belong
+to the same thought. Keep them in a separate commit-sized chunk of your work and do not let them
+influence the mutation measurements. `crates/services/src/services/event_bus/tailer.rs` has been
+added to this task's `files:` solely for fix 2 — **change nothing in it but that one comment line.**
+
+### Fix 1 — two comments cite a line number that task 018 moved
+
+```text
+event_bus_end_to_end.rs:258   // with `ev.seq <= state.last` (`event_bus/mod.rs:200`), ...
+event_bus_end_to_end.rs:390   // (`event_bus/mod.rs:200`). Seqs 1-2 are below the cursor ...
+```
+
+`mod.rs:200` WAS the Live-arm dedupe before task 018. Attempt 1 made `new` async and added the
+timeout block, moving it. Verified at this commit:
+
+```text
+$ grep -n "if ev.seq > state.last" crates/services/src/services/event_bus/mod.rs
+254:                                    if ev.seq > state.last {
+```
+
+Repoint both to `mod.rs:254`. **Verify the line yourself before writing it** — if further work has
+moved it again, the number in this task file is as stale as the one it replaces. That is the whole
+point of the finding.
+
+### Fix 2 — `tailer.rs:150` still asserts the premise task 018 falsified
+
+```text
+150:/// `let _ = ...` deliberately — a caller that drops the receiver (as `EventBus::new` does) must
+```
+
+`EventBus::new` has awaited the readiness receiver since `86e85038`; it does not drop it. This is
+the same class as the `mod.rs:974` comment 018 fixed, one file over.
+
+Correct the parenthetical so it no longer claims `EventBus::new` drops the receiver. The `let _ =`
+defensive-send rationale itself is still valid and should survive — a caller COULD drop the
+receiver, and the tailer must not panic if one does. Rewrite it as the hypothetical it now is
+rather than deleting it.
+
+**Nothing else in `tailer.rs` may change.** Panel 13 verified it byte-identical across the whole of
+task 018 (`git diff 86e85038~1 587322cd -- .../tailer.rs` empty), and `spawn`'s retry-forever
+semantics plus `tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero` are
+fenced by task 018's own record. Prove your diff touches only the comment.
+
+### Why fix 2 was not done in 018 itself
+
+Task 018's replacement section 2 stated "`tailer.rs`'s `spawn` function must not change at all", and
+a byte-identical `tailer.rs` was an attempt-2 deliverable that panel 13 confirmed. Touching it there
+would have invalidated a verified property mid-task. It moves here instead.
+
+**A note on how this was missed, worth reading before you write your own sweep.** Attempt 2 did run
+a grep sweep for stale premises, and its pattern was `probe\|wait_until_tailer_publishes\|drops the
+tailer\|readiness receiver`. `tailer.rs:150` reads "drops the **receiver**" — the sweep would have
+missed this line even had `tailer.rs` been in scope. When you sweep, match on the CONCEPT with
+several phrasings, and say in the ledger which patterns you used so the next reader can judge the
+coverage rather than trust it.

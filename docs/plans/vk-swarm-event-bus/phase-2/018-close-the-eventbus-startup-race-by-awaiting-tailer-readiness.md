@@ -2,7 +2,7 @@
 id: "018"
 phase: 2
 title: "Close the EventBus startup race by awaiting tailer readiness"
-status: ready
+status: passed
 depends_on: ["013","016","017"]
 parallel: false
 conflicts_with: []
