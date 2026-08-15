@@ -8,7 +8,22 @@ use super::{
     CreateExecutionProcess, ExecutionContext, ExecutionProcess, ExecutionProcessRunReason,
     ExecutionProcessStatus, ExecutorActionField, MissingBeforeContext,
 };
+use crate::models::event::NodeEvent;
+use crate::models::event_journal::{self, EventJournalError};
 use crate::models::{task::Task, task_attempt::TaskAttempt};
+
+/// Map a journal-append failure onto `sqlx::Error` — duplicated from
+/// `task::queries::journal_err_to_sqlx` (that copy is private to its module, and this task's file
+/// set does not include `mod.rs`, so there is nowhere shared to put one copy). See that copy's doc
+/// comment for the Database/Serde split rationale.
+fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
+    match e {
+        EventJournalError::Database(err) => err,
+        EventJournalError::Serde(err) => {
+            sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
+        }
+    }
+}
 
 impl ExecutionProcess {
     /// Find execution process by ID
@@ -112,10 +127,41 @@ impl ExecutionProcess {
     /// is not in the list of currently active instances (or has no instance ID at all).
     /// Excludes rows with resume_state IN ('pending', 'resumed') for SC8 safety.
     /// Returns the number of processes marked as failed.
+    ///
+    /// Task 007: this is a real terminal-failure path (after a node crash, every orphaned
+    /// process transitions to `failed` here) that the original phase-3 breakdown missed. SELECTs
+    /// the exact rows about to transition, INSIDE the same transaction and against the identical
+    /// predicate, before the UPDATE runs — counting `rows_affected()` after the fact can prove
+    /// how many rows moved but not WHICH ones, and "one `AttemptFailed` per transitioned process"
+    /// needs each row's task/attempt/executor identity.
     pub async fn mark_orphaned_as_failed(
         pool: &SqlitePool,
         current_instance_id: &str,
     ) -> Result<u64, sqlx::Error> {
+        #[derive(sqlx::FromRow)]
+        struct OrphanedRow {
+            execution_process_id: Uuid,
+            task_attempt_id: Uuid,
+            task_id: Uuid,
+            executor: String,
+        }
+
+        let mut tx = pool.begin().await?;
+
+        // Runtime API: new SQL text, not a re-use of an existing macro query.
+        let orphaned: Vec<OrphanedRow> = sqlx::query_as(
+            r#"SELECT ep.id AS execution_process_id, ep.task_attempt_id AS task_attempt_id,
+                      ta.task_id AS task_id, ta.executor AS executor
+               FROM execution_processes ep
+               JOIN task_attempts ta ON ta.id = ep.task_attempt_id
+               WHERE ep.status = 'running'
+                 AND (ep.server_instance_id IS NULL OR ep.server_instance_id != ?)
+                 AND (ep.resume_state IS NULL OR ep.resume_state NOT IN ('pending', 'resumed'))"#,
+        )
+        .bind(current_instance_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
         let result = sqlx::query!(
             r#"UPDATE execution_processes
                SET status = 'failed', updated_at = datetime('now')
@@ -124,8 +170,24 @@ impl ExecutionProcess {
                  AND (resume_state IS NULL OR resume_state NOT IN ('pending', 'resumed'))"#,
             current_instance_id
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+        for row in &orphaned {
+            let event = NodeEvent::AttemptFailed {
+                task_id: row.task_id,
+                attempt_id: row.task_attempt_id,
+                execution_process_id: row.execution_process_id,
+                executor: row.executor.clone(),
+                reason: "orphan recovery: process was running under a stale server instance"
+                    .to_string(),
+            };
+            event_journal::append(&mut *tx, &event)
+                .await
+                .map_err(journal_err_to_sqlx)?;
+        }
+
+        tx.commit().await?;
 
         Ok(result.rows_affected())
     }
@@ -357,7 +419,14 @@ impl ExecutionProcess {
         .await
     }
 
-    /// Create a new execution process
+    /// Create a new execution process.
+    ///
+    /// Task 007: wrapped in a transaction that also appends `AttemptStarted` to the event
+    /// journal — the INSERT and the journal append share the shared-transaction shape task 006
+    /// established for `Task::create`. `CreateExecutionProcess` carries only `task_attempt_id`
+    /// (not `task_id`), so the owning `TaskAttempt` row is loaded INSIDE this same transaction to
+    /// source both `task_id` and the executor identity SC2 requires — a plain read against the
+    /// pool would race a concurrent writer, same reasoning as `Task::update`'s prior-status read.
     pub async fn create(
         pool: &SqlitePool,
         data: &CreateExecutionProcess,
@@ -368,7 +437,9 @@ impl ExecutionProcess {
         let now = Utc::now();
         let executor_action_json = sqlx::types::Json(&data.executor_action);
 
-        sqlx::query_as!(
+        let mut tx = pool.begin().await?;
+
+        let execution_process = sqlx::query_as!(
             ExecutionProcess,
             r#"INSERT INTO execution_processes (
                     id, task_attempt_id, run_reason, executor_action, before_head_commit,
@@ -389,8 +460,30 @@ impl ExecutionProcess {
             now,
             server_instance_id
         )
-        .fetch_one(pool)
-        .await
+        .fetch_one(&mut *tx)
+        .await?;
+
+        // Runtime API, not a macro: new SQL text (this task's Change section forbids a new
+        // `query_as!` — the `.sqlx` offline cache cannot be regenerated in this run).
+        let (task_id, executor): (Uuid, String) =
+            sqlx::query_as("SELECT task_id, executor FROM task_attempts WHERE id = ?")
+                .bind(data.task_attempt_id)
+                .fetch_one(&mut *tx)
+                .await?;
+
+        let event = NodeEvent::AttemptStarted {
+            task_id,
+            attempt_id: data.task_attempt_id,
+            execution_process_id: execution_process.id,
+            executor,
+        };
+        event_journal::append(&mut *tx, &event)
+            .await
+            .map_err(journal_err_to_sqlx)?;
+
+        tx.commit().await?;
+
+        Ok(execution_process)
     }
 
     pub async fn delete_by_task_attempt_id(
@@ -763,5 +856,242 @@ mod tests {
                 expected
             );
         }
+    }
+}
+
+/// Task 007: attempt lifecycle events emitted from `ExecutionProcess::create` (`AttemptStarted`)
+/// and `ExecutionProcess::mark_orphaned_as_failed` (`AttemptFailed`, one per transitioned row).
+/// Uses `create_test_pool_with_migrations` per the task file's dictate, mirroring task 006's
+/// `lifecycle_event_tests` module in `task/queries.rs`.
+#[cfg(test)]
+mod lifecycle_event_tests {
+    use super::*;
+    use crate::models::event::NodeEvent;
+    use crate::test_utils::create_test_pool_with_migrations;
+    use executors::actions::{
+        ExecutorAction, ExecutorActionType, coding_agent_initial::CodingAgentInitialRequest,
+    };
+    use executors::executors::BaseCodingAgent;
+    use executors::profile::ExecutorProfileId;
+
+    async fn seed_project(pool: &SqlitePool) -> Uuid {
+        let pid = Uuid::new_v4();
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (?, 'p', '/tmp/p')")
+            .bind(pid)
+            .execute(pool)
+            .await
+            .unwrap();
+        pid
+    }
+
+    async fn seed_task(pool: &SqlitePool, project_id: Uuid) -> Uuid {
+        let tid = Uuid::new_v4();
+        sqlx::query("INSERT INTO tasks (id, project_id, title, status) VALUES (?, ?, 't', 'todo')")
+            .bind(tid)
+            .bind(project_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        tid
+    }
+
+    async fn seed_attempt(pool: &SqlitePool, task_id: Uuid, executor: &str) -> Uuid {
+        let aid = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO task_attempts (id, task_id, executor, branch, target_branch, container_ref) \
+             VALUES (?, ?, ?, 'b', 'main', '/tmp/wt')",
+        )
+        .bind(aid)
+        .bind(task_id)
+        .bind(executor)
+        .execute(pool)
+        .await
+        .unwrap();
+        aid
+    }
+
+    async fn read_journal_rows(pool: &SqlitePool) -> Vec<(String, String)> {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT event_type, payload FROM event_journal ORDER BY seq",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    fn create_data(task_attempt_id: Uuid) -> CreateExecutionProcess {
+        CreateExecutionProcess {
+            task_attempt_id,
+            executor_action: ExecutorAction::new(
+                ExecutorActionType::CodingAgentInitialRequest(CodingAgentInitialRequest {
+                    prompt: "do it".to_string(),
+                    executor_profile_id: ExecutorProfileId::new(BaseCodingAgent::ClaudeCode),
+                }),
+                None,
+            ),
+            run_reason: ExecutionProcessRunReason::CodingAgent,
+        }
+    }
+
+    /// Test 1 (task file).
+    #[tokio::test]
+    async fn create_emits_attempt_started_with_identity() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = seed_task(&pool, project_id).await;
+        let attempt_id = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
+
+        let process = ExecutionProcess::create(
+            &pool,
+            &create_data(attempt_id),
+            Uuid::new_v4(),
+            None,
+            Some("instance-a"),
+        )
+        .await
+        .unwrap();
+
+        let rows = read_journal_rows(&pool).await;
+        let started: Vec<_> = rows
+            .iter()
+            .filter(|(t, _)| t == "attempt_started")
+            .collect();
+        assert_eq!(started.len(), 1, "exactly one attempt_started row");
+        let event: NodeEvent = serde_json::from_str(&started[0].1).unwrap();
+        match event {
+            NodeEvent::AttemptStarted {
+                task_id: tid,
+                attempt_id: aid,
+                execution_process_id: epid,
+                executor,
+            } => {
+                assert_eq!(tid, task_id);
+                assert_eq!(aid, attempt_id);
+                assert_eq!(epid, process.id);
+                assert_eq!(executor, "CLAUDE_CODE");
+                assert!(
+                    !executor.is_empty(),
+                    "SC2 requires non-empty executor identity"
+                );
+            }
+            other => panic!("expected AttemptStarted, got {other:?}"),
+        }
+    }
+
+    /// Test 5 (task file). FK violation on `task_attempt_id` — proves the INSERT and the journal
+    /// append share the transaction: a failed write must journal nothing.
+    #[tokio::test]
+    async fn rolled_back_create_journals_nothing() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let bogus_attempt_id = Uuid::new_v4();
+
+        let result = ExecutionProcess::create(
+            &pool,
+            &create_data(bogus_attempt_id),
+            Uuid::new_v4(),
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "FK violation on task_attempt_id must fail the write"
+        );
+
+        let rows = read_journal_rows(&pool).await;
+        assert!(
+            rows.is_empty(),
+            "failed write must journal nothing — proves the shared transaction: {rows:?}"
+        );
+    }
+
+    /// Test 6 (task file). Seeds three orphaned `running` rows under a stale server instance plus
+    /// one `resume_state = 'pending'` row that must NOT transition (SC8 safety, pre-existing
+    /// behavior). Rows are inserted directly (not via `ExecutionProcess::create`) so the journal
+    /// contains ONLY the orphan-recovery events under test, with no `attempt_started` noise.
+    #[tokio::test]
+    async fn orphan_recovery_emits_one_attempt_failed_per_process() {
+        let (pool, _tmp) = create_test_pool_with_migrations().await;
+        let project_id = seed_project(&pool).await;
+        let task_id = seed_task(&pool, project_id).await;
+
+        async fn seed_running_process(
+            pool: &SqlitePool,
+            attempt_id: Uuid,
+            server_instance_id: &str,
+            resume_state: Option<&str>,
+        ) -> Uuid {
+            let pid = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO execution_processes \
+                 (id, task_attempt_id, status, run_reason, executor_action, server_instance_id, resume_state) \
+                 VALUES (?, ?, 'running', 'codingagent', '{}', ?, ?)",
+            )
+            .bind(pid)
+            .bind(attempt_id)
+            .bind(server_instance_id)
+            .bind(resume_state)
+            .execute(pool)
+            .await
+            .unwrap();
+            pid
+        }
+
+        let mut expected: Vec<(Uuid, Uuid, Uuid, String)> = Vec::new(); // (task_id, attempt_id, process_id, executor)
+        for i in 0..3 {
+            let executor = format!("EXEC_{i}");
+            let attempt_id = seed_attempt(&pool, task_id, &executor).await;
+            let process_id = seed_running_process(&pool, attempt_id, "stale-instance", None).await;
+            expected.push((task_id, attempt_id, process_id, executor));
+        }
+        // Must NOT transition: resume_state = 'pending'.
+        let pending_attempt = seed_attempt(&pool, task_id, "EXEC_PENDING").await;
+        let _pending_process =
+            seed_running_process(&pool, pending_attempt, "stale-instance", Some("pending")).await;
+
+        let count = ExecutionProcess::mark_orphaned_as_failed(&pool, "current-instance")
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 3,
+            "only the three non-pending orphaned rows transition"
+        );
+
+        let rows = read_journal_rows(&pool).await;
+        let failed: Vec<_> = rows.iter().filter(|(t, _)| t == "attempt_failed").collect();
+        assert_eq!(
+            failed.len(),
+            3,
+            "exactly one attempt_failed per transitioned process, none for the pending row"
+        );
+
+        let mut seen: Vec<(Uuid, Uuid, Uuid, String)> = Vec::new();
+        for (_, payload) in &failed {
+            let event: NodeEvent = serde_json::from_str(payload).unwrap();
+            match event {
+                NodeEvent::AttemptFailed {
+                    task_id: tid,
+                    attempt_id: aid,
+                    execution_process_id: epid,
+                    executor,
+                    reason,
+                } => {
+                    assert!(!reason.is_empty(), "orphan recovery must name a reason");
+                    assert!(
+                        !executor.is_empty(),
+                        "SC2 requires non-empty executor identity"
+                    );
+                    seen.push((tid, aid, epid, executor));
+                }
+                other => panic!("expected AttemptFailed, got {other:?}"),
+            }
+        }
+        seen.sort();
+        expected.sort();
+        assert_eq!(
+            seen, expected,
+            "each orphaned process must produce exactly one AttemptFailed carrying its own \
+             task/attempt/execution-process id and executor identity"
+        );
     }
 }

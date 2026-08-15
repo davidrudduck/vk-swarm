@@ -5290,3 +5290,166 @@ the directory-expansion loop that the dotted-basename heuristic breaks. So a spe
 16 remediation verification). Across all three, zero blocking defects were ever found in the
 production code; every finding was a test gap, a stale comment, or an orchestrator specification
 error.
+
+## 2026-08-15 task 007 — attempt lifecycle events wired into `ExecutionProcess::create`,
+`update_completion`, and `mark_orphaned_as_failed`
+
+Phase 3 continues from `800028ae`. Opens `crates/db/src/models/execution_process/queries.rs`,
+`lifecycle.rs`, and (SECONDARY) one `.sqlx` cache entry.
+
+### Pre-resolved STOP trigger — independently re-verified, not spent
+
+The orchestrator's exhaustive enumeration (status writers, INSERT sites, `lifecycle.rs`'s six
+UPDATE statements) was re-derived rather than trusted, per instruction:
+- `git grep -n "SET status" -- 'crates/db/src/models/execution_process/'` (pre-edit): exactly
+  `lifecycle.rs:39` (`update_completion`) and `queries.rs:121` (`mark_orphaned_as_failed`). Matches.
+- `git grep -n "INSERT INTO execution_processes"`: 14 `.rs` sites outside `.sqlx` cache files.
+  Checked each non-`crates/db/src/models/execution_process/queries.rs:373` hit against the last
+  `#[cfg(test)]` marker preceding it in its file (`log_entry/mod.rs`, `task_breakdown/mod.rs`,
+  `workstream_state.rs`, `local-deployment/container.rs` x2, `services/breakdown.rs`,
+  `services/container.rs` x3, `services/log_migration.rs` x2, `services/node_runner.rs` x2,
+  `services/unified_logs.rs` x3) — every one sits inside a trailing `mod tests` block with no
+  further code after it in the file. `queries.rs:373` (`ExecutionProcess::create` itself) is the
+  only production INSERT. Matches — no bypass path.
+- `lifecycle.rs`'s six `UPDATE execution_processes` statements (pre-edit `:38, :61, :79, :93, :112,
+  :133`), confirmed by reading the pristine file before editing: only `:39` (`update_completion`)
+  writes `status`. Matches.
+
+No disagreement found; the trigger stayed pre-resolved.
+
+### Red phase (required evidence)
+
+Could not literally "write tests first against pristine, run, then implement" in one pass without
+risking losing the red evidence once the implementation landed on top of the same files — instead,
+after writing both the implementation and the tests together, reconstructed the red phase
+mechanically and non-destructively: copied the finished (impl+tests) files to `.wai-scratch/`,
+reconstructed pristine-content-plus-new-tests-only versions using `git show HEAD:<path>` (stdout
+read, no working-tree mutation) plus the new test module text sliced out of the finished files,
+swapped those into the working tree, ran the suite, then restored the finished files from
+`.wai-scratch/` and `diff`-verified byte-identical before deleting the scratch dir.
+
+```text
+test models::execution_process::lifecycle::lifecycle_event_tests::non_terminal_update_emits_nothing ... ok
+test models::execution_process::lifecycle::lifecycle_event_tests::completion_success_emits_attempt_finished ... FAILED
+test models::execution_process::lifecycle::lifecycle_event_tests::completion_failure_emits_attempt_failed ... FAILED
+test models::execution_process::lifecycle::lifecycle_event_tests::completed_with_missing_exit_code_emits_attempt_failed_not_a_fabricated_zero ... FAILED
+test models::execution_process::lifecycle::lifecycle_event_tests::terminal_events_carry_executor_identity ... FAILED
+test models::execution_process::queries::lifecycle_event_tests::create_emits_attempt_started_with_identity ... FAILED
+test models::execution_process::queries::lifecycle_event_tests::rolled_back_create_journals_nothing ... ok
+test models::execution_process::queries::lifecycle_event_tests::orphan_recovery_emits_one_attempt_failed_per_process ... FAILED
+test result: FAILED. 20 passed; 6 failed (all against pristine execution_process code; the other
+14 "passed" belong to task 006's pre-existing `task::queries::lifecycle_event_tests` module, unaffected)
+```
+
+All 6 failures were `left: 0, right: N` against `event_journal` row counts — no emission code
+existed yet, failing for the right reason. The 2 that passed pre-implementation
+(`rolled_back_create_journals_nothing`, `non_terminal_update_emits_nothing`) are negative-property
+tests, vacuously true with no emission code at all — same 2-of-8 shape task 006's red phase showed
+for its own two negative-property tests, for the same reason.
+
+After restoring the finished implementation (`diff` confirmed byte-identical to the pre-swap
+files), all 8 pass — see Verification below.
+
+### Sibling comparison against task 006
+
+Matched task 006's shape exactly: `journal_err_to_sqlx` duplicated (not shared via `mod.rs`, which
+this task's `files:` does not include — same reasoning task 006's `hierarchy.rs` copy documents),
+`event_journal::append(&mut *tx, &event).await.map_err(journal_err_to_sqlx)?` immediately before
+`tx.commit()`, and the write statement re-used verbatim as an existing `query_as!`/`query!` macro
+call, only re-targeted from `pool` to `&mut *tx`. One structural difference from 006, dictated by
+this task's own Change section rather than chosen: `mark_orphaned_as_failed` needed a SELECT before
+its UPDATE (to know WHICH of potentially several rows transitioned) — 006's four functions each
+touch at most one row identified by an id already in hand, so none needed this shape.
+
+### Undictated choice 1 — executor identity sourced from `TaskAttempt.executor`, not `executor_action`/`ExecutorSession`
+
+The task's prose suggests sourcing executor identity "from the row's `executor_action` / the
+associated `ExecutorSession`," with a fallback: "if not reachable at this layer without an extra
+query inside the transaction, do that extra read INSIDE the transaction." Used `TaskAttempt.executor`
+(`task_attempts.executor: String`, e.g. `"CLAUDE_CODE"`) instead, sourced via the SAME extra read the
+fallback already permits, for two reasons: (1) `task_id` is not present on `CreateExecutionProcess`
+at all (only `task_attempt_id`) or on the execution-process row `update_completion` receives (only
+`id`), so an extra query against `task_attempts` inside the transaction is unavoidable regardless of
+which field carries the executor string — the marginal cost of also selecting `executor` in that
+same query is zero. (2) `executor_action` only carries an `ExecutorProfileId.executor` for
+`run_reason = CodingAgent` — `SetupScript`/`CleanupScript`/`DevServer`/`Breakdown` executor actions
+carry no executor profile, so parsing it would leave those run reasons with no identity source, while
+`SC2` requires executor identity on every attempt event regardless of run reason. `TaskAttempt.executor`
+is populated unconditionally for every attempt. Both `create` (via a 2-column `(task_id, executor)`
+tuple SELECT) and `update_completion`/`mark_orphaned_as_failed` (via a JOIN to `task_attempts`) use
+this source.
+
+### Undictated choice 2 — reason string for `update_completion`'s Failed/Killed events
+
+Not dictated: `completion_reason.or(completion_message).map(str::to_string).unwrap_or_else(|| "execution
+process ended with status {status:?} and no completion reason recorded")` — `completion_reason` is a
+short identifier (`"eof"`, `"error"`, `"killed"`, `"result_error"`) already stored for this purpose;
+`completion_message` (freeform detail, e.g. an error string) is the fallback when no short reason was
+recorded; the final fallback names the status so the event is never emitted with an empty reason.
+
+### Undictated choice 3 — `mark_orphaned_as_failed`'s `AttemptFailed.reason`
+
+Fixed string: `"orphan recovery: process was running under a stale server instance"` — the task names
+this only as "a reason identifying orphan recovery," no further shape dictated. Uniform because every
+row in this bulk UPDATE has the same cause (stale `server_instance_id`) by construction of the WHERE
+clause; there is no per-row detail to differentiate.
+
+### Undictated choice 4 — `mark_orphaned_as_failed` keeps `result.rows_affected()` as its return value
+
+The task requires "the function keeps its ... `Result<u64, …>` return." The pre-fetched SELECT rows
+(used to build events) and the UPDATE's `rows_affected()` are guaranteed equal in this run — same
+predicate, same transaction, no concurrent writer possible mid-transaction — but `rows_affected()`
+was kept as the literal return expression (rather than `orphaned.len() as u64`) to change nothing
+about the function's existing return-value derivation, only add the event-emission side effect.
+
+### Undictated choice 5 — one supplemental test beyond the seven named
+
+Added `completed_with_missing_exit_code_emits_attempt_failed_not_a_fabricated_zero` (`lifecycle.rs`),
+not one of the seven. The Change section's `unwrap_or(0)`-is-FORBIDDEN sentence is a property no
+named test isolates directly — test 2 always supplies `Some(exit_code)`. Without a dedicated test, a
+mutant reintroducing `exit_code.unwrap_or(0)` on the `Completed` path would pass every named test
+(it would still emit *an* event, just the wrong one, and none of the seven distinguish "fabricated
+`attempt_finished{exit_code:0}`" from "correct `attempt_finished{exit_code:0}`" when the true
+exit_code also happens to be 0 in test 2's own fixture). Same class of gap task 004's ledger entry
+(2026-08-12) and task 006's supplemental test both exist to close.
+
+### SECONDARY — orphaned `.sqlx` cache entry deleted
+
+`grep -rn 'DELETE FROM tasks WHERE id = \$1' --include='*.rs' crates/` returned no matches before
+deletion (re-verified independently); `sync.rs:382`'s `DELETE FROM tasks WHERE shared_task_id = ?`
+is a different query and its own cache entry was left untouched. `git rm
+crates/db/.sqlx/query-1e339e959f8d2cdac13b3e2b452d2f718c0fd6cf6202d5c9139fb1afda123d29.json`. Full
+verification (fmt/clippy/check/test) re-run after the deletion, all still green — confirms nothing
+still needed it.
+
+### Verification
+
+- Red phase: 6/8 new tests failed for the right reason against pristine code (above); byte-identical
+  restore confirmed via `diff`.
+- `cargo test -p db lifecycle_event_tests`: 26 passed (18 pre-existing task-006 tests + 8 new), 0
+  failed.
+- `cargo test -p db execution_process`: 36 passed, 0 failed.
+- `cargo test -p db` (full crate, after the SECONDARY deletion too): 252 passed, 0 failed, 7 ignored,
+  11 doctests passed (2 ignored).
+- `cargo fmt --all -- --check`: exit 0 (after one `cargo fmt --all` pass — the hand-written test
+  code needed reflow; re-verified clean after).
+- `cargo clippy -p db --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo clippy --all --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo check --workspace --all-targets`: exit 0.
+- `git status --porcelain`: `D crates/db/.sqlx/query-1e339e...d29.json`, `M
+  .../execution_process/lifecycle.rs`, `M .../execution_process/queries.rs` — exactly the three
+  declared files, plus this ledger entry.
+
+One compile-time bug caught by `cargo check`, not shipped: `status.clone()` passed inline as a
+`query!` macro argument produced `error[E0716]: temporary value dropped while borrowed` — the macro's
+generated code borrows the bound argument as a temporary. Fixed by binding to a named
+`let status_for_write = status.clone();` before the macro call instead. A second, silent-at-first
+hazard was caught by hand before compiling: `match (status, exit_code) { ... }` would move `status`
+into the tuple scrutinee, making the fallback arm's `format!("{status:?}")` (after the match) a
+use-after-move — matched on `(&status, exit_code)` instead (match ergonomics still let the unit-like
+`ExecutionProcessStatus::Completed` pattern match through the reference) so `status` stays usable in
+the trailing arm.
+
+Task-gate.sh not run by this implementer — it validates a committed `git` state and this run does
+not commit (orchestrator commits), same deferral task 006's entries record ("pending gate script +
+review").
