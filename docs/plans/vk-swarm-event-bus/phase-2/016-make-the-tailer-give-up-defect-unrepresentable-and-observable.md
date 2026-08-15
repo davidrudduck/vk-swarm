@@ -269,6 +269,10 @@ tests, not the extraction.
 
 ## REQUIRED after attempt 2 — I fixed one of the two paths, and the fix introduced a counter that can lie
 
+> **Superseded in part by "REQUIRED after attempt 3" below:** this section says "one observable
+> covers BOTH paths". There are THREE (, , ). Read the two sections
+> together; the published path is specified only in the later one.
+
 Attempt 2 did what it was asked and the panel confirmed it: a failure-path give-up budget below 25
 dies at the counter-wait site. But the brief was wrong in the same way, one level down.
 
@@ -367,3 +371,93 @@ guard, which is the point.
 - `last_published_seq` initialised to the resolved mark is the deliberate cursor semantic, stored
   before readiness so observers see a consistent pair.
 - The `polls_total >= before + 3` bound is correctly justified (the increment precedes the read).
+
+## REQUIRED after attempt 3 — `PollOutcome` has THREE variants and the guard covers two
+
+**Orchestrator error, the eighth, and the same error for the third consecutive round.** The
+"REQUIRED after attempt 2" section above states the fix as *"one observable covers both paths"*. The
+enum defined in this very file has three variants — `Idle`, `Published`, `Failed`. I wrote the enum
+and then reasoned about two of its three arms, three rounds running.
+
+The `Published` path has **zero** cadence coverage. `the_driver_keeps_polling_a_quiet_journal` never
+publishes; that is its premise. `the_driver_keeps_polling_a_journal_it_cannot_read` publishes once,
+and only after `await_polls_climb` has already returned.
+
+| driver gives up after K **published** passes | result |
+|---|---|
+| K=6 | `275 passed; 0 failed` |
+| **K=5** | `275 passed; 0 failed` |
+| K=4 | DIES — incidentally, on `tailer_health_advances_while_polling_and_records_failures` |
+
+**This is not covered by declared residual 1.** That residual is a budget of ≥50 *on the pass axis*,
+justified because detection cost is linear in elapsed time. The justification does not transfer:
+this budget is consumed by **published rows**, not by time. Phase 3 emits an event on every task
+mutation, so a live node burns five published passes within seconds of going live — after which SSE
+consumers park forever while all three counters read healthy. Ordinary use, not an exotic condition.
+
+### 1. Add the third cadence test — the `Published` path
+
+`the_driver_keeps_publishing_as_rows_arrive`: with the tailer running, commit a row and wait for its
+delivery, repeated until **50 published passes** have occurred, under a **30s deadline**. Then assert
+a further row still publishes at its absolute seq.
+
+**Derivation, shown so it can be checked** (`TAIL_INTERVAL = 75ms`):
+
+| | value |
+|---|---|
+| 50 passes, sleep-bound only | 3.75s |
+| + ~5ms commit per pass | 4.00s |
+| ×1.6 (the 32x-load stretch panel 9 measured on the sleep-bound tests) | 6.40s |
+| ×3 (pessimistic, if commits make it DB-bound rather than sleep-bound) | 12.00s |
+| **30s deadline → margin vs the pessimistic case** | **2.5x** |
+
+50 is chosen to match the other two paths so the declared floor is uniform across all three, rather
+than leaving one path with a different number nobody can remember. The deadline is 30s rather than
+the other tests' 20s because this test commits on every pass and is therefore more DB-bound than
+sleep-bound — panel 9's measured 1.6x stretch applies to the sleep-bound tests and should not be
+assumed here.
+
+**MEASURE IT AND TELL ME IF I AM WRONG.** Three consecutive attempts have caught a threshold I
+asserted without deriving the right axis. If 50/30s is wrong, report the measurement rather than
+silently adjusting.
+
+### 2. Add the `EventBus` clone-sharing test (panel 9 F3)
+
+`tailer_health` detaching on clone survives the suite:
+
+```text
+tailer_health: Arc::new(TailerHealth::default()),   // was: self.tailer_health.clone()
+test result: ok. 275 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 46.82s
+```
+
+`tailer_health()`'s doc comment promises the counters are "shared across all clones of this
+`EventBus` exactly as `tailer_handle` is" — a documented invariant with no test, and
+`event_bus_tailer_health_tracks_the_bus_s_own_tailer` never clones. Clone the bus and assert both
+handles observe the same climbing counters. Secondary in severity (no production consumers exist
+yet, confirmed by grep), cheap to close, and task 014 is about to create the first callers.
+
+### Mutation proofs — all must kill, plus every prior proof
+1. Driver returns after **5** consecutive `Published` passes → the new published-cadence test FAILS.
+2. `EventBus::clone` gives the clone a fresh `TailerHealth` → the new clone test FAILS.
+3. Every proof from attempts 1–3 must still kill (terminating `PollOutcome` variant; `break 0` after
+   10 initial-mark retries; different `Arc` in `EventBus::new`; `polls_total` frozen at 1;
+   `consecutive_failures` over-counting 3x; `last_published_seq` storing a batch's first seq;
+   `polls_total` skipping failed passes; give-up after 40 `Idle`; 60s adaptive idle backoff; give-up
+   after 10 `Failed`).
+
+### Recorded as ACCURATE — do not re-attack
+- **The cadence tests are NOT load-fragile.** Panel 9 measured them at 4.17s idle, 4.63-4.67s at 8x
+  oversubscription, and 6.56-6.77s at 32x plus sustained `dd` I/O contention — a 1.6x stretch against
+  a 20s deadline, 3.0x margin at the worst observed. No spurious red could be produced.
+  `MAX_CADENCE_BASELINE_POLLS` was specifically probed as a false-red mechanism and never fired.
+- **Residual 2 is BETTER than declared.** The effective cadence floor is ~300ms, not 400ms — but it
+  is held by `zero_receivers_does_not_stall_the_cursor`'s incidental fixed 300ms sleep, not by
+  `await_polls_climb`. Heartbeat inflation of `polls_total` (a plausible "keep the health surface
+  responsive" change) is caught at suite level but NOT by the mechanism attempt 3 was built around.
+  Record it; do not add a test for it.
+- **The retained `consecutive_failures >= 25` waits are now strictly redundant** with `polls_total`:
+  every shape they catch also freezes `polls_total` below its target. Redundancy is not a defect —
+  but the ledger must stop counting them as independent coverage.
+- The exact-count arithmetic (7 idle + 5 failed + one 3-row batch → 13 / 0 / 3) pins what it claims
+  at the `poll_once` level; `store(mark)` vs `store(*cursor)` is genuinely equivalent given
+  `read_range`'s `(cursor, mark]` contract, so it is not worth a mutation.

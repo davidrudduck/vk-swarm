@@ -2522,3 +2522,50 @@ ran, and the full suite re-confirmed green between mutations.
   typecheck command, run in addition to the brief's three); `cargo fmt --all -- --check` exit 0;
   `cargo clippy -p services --all-targets --all-features -- -D warnings` exit 0; `cargo test -p
   services` exit 0, 15 binaries, **392 passed / 0 failed**, lib `275 passed; 0 failed; 5 ignored`
+
+## 2026-08-15 execute: 016 attempt 3 REJECTED — three variants, two guarded; my eighth error
+
+- [Run orchestrator] **The same error for the third consecutive round, and the most embarrassing form
+  of it.** The amendment I wrote states the fix as "one observable covers BOTH paths". `PollOutcome`,
+  an enum I specified in this same task file, has THREE variants: `Idle`, `Published`, `Failed`. I
+  defined it and then reasoned about two of its three arms, three rounds running
+- [Run orchestrator] The `Published` path has zero cadence coverage by construction: the idle test
+  never publishes (its premise), and the faulted test publishes once, after `await_polls_climb` has
+  already returned. A driver that gives up after **5 published passes** survives at
+  `275 passed; 0 failed`; K=6 survives; K=4 dies incidentally on an unrelated health test, so the
+  bracket is two-sided
+- [Run orchestrator] **NOT covered by declared residual 1**, and the distinction matters. That
+  residual is a budget of ≥50 on the PASS axis, justified because detection cost is linear in elapsed
+  time. This budget is consumed by PUBLISHED ROWS, not by time. Phase 3 emits on every task mutation,
+  so a live node burns five published passes within seconds of going live, and then SSE consumers park
+  forever while all three counters read healthy. A residual has to be a trade someone costed; this was
+  a path nobody costed
+- [Run orchestrator] Considered banking it under the cap proposed to the user (accept further
+  driver-path variants as residuals and move the panel budget to phase 3) and **rejected that**: the
+  cap's rationale is diminishing returns on expensive coverage of exotic conditions, and this is
+  neither — the trigger is ordinary use and the fix is one test. Applying the cap here would be the
+  rationalisation the pre-committed rule exists to prevent
+- [Run orchestrator] Attempt 4 adds the third cadence test at 50 published passes / 30s deadline. The
+  50 matches the other two paths so the declared floor is uniform; the 30s (vs 20s) is because this
+  test commits on every pass and is therefore more DB-bound than sleep-bound, so panel 9's measured
+  1.6x load stretch cannot be assumed. Derivation is shown in the task file, and the implementer is
+  explicitly asked to measure and contradict it — three consecutive attempts have caught a threshold I
+  asserted on the wrong axis
+- [Run orchestrator] Also closing panel 9's F3: `EventBus::clone` giving the clone a fresh
+  `TailerHealth` survives the suite, falsifying the accessor's own doc comment ("shared across all
+  clones exactly as `tailer_handle` is"). No production consumers exist yet — the panel grepped and
+  disproved its own `DeploymentImpl` hypothesis, reporting against its own interest — but task 014
+  creates the first callers
+
+### Panel 9 findings recorded as ACCURATE, not to be re-attacked
+- [Run orchestrator] **The cadence tests are NOT load-fragile.** Measured 4.17s idle, 4.63-4.67s at 8x
+  oversubscription, 6.56-6.77s at 32x plus sustained `dd` I/O — a 1.6x stretch against a 20s deadline.
+  No spurious red could be produced. This closes the risk I flagged as my main worry when dispatching
+- [Run orchestrator] **Declared residual 2 is BETTER than stated**: the effective cadence floor is
+  ~300ms, not 400ms. But it is held by `zero_receivers_does_not_stall_the_cursor`'s incidental fixed
+  sleep, NOT by `await_polls_climb`. Heartbeat inflation of `polls_total` is caught at suite level and
+  not by the mechanism attempt 3 was built around — the guard is less load-bearing than the ledger's
+  own argument for it claimed
+- [Run orchestrator] **The `consecutive_failures >= 25` waits are now strictly redundant** with
+  `polls_total`. Redundancy is not a defect, but this ledger must stop counting them as independent
+  coverage — an earlier entry did
