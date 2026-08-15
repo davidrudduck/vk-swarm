@@ -5453,3 +5453,92 @@ the trailing arm.
 Task-gate.sh not run by this implementer — it validates a committed `git` state and this run does
 not commit (orchestrator commits), same deferral task 006's entries record ("pending gate script +
 review").
+
+### Panel 17A (task 007, SC2 remit): CITED DISSENT — 2 BLOCKING, 3 non-blocking. Task 007 REJECTED.
+
+Opus, own detached worktree at `51686b2d`, tree-clean proof supplied, worktree and target dir
+removed. Orchestrator independently verified both blocking findings before accepting them.
+
+**F17A-1 (BLOCKING) — `update_completion` emits on every terminal WRITE, not on a terminal
+TRANSITION.** The task file says "emit ONLY on the terminal transition". The code computes:
+
+```rust
+let is_terminal = !matches!(status, ExecutionProcessStatus::Running);
+```
+
+A function of the TARGET status alone. **No prior status is ever read.** Verified by reading
+`lifecycle.rs:53` and the whole `if is_terminal` block: the owner JOIN runs AFTER the UPDATE and
+selects only `(task_attempt_id, task_id, executor)` — no status.
+
+```text
+P1: 3 event(s) for 3 identical Completed writes: ["attempt_finished","attempt_finished","attempt_finished"]
+P2: 2 event(s) Completed->Killed: ["attempt_finished","attempt_failed"]
+P3: 0 event(s) for a Running write: []
+```
+
+**P2 is the damaging one: ONE execution process emitting BOTH `attempt_finished` and
+`attempt_failed`.** SC2 names "its terminal outcome (finished or failed)" — singular. Two
+contradictory terminal events for one attempt is worse than a missing one, because a consumer cannot
+tell which is true.
+
+**Shape parity with task 006 is FALSE on this axis, and the ledger claimed it.** `Task::update`
+(`task/queries.rs:340-386`) reads `old_status` inside the transaction and gates on
+`old_status != task.status`, and 006 ships two tests for exactly that property. 007 has no analogue
+at either level. 007's own doc comment invokes "same reasoning as `Task::update`'s prior-status read"
+while not doing the read. So a consumer CAN distinguish provenance: task events are transition-gated,
+attempt events are write-gated.
+
+**Production-reachable, traced rather than asserted:** `stop_execution_process`
+(`routes/execution_processes.rs:192-201`) calls `stop_execution(&ep, Killed)` with **no status
+guard** — verified by reading it. The middleware loads by id with no status filter. The exit monitor
+writes `Completed` at `container.rs:642` but removes the child from the store only at `:918`, after
+log normalization, webhooks, session checks, `load_context`, summary update and MsgStore teardown —
+a multi-second window. Clicking Stop on an agent that just finished lands in it. Note
+`services/container.rs:723-725` (`try_stop`) DOES guard on `status == Running`; the route does not.
+Pre-007 this was a benign duplicate status write. 007 turns it into two contradictory events.
+
+**F17A-2 (BLOCKING) — the `is_terminal` guard is entirely untested.** Mutating it to
+`let is_terminal = true;` leaves the WHOLE crate green:
+
+```text
+test result: ok. 254 passed; 0 failed; 7 ignored
+```
+
+Test 4 (`non_terminal_update_emits_nothing`) drives `ExecutionProcess::update_pid` — verified at
+`lifecycle.rs:409` — which never enters `update_completion`. The task file did suggest "e.g. setting
+a pid", so the implementer followed the letter; the resulting test pins nothing about the guard it is
+named for. **That is a defect in my task file's example, not in the implementation of it.**
+
+**Both close with one change:** fold `ep.status` into the owner JOIN `update_completion` already
+issues, move that SELECT BEFORE the UPDATE, and gate emission on the row not already being terminal —
+mirroring `Task::update`. Zero extra round trips. Plus three boundary tests: a `Running` write, a
+repeat terminal write, and terminal→terminal.
+
+**F17A-3 (NON-BLOCKING) — all three sites emit `"executor": ""` for a NULL executor.**
+`task_attempts.executor` is nullable (`PRAGMA table_info` → `notnull = 0`) and sqlx decodes SQLite
+NULL into `String` as `""` rather than erroring, so an event with empty executor identity is emitted
+and `Ok` returned. Reachability is legacy-data only: `CreateTaskAttempt.executor` is a typed enum, the
+other two INSERT sites are test helpers, and the backfill migration leaves NULL as NULL. The live node
+DB has 0 `task_attempts`, so the panel could not confirm whether such rows exist.
+
+**F17A-4 (NON-BLOCKING) — the missing-exit-code branch is unreachable, and the bus/table can
+contradict.** The test bites (verified by mutation). But `(Completed, None)` is unreachable from every
+production caller: `container.rs:1995` maps `Completed` to `Some(0)`; `:613-623` pairs `None` only
+with `Failed`; `services/container.rs:562,:1572` both pass `(Failed, None)`. The panel argued both
+ways as asked. **Against, and worth recording:** the row's own `status` column reads `completed` while
+the journal says the attempt failed — the bus and the table disagree, which is the drift SC2 exists to
+prevent. The honest encoding would be a nullable exit code or a distinct variant. Design note given
+unreachability, not a defect.
+
+**F17A-5 (NON-BLOCKING, ledger accuracy) — the executor-sourcing rationale names Breakdown
+wrongly.** `ExecutorAction::base_executor()` returns `None` only for `ScriptRequest`; Breakdown is
+constructed with `CodingAgentInitialRequest`, which carries a profile. So the claim holds for
+SetupScript/CleanupScript/DevServer but not Breakdown. **The decision itself stands** — three of four
+still have no source, and the JOIN is required for `task_id` regardless.
+
+**Clean axes:** executor identity IS pinned at all three sites (blanking it fails five tests); id
+sourcing is pinned (swapping task_id/attempt_id fails); the orphan SELECT/UPDATE predicates are
+character-identical modulo alias and dropping the `resume_state` clause from the SELECT alone is
+caught; the orphan INNER JOIN cannot silently drop a row (FK is `ON DELETE CASCADE`, and a LEFT JOIN
+orphan count on the live DB returns 0); and the STOP-trigger enumeration was re-derived REPO-WIDE
+(15 `UPDATE execution_processes` sites, only two write status, both instrumented).
