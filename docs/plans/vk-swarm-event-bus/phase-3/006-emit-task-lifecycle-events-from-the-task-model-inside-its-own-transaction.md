@@ -151,7 +151,16 @@ touch other files in `crates/db/src/models/task/` (archive.rs, sync.rs, cleanup.
   `git grep -n "SET status" -- 'crates/**/*.rs'`. The ONLY write to `tasks.status` in Rust source is
   `crates/db/src/models/task/hierarchy.rs:19`, which IS `update_status` itself. `Task::update`'s
   status write is inside its own `UPDATE ... SET title, description, status, parent_task_id`. There
-  is no bypass path, so SC1 coverage is complete with the four named functions.
+  is no bypass path for STATUS. ~~so SC1 coverage is complete with the four named functions.~~
+  **COMPLETENESS CLAIM STRUCK 2026-08-15.** The status half above is still true and was re-verified
+  that day. The *completeness* half is FALSE for CREATION: `task_breakdown::accept_proposal`
+  (`crates/db/src/models/task_breakdown/queries.rs:406`, routed at `breakdown.rs:273`) and the two
+  hive-sync paths (`task/sync.rs:32`, `:283`) all `INSERT INTO tasks` without going through
+  `Task::create`. `task_breakdown` merged in PR #475 on 2026-08-11, concurrent with this decompose.
+  **Task 020 covers the breakdown site; the sync paths are a separate open decision.** Nothing about
+  this changes YOUR scope — instrument exactly the four functions named below and no others — but do
+  not repeat the completeness claim in the ledger, and do not treat the four functions as proof that
+  SC1 is fully covered by this task.
   `crates/db/src/models/task/archive.rs:15` writes `archived_at`, NOT `status` — a separate lifecycle
   concern this plan does not journal, and archive.rs stays out of `files:` as stated above.
 - *Dismissal-helper callers:* enumerated with `git grep -n "clear_for_task\|undismiss"`.
