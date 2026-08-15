@@ -5034,3 +5034,45 @@ second savepoint reusing the released name); A4b (caller ignores the error and k
 transaction: post-failure UPDATE `Ok(1)`, commit `Ok(())`); C1 (`core.rs:663`'s exact early-return
 shape with the tx dropped rather than explicitly rolled back — the child's `parent_task_id` is
 restored and the savepoint RELEASE does not make the outer nullify durable).
+
+### Panel 15B, follow-up: my F1 generalisation was too broad — corrected
+
+The panel challenged my own ledger wording, in my favour, and it is right. I wrote:
+
+> *when a test's final act is to undo the state it asserts on, the assertion is about the undo, not
+> about the code under test.*
+
+That reads as a ban on a test which in fact has real value: the rollback-based test rules out a
+POISONED CONNECTION, which is a genuine property and worth asserting. The defect was not that the
+test exists — it is that it was the ONLY savepoint-path assertion, so nothing covered the commit
+path. The panel's narrower and more usable form, adopted here as the rule this run carries forward:
+
+> **A test whose final act undoes the state it asserts on is testing the undo — pair it with one
+> that keeps the state.** Not "don't write it", but "don't let it stand alone."
+
+Recording the correction rather than quietly restating it: I over-generalised from my own error, and
+a broad rule that forbids a useful test would have cost more later than the narrow one that keeps it.
+
+**It also re-verified rather than transcribed.** Asked for the A1/A4b source from a removed worktree,
+it rebuilt a detached worktree at `4772da26`, adapted both tests to `lifecycle_event_tests`' own
+helpers, and re-ran the bite proof — because "the whole finding is that this test is easy to write
+wrong and a transcription that compiles but is vacuous again would be worse than nothing." That run
+is also the single cleanest statement of F1:
+
+```text
+test ...delete_savepoint_failure_is_undone_even_if_the_caller_commits ... FAILED
+test ...delete_via_savepoint_rolls_back_cleanly_on_append_failure ... ok      <-- passes on the defect
+test ...delete_via_pool_is_atomic_when_append_fails ... FAILED
+test ...failed_savepoint_leaves_the_outer_transaction_usable ... FAILED
+```
+
+One execution, one defect, the shipped test green while both replacements are red.
+
+**A qualification on F2 fork (a) that its own sweep does not cover, volunteered rather than
+withheld:** `async fn` INFERS `Send` where `impl Future + Send + 'a` ASSERTS it. A future caller that
+breaks Send-ness would fail at THAT caller with an opaque axum `Handler` error rather than at
+`delete` with a clear one. The remedy is fork (a) plus a two-line `assert_send` compile test beside
+`delete`, giving fork (a)'s simplicity with fork (b)'s diagnostics. Taken.
+
+Source for all of it preserved at `.wai-scratch/panel15b-savepoint-tests.rs` (gitignored), including
+the three traps the panel hit at least once each.
