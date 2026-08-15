@@ -37,7 +37,9 @@ It also failed 2 of 3 full `cargo test -p services` runs on the task-013 branch 
 - Main worktree with attempt 7: fails ~1/4 to 2/3 depending on machine load.
 
 Same code passing in one worktree and failing in another, plus the failure reproducing on code that
-predates task 013 entirely, rules out the event bus as the cause. The variable is machine load.
+predates task 013 entirely, rules out the event bus as the cause. ~~The variable is machine load.~~
+**Superseded 2026-08-15** — load raises the frequency but is not the variable; see the idle-machine
+section below. What this A/B establishes remains sound: the defect is not caused by the event bus.
 
 ## Why it looked like it MIGHT be a real bug (superseded by the confirmation below)
 
