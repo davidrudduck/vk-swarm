@@ -8,7 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - "crates/services/tests/event_emission.rs"
-siblings: ["crates/services/tests/electric_task_sync.rs"]
+siblings: ["crates/services/tests/electric_task_sync.rs", "crates/services/tests/event_bus_end_to_end.rs"]
 irreversible: false
 scope_test: "crates/services"
 allowed_change: create
@@ -35,7 +35,6 @@ connectivity bug and a cross-site assertion bug blocked each other's revert.
    `NodeEvent` and assert `event_type()` matches the stored `event_type` column. Catches a site that
    journals a hand-written type string instead of the typed contract.
 
-
 ## Change
 
 **Query form for any NEW SQL you write (amended 2026-08-12).** Use the runtime sqlx API —
@@ -59,12 +58,10 @@ assert on the SET and COUNT of rows. Query the journal rather than subscribing t
 suite is about EMISSION, and going through the tailer would make a publication bug look like an
 emission bug.
 
-
 ## Allowed moves
 ONLY this one new test file. Do NOT modify any emission site to make a test pass —
 if a site is wrong, that is a defect in task 006/007/008 and belongs there. Do NOT assert on
 broadcast delivery; that is task 013's and task 005's territory.
-
 
 ## STOP triggers
 - A test here fails because an emission site is wrong — STOP and fix it in the owning task rather
@@ -76,13 +73,11 @@ broadcast delivery; that is task 013's and task 005's territory.
   and is blocked on THAT escalation, not on this task. Say so explicitly rather than weakening the
   test to pass; this suite inherits 008's risk and must not disguise it.
 
-
 ## Manual verification (record in decisions-ledger)
 Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
 WAI_TEST_CMD="cargo test -p services event_emission"
 
 All five tests green. Record in the ledger the `electric_task_sync.rs` sibling comparison.
-
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 015` exits 0
