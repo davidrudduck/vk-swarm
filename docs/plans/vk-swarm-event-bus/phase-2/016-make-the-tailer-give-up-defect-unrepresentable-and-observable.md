@@ -270,7 +270,7 @@ tests, not the extraction.
 ## REQUIRED after attempt 2 — I fixed one of the two paths, and the fix introduced a counter that can lie
 
 > **Superseded in part by "REQUIRED after attempt 3" below:** this section says "one observable
-> covers BOTH paths". There are THREE (, , ). Read the two sections
+> covers BOTH paths". There are THREE (`Idle`, `Published`, `Failed`). Read the two sections
 > together; the published path is specified only in the later one.
 
 Attempt 2 did what it was asked and the panel confirmed it: a failure-path give-up budget below 25
