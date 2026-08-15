@@ -2,7 +2,7 @@
 workstream: normalize-fast-execution-lost-logs-flake
 doc_type: readme
 status: ready
-title: "Fast executions silently lose logs — CONFIRMED race in normalization"
+title: "Fast executions silently lose logs — CONFIRMED race, fires idle and under load"
 depends_on: []
 adrs: []
 staging_pointers:
@@ -56,7 +56,7 @@ load that could be a slow machine — or it could be the original race, still li
 **It was deliberately NOT marked `#[ignore]`**: silencing it would remove the only guard against a
 lost-log bug in production log handling, which is a worse trade than an occasional red run.
 
-## It is the WHOLE FILE, not one test — and we may be aggravating it
+## Rate observations (the "load" framing here is superseded by the 2026-08-15 section above)
 
 A later gate run failed on a DIFFERENT test in the same file,
 `test_normalization_malformed_input`, so the unit of flakiness is
@@ -106,11 +106,28 @@ sub-second case is unambiguous and is the one to chase.
 execution log output for fast executions, silently and intermittently. The test is doing exactly the
 job it was written for and should not be touched until the race is fixed.
 
+## 2026-08-15: it fires on an IDLE machine too — "load-sensitive" is the wrong name
+
+The title and the rate table below describe this as load-triggered. That framing came from the
+earliest observations and is now too narrow. It failed a Stage-1 gate run on a box measured idle
+moments before (run queue 0, ~92% CPU idle, load average 2.83 and still decaying from an unrelated
+cleanup):
+
+```text
+failures:
+    test_fast_execution_no_lost_logs
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+```
+
+**0.49s** — the same sub-second signature as the 0.52s capture below, so again the handle completed
+and produced zero patches rather than timing out. Load raises the frequency; it is not the cause.
+Anyone bisecting this should not assume a stress harness is required to reproduce it.
+
 ## What is needed
 
 1. ~~Reproduce with the failure message captured~~ **DONE** — see above. Reproduces at roughly 1 in 6
-   to 1 in 8 full-crate runs under load; standalone on a quiet machine it did not reproduce in 12
-   attempts, and reproduced once in 8 when other agents were loading the machine.
+   to 1 in 8 full-crate runs under load, and at a lower but non-zero rate on an idle machine (the
+   earlier "0/12 standalone on a quiet machine" reading was luck, not a floor).
 2. ~~Determine whether the handle timed out or completed with zero patches~~ **DONE — completed with
    zero patches.** Race, not slowness.
 3. Find the race: why does the normalizer complete without emitting a patch for a message that was
