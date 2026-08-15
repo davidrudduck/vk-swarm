@@ -147,8 +147,9 @@ async fn poll_once(
 ///
 /// The readiness signal is that edge: once it resolves, the initial mark is fixed, so every row
 /// committed afterwards is strictly above the cursor and MUST be published. The send is
-/// `let _ = ...` deliberately — a caller that drops the receiver (as `EventBus::new` does) must
-/// not panic the tailer.
+/// `let _ = ...` deliberately — a caller that drops the receiver must not panic the tailer.
+/// (`EventBus::new` does not do this: it awaits the receiver in `new_with_ready_timeout` — see
+/// `event_bus/mod.rs`. A caller COULD still drop it, and this send exists for that hypothetical.)
 pub fn spawn(
     pool: SqlitePool,
     sender: broadcast::Sender<SequencedEvent>,

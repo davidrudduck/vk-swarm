@@ -190,10 +190,16 @@ fn assert_task_created_body(
 #[tokio::test]
 async fn a_committed_row_reaches_a_live_subscriber() {
     let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
+
+    // The warm-up commit lands BEFORE the bus exists, so the tailer's initial mark is 1 and the
+    // row under test is the FIRST row it must ever publish. On an empty journal the mark is 0,
+    // seq 1 falls inside subscribe_from's own replay window, and a tailer that starts one past
+    // its mark (or drops the first row of a batch) is undetectable here. See task 019.
+    let (warm_seq, _warm_task_id, _warm_project_id) = commit_task_created(&pool).await;
+
     let bus = EventBus::new(pool.clone(), 64).await;
     let mut stream: EventStream = bus.subscribe_from(0).unwrap();
 
-    let (warm_seq, _warm_task_id, _warm_project_id) = commit_task_created(&pool).await;
     expect_next_seq(&mut stream, warm_seq, Instant::now() + DEADLINE).await;
 
     let (seq, task_id, project_id) = commit_task_created(&pool).await;
@@ -255,7 +261,7 @@ async fn a_subscriber_that_joins_late_replays_from_its_cursor_then_goes_live() {
     // replay of seqs 1..=4" either (F2, panel 11 on task 017 — the duplicate clause was corrected
     // in task 018, the replay clause only in attempt 2 after panel 12 caught it retained). Both
     // are ruled out of OBSERVATION by the same rule: `subscribe_from`'s Live arm drops anything
-    // with `ev.seq <= state.last` (`event_bus/mod.rs:200`), so a re-delivered seq 1..=4 —
+    // with `ev.seq <= state.last` (`event_bus/mod.rs:254`), so a re-delivered seq 1..=4 —
     // duplicate or belated replay alike — is consumed before the stream ever yields it, and this
     // assertion cannot see one either way. Nothing else in this test guards either property.
     //
@@ -387,7 +393,7 @@ async fn a_new_bus_on_the_same_pool_resumes_without_replaying_history() {
     // caught it retained). Both are ruled out of OBSERVATION by the same rule: this subscriber
     // starts at `bus2.subscribe_from(high_water)`, so `state.last` is 2 from the outset and only
     // ever climbs, and `subscribe_from`'s Live arm drops anything with `ev.seq <= state.last`
-    // (`event_bus/mod.rs:200`). Seqs 1-2 are below the cursor by construction, and a re-delivered
+    // (`event_bus/mod.rs:254`). Seqs 1-2 are below the cursor by construction, and a re-delivered
     // seq 3 or 4 is dropped as a duplicate — neither can reach this assertion.
     //
     // The no-history-replay property IS guarded by this test, but by the FIRST `expect_next_seq`

@@ -4135,3 +4135,224 @@ which patterns it used, letting the next reader judge coverage instead of trusti
 
 **Task 018 marked `passed`** after two attempts, one blocking rejection, and three panels
 (11 on 017, 12 and 13 on 018).
+
+## 2026-08-15 task 019
+
+Implemented on `8493fcf0`. File set: `crates/services/tests/event_bus_end_to_end.rs`,
+`crates/services/src/services/event_bus/tailer.rs` (one comment only), and this ledger.
+
+Working-rules compliance: no `git checkout`/`restore`/`stash`/`reset`/`clean` used anywhere in this
+session. Both mutations (M7, M3) were applied to `tailer.rs` via `cp` from a pristine scratch copy
+(`.wai-scratch/tailer.rs.019-pristine`, itself copied from the real file before any edits), tested,
+then restored via `cp` from the same pristine copy with a `diff` verifying byte-identical restore
+before the next mutation or before finishing. `git diff --stat` on `tailer.rs` after both restores
+showed only the fix-2 comment change, confirming no mutation residue survived into the final diff.
+`pgrep -x cargo` was confirmed empty immediately before every timed measurement (control, M7, M3, and
+each of the four `cargo test -p services` full-suite reruns of the verification section).
+
+### Primary change — the restructure, applied exactly as specified
+
+Moved `a_committed_row_reaches_a_live_subscriber`'s warm-up commit to before `EventBus::new`, as
+dictated. No undictated choice was needed here — the task file's before/after diff was followed
+verbatim, including its doc-comment addition.
+
+### Re-confirmation of the three run tables (REQUIRED, re-run independently)
+
+All three run against `crates/services/tests/event_bus_end_to_end.rs` at its restructured (post-fix)
+state, `tailer.rs` at its state for that table (pristine for control, mutated for M7/M3). Every run
+below used `cargo test -p services --test event_bus_end_to_end` at default test-harness parallelism
+(all 5 tests in the file run concurrently) — the same shape the orchestrator's numbers imply (their
+control table's ~2.7s per run is only reachable at default parallelism; a serialized run of the same
+5 tests measures ~7.1s, see the methodology note below).
+
+**CONTROL (unmutated, restructured), full suite, 4 runs:**
+
+```text
+run 1: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.64s
+run 2: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.65s
+run 3: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.60s
+run 4: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.65s
+```
+
+**4/4 green, matching the task file's table (2.71/2.71/2.62/2.73s) within normal machine variance.**
+No STOP trigger fired.
+
+**M7 (`Ok(mark) => break mark,` → `Ok(mark) => break mark + 1,`, `tailer.rs:164`), restructured test,
+full suite, 4 runs:**
+
+```text
+run 1: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.57s
+run 2: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.57s
+run 3: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.56s
+run 4: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.52s
+```
+
+All four failures named `a_committed_row_reaches_a_live_subscriber`; the other four tests stayed
+green in every run. **4/4 FAILED, matching the task file's prediction of 0/4 → 4/4.** I ran the full
+suite (not filtered to the one test, unlike the orchestrator's `0 passed; 1 failed` filtered form) —
+a strict superset of what the task asked me to reconfirm, and it additionally shows the mutation does
+not collaterally fail any other test in the file.
+
+**M3 (`for seq_ev in seq_events` → `for (m3_i, seq_ev) in seq_events.into_iter().enumerate()` with an
+`if m3_i == 0 { *cursor = seq_ev.seq; continue; }` guard, `tailer.rs:84`), restructured test, full
+suite, 4 runs:**
+
+```text
+run 1: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.57s
+run 2: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.57s
+run 3: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.54s
+run 4: test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.56s
+```
+
+All four failures named `a_committed_row_reaches_a_live_subscriber`; the other four tests stayed
+green in every run. **4/4 FAILED, matching the task file's prediction of 1/4 → 4/4.**
+
+**No disagreement with the task file's numbers.** All three tables reproduce cleanly.
+
+### A methodology note, recorded because it looked like a disagreement before it wasn't
+
+My first control attempt used `cargo test -p services --test event_bus_end_to_end -- --test-threads=1`
+to serialize the 5 tests for a cleaner read of which test was which. That measured 4/4 green but at
+~7.07-7.09s per run — materially beyond the task file's ~2.7s STOP-trigger bound, which for a moment
+looked like the "disagreement" the task said to report rather than paper over. It was not a defect in
+the restructure: it was my own harness flag forcing serialization of tests the orchestrator's table
+(and the file header's own design) assumes run concurrently. Re-run at default parallelism, control
+was 4/4 green at 2.60-2.65s, matching the task file. Recorded so a later reader who reaches for
+`--test-threads=1` for a cleaner readout does not mistake the resulting wall time for a regression.
+
+### SECONDARY fix 1 — `mod.rs:200` → `mod.rs:254`, re-verified before writing
+
+Re-ran `grep -n "if ev.seq > state.last" crates/services/src/services/event_bus/mod.rs` myself before
+writing the number (not copied from the task file): `254:                                    if ev.seq
+> state.last {`, matching what the task file already asserted panel 13 had confirmed. Re-ran it AGAIN
+after the primary restructure (in case the restructure itself had touched `mod.rs` — it did not) and
+a third time after applying fix 1, to make sure my own edit had not somehow drifted the target. All
+three checks agreed: `254`. Both citations in `event_bus_end_to_end.rs` (at what are now lines 264
+and 396, shifted by the restructure's added lines) were repointed from `:200` to `:254`. No STOP
+condition — the line had not moved again since panel 13 verified it.
+
+### SECONDARY fix 2 — `tailer.rs:150`'s false parenthetical
+
+Confirmed via `event_bus/mod.rs`'s `new_with_ready_timeout` (line 105-143) that `EventBus::new` awaits
+the tailer's readiness receiver through a `tokio::time::timeout(ready_timeout, ready).await` and does
+not drop it — the task file's premise for this fix is accurate. Rewrote the parenthetical as the
+hypothetical it now is, keeping the `let _ = ...` defensive-send rationale (a caller COULD still drop
+the receiver) rather than deleting it, per the task's instruction:
+
+```diff
+-/// `let _ = ...` deliberately — a caller that drops the receiver (as `EventBus::new` does) must
+-/// not panic the tailer.
++/// `let _ = ...` deliberately — a caller that drops the receiver must not panic the tailer.
++/// (`EventBus::new` does not do this: it awaits the receiver in `new_with_ready_timeout` — see
++/// `event_bus/mod.rs`. A caller COULD still drop it, and this send exists for that hypothetical.)
+```
+
+**Undictated choice:** the corrected comment grew from 2 lines to 3 rather than staying at 2, to name
+the specific function (`new_with_ready_timeout`) that now does the awaiting rather than leaving the
+correction unsourced — a future reader can verify the claim without a repo-wide grep. `git diff -- \
+crates/services/src/services/event_bus/tailer.rs` confirms the diff touches exactly this one
+doc-comment block and nothing else in the file (verified: 5 lines changed, one hunk, no other hunks).
+
+### Sweep for further stale premises
+
+Patterns used, each run separately over both changed files (and, for the line-number patterns, over
+the whole `event_bus/` directory to catch citations I might otherwise miss):
+
+1. `drops the\|dropped the\|drop the\|drops it\|dropped it` — broader than attempt 2's
+   `drops the tailer\|readiness receiver` (which is the exact pattern documented as having missed
+   `tailer.rs:150` by matching "receiver" but not "drops the receiver" as one phrase — this pattern
+   set is phrased to catch "drops the X" for any X). Three hits after my edits: `e2e.rs:62`
+   ("`new()` dropped the tailer's readiness receiver" — past tense, inside the `WARM_LIVE_DEADLINE`
+   doc comment's history of pre-018 behaviour, already reviewed and confirmed correct-as-written in
+   the task 018 attempt-2 ledger entry); `e2e.rs:197` (my own new restructure comment, accurate);
+   `tailer.rs:150` (post-fix, accurate); `tailer.rs:340` (`await_ready`'s panic message about a test
+   double dropping its OWN sender without signalling — an unrelated runtime scenario, not a premise
+   about `EventBus::new`). No stale hit.
+2. `mod\.rs:[0-9]` — generalizes fix 1's literal `:200` search to catch ANY numbered citation into
+   `mod.rs`, in case a third stale site existed that named a different line. Two hits, both the fixed
+   `:254` citations. No third site found.
+3. `tailer\.rs:[0-9]` — the mirror of pattern 2, over all three files (`e2e.rs`, `tailer.rs`,
+   `mod.rs`) in case anything cites a `tailer.rs` line number. Zero hits anywhere.
+4. `readiness receiver\|readiness signal\|ready_rx\|ready_tx` — the conceptual readiness-mechanism
+   vocabulary, independent of line numbers. All hits reviewed under pattern 1 above; nothing new.
+5. `probe\|wait_until_tailer_publishes\|prove_tailer_is_live` — attempt 2's original pattern,
+   re-run for completeness now that `tailer.rs` is back in scope for one line. Zero hits in either
+   file (the helper and its callers were already fully removed in task 018).
+6. `:200\b` over the whole `event_bus/` directory (not just the two changed files) — a bare-number
+   net wider than pattern 2, to catch a `:200` citation from a file this task does not otherwise
+   touch. Zero hits after the fix.
+7. `startup race\|unsound at\|the race\b` — swept on the theory that a race-condition claim could be
+   stale the same way a dropped-receiver claim was. Four hits, all in `e2e.rs`: one past-tense
+   history statement (`:61`, "was unsound at any fixed deadline", describing pre-018 behaviour) and
+   three present-tense claims that the race is now closed (`:189`, `:218`, `:336`) — all still true
+   post-018, no edit needed.
+
+No further stale premises found. Coverage claim is scoped to these seven pattern sets over the three
+files in this task's blast radius (`e2e.rs`, `tailer.rs`, `mod.rs`); a differently-phrased stale
+premise outside this vocabulary, or one living outside these three files, would not have been caught.
+
+### Verification (all green)
+
+```text
+cargo test -p services                                                -> exit 0 (279 lib + 5 e2e +
+  all other integration suites passed; normalize_sync_test.rs, the documented pre-existing flake,
+  was green this run and untouched either way)
+cargo fmt --all -- --check                                             -> exit 0
+cargo clippy -p services --all-targets --all-features -- -D warnings   -> exit 0
+cargo check --workspace                                                -> exit 0
+```
+
+`git diff --stat`:
+
+```text
+ crates/services/src/services/event_bus/tailer.rs |  5 +++--
+ crates/services/tests/event_bus_end_to_end.rs    | 12 +++++++++---
+ 2 files changed, 12 insertions(+), 5 deletions(-)
+```
+
+Exactly the two files in this task's `files:` list, plus this ledger.
+
+### Problem found in the task file itself: the "Done when" script path does not exist
+
+`~/.claude/wai/scripts/task-gate.sh` does not exist in this worktree's environment.
+`~/.claude/wai` is a directory of symlinks (`schema`, `skills`, `workflows`) with no `scripts` entry.
+`find / -name task-gate.sh` locates several copies of the script under plugin cache/marketplace paths
+(none at the literal path the task file gives) and under unrelated project directories, but none at
+`~/.claude/wai/scripts/task-gate.sh` specifically. Rather than guess which cached copy was intended
+and run an unverified substitute, I ran the four commands the task file's own "Verification before
+reporting" section lists explicitly (`cargo test -p services`, `cargo fmt --all -- --check`,
+`cargo clippy -p services --all-targets --all-features -- -D warnings`, `cargo check --workspace`) —
+all green, shown above — plus the `git diff --stat` and one-comment-only diff proof it also asks for.
+This is reported as a finding about the task file/environment, not treated as a blocker for a task
+whose actual deliverables and their explicit verification commands are otherwise fully satisfied.
+
+### Summary for the gate
+
+Primary restructure applied exactly as specified; both mutation tables and the control table
+reconfirmed independently and agree with the task file's numbers (no disagreement to report on the
+substance, only the `--test-threads=1` methodology near-miss above). Both SECONDARY fixes applied,
+each re-verified against current code rather than trusted from the task file, with `tailer.rs`'s diff
+proven to be exactly one comment block. Sweep run with seven documented pattern sets; no further stale
+premises found within their coverage. All four required verification commands green. Task file's
+"Done when" script path does not resolve in this environment and is reported rather than
+worked around.
+
+### Orchestrator note: every task file's "Done when" gate path is wrong on this machine
+
+019's implementer reported that `~/.claude/wai/scripts/task-gate.sh` — the path in every task file's
+`## Done when` line — does not resolve here: `~/.claude/wai` carries only `schema`/`skills`/
+`workflows` symlinks and no `scripts/`. The real path on this machine is
+`/home/david/.claude/plugins/cache/agent-plugins/wai/0.28.25/scripts/task-gate.sh`, which is what
+the orchestrator has used for every gate run in this workstream.
+
+**The implementer handled this correctly and it is worth recording as the pattern:** it did NOT
+guess-substitute one of the other `task-gate.sh` copies on disk, and it did not silently skip
+verification. It ran the four explicit commands the dispatch brief listed and reported the path
+problem as a defect in the task file. Substituting a cached copy from elsewhere would have been a
+plausible-looking guess at which of several installed plugin versions is authoritative — exactly the
+class of undictated choice this loop exists to surface rather than absorb.
+
+No task files are being edited for this: the `Done when` line is inherited boilerplate from the
+decompose template, the orchestrator runs the gate itself with the resolved path, and rewriting the
+line in nineteen task files would touch every one of them for no behavioural gain. Recorded here so
+the next implementer does not spend time on it.
