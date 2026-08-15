@@ -246,14 +246,24 @@ async fn a_subscriber_that_joins_late_replays_from_its_cursor_then_goes_live() {
     assert_task_created_body(&ev, task_id4, project_id4);
 
     // No gap (already proven: seq4 arrived as the immediate next item, not something later).
-    // This does NOT additionally prove "no duplicate across the boundary" (F2, panel 11 on task
-    // 017) — `subscribe_from`'s Live arm drops anything with `ev.seq <= state.last`
-    // (`event_bus/mod.rs:200`), so a duplicate is consumed before the stream ever yields it and
-    // this assertion cannot observe one either way. What this silence DOES prove is that nothing
-    // further — in particular no belated replay of seqs 1..=4 — arrives after the handoff. The
-    // exactly-once property genuinely lives in `the_bus_publishes_a_committed_row_exactly_once`
-    // (`event_bus/mod.rs`), which subscribes directly to the broadcast channel rather than through
-    // `subscribe_from`'s dedupe.
+    //
+    // This silence proves exactly ONE thing and no more: no event with a seq ABOVE the cursor
+    // (`state.last`, which is 4 by this point) arrived within the window. Nothing past seq 4 was
+    // ever committed here, so what it rules out is the bus yielding a row this test never wrote.
+    //
+    // It does NOT prove "no duplicate across the boundary", and it does NOT prove "no belated
+    // replay of seqs 1..=4" either (F2, panel 11 on task 017 — the duplicate clause was corrected
+    // in task 018, the replay clause only in attempt 2 after panel 12 caught it retained). Both
+    // are ruled out of OBSERVATION by the same rule: `subscribe_from`'s Live arm drops anything
+    // with `ev.seq <= state.last` (`event_bus/mod.rs:200`), so a re-delivered seq 1..=4 —
+    // duplicate or belated replay alike — is consumed before the stream ever yields it, and this
+    // assertion cannot see one either way. Nothing else in this test guards either property.
+    //
+    // Both genuinely live elsewhere, observed on the raw broadcast channel instead of through
+    // `subscribe_from`'s dedupe: duplicate publication in
+    // `the_bus_publishes_a_committed_row_exactly_once` (`event_bus/mod.rs`), and re-emission of
+    // already-published history in `tailer_does_not_republish_across_passes`
+    // (`event_bus/tailer.rs`).
     assert_quiet(&mut stream, QUIET_WINDOW).await;
 
     bus.shutdown().await;
@@ -366,12 +376,28 @@ async fn a_new_bus_on_the_same_pool_resumes_without_replaying_history() {
         expect_next_seq(&mut stream, second_seq, Instant::now() + WARM_LIVE_DEADLINE).await;
     assert_task_created_body(&second, second_task_id, second_project_id);
 
-    // No stray replay of the two pre-restart events sneaks in afterward. A duplicate of either
-    // post-restart event is separately, and more strongly, ruled out already: `subscribe_from`'s
-    // Live arm drops anything with `ev.seq <= state.last` (`event_bus/mod.rs:200`), so a
-    // duplicate is consumed before the stream ever yields it and cannot arrive here to be
-    // observed either way (F2, panel 11 on task 017) — the exactly-once property genuinely lives
-    // in `the_bus_publishes_a_committed_row_exactly_once` (`event_bus/mod.rs`).
+    // This silence proves exactly ONE thing and no more: no event with a seq ABOVE the cursor
+    // (`state.last`, which is `second_seq` by this point) arrived within the window. Nothing past
+    // that seq was ever committed here, so what it rules out is the bus yielding a row this test
+    // never wrote.
+    //
+    // It does NOT prove "no stray replay of the two pre-restart events", and it does NOT prove
+    // "no duplicate of either post-restart event" either (F2, panel 11 on task 017 — the duplicate
+    // clause was corrected in task 018, the stray-replay clause only in attempt 2 after panel 12
+    // caught it retained). Both are ruled out of OBSERVATION by the same rule: this subscriber
+    // starts at `bus2.subscribe_from(high_water)`, so `state.last` is 2 from the outset and only
+    // ever climbs, and `subscribe_from`'s Live arm drops anything with `ev.seq <= state.last`
+    // (`event_bus/mod.rs:200`). Seqs 1-2 are below the cursor by construction, and a re-delivered
+    // seq 3 or 4 is dropped as a duplicate — neither can reach this assertion.
+    //
+    // The no-history-replay property IS guarded by this test, but by the FIRST `expect_next_seq`
+    // above rather than by this silence: a replay read taken from the wrong lower bound would
+    // yield seq 1 as the stream's very first item and fail there loudly, which is exactly the
+    // vacuity defence this test's doc comment describes. Duplicate publication lives in
+    // `the_bus_publishes_a_committed_row_exactly_once` (`event_bus/mod.rs`) and re-emission of
+    // already-published history in `tailer_does_not_republish_across_passes`
+    // (`event_bus/tailer.rs`), both of which observe the raw broadcast channel instead of
+    // `subscribe_from`'s dedupe.
     assert_quiet(&mut stream, QUIET_WINDOW).await;
 
     bus2.shutdown().await;

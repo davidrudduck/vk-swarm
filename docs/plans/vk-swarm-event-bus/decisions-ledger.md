@@ -3490,18 +3490,49 @@ Each run failed on exactly the three tests whose "live" (tailer-delivered) commi
 `a_new_bus_on_the_same_pool_resumes_without_replaying_history` — while
 `a_rolled_back_transaction_reaches_no_subscriber` (whose one delivered row travels via direct
 replay, not the tailer) and `every_event_variant_survives_the_full_round_trip` (asserted via
-`serde_json::Value` equality, a stricter check that was already catching M8 before F4) pass
+`serde_json::Value` equality, ~~a stricter check that was already catching M8 before F4~~) pass
 unaffected. **F4's fix works exactly as intended.**
+
+> **CORRECTED 2026-08-15 in attempt 2 (panel 12's F4). The struck clause above contradicted the
+> sentence containing it**, calling test 5 both "already catching M8 before F4" and one of the tests
+> that "pass unaffected". Both cannot hold, and the code settles it against the struck clause: test
+> 5 subscribes AFTER committing all nine variants (`event_bus_end_to_end.rs:448` at commit
+> `86e85038` — note panel 12 and task 018's amended file both cite `:443`, which is inside the
+> `seqs` block, not the `subscribe_from` line), so every variant arrives through
+> `subscribe_from`'s `Initializing` direct journal replay and never touches the tailer's broadcast
+> channel at all. **Test 5 cannot catch a tailer-publish mutation in either direction**, M8
+> included; its `serde_json::Value` comparison is indeed stricter than a field-wise check, but
+> strictness is irrelevant to a path the test never exercises. The correct reason it passed
+> unaffected is the same one that applies to `a_rolled_back_transaction_reaches_no_subscriber`
+> immediately before it: direct replay, not the tailer.
+>
+> Test 5 is deliberately NOT restructured here. That is a coverage question, it shares its mechanism
+> with the M3/M7 residuals recorded above, and it belongs to task 019's territory. **Recorded as an
+> observation for 019 to weigh:** test 5 is a third instance of the "the row under test never
+> travels the tailer path" shape that 019's warm-up-commit-before-`EventBus::new` restructure fixes
+> for test 1. Whether the same device helps here is 019's call to make with its own measurements,
+> not a conclusion inherited from this entry.
 
 ### F2 — comment corrections
 
-Both false claims corrected in place (`event_bus_end_to_end.rs`): test 2's "no duplicate across the
+> **CORRECTED 2026-08-15 in attempt 2 (panel 12's F1). The entry below OVERSTATED what was done and
+> is left in place, struck through, so the record shows the false claim rather than hiding it.**
+> Each of the two comments contained TWO false clauses, not one. Attempt 1 corrected the DUPLICATE
+> clause in each and retained the other verbatim — `event_bus_end_to_end.rs:253` ("no belated replay
+> of seqs 1..=4") and `:369` ("No stray replay of the two pre-restart events"). Both retained
+> clauses are false by the very rule the corrected half of the same comment cites two lines earlier.
+> The entry's own justification ("neither test's silence window can observe a duplicate either way")
+> covers only the duplicate half, yet it was written as though the whole F2 obligation was
+> discharged. **The defect was the false completion claim, not the comment quality.** See
+> `## 2026-08-15 task 018 attempt 2` below for what was actually changed.
+
+~~Both false claims corrected in place (`event_bus_end_to_end.rs`): test 2's "no duplicate across the
 boundary" and test 4's "no stray replay of the two pre-restart events, or a duplicate of either
 post-restart one" both now state plainly that `subscribe_from`'s Live arm drops anything with
 `ev.seq <= state.last` before the stream ever yields it, so neither test's silence window can
 observe a duplicate either way, and both now name
 `the_bus_publishes_a_committed_row_exactly_once` (`event_bus/mod.rs`) as where the exactly-once
-property is actually proven.
+property is actually proven.~~
 
 ### Test 2's declared residual — RETIRED, not merely reduced
 
@@ -3712,3 +3743,341 @@ any of them.
 counterfactual-rate discrepancy and four falsified "this will be killed" predictions in this run
 "are all the same failure mode: predicted kills banked without measurement." That is accurate. It
 is why 019's evidence was measured before the task was written rather than after.
+
+## 2026-08-15 task 018 attempt 2
+
+Remediation of panel 12's four findings against attempt 1 (`86e85038`), implemented on `6018da3f`.
+Attempt 1's implementation is untouched and stands: `new` async, the bounded wait, `READY_TIMEOUT`,
+the `prove_tailer_is_live` deletion, F4's `project_id` threading. The 30-run acceptance bar was NOT
+re-run — it passed and nothing here invalidates it.
+
+`crates/services/src/services/event_bus/tailer.rs` is byte-identical to `6018da3f` at every
+checkpoint, including through two mutation-and-restore cycles (MUT-2b, MUT-2d). Each mutation was
+applied by `cp` from `.wai-scratch/tailer.rs.pristine.a2`, tested, restored by `cp` from the same
+copy, and `diff`-verified byte-identical before the next. `git diff -- .../tailer.rs | wc -l` reads
+`0`. No `git checkout`/`restore`/`stash`/`reset`/`clean` was used at any point.
+
+### Item 1 (BLOCKING) — the F2 correction, finished
+
+Both retained clauses removed and replaced with what the assertion actually proves. The two
+replacements are DELIBERATELY NOT the same text, because the residuals differ:
+
+- **`event_bus_end_to_end.rs`, test 2 (`a_subscriber_that_joins_late_...`).** The silence now claims
+  only this: no event with a seq ABOVE the cursor (`state.last` = 4) arrived. It states explicitly
+  that it proves NEITHER "no duplicate across the boundary" NOR "no belated replay of seqs 1..=4",
+  both for the same reason — the Live arm drops `ev.seq <= state.last` (`mod.rs:200`) — and that
+  **nothing else in this test guards either property**. It points at
+  `the_bus_publishes_a_committed_row_exactly_once` for duplicate publication and at
+  `tailer_does_not_republish_across_passes` (`tailer.rs`) for re-emission of already-published
+  history. That second citation is evidence-backed, not assumed: panel 12's own republish mutation
+  put exactly that test red.
+- **`event_bus_end_to_end.rs`, test 4 (`a_new_bus_on_the_same_pool_...`).** Same structure, but here
+  the no-history-replay property IS guarded by the test — by the FIRST `expect_next_seq`, not by the
+  silence: a replay read taken from the wrong lower bound yields seq 1 as the stream's first item
+  and fails there loudly. The comment now names that assertion as the guard, which is also what the
+  test's own doc comment already said. Seqs 1-2 are additionally noted as below the cursor by
+  construction, since this subscriber starts at `subscribe_from(high_water)` = 2.
+
+The ledger's `### F2` entry is corrected in place, struck through rather than rewritten, and states
+that the entry claimed a completion it had not made.
+
+**Considered and rejected: test 3's `assert_quiet` comment** ("no belated appearance of the
+rolled-back row"). It looks like a third instance of the same class and is not one. The other two
+clauses named rows the test itself committed, which sit at-or-below the cursor and are therefore
+provably unobservable. Here the row does not exist in the journal at all, and a defect that leaked
+it LATER would write it at a fresh seq ABOVE the cursor, where `assert_quiet` does see it. The
+clause is defensible on its own terms, and the task file fences test 3 besides. Recorded rather than
+silently edited, so a later panel does not have to re-derive why it was left.
+
+### Item 2 — `wait_until_tailer_publishes` REMOVED, and why that is the right call
+
+**Judgment: the helper is no longer needed, and keeping it would have been worse than a stale
+comment — it would have preserved in the lib suite exactly the pattern task 018 deleted from the
+e2e suite.**
+
+The reasoning is not merely "the premise at `mod.rs:974` is false". It is that the replacement
+premise is *already documented, adjacent, and exercised*: `tailer.rs`'s `await_ready` records that
+readiness "is a happens-before edge that costs no journal row, so a row committed after it is
+unconditionally owed to subscribers and its seq can be asserted ABSOLUTELY", and
+`a_row_committed_after_readiness_is_never_dropped` is that exact shape one layer down, against
+`tailer::spawn` directly. Task 018 gave `EventBus::new` the same edge. The helper was the
+compensation for not having it; there is nothing left to compensate for.
+
+The second reason is about the pattern, not the premise. A 10-attempt probe loop establishes
+liveness *probe-relatively*: a tailer that drops a row simply rebases the frame and the next attempt
+succeeds. That is precisely the mechanism task 018's own ledger entry blames for M7 escaping the e2e
+suite. Leaving one in the lib suite would keep that hazard alive one file over.
+
+**What replaced it:** `expect_tailer_publishes_a_committed_row` — commit ONE row, and the very next
+event this subscriber receives must be that row, at its exact seq, carrying the committed body. One
+strict observation, no retry, 30s deadline as a diagnosis-not-verdict safety net matching the rest
+of the module.
+
+**Call sites, both changed:**
+
+1. `shutdown_stops_the_tailer` calls the new helper, then `drain_until_quiet` explicitly. The drain
+   used to be *inside* the deleted helper; hoisting it keeps the "empty pipe before shutdown"
+   contract visible at the place that depends on it.
+2. `the_bus_publishes_a_committed_row_exactly_once` no longer needs a liveness precondition at all.
+   It now asserts the journal is empty, commits one row, and asserts that row is **seq 1** — an
+   ABSOLUTE seq, where before it counted copies of whatever seq a probe loop happened to leave
+   behind. Same device, same reason, as `a_row_committed_after_readiness_is_never_dropped`.
+
+**UNDICTATED CHOICES in this item** (the task said "if it can be replaced, do it", not how):
+
+- Strict-next rather than skip-until-match. In both call sites the journal is fresh and the
+  subscriber is created before the only commit, so an unexpected seq is always a defect; skipping
+  past one is the hollow-assertion shape this workstream keeps removing.
+- The `Ok(Err(_))` receiver-error arm panics with its own message rather than folding into the
+  timeout arm, so a closed channel is not misreported as "the tailer published nothing" — the same
+  defect class as panel 11's F6 against the deleted helper's `_ => break`.
+- Asserting `seq == 1` explicitly in the exactly-once test, in addition to the empty-journal
+  assertion. Redundant by construction; it makes the absolute-seq claim legible at the call site.
+
+**Not named by the task file, and fixed anyway** — the task named only `mod.rs:974`, but the helper's
+own doc comment at `mod.rs:811-814` carried the SAME false premise verbatim ("`tokio::spawn` only
+schedules the task, so without this the tailer's initial high-water-mark read can land after the row
+under test and skip it"), and `drain_until_quiet`'s doc at `:864-865` referenced the helper by name.
+Fixing `:974` alone would have left two more instances of exactly the defect that got attempt 1
+rejected. All three are resolved by the removal. **This is a genuine gap in the amended task file
+and is reported as such.**
+
+**Also swept:** `grep -n "probe\|wait_until_tailer_publishes\|drops the tailer\|readiness receiver"`
+over both files. One further stale hit was found and fixed — the second-window comment in the
+exactly-once test justified counting only copies of THIS seq by "a duplicate of an earlier probe row
+would otherwise inflate the tally", which no longer describes anything. It now says the filter is
+belt-and-braces because seq 1 is the only row the test commits, and records that it WAS load-bearing
+before. Remaining hits in `event_bus_end_to_end.rs:62-64` are past-tense history of what `new()` used
+to do and are correct as written.
+
+**Observation, recorded without building on it:** because the counted row is now seq 1, M7
+(`Ok(mark) => break mark + 1`) fails `the_bus_publishes_a_committed_row_exactly_once` — the cursor
+lands at 1, seq 1 is never published, and the "published nothing within 30s" assertion fires. That is
+an additional kill SITE, not new crate-wide coverage: the lib suite already killed M7 via
+`tailer.rs`. It is noted because it is the same mechanism task 019 is about, not as a result 019 may
+lean on.
+
+#### Mutation proofs for item 2 — the replacement kills what the helper killed
+
+All applied by `cp`/`python3` anchor-replacement with `assert count == 1`, restored by `cp` and
+`diff`-verified byte-identical.
+
+**MUT-2a — `shutdown()` becomes a no-op** (`handle.abort()` removed; the `take()` still happens, so
+idempotence is unchanged). This is the vacuity guard the deleted helper existed for: without a proven
+liveness precondition, a no-op `shutdown()` passes on silence.
+
+```text
+test services::event_bus::tests::shutdown_stops_the_tailer ... FAILED
+thread '...shutdown_stops_the_tailer' panicked at crates/services/src/services/event_bus/mod.rs:1172:27:
+tailer should be stopped; it published seq 2 after shutdown (expected silence for seq 2)
+test result: FAILED. 32 passed; 1 failed; 0 ignored; 0 measured; 251 filtered out; finished in 11.89s
+```
+
+**KILLED.** Non-vacuity preserved.
+
+**MUT-2b — the tailer fabricates `task_id` on `TaskCreated`, seq and everything else honest**
+(`tailer.rs` publish loop). This is the payload check the deleted helper carried and the reason it
+was "the only place a payload assertion belongs".
+
+```text
+---- services::event_bus::tests::shutdown_stops_the_tailer stdout ----
+thread '...shutdown_stops_the_tailer' panicked at crates/services/src/services/event_bus/mod.rs:913:26:
+assertion `left == right` failed: the tailer published seq 1 carrying a body that is not the one committed at that seq
+  left: 00000000-0000-0000-0000-000000000000
+ right: 44a7a6aa-41d7-4374-9136-983217d63050
+
+---- services::event_bus::tests::the_bus_publishes_a_committed_row_exactly_once stdout ----
+thread '...the_bus_publishes_a_committed_row_exactly_once' panicked at crates/services/src/services/event_bus/mod.rs:1086:30:
+assertion `left == right` failed: the bus published seq 1 carrying a body that is not the one committed at that seq
+  left: 00000000-0000-0000-0000-000000000000
+ right: 86777396-db59-452c-a3bd-6734a997ac73
+
+test result: FAILED. 12 passed; 2 failed; 0 ignored; 0 measured; 270 filtered out; finished in 2.55s
+```
+
+**KILLED**, at `mod.rs:913` — inside the new helper. Body assertion preserved.
+
+**MUT-2c — `EventBus::new` spawns a SECOND tailer on the same channel.** The subject of the test
+whose helper call was removed.
+
+```text
+---- services::event_bus::tests::the_bus_publishes_a_committed_row_exactly_once stdout ----
+thread '...' panicked at crates/services/src/services/event_bus/mod.rs:1133:9:
+assertion `left == right` failed: the bus delivered the single committed row at seq 1 2 time(s); `EventBus::new` must spawn exactly ONE tailer (task 013 property 4). ...
+  left: 2
+ right: 1
+
+test result: FAILED. 31 passed; 2 failed; 0 ignored; 0 measured; 251 filtered out; finished in 11.67s
+```
+
+**KILLED** — and note `at seq 1`, confirming the counted row is now absolute rather than
+probe-relative. (`shutdown_stops_the_tailer` also fails here, correctly: the second tailer is never
+aborted.)
+
+**MUT-2d — the tailer's `sender.send` removed entirely** (`tailer.rs`). The canonical "the tailer
+never publishes" case the deleted helper's terminal `panic!` guarded.
+
+```text
+---- services::event_bus::tests::shutdown_stops_the_tailer stdout ----
+thread '...' panicked at crates/services/src/services/event_bus/mod.rs:935:23:
+the tailer published nothing within 30s; seq 1 was committed after `EventBus::new` awaited readiness and cannot legitimately be skipped
+
+---- services::event_bus::tests::the_bus_publishes_a_committed_row_exactly_once stdout ----
+thread '...' panicked at crates/services/src/services/event_bus/mod.rs:1103:9:
+assertion `left == right` failed: the bus published nothing for seq 1 within 30s; a duplicate-detection test is vacuous unless the row arrives at least once
+  left: 0
+ right: 1
+
+test result: FAILED. 12 passed; 2 failed; 0 ignored; 0 measured; 270 filtered out; finished in 32.10s
+```
+
+**KILLED.**
+
+#### Does the replacement MISS anything the helper caught?
+
+MUT-2a and MUT-2d would very likely have been killed by the old helper too — they demonstrate that
+the replacement PRESERVES its guards, not that it improves on them. Nothing is lost in the other
+direction, and one thing is gained: the old helper tolerated up to 10 probe attempts, so a tailer
+that dropped, say, one row in ten would still have satisfied it on a later attempt. Strict-next
+fails on the first drop. The removal is a strict strengthening plus a removed rationale, not a trade.
+
+#### Flake check under load — the retry cushion was removed, so this was measured, not assumed
+
+Deleting a retry loop from two timing-coupled tests invites the question "is the replacement flaky
+on a busy box?". Both changed suites were run 5x quiet and 4x under the same deliberate 6-way
+busy-loop load used for the item-3 measurement (4-core box; load generators killed individually by
+exact recorded PID, `kill -0` sweep confirming all gone):
+
+```text
+QUIET:
+run 1: lib[ok. 33 passed; 0 failed; ... 11.94s]  e2e[ok. 5 passed; 0 failed; ... 2.63s]
+run 2: lib[ok. 33 passed; 0 failed; ... 11.90s]  e2e[ok. 5 passed; 0 failed; ... 2.64s]
+run 3: lib[ok. 33 passed; 0 failed; ... 11.86s]  e2e[ok. 5 passed; 0 failed; ... 2.65s]
+run 4: lib[ok. 33 passed; 0 failed; ... 11.90s]  e2e[ok. 5 passed; 0 failed; ... 2.63s]
+run 5: lib[ok. 33 passed; 0 failed; ... 11.93s]  e2e[ok. 5 passed; 0 failed; ... 2.65s]
+
+UNDER LOAD:
+run 1: lib[ok. 33 passed; 0 failed; ... 14.25s]  e2e[ok. 5 passed; 0 failed; ... 3.07s]
+run 2: lib[ok. 33 passed; 0 failed; ... 14.05s]  e2e[ok. 5 passed; 0 failed; ... 2.99s]
+run 3: lib[ok. 33 passed; 0 failed; ... 14.10s]  e2e[ok. 5 passed; 0 failed; ... 2.88s]
+run 4: lib[ok. 33 passed; 0 failed; ... 14.00s]  e2e[ok. 5 passed; 0 failed; ... 2.93s]
+```
+
+**18/18 green.** Wall time moves with the load; nothing goes red. This is a flake check on the
+changed tests, NOT a re-run of task 018's 30-run acceptance bar, which stands from attempt 1.
+
+### Item 3 — the wait must end BECAUSE readiness fired
+
+New test `new_returns_as_soon_as_a_healthy_tailer_signals_readiness` (`event_bus/mod.rs`), driving
+the PUBLIC `new` deliberately — `new_with_ready_timeout` would not carry the constant whose burn is
+the defect.
+
+**The bound is `READY_TIMEOUT / 10` (1000ms at the current 10s), and it comes from measurement.**
+`EventBus::new` was instrumented with an `eprintln!` of its elapsed time and sampled inside the FULL
+parallel `cargo test -p services --lib` run — not in isolation, so each sample carries the suite's
+own contention — on a 4-core box:
+
+```text
+QUIET (pgrep -x cargo empty immediately before):
+run  1: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.18s
+run  2: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.12s
+run  3: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.42s
+run  4: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.18s
+run  5: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.13s
+run  6: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.17s
+run  7: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.15s
+run  8: new_elapsed_ms=2 | ok. 279 passed; 0 failed; finished in 12.25s
+run  9: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.56s
+run 10: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.51s
+run 11: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.33s
+run 12: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 12.36s
+
+UNDER DELIBERATE LOAD (6 busy-loop processes on a 4-core box):
+run  1: new_elapsed_ms=2 | ok. 279 passed; 0 failed; finished in 14.79s
+run  2: new_elapsed_ms=2 | ok. 279 passed; 0 failed; finished in 14.86s
+run  3: new_elapsed_ms=1 | ok. 279 passed; 0 failed; finished in 15.05s
+run  4: new_elapsed_ms=2 | ok. 279 passed; 0 failed; finished in 14.15s
+```
+
+**16 samples, every one 1ms or 2ms, max 2ms.** Under load the whole suite stretched ~12.2s → ~14.9s
+while this construction did not move at all, which is the expected shape: it is one SQLite
+`MAX(seq)` read against a freshly migrated database, not a scheduling-sensitive wait. So the number
+is not merely "big enough" — the quantity being bounded was shown to be load-insensitive.
+
+**Why 1000ms and not something tighter or looser.** It is 500x the observed maximum, which is the
+headroom over scheduling noise — this assertion must never be the thing that decides the verdict on
+a loaded CI box. And it is 10x BELOW `READY_TIMEOUT`, which is what gives it teeth: a driver that
+stops observing readiness overshoots by an order of magnitude and cannot creep past it. Expressed as
+`READY_TIMEOUT / 10` rather than a literal so it survives a change to the constant it guards. The
+`eprintln!` was removed once the bound was fixed; the measurement lives in the constant's doc
+comment as well as here.
+
+(The six load generators were spawned with their PIDs recorded and killed individually by exact PID,
+with a `kill -0` sweep confirming all six gone and no strays left — `pkill`/`killall` were not used.
+Noting it because attempt 4 of task 016 left 292 orphaned load generators behind on this box.)
+
+**Mutation proof (REQUIRED), verbatim.** `timeout(ready_timeout, ready)` →
+`timeout(ready_timeout, std::future::pending::<Result<(), oneshot::error::RecvError>>())`, the
+receiver bound to `_mut3_ready` so it is held rather than dropped — never observe readiness, always
+sleep the full budget. This is panel 12's own mutation.
+
+```text
+running 1 test
+test services::event_bus::tests::new_returns_as_soon_as_a_healthy_tailer_signals_readiness ... FAILED
+
+failures:
+
+---- services::event_bus::tests::new_returns_as_soon_as_a_healthy_tailer_signals_readiness stdout ----
+
+thread 'services::event_bus::tests::new_returns_as_soon_as_a_healthy_tailer_signals_readiness' (739709) panicked at crates/services/src/services/event_bus/mod.rs:852:9:
+EventBus::new took 10.001510341s on a healthy pool, at or past the 1s bound. On a readable journal the tailer signals readiness on its first high_water_mark read, so construction is a matter of milliseconds; anything approaching READY_TIMEOUT (10s) means the readiness signal is not being observed at all and every construction silently waits out the whole budget
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 283 filtered out; finished in 10.17s
+```
+
+And the whole lib suite under the same mutation, for comparison against panel 12's all-green
+`32 passed` / 44.64s:
+
+```text
+test services::event_bus::tests::new_returns_even_if_the_tailer_never_signals_readiness ... ok
+test services::event_bus::tests::new_returns_as_soon_as_a_healthy_tailer_signals_readiness ... FAILED
+test result: FAILED. 278 passed; 1 failed; 5 ignored; 0 measured; 0 filtered out; finished in 47.12s
+```
+
+**KILLED, with an exact diagnosis** (`took 10.001510341s ... at or past the 1s bound`). The
+assertion is not decorative. Note the sibling `new_returns_even_if_the_tailer_never_signals_readiness`
+stays green under this mutation, which is precisely the gap panel 12 identified: "returns within
+budget" and "returned because readiness fired" are different claims and now have different tests.
+
+### Item 4 — ledger self-contradiction about test 5
+
+Corrected in place in the M8 section above, struck through rather than rewritten. Test 5 is NOT
+restructured; the observation is recorded there for task 019 to weigh. While making the correction
+the cited line number was checked rather than copied: at `86e85038` test 5's `subscribe_from` is at
+`event_bus_end_to_end.rs:448`, not the `:443` that both panel 12 and the amended task file give.
+`:443` is inside the `seqs` block. The substance of the finding is unaffected.
+
+### Problems with the amended task file itself
+
+1. **Item 2 under-scoped the false-premise sweep.** It named `mod.rs:974` as "the" falsified comment.
+   Two more carried the identical false premise or a dangling reference to it (`:811-814`,
+   `:864-865`), both of them inside the very helper the item asks about. An implementer who fixed
+   exactly what was named would have reproduced attempt 1's rejection reason on a different line.
+2. **`:443` is a stale line number** for test 5's `subscribe_from` (correct: `:448`), inherited from
+   panel 12. Minor, but it appears inside an instruction to correct an inaccuracy.
+
+Neither changed what was implemented; both are recorded because the task file is the artifact a
+later reader trusts.
+
+### Verification (all green)
+
+```text
+cargo test -p services            -> exit 0
+cargo fmt --all -- --check        -> exit 0
+cargo clippy -p services --all-targets --all-features -- -D warnings -> exit 0
+cargo check --workspace           -> exit 0
+```
+
+File set: `crates/services/src/services/event_bus/mod.rs`,
+`crates/services/tests/event_bus_end_to_end.rs`, and this ledger. `tailer.rs` byte-identical
+(`git diff` on it is empty).

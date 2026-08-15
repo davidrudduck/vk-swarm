@@ -794,6 +794,67 @@ mod tests {
         bus.shutdown().await;
     }
 
+    /// Upper bound on how long [`EventBus::new`] may take on a HEALTHY pool, where the tailer's
+    /// very first `high_water_mark` read succeeds and readiness fires immediately.
+    ///
+    /// **Derived from measurement, not chosen.** `EventBus::new` was instrumented and the elapsed
+    /// time sampled inside the FULL parallel `cargo test -p services --lib` run (not in isolation,
+    /// so the sample carries the suite's own contention) on a 4-core box: **12 runs on a quiet
+    /// machine (`pgrep -x cargo` empty) and 4 more under a deliberate 6-way CPU load — 16 samples,
+    /// every one of them 1ms or 2ms, max 2ms.** Under load the whole suite stretched from ~12.2s
+    /// to ~14.9s while this construction did not move, which is the expected shape: it is one
+    /// SQLite `MAX(seq)` read on a freshly migrated database, not a scheduling-sensitive wait.
+    ///
+    /// The bound is [`READY_TIMEOUT`] / 10, so it is stated relative to the constant it guards and
+    /// survives a future change to it. At the current 10s that is 1000ms:
+    ///
+    /// - **500x the observed maximum**, which is the headroom over scheduling noise — this must
+    ///   never be the thing that decides the verdict on a loaded CI box.
+    /// - **10x below `READY_TIMEOUT`**, which is what gives it teeth: a driver that stops
+    ///   observing readiness and waits out the whole budget overshoots this by an order of
+    ///   magnitude and cannot creep past it.
+    const HEALTHY_READY_BOUND: std::time::Duration =
+        std::time::Duration::from_millis((READY_TIMEOUT.as_millis() / 10) as u64);
+
+    /// **REQUIRED (task 018 attempt 2, panel 12's F3).** `EventBus::new` must return because the
+    /// tailer's readiness FIRED, not merely because its own timeout eventually expired.
+    ///
+    /// `new_returns_even_if_the_tailer_never_signals_readiness` above pins only "returns within
+    /// budget". Panel 12 proved the gap by replacing the awaited future with `pending()` — never
+    /// observe readiness, always sleep the full budget — and the whole lib suite stayed green
+    /// while its runtime went from 12.51s to 44.64s. In production every `EventBus::new()` would
+    /// then silently cost the full [`READY_TIMEOUT`] and every health surface would still read
+    /// green: the same green-while-degraded class task 016 exists to close, reappearing one layer
+    /// up.
+    ///
+    /// This closes it on a healthy pool, where readiness resolves on the tailer's first
+    /// `high_water_mark` read, by bounding the construction far below [`READY_TIMEOUT`]. It drives
+    /// the PUBLIC `new` deliberately, not `new_with_ready_timeout`: the cost this pins is the real
+    /// constant being burned on every construction, and only the public constructor carries it.
+    ///
+    /// Mutation proof (task 018 attempt 2's REQUIRED bar): replace the awaited `ready` with
+    /// `std::future::pending()` — this test must then FAIL, having burned the full
+    /// [`READY_TIMEOUT`].
+    #[tokio::test]
+    async fn new_returns_as_soon_as_a_healthy_tailer_signals_readiness() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        let start = tokio::time::Instant::now();
+        let bus = EventBus::new(pool.clone(), 64).await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < HEALTHY_READY_BOUND,
+            "EventBus::new took {elapsed:?} on a healthy pool, at or past the \
+             {HEALTHY_READY_BOUND:?} bound. On a readable journal the tailer signals readiness on \
+             its first high_water_mark read, so construction is a matter of milliseconds; anything \
+             approaching READY_TIMEOUT ({READY_TIMEOUT:?}) means the readiness signal is not being \
+             observed at all and every construction silently waits out the whole budget"
+        );
+
+        bus.shutdown().await;
+    }
+
     /// Commits one journal row and returns the seq it was assigned plus the `task_id` that
     /// identifies its body.
     async fn commit_one(pool: &SqlitePool) -> (i64, Uuid) {
@@ -808,68 +869,88 @@ mod tests {
         (seq, task_id)
     }
 
-    /// Blocks until the tailer is provably publishing, by committing probe rows until one comes
-    /// back. `tokio::spawn` only schedules the task, so without this the tailer's initial
-    /// high-water-mark read can land after the row under test and skip it — silence would then
-    /// prove nothing about `shutdown()`.
+    /// Commits ONE row and asserts the TAILER publishes it — at its exact seq, carrying the body
+    /// that was committed. Returns that seq.
     ///
-    /// Returns only once the NEWEST probe row has been received, so no stale probe event can be
-    /// mistaken for a post-shutdown publication.
+    /// **This replaces `wait_until_tailer_publishes`, a 10-attempt probe-commit retry loop deleted
+    /// in task 018 attempt 2 (panel 12's F2).** That helper's entire stated justification was that
+    /// "`tokio::spawn` only schedules the task, so without this the tailer's initial
+    /// high-water-mark read can land after the row under test and skip it". Task 018 made
+    /// `EventBus::new` AWAIT the tailer's readiness signal before returning, which falsified that
+    /// premise: by the time any caller here runs, the tailer's initial cursor is already fixed, so
+    /// every subsequent commit is strictly above it and is unconditionally owed to subscribers.
+    /// That is precisely the edge `tailer.rs`'s `await_ready` documents — "a happens-before edge
+    /// that costs no journal row, so a row committed after it is unconditionally owed to
+    /// subscribers and its seq can be asserted ABSOLUTELY" — and
+    /// `a_row_committed_after_readiness_is_never_dropped` (`tailer.rs`) is this same shape one
+    /// layer down, against `tailer::spawn` directly.
+    ///
+    /// Keeping a retry loop here would also have kept alive, in the lib suite, exactly the pattern
+    /// task 018 deleted from the end-to-end suite: probe-relative liveness rebases the frame on
+    /// each attempt, so a tailer that DROPPED a row simply moves the goalposts and still satisfies
+    /// the precondition. The wait below is a single strict, exact-seq observation instead: the
+    /// next thing this subscriber receives must be the committed row, not merely something.
     ///
     /// This is the ONLY place in this module that observes the TAILER's output — every other test
     /// here drives `sender` by hand to exercise `subscribe_from`, and is deliberately
-    /// tailer-independent. So it is the only place a payload assertion belongs: matching the probe
-    /// row's body as well as its seq means a tailer publishing fabricated payloads cannot satisfy
-    /// the liveness precondition this helper exists to establish.
-    async fn wait_until_tailer_publishes(
+    /// tailer-independent. So it is the only place a payload assertion belongs: matching the row's
+    /// body as well as its seq means a tailer publishing fabricated payloads cannot satisfy the
+    /// liveness precondition this helper exists to establish.
+    async fn expect_tailer_publishes_a_committed_row(
         pool: &SqlitePool,
         subscriber: &mut broadcast::Receiver<SequencedEvent>,
-    ) {
-        for _ in 0..10 {
-            let (seq, task_id) = commit_one(pool).await;
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-            loop {
-                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-                match tokio::time::timeout(remaining, subscriber.recv()).await {
-                    Ok(Ok(ev)) if ev.seq == seq => {
-                        match ev.event {
-                            NodeEvent::TaskCreated {
-                                task_id: delivered, ..
-                            } => assert_eq!(
-                                delivered, task_id,
-                                "the tailer published seq {seq} carrying a body that is not the \
-                                 one committed at that seq"
-                            ),
-                            ref other => panic!(
-                                "the tailer published {other:?} at seq {seq}; the probe row is a \
-                                 TaskCreated"
-                            ),
-                        }
-                        // Return with an EMPTY pipe, which is what this helper's contract above
-                        // promises and what it silently relied on the bus for until now.
-                        drain_until_quiet(subscriber).await;
-                        return;
-                    }
-                    Ok(Ok(_)) => continue,
-                    _ => break,
+    ) -> i64 {
+        let (seq, task_id) = commit_one(pool).await;
+
+        // Generous deadline: a safety net so a dead tailer fails with a diagnosis rather than
+        // hanging the suite, never the thing that decides the verdict. Matches the 30s the other
+        // tailer-observing waits in this module and in `tailer.rs` already use.
+        match tokio::time::timeout(std::time::Duration::from_secs(30), subscriber.recv()).await {
+            Ok(Ok(ev)) if ev.seq == seq => {
+                match ev.event {
+                    NodeEvent::TaskCreated {
+                        task_id: delivered, ..
+                    } => assert_eq!(
+                        delivered, task_id,
+                        "the tailer published seq {seq} carrying a body that is not the one \
+                         committed at that seq"
+                    ),
+                    ref other => panic!(
+                        "the tailer published {other:?} at seq {seq}; the committed row is a \
+                         TaskCreated"
+                    ),
                 }
+                seq
             }
+            Ok(Ok(other)) => panic!(
+                "the tailer published seq {} first; seq {seq} was the only row owed to this \
+                 subscriber, which was created before that row was committed and after \
+                 `EventBus::new` had already awaited the tailer's readiness",
+                other.seq
+            ),
+            Ok(Err(e)) => panic!(
+                "the broadcast receiver failed before seq {seq} arrived: {e:?}; the tailer cannot \
+                 be observed, so nothing downstream of this precondition proves anything"
+            ),
+            Err(_) => panic!(
+                "the tailer published nothing within 30s; seq {seq} was committed after \
+                 `EventBus::new` awaited readiness and cannot legitimately be skipped"
+            ),
         }
-        panic!("the tailer never published a probe row, so this test cannot observe shutdown");
     }
 
     /// Consumes anything still queued on `subscriber`, returning once the channel has stayed silent
     /// for one quiet period (or a hard cap elapses).
     ///
-    /// `wait_until_tailer_publishes` returns the instant it sees ONE copy of its probe row, and its
-    /// contract is that "no stale probe event can be mistaken for a post-shutdown publication".
-    /// That held only while the bus published each row exactly once. A bus that published a row
-    /// TWICE leaves the second copy buffered, and `shutdown_stops_the_tailer` — which panics on any
-    /// event at all after `shutdown()` — would then go red for a reason that has nothing to do with
-    /// shutdown, non-deterministically, depending on whether the second publisher got its tick in
-    /// before the abort. Duplicate publication is the subject of
-    /// `the_bus_publishes_a_committed_row_exactly_once` and belongs to that test alone; this keeps
-    /// it from leaking sideways into an unrelated assertion.
+    /// `expect_tailer_publishes_a_committed_row` returns the instant it sees ONE copy of its row,
+    /// and `shutdown_stops_the_tailer` needs an EMPTY pipe afterwards so no stale event can be
+    /// mistaken for a post-shutdown publication. That holds on its own only while the bus publishes
+    /// each row exactly once. A bus that published a row TWICE leaves the second copy buffered, and
+    /// `shutdown_stops_the_tailer` — which panics on any event at all after `shutdown()` — would
+    /// then go red for a reason that has nothing to do with shutdown, non-deterministically,
+    /// depending on whether the second publisher got its tick in before the abort. Duplicate
+    /// publication is the subject of `the_bus_publishes_a_committed_row_exactly_once` and belongs
+    /// to that test alone; this keeps it from leaking sideways into an unrelated assertion.
     async fn drain_until_quiet(subscriber: &mut broadcast::Receiver<SequencedEvent>) {
         let cap = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         while tokio::time::Instant::now() < cap {
@@ -971,14 +1052,25 @@ mod tests {
         let bus = EventBus::new(pool.clone(), 64).await;
         let mut subscriber = bus.sender().subscribe();
 
-        // `EventBus::new` drops the tailer's readiness receiver, so no happens-before edge is
-        // available here and a row committed before the initial `high_water_mark` resolves is
-        // CORRECTLY never published. Probing until a row comes back buys the edge, and it costs
-        // nothing in strength because this test asserts a COUNT, not an absolute seq — the trap
-        // that made attempt 4's probe hide a dropped first row does not apply.
-        wait_until_tailer_publishes(&pool, &mut subscriber).await;
+        // `EventBus::new` AWAITS the tailer's readiness signal before returning (task 018), so the
+        // tailer's initial cursor is already fixed at this point and the row committed below is
+        // strictly above it — unconditionally owed to this subscriber, which was created first.
+        // No probe loop is needed to buy that happens-before edge, and task 018 attempt 2 deleted
+        // the one that used to sit here (panel 12's F2): its stated justification was that `new`
+        // DROPPED the readiness receiver, which this task falsified.
+        //
+        // The journal is asserted empty so the counted seq is an ABSOLUTE 1 rather than whatever a
+        // probe loop happened to leave behind — the same device
+        // `a_row_committed_after_readiness_is_never_dropped` (`tailer.rs`) uses for the same
+        // reason.
+        assert_eq!(
+            event_journal::high_water_mark(&pool).await.unwrap(),
+            0,
+            "this test's absolute seq assertion requires a fresh journal"
+        );
 
         let (seq, task_id) = commit_one(&pool).await;
+        assert_eq!(seq, 1, "the first row of a fresh journal must be seq 1");
 
         // First delivery, on a generous deadline: what makes this slow is machine load, never
         // correctness, so the budget is deadline-based rather than a fixed sleep.
@@ -1017,8 +1109,9 @@ mod tests {
         // Then a bounded FURTHER window for a second copy. A second tailer polls on its own
         // independent TAIL_INTERVAL (75ms) tick, so its copy lands within roughly one interval of
         // the first; 2000ms is ~26 intervals and needs no luck. Only copies of THIS seq are
-        // counted: a duplicate of an earlier probe row would otherwise inflate the tally and make
-        // the test fail for the right reason by accident.
+        // counted, which is now belt-and-braces rather than load-bearing: seq 1 is the only row
+        // this test ever commits, so there is nothing else on the channel to miscount. It was
+        // load-bearing before task 018 attempt 2, when a probe loop left earlier rows behind.
         let second_window = tokio::time::Instant::now() + std::time::Duration::from_millis(2000);
         loop {
             let remaining = second_window.saturating_duration_since(tokio::time::Instant::now());
@@ -1058,8 +1151,14 @@ mod tests {
         let mut subscriber = bus.sender().subscribe();
 
         // Prove the tailer IS publishing first, so the silence below is attributable to shutdown()
-        // and not to a tailer that was never live.
-        wait_until_tailer_publishes(&pool, &mut subscriber).await;
+        // and not to a tailer that was never live. Exact-seq and body-checked, not probe-relative:
+        // `EventBus::new` has already awaited readiness, so this row cannot legitimately be
+        // skipped (task 018 attempt 2 — see `expect_tailer_publishes_a_committed_row`).
+        expect_tailer_publishes_a_committed_row(&pool, &mut subscriber).await;
+
+        // Return to an EMPTY pipe before shutting down, so a buffered second copy of the liveness
+        // row cannot be mistaken below for a post-shutdown publication.
+        drain_until_quiet(&mut subscriber).await;
 
         // Shutdown the tailer
         bus.shutdown().await;
