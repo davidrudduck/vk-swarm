@@ -2753,3 +2753,46 @@ ran, and the full suite re-confirmed green between mutations.
   not weaker. The lesson for this run's hygiene is that a panel authorised to stress the machine must
   be told to reap its own load generators, and the orchestrator must verify the box is idle before
   trusting any subsequent timing
+
+## 2026-08-15 execute: task 016 PASSED — panel 10 returns NO CITED DISSENT
+
+First clean panel verdict in this run, after nine consecutive rounds that each found something real.
+
+- [Run orchestrator] **The panel declined to bank a survivor**, which is the behaviour that makes the
+  verdict trustworthy. Moving the `last_published_seq` store across `ready_tx.send(())` SURVIVED at
+  `277 passed; 0 failed` — but there is no suspension point between the two statements, so no caller
+  can be scheduled in the gap. Rather than claim it, the panel widened the window to a real one (the
+  same reorder with a 500ms `.await` between) and
+  `tailer_health_starts_at_the_resolved_initial_mark_not_zero` killed it deterministically. The
+  ordering property IS enforced for every observable violation; the survivor is unobservable by
+  construction. Reporting it would have been a race-shaped false positive
+- [Run orchestrator] **It also answered the framing question against me.** I asked whether four rounds
+  of give-up hunting had crowded out the rest of the module's job. The answer was no: seven other
+  defect classes are live, distinct, and each pinned by a named test, proven by a killing mutation —
+  live-path dedup boundary (`>` → `>=`); `Lagged` refill origin (`read_range(last, mark)` →
+  `(mark, mark)`); handoff-gap from moving `subscribe()` after the read; burst loss from a per-pass
+  cap that skips the cursor to the mark; cursor stall gated on `send().is_ok()`; initial-mark counter
+  seeding; and `shutdown()` failing to `abort()`. Batch ordering, payload integrity, exactly-once,
+  cursor resume, overrun recovery and shutdown are all guarded
+- [Run orchestrator] Secondary observation recorded, NOT actioned here: no single test drives
+  `commit → tailer → broadcast → subscribe_from`; both halves are pinned individually and the
+  composition is inferred. The panel notes this is a deliberate choice documented at `mod.rs:826` —
+  `subscribe_from`'s Live arm dedups on `ev.seq > last`, so using it in the exactly-once test would
+  swallow the very duplicate that test exists to catch. That argument is correct for THAT test and
+  does not remove the seam obligation; **task 017 carries it**, and the reachability gate blocks the
+  run's close until it lands
+- [Run orchestrator] Compaction deleting rows beneath an in-memory SSE cursor was confirmed real but
+  out of scope — it belongs to `compact()`'s contract and is unreachable by any mutation of
+  `tailer.rs`/`mod.rs`. Already recorded as a bounded, accepted risk earlier in this ledger
+- [Run orchestrator] Seq renumbering after compaction is closed at the schema, not by a test:
+  `seq INTEGER PRIMARY KEY AUTOINCREMENT`, whose migration comment states AUTOINCREMENT "guarantees no
+  reuse after deletion, which compaction requires". The cursor can never be stranded above a reused seq
+- [Run orchestrator] The panel started zero background processes and verified the box was idle before
+  reporting — the operational rule added after the 292-orphan incident worked on its first outing
+
+### Task 016 final state
+Four attempts, four panels. Production code changed in exactly two places across the whole task: the
+`poll_once`/`PollOutcome` extraction (behaviour-preserving, verified line by line) and one line
+seeding `last_published_seq` from the resolved initial mark. Everything else was test expressiveness.
+277 lib tests; 13 mutation proofs kill. Declared residuals: give-up budget ≥50 on any path; adaptive
+backoff faster than ~400ms/pass (effective floor ~300ms, held incidentally); multi-row-only budgets.

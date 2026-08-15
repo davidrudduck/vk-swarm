@@ -2,7 +2,7 @@
 id: "016"
 phase: 2
 title: "Make the tailer give-up defect unrepresentable, and the tailer observable"
-status: rejected
+status: passed
 depends_on: ["013"]
 parallel: false
 conflicts_with: []
