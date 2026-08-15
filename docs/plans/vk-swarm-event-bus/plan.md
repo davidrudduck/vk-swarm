@@ -57,7 +57,8 @@ UI is explicitly out of scope — the board already streams live over /api/tasks
 | 006 | 3 | Emit task lifecycle events from the task model inside its own transaction | dep: 005 | conflicts: none |
 | 007 | 3 | Emit attempt lifecycle events from the execution-process create and completion writes | dep: 006 | conflicts: none |
 | 008 | 3 | Emit hive connectivity events from the node_runner event loop | dep: 007 | conflicts: none |
-| 015 | 3 | Add the cross-site emission integration suite | dep: 006 007 008 | conflicts: none |
+| 020 | 3 | Emit TaskCreated for the child tasks a breakdown acceptance creates | dep: 004 006 | conflicts: none |
+| 015 | 3 | Add the cross-site emission integration suite | dep: 006 007 008 020 | conflicts: none |
 | 009 | 4 | Add the TriggerHook seam with persisted per-hook cursors and one real hook | dep: 005 | conflicts: none |
 | 010 | 4 | Add the GET /api/events SSE endpoint with cursor resume on the freed path | dep: 001 005 | conflicts: none |
 | 011 | 5 | Bound the journal with an env-tunable periodic compaction task | dep: 004 009 | conflicts: none |

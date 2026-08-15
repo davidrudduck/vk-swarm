@@ -3,7 +3,7 @@ id: "015"
 phase: 3
 title: "Add the cross-site emission integration suite"
 status: ready
-depends_on: ["006","007","008"]
+depends_on: ["006","007","008","020"]
 parallel: false
 conflicts_with: []
 files:
@@ -25,6 +25,12 @@ connectivity bug and a cross-site assertion bug blocked each other's revert.
 
 1. `task_crud_emits_exactly_one_event_each` — create/move/delete; assert exactly one journal row per
    operation, correctly typed.
+1b. `breakdown_acceptance_emits_one_event_per_child` — **added 2026-08-15 with task 020.** Accept a
+   proposal with multiple items and assert one `TaskCreated` per child, with the child ids as a SET.
+   This suite's whole claim is CROSS-SITE completeness, so omitting the breakdown site would let it
+   report full coverage while a routed, user-initiated creation path emits nothing — the exact gap
+   that forced task 020 into existence. If task 020 has not landed, this test is blocked on 020, not
+   on this task; say so rather than dropping it.
 2. `attempt_lifecycle_emits_exactly_one_event_each` — start and terminate an attempt; assert one
    `attempt_started` and one terminal event.
 3. `connectivity_transitions_emit_exactly_one_event_each` — one row per genuine transition, none for
