@@ -4838,3 +4838,82 @@ build when a new one appears.
 methods consume `self` by value, so three sequential operations on one non-`Copy` `E` are impossible,
 and the sqlx HRTB limitation it hit and worked around is real and documented. Nothing about that work
 is wasted; only `.acquire()` becomes `.begin()`.
+
+### Panel 15A (task 006, emission remit): CITED DISSENT — 5 findings, all NON-BLOCKING
+
+Opus, own detached worktree at `4772da26`, `SQLX_OFFLINE=true` throughout, tree-clean proof supplied,
+worktree and target dir removed. Its own framing is exact and worth quoting: **"I proved the code
+right and the tests thin."** All six probe tests it wrote to hunt defects PASSED against unmutated
+code; every finding is a coverage gap, not a behavioural defect.
+
+**F15A-1 — `update_status`'s conditional guard has ZERO negative-path coverage.** Deleting
+`&& old_status != status` from `hierarchy.rs:62-64` survives the ENTIRE crate suite:
+`ok. 236 passed; 0 failed`. The shipped tests drive `update_status` only with a CHANGED status.
+
+The panel then established why the guard is load-bearing rather than decorative, which is the part
+that makes this worth fixing: `update_status` has **seven unguarded production writers** of two
+terminal statuses — `Done` at `git_ops.rs:99`, `github.rs:279`, `pr_monitor.rs:186`, `:259`;
+`InReview` at `container.rs:296`, `:597`, `:1594` — none checking the current status first. The
+codebase's eighth site, `approvals.rs:465 ensure_task_in_review`, DOES gate on
+`ctx.task.status == TaskStatus::InProgress`. That asymmetry is the codebase treating repeated
+same-status calls as a live concern at one site and not the others, and the guard absorbs it. The
+panel was careful to say it did not reproduce a duplicate in production — it claims the shape is
+live, not that it triggered it. The append's conditionality is also an UNDICTATED choice (the task
+file never said it), so its decision branch being untested is exactly what should be pinned.
+
+**F15A-2 — append-failure atomicity is unproven for all three pool-taking sites.** D2's core property
+is "the append rides the state write's transaction", and the suite proves it ONLY for `delete` (via
+the two tests the 2026-08-15 amendment demanded). `failed_write_journals_nothing` runs the OPPOSITE
+direction — state write fails, so no event — which is why the axis reads covered when it is not.
+Swallowing the append error in `Task::create` (`let _ = event_journal::append(...)`) — the exact
+SC1-violating shape, task committed with no journal row — survives every shipped test; only the
+panel's probes caught it. A sub-gap: nothing pins that the DISMISSAL CLEAR rides the transaction
+either, which is the single reason `clear_for_task` was generalised.
+
+**F15A-3 — `Task::update`'s event `task_id` is unpinned.**
+`update_with_status_change_emits_task_status_changed` destructures
+`TaskStatusChanged { old_status, new_status, .. }`, so `task_id: Uuid::nil()` survives the suite.
+One-line fix: name `task_id` instead of `..` and assert it.
+
+**F15A-4 — `Task::delete` has THREE production call sites; my amendment says two.** ORCHESTRATOR
+ERROR (12th), corrected here. Exhaustive re-enumeration:
+
+```text
+crates/server/src/routes/tasks/handlers/core.rs:663    Task::delete(&mut *tx, task.id)          <- transaction
+crates/server/src/routes/tasks/handlers/remote.rs:254  Task::delete(&deployment.db().pool, ..)  <- pool
+crates/server/src/routes/tasks/handlers/remote.rs:266  Task::delete(pool, task.id)              <- pool
+```
+
+**No behavioural defect** — `:266` passes a pool, so `.begin()` gives it a real transaction exactly as
+`:254` gets. The fix stands; only the count was wrong.
+
+**How I got it wrong is the part that matters.** My enumerating grep was piped through `head -12` and
+the third site fell off the end. I then wrote "TWO production call sites" into the task-file amendment
+and three ledger sections with full confidence. **The implementer had it right** — its "Undictated
+choice 4" enumerates `remote.rs:266` among the callers it verified — and I did not reconcile my count
+against its list.
+
+**This is the THIRD enumeration error today and all three share one cause: I enumerated from a
+partial view and reported the result as complete.** Task-creation sites (missed
+`task_breakdown::accept_proposal`), delete callers (missed the pool caller entirely), delete callers
+again (missed the third). Two were caught by me re-deriving on a hunch and one by a panel. **None was
+caught by the gate, plan-lint, or any mechanism.** A hunch is not a control. This is now a third
+independent argument for the conformance-guard test put to the spec owner earlier today, and the
+strongest one, because it shows the failure recurring even after I knew about it.
+
+**F15A-5 — inaccurate rationale in a test comment.** `queries.rs:1139-1140` justifies repairing the
+renamed table by "the process-wide template database other tests copy from". These tests use
+`create_test_pool_with_migrations`, which creates a fresh `TempDir` and runs migrations per call
+(`test_utils.rs:107-131`) and never touches the `TEMPLATE_DIR`/`OnceLock` template that
+`create_test_pool` uses. Test isolation is intact; the repair is good hygiene, the stated reason is
+wrong.
+
+**Clean axes, each attacked and each yielding nothing:** wrong `project_id` on `TaskCreated`
+(caught); swapped `old_status`/`new_status` (caught); double-append in `Task::create` (caught);
+`.begin()` reverted to `.acquire()` (caught — the panel independently reproduced the amendment's own
+required bite-proof from scratch rather than trusting the pasted run); offline build under
+`SQLX_OFFLINE=true` with `clear_for_task`'s query hitting the existing cache entry, so the
+macro-query prohibition is satisfied and no `.sqlx` file is unstaged; the dismissal split coherent
+with `dashboard.rs:62` unchanged; no double-emission at two layers across `crates/server`,
+`crates/services`, `crates/local-deployment`; delete of a nonexistent id journals nothing; ordering
+correct at all four sites.
