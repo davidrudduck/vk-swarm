@@ -3187,3 +3187,54 @@ delivery-path mutation can make a non-existent journal row appear. Trading a pos
 test for a definitely-smaller safety net is a bad trade; 018 is instructed to leave it alone.
 
 **Task 017 marked `passed`.**
+
+### ORCHESTRATOR ERROR (10th this run) — 018's bounded fallback reversed a panel-cleared 013 decision
+
+Task 018's implementer STOPPED before writing any code and reported that section 2 contradicted an
+existing test. **The catch is correct and the task file was wrong.**
+
+Section 2 as originally written required capping `spawn`'s initial-mark retry loop at 10 attempts,
+falling back to cursor 0, and signalling readiness. `tailer.rs:1533-1611` already contains
+`tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero`, built in task 013
+attempt 8 and cleared by panels 5 and 6, asserting the exact opposite:
+
+```rust
+assert!(
+    matches!(ready.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+    "the tailer signalled readiness while the journal table was unreadable, so it did not \
+     retry the initial high-water mark — it fabricated one"
+);
+```
+
+Its 8000ms window was chosen deliberately to exceed the 5500ms a ten-attempt give-up takes
+(`100+200+400+800+800*5`) so that `break 0` after ten retries fails loudly. Mutation proof (2) in
+that ledger entry is literally "initial loop `break 0` after 10 retries", recorded as a kill.
+
+**013's adversarial process had already tested and rejected the design I asked for.** I derived the
+5500ms arithmetic MYSELF earlier in this run (recorded as "ORCHESTRATOR ERROR — my 4000ms floor was
+arithmetically wrong") and then, four tasks later, specified the very mutant that arithmetic exists
+to kill. The failure was not the design idea; it was writing a task that touches `tailer.rs`
+without re-reading `tailer.rs`'s own test suite first.
+
+**It was also wrong on the merits.** The hazard the 013 test names is real and I traded it away for
+a lesser one: a tailer that signals readiness holding a fabricated cursor then publishes from a
+mark it never read. Cursor-0's history replay is survivable by the dedupe contract; inventing a
+cursor is not something to accept in exchange for avoiding a boot hang.
+
+**The fix — bound the WAIT, not the RETRY.** This is the implementer's option 1, taken verbatim:
+
+- `tailer::spawn` does not change at all. Retry-forever stays. The 013 test stays green, untouched.
+- `EventBus::new` races the readiness receiver against its own `READY_TIMEOUT` (10s, a new constant
+  in `mod.rs`). On success the race is closed; on timeout it `error!`s loudly and returns anyway.
+
+This is strictly better than what I wrote. It closes the race on every path where readiness
+resolves — which is every case the 1-in-20 measurement was taken on — cannot hang boot, disturbs no
+existing invariant, and in the pathological case degrades to exactly today's behaviour except LOUD
+where today is silent. It also confines the change to one file instead of two.
+
+**Process note.** The constrained-implementer design is what caught this: the implementer read the
+ledger and the sibling test suite before writing, hit a contradiction, and STOPPED with options
+rather than picking one or quietly deleting the test in its way. That is the behaviour task 017's
+implementer did NOT exhibit when it hit its own STOP trigger and reasoned its way past it. Both
+outcomes are now on the record for comparison. 018's STOP-trigger list has been extended to invite
+this explicitly: a task file is the orchestrator's reasoning, not ground truth.

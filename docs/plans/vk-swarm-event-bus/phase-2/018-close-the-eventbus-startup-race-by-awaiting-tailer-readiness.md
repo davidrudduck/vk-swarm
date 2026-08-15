@@ -97,36 +97,77 @@ Every call site is a test. Update them mechanically (`EventBus::new(pool.clone()
 (`crates/local-deployment/src/lib.rs:156`, `:165` awaits `DBService::new_with_after_connect`), so
 this imposes no constraint on 014.
 
-### 2. `tailer::spawn`'s initial-mark loop MUST become bounded
+### 2. ~~`tailer::spawn`'s initial-mark loop MUST become bounded~~ WITHDRAWN — bound the WAIT, not the RETRY
 
-**File:** `crates/services/src/services/event_bus/tailer.rs`
-**Anchor:** the `let mut last_published = loop { match event_journal::high_water_mark(&pool).await
-{ ... } }` block inside `spawn`.
+> **SUPERSEDED 2026-08-15, before any code was written.** The original section 2 (struck through
+> below, preserved so the reversal is on the record) required capping `spawn`'s initial-mark retry
+> loop at 10 attempts with a fall-back to cursor 0. **That was an orchestrator error.** Task 018's
+> implementer caught it as a STOP before writing anything, and the catch was correct.
 
-That loop currently retries **forever** on error. Awaiting it from `new` without bounding it
-converts a background retry into a **startup hang**: a persistent read failure at boot would mean
-`EventBus::new().await` never returns and the node never boots, with one `warn!` and no further
-output. Today the node boots degraded; this change must not make it fail to boot at all, and must
-never fail silently.
+> ~~Cap the loop at 10 attempts; on the 10th consecutive failure `error!`, fall back to cursor 0,
+> and signal readiness.~~
 
-**After:** cap the loop at **10 attempts**. On the 10th consecutive failure:
+**Why it was wrong.** `crates/services/src/services/event_bus/tailer.rs:1533-1611` already contains
+`tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero`, built in task 013
+attempt 8 and cleared by panels 5 and 6, which asserts the **exact opposite**:
 
-1. `error!` — a distinct message from the existing first-attempt `warn!`, stating that the initial
-   mark could not be read and the tailer is starting from 0.
-2. Fall back to cursor `0` and proceed into the driver loop.
-3. Signal readiness as normal, so `new` always returns in bounded time.
+```rust
+assert!(
+    matches!(ready.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+    "the tailer signalled readiness while the journal table was unreadable, so it did not \
+     retry the initial high-water mark — it fabricated one"
+);
+```
 
-**Why 0 is the safe fallback, and not a fresh hazard.** Starting at 0 republishes journal history
-onto the broadcast once. That is safe by contract, not by luck: `subscribe_from`'s Live arm drops
-anything with `ev.seq <= state.last` (`mod.rs:200-205`), and a burst large enough to overrun the
-channel lands in the `Lagged` refill arm (`mod.rs:207+`), which re-reads from the journal. The
-at-least-once contract tolerates duplicates; it does not tolerate the gap this task closes. And in
-the degraded case the subsequent `read_range` will fail too, so `consecutive_failures` climbs and
-the failure is visible on the task-016 health surface rather than silent.
+Its 8000ms outage window was chosen deliberately to exceed the 5500ms a ten-attempt give-up takes
+(`100+200+400+800+800*5`), precisely so that `break 0` after ten retries fails loudly. Mutation
+proof (2) in that ledger entry is literally "initial loop `break 0` after 10 retries", recorded as
+a kill. **013's adversarial process already tested and rejected the design this task asked for.**
 
-Record the computed cumulative bound in the ledger. The existing backoff is
-`min(1000, 50 * (1 << retry_count.min(4)))`; state the total worst-case delay 10 attempts implies
-and confirm it is the boot-delay budget you intend.
+And it was wrong on the merits, not merely in conflict. The hazard that test names is real: a
+tailer that signals readiness holding a *fabricated* cursor is worse than one that keeps retrying,
+because it then publishes from a mark that was never read. Cursor-0's history replay is survivable;
+inventing a cursor is not the kind of thing to trade a hang for.
+
+### 2 (replacement). `EventBus::new` bounds its OWN wait; `spawn` is not touched
+
+**File:** `crates/services/src/services/event_bus/mod.rs` only.
+
+**`crates/services/src/services/event_bus/tailer.rs`'s `spawn` function must not change at all.**
+Its retry-forever semantics are correct and stay. Do not edit
+`tailer_retries_the_initial_high_water_mark_instead_of_falling_back_to_zero`; it must stay green,
+untouched, as written.
+
+Instead, `new` races the readiness receiver against its own timeout:
+
+1. `tokio::time::timeout(READY_TIMEOUT, ready_rx)` where `READY_TIMEOUT` is a new module constant
+   in `mod.rs`, set to **10 seconds**.
+2. On success: the cursor is fixed and the race is closed — the normal path, and the one the
+   1-in-20 measurement lives on.
+3. On timeout: `error!` (state that the tailer has not established its cursor within the budget,
+   that it is still retrying, and that events committed in this window may not be broadcast), then
+   return the bus anyway.
+
+**What this buys and what it does not.** It closes the race whenever readiness resolves, which is
+whenever the journal is readable — every case measured. In the pathological case (journal
+unreadable for a full 10s at boot) it degrades to exactly today's behaviour, which is a strict
+improvement over today rather than a regression, and it is now **loud** where today it is silent.
+Boot cannot hang. No existing invariant is disturbed.
+
+Record the chosen 10s in the ledger with your reasoning: the tailer's backoff caps at 1000ms per
+retry, so 10s is roughly 12 attempts, and a journal unreadable that long at startup is a node with
+larger problems than event delivery.
+
+**REQUIRED test — `new` returns even when readiness never fires.** Rename the `event_journal` table
+away (follow the `ALTER TABLE event_journal RENAME TO event_journal_hidden` pattern the existing
+test uses), call `EventBus::new`, and assert it RETURNS rather than hanging. To keep this test fast,
+add a private `async fn new_with_ready_timeout(pool, capacity, ready_timeout)` that `new` delegates
+to, and drive the test through it with a short timeout. It is a private helper reachable from the
+colocated `#[cfg(test)] mod tests` — do **not** widen the public API for it. Rename the table back
+and abort the tailer before the test ends.
+
+Mutation proof for this test: make `new` await readiness unconditionally (no timeout) → the test
+must hang and fail, not pass.
 
 ### 3. Delete `prove_tailer_is_live` from the 017 suite
 
@@ -153,10 +194,16 @@ warm-up commits that provably exhaust the replay window stay exactly as they are
 - Awaiting readiness in `new` does **not** remove the flake measured in the acceptance bar below.
   That means the straddle analysis above is wrong or incomplete — report the counterexample with the
   captured run output rather than adding a retry anywhere.
-- The bounded fallback cannot signal readiness without restructuring `spawn`'s return type. Report
-  what is in the way.
+- Any change to `mod.rs` appears to require editing `spawn` or any existing test in `tailer.rs`.
+  Section 2's replacement exists precisely so nothing in `tailer.rs` has to move — if something
+  does, STOP and say what.
 - Any test outside these three files needs editing to compile. Report which and why — that is a
   hidden production call site the zero-call-site claim above missed.
+- **You find another existing invariant this task contradicts.** The original section 2 reversed a
+  panel-cleared decision from task 013 and the implementer caught it as a STOP before writing code.
+  That was the correct move and it is welcome again — a task file is the orchestrator's reasoning,
+  not ground truth, and it has been wrong repeatedly in this run. Read the ledger before you build,
+  and STOP on a conflict rather than picking a side.
 
 ## Acceptance bar (this is the proof, not a unit test)
 
