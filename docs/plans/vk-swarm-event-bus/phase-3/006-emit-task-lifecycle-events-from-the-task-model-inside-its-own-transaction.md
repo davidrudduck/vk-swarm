@@ -193,3 +193,43 @@ shows exactly three rows in that order with strictly increasing seq.
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 006` exits 0
+
+---
+
+## REQUIRED — after orchestrator review, before gating
+
+`Task::delete` has **two** production call sites, not one. This task file and `plan.md` both assert
+one. That was my error and it is corrected here:
+
+```text
+core.rs:663:   Task::delete(&mut *tx, task.id).await?          <- transaction
+remote.rs:254: Task::delete(&deployment.db().pool, task.id)    <- POOL, no transaction
+```
+
+`Acquire::acquire` on `&mut Transaction` is a pure passthrough (sqlx-core-0.8.6
+`transaction.rs:250`), so the transaction path is correct as implemented. On a pool it yields a
+`PoolConnection` and the three statements become three auto-commits — a failed append after a
+successful DELETE deletes the task and journals nothing.
+
+**REQUIRED: use `Acquire::begin` instead of `Acquire::acquire` in `Task::delete`**, and commit the
+resulting transaction before returning. On a pool this opens a real transaction; on `&mut Transaction`
+it opens `SAVEPOINT _sqlx_savepoint_{depth}` (`transaction.rs:281`) nested in the caller's
+transaction. Both paths become atomic and no caller changes.
+
+**The earlier STOP trigger forbidding delete "its own transaction" is superseded for this specific
+purpose.** It was written assuming a single tx-owning caller, and its concern was holding the SQLite
+writer lock across unrelated work; a savepoint inside an already-open transaction does not extend a
+lock the outer transaction already holds. Do NOT add a `delete_with_event` entry point — that part of
+the trigger stands.
+
+**REQUIRED test:** prove the pool path is atomic. Make the append fail after the DELETE has
+succeeded (corrupt the payload, or point the append at a renamed `event_journal` table — the tailer
+tests in `crates/services` use `ALTER TABLE ... RENAME TO ...` for exactly this), call
+`Task::delete(&pool, id)`, and assert **the task still exists**. Prove it bites: with `.acquire()`
+restored, this test must FAIL. Paste both runs.
+
+Note `chmod` and closing the pool do NOT inject a usable fault here — see the sqlx fault-injection
+notes; a table rename or payload corruption is what works.
+
+Keep the `impl Future` return shape and its `#[allow(clippy::manual_async_fn)]`; the HRTB limitation
+that forced it is unrelated to this change and still applies.

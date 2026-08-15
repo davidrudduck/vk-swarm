@@ -4473,3 +4473,244 @@ reads `tailer.rs:164` while HEAD has `break mark,` at `:165` — `git show d5e2e
 invisible in both shapes, but that belongs to `tailer_resumes_from_its_high_water_on_restart`.
 
 **Task 019 marked `passed`. Phase 2 is complete.**
+
+## 2026-08-15 task 006 — task lifecycle events wired into `Task::create`/`update`/`update_status`/`delete`
+
+Phase 3 opens: `crates/db/src/models/task/queries.rs`, `hierarchy.rs`,
+`crates/db/src/models/activity_dismissal.rs`. Both PRE-RESOLVED STOP triggers (raw-status-write
+enumeration, dismissal-helper callers) were re-verified as instructed and not spent — the raw-write
+enumeration still shows the only `tasks.status` write is `hierarchy.rs:19`/`update_status` itself, and
+`clear_for_task` still has exactly one caller (`hierarchy.rs:27`). The struck-through completeness
+claim in the task file was noted and not repeated.
+
+### Red phase (required evidence)
+
+Wrote the seven named tests plus one supplemental (below) against the file's **pristine, pre-task
+HEAD** content (restored via `git show HEAD:<path>`, not `git checkout` — the working-rules ban on git
+mutation applies to the working tree, `git show`'s stdout-only read does not touch it). Ran
+`cargo test -p db lifecycle_event_tests`:
+
+```text
+test models::task::queries::lifecycle_event_tests::delete_emits_task_deleted ... FAILED
+test models::task::queries::lifecycle_event_tests::create_emits_task_created ... FAILED
+test models::task::queries::lifecycle_event_tests::failed_write_journals_nothing ... ok
+test models::task::queries::lifecycle_event_tests::delete_journals_inside_the_callers_transaction ... FAILED
+test models::task::queries::lifecycle_event_tests::update_status_with_existing_dismissal_succeeds ... FAILED
+test models::task::queries::lifecycle_event_tests::update_status_emits_task_status_changed_with_both_statuses ... FAILED
+test models::task::queries::lifecycle_event_tests::update_with_status_change_emits_task_status_changed ... FAILED
+test models::task::queries::lifecycle_event_tests::update_without_status_change_emits_no_status_event ... ok
+test result: FAILED. 2 passed; 6 failed; 0 ignored
+```
+
+All 6 positive-assertion tests failed with `left: 0, right: 1` against `event_journal` row counts —
+failing for the right reason (no emission code exists yet), not a compile error. The 2 that "passed"
+pre-implementation are negative-property tests (`update_without_status_change...`,
+`failed_write_journals_nothing`) that are vacuously true with no emission code at all; their value is
+only realized post-implementation, alongside the positive tests, which is why both categories are
+re-asserted green together below rather than treated as evidence on their own.
+
+### Undictated choice 1 — test 2 assigned to `update_status`, plus a supplemental test for `Task::update`'s positive path
+
+The task names test 2 `update_status_emits_task_status_changed_with_both_statuses` without stating
+which of the two status-touching functions (`Task::update`, `Task::update_status`) it targets; test 4
+is explicitly pinned to `Task::update` by the task's own prose. Read test 2 as targeting
+`Task::update_status` by name-literal match (the function is literally called `update_status`), which
+also sets up test 7's dismissal scenario on the same function. This leaves `Task::update`'s POSITIVE
+status-change path (status actually differs) asserted nowhere in the named seven — test 4 only proves
+the NEGATIVE half. Added `update_with_status_change_emits_task_status_changed` (not one of the seven,
+labelled as supplemental in its doc comment) so a mutant that deletes the "only when differs" guard
+inside `Task::update` specifically cannot hide behind test 2 exercising a different function. This is
+the exact class of gap task 004's ledger entry (attempt 1, 2026-08-12) flagged: an all-green suite
+shipped a broken conditional once already on this plan.
+
+### Undictated choice 2 — `failed_write_journals_nothing` targets `Task::create`, not `Task::update`
+
+The task's example ("violate a FK by using an absent project_id") only cleanly maps to `Task::create`
+(`INSERT ... project_id` against the FK on `tasks.project_id REFERENCES projects(id)`, `foreign_keys`
+pragma ON by sqlx's `SqliteConnectOptions` default, confirmed against
+`sqlx-sqlite-0.8.6/src/options/mod.rs:185`). `Task::update`'s WHERE-clause project_id mismatch would
+raise `RowNotFound`, not a FK violation, so it was left untested by this specific test; the same
+mechanism (open tx, failing query, no commit, no event) is already proven for `Task::update` by test 4
+and the supplemental test both completing their `.unwrap()` calls without ever seeing a stray
+`task_status_changed` row from an aborted attempt.
+
+### Undictated choice 3 — `Task::delete` guards emission on `rows_affected() > 0`
+
+The task's prose doesn't say what happens when `delete` is called on a nonexistent id (existing
+callers never hit this — `core.rs` checks `rows_affected == 0` and errors AFTER the transaction would
+already have committed a phantom event otherwise). Guarded the `TaskDeleted` append behind
+`result.rows_affected() > 0` so a no-op delete never fabricates an event. Smallest change consistent
+with D2 ("model functions append only" — nothing changed, nothing to append).
+
+### Undictated choice 4 — `Task::delete`'s bound is `Acquire`, not bare `Executor`, and is NOT `async fn`
+
+The task's Change section shows `Task::delete`'s signature as `E: Executor<'e, Database = Sqlite>` and
+describes the fix as "simply append on the same executor." That signature cannot literally support
+this task's requirement: delete needs THREE sequential statements (read `project_id` for the payload,
+DELETE, append) against the SAME given executor, and `sqlx::Executor` methods consume `self` by value
+— a generic `executor: E` can be used exactly once, and `E` cannot be required `Copy` without breaking
+the `&mut Transaction`-derived caller (`&mut *tx` in `core.rs:663`, not `Copy`).
+
+Resolved by changing the bound to `sqlx::Acquire<'c, Database = Sqlite>` instead. `Acquire::acquire()`
+on `&mut SqliteConnection` (what `&mut *tx` derefs to) is a **no-op passthrough** — `Box::pin(ok(self))`
+in the `impl_acquire!` macro, NOT a `.begin()` call — so no transaction is opened, satisfying the task's
+"do not open a transaction" requirement exactly. `.acquire()` hands back a concrete `&mut
+SqliteConnection` that CAN be reborrowed (`&mut *conn`) for each of the three statements. Verified
+every existing caller (`remote.rs:254`, `remote.rs:266`, `core.rs:663`, `queries.rs` test, and
+`task_breakdown/mod.rs:201`) passes either `&SqlitePool` or `&mut *tx`, both of which implement
+`Acquire` via sqlx-core's blanket impls (`acquire.rs:83`, `impl_acquire!` at `sqlx-sqlite/src/lib.rs:118`)
+— no caller needed to change.
+
+**This surfaced a real, reproducible sqlx/rustc limitation, not a hypothetical one.** Written as a
+plain `async fn delete<'e, E>(...) -> Result<u64, sqlx::Error> where E: Acquire<'e, ...>`, `cargo check
+-p server` failed with `the trait bound ... Handler<_, _> is not satisfied` at the `.route("/",
+delete(handlers::delete_task))` call in `routes/tasks/mod.rs` — opaque, but reproduced independently
+(no axum) with a minimal repro added temporarily to `queries.rs`:
+
+```bash
+error: implementation of `sqlx::Acquire` is not general enough
+  --> crates/db/src/models/task/queries.rs:1129:9
+   |
+1129 |         assert_send(&fut);
+   = note: `sqlx::Acquire<'0>` would have to be implemented for the type `&mut SqliteConnection`,
+           for any lifetime `'0`... but `sqlx::Acquire<'1>` is actually implemented for the type
+           `&'1 mut SqliteConnection`, for some specific lifetime `'1`
+```
+
+This is the exact failure mode sqlx's own `Acquire` trait doc comment names and documents a workaround
+for: an `async fn`'s single elided lifetime gets forced to serve BOTH the `Acquire` bound's lifetime
+parameter and the returned future's own capture lifetime, and the trait solver cannot always prove the
+resulting HRTB obligation, especially when the borrow (`&mut *tx`) is taken fresh inside another
+async fn's desugared state machine (`delete_task`). Applied sqlx's own documented fix: rewrite as a
+plain `fn` (not `async fn`) returning a hand-written `impl Future<Output = ...> + Send + 'a`, with the
+`Acquire` bound's lifetime (`'c`) and the future's own lifetime (`'a`) as two SEPARATE generic
+parameters instead of one shared elided lifetime:
+
+```rust
+pub fn delete<'a, 'c, E>(executor: E, id: Uuid)
+    -> impl std::future::Future<Output = Result<u64, sqlx::Error>> + Send + 'a
+where
+    E: Acquire<'c, Database = Sqlite> + Send + 'a,
+{
+    async move { /* unchanged body */ }
+}
+```
+
+This fixed both the isolated repro (`cargo test -p db send_check` — Send-bound assertion and
+`tokio::spawn` both compiled and passed) and the real caller (`cargo check --workspace` and
+`cargo check --workspace --all-targets` both clean). Callers are unaffected — `Task::delete(&mut *tx,
+id).await?` reads identically whether `delete` is `async fn` or a plain fn returning `impl Future`.
+Clippy's `manual_async_fn` lint fires on the hand-written future (correctly — this pattern is normally
+an anti-pattern) and is suppressed with `#[allow(clippy::manual_async_fn)]` plus an inline comment
+citing this exact HRTB failure, so a future reader doesn't "simplify" it back into the broken form.
+The diagnostic repro (`send_check` test module, and a temporary `#[axum::debug_handler]` on
+`delete_task` in `core.rs` used only to confirm the error site) were both removed before the final
+diff; `core.rs` was verified byte-identical to `git show HEAD:...` after removal.
+
+### Ordering note on `Task::update_status`
+
+The Change section's dictated order for `update_status` ("update status -> clear dismissal -> append
+event -> commit") doesn't state whether the append is conditional. Made it conditional on
+`old_status != status` (skip if unchanged) for symmetry with `Task::update`'s explicit "exactly one
+event per state change" rule and the Change section's opening D2 summary, which states that rule as a
+blanket property of all four functions, not something scoped to `Task::update` alone. This doesn't
+violate the dictated order — the conditional only skips the append step, the sequence for the emitting
+case is unchanged.
+
+### Journal-error-to-sqlx-Error mapping
+
+`event_journal::append` returns `Result<_, EventJournalError>` (`Database`/`Serde` variants); all four
+functions must stay on `Result<_, sqlx::Error>` (task forbids changing return types). Added a small
+`journal_err_to_sqlx` mapper — `Database` unwraps directly, `Serde` becomes `sqlx::Error::Protocol` —
+matching this crate's existing pattern for folding non-sqlx failures into a sqlx::Error-only signature
+(`node_outbox.rs:79`, `task_breakdown/queries.rs:235`). Duplicated (not shared via `pub(super)`) between
+`queries.rs` and `hierarchy.rs` to keep the task's two touched files independent, per its own "keep
+each site's shape local" framing.
+
+### Verification (all commands run from `/data/Code/vk-swarm-worktrees/event-bus`)
+
+- `cargo test -p db lifecycle_event_tests` (red, pre-implementation): 6 failed for the right reason, 2
+  vacuously true — pasted above.
+- `cargo test -p db task`: **71 passed, 0 failed** (unit) + 5/0/6/0/5 across the five integration test
+  binaries touching `task` — all green, including all 8 new lifecycle tests.
+- `cargo test -p db` (full crate): **234 passed, 0 failed, 7 ignored** (unit) + all integration binaries
+  + 11 doctests green.
+- `cargo fmt --all -- --check`: exit 0 (nightly-feature warnings only, no diff).
+- `cargo clippy -p db --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo clippy --all --all-targets --all-features -- -D warnings` (full workspace, run because
+  `Task::delete`'s bound change is visible to every downstream crate): exit 0.
+- `cargo check --workspace`: exit 0.
+- `cargo check --workspace --all-targets` (extra: confirms test/bench targets in every crate, not just
+  lib/bin, still compile against the new `delete` signature): exit 0.
+- `git status --porcelain`: only the three declared files
+  (`crates/db/src/models/activity_dismissal.rs`, `crates/db/src/models/task/hierarchy.rs`,
+  `crates/db/src/models/task/queries.rs`) plus this ledger entry.
+
+### Not done — live SC1 check
+
+The task's "Manual verification" section also asks for a live check (`sqlite3 $VK_DATABASE_PATH
+"select seq, event_type from event_journal ..."` after create/move/delete on a running node). No
+running instance is registered for this worktree (`/tmp/vibe-kanban/instances/` shows only
+`/home/david/Tools/vk-swarm`, a different project root) and starting one wasn't part of this task's
+authorization. Flagging for the orchestrator rather than starting a server unprompted; this is separate
+from and does not gate the `task-gate.sh` Done-when, which only requires the automated test/typecheck
+commands above.
+
+**Task 006 implementation complete pending gate script + review.**
+
+### ORCHESTRATOR ERROR (11th) — task 006 assumed `Task::delete` always receives a transaction; it does not
+
+Found by the orchestrator while reviewing 006's implementation, before gating. **This is my error, not
+the implementer's** — the task file and `plan.md` both assert a single, transaction-owning caller.
+
+**plan.md's Approach says:** *"...and with one handed a caller-owned transaction (`Task::delete`,
+whose route already owns an outer transaction spanning child nullification)"*. Singular. In fact
+there are TWO production call sites:
+
+```text
+crates/server/src/routes/tasks/handlers/core.rs:663:   Task::delete(&mut *tx, task.id).await?
+crates/server/src/routes/tasks/handlers/remote.rs:254: Task::delete(&deployment.db().pool, task.id).await?
+```
+
+`remote.rs:254` is the dangling-`shared_task_id` local-delete fallback (F-2026-08-05-01, ADR-0015).
+It passes the **pool**.
+
+**Why that breaks the guarantee, established from sqlx 0.8.6's source rather than from the API name:**
+
+```rust
+// sqlx-core-0.8.6/src/transaction.rs:244-258 — Acquire for &'t mut Transaction
+fn acquire(self) -> BoxFuture<'t, Result<Self::Connection, Error>> {
+    Box::pin(futures_util::future::ok(&mut **self))          // pure passthrough, no tx, no savepoint
+}
+fn begin(self) -> BoxFuture<'t, Result<Transaction<'t, DB>, Error>> {
+    Transaction::begin(&mut **self, None)                     // -> "SAVEPOINT _sqlx_savepoint_{depth}" (:281)
+}
+```
+
+The implementer's use of `.acquire()` is therefore **correct on the transaction path** — a no-op
+reborrow, statements ride the caller's transaction. On the **pool** path `.acquire()` yields a
+`PoolConnection`, so `SELECT project_id` / `DELETE` / `append` execute as three separate
+auto-commit statements. A failing append after a successful DELETE leaves the task deleted with no
+event — the exact journal-first atomicity property ADR-0017 rests on, violated on one of two live
+paths.
+
+**The fix is `.begin()` rather than `.acquire()`.** On a pool it opens a real transaction; on
+`&mut Transaction` it opens a SAVEPOINT nested in the caller's transaction. Both paths become
+atomic, and no caller changes. The task file's STOP trigger forbidding delete "its own transaction"
+was written against the assumption of a single tx-owning caller, and its stated concern was holding
+the SQLite writer lock across unrelated work — a savepoint inside an already-open transaction does
+not extend that lock, because the outer transaction already holds it.
+
+**The pattern here is the point, and it is the second instance today.** The plan enumerated
+`Task::delete`'s callers from the spec's Design rather than from the code, exactly as it enumerated
+task-creation sites from the Design and missed `task_breakdown::accept_proposal`. Neither miss was
+found by the gate, by a panel, or by the plan-lint; both were found by an orchestrator manually
+re-deriving an enumeration. **That is not a repeatable safety net**, and it is a second independent
+argument for the conformance-guard test proposed to the spec owner earlier today — a mechanical check
+that the set of task write sites and delete call sites matches a reviewed allowlist, failing the
+build when a new one appears.
+
+**Credit where due:** the implementer's `Acquire` diagnosis was correct and well-traced — `Executor`'s
+methods consume `self` by value, so three sequential operations on one non-`Copy` `E` are impossible,
+and the sqlx HRTB limitation it hit and worked around is real and documented. Nothing about that work
+is wasted; only `.acquire()` becomes `.begin()`.
