@@ -5076,3 +5076,152 @@ breaks Send-ness would fail at THAT caller with an opaque axum `Handler` error r
 
 Source for all of it preserved at `.wai-scratch/panel15b-savepoint-tests.rs` (gitignored), including
 the three traps the panel hit at least once each.
+
+## 2026-08-15 task 006 attempt 2 — eight remediations from panels 15A and 15B
+
+Neither panel found a blocking defect in attempt 1's production code; both concluded it was correct.
+The eight items below are all test/comment/signature remediations against already-verified findings,
+per the task file's `## REQUIRED — attempt 2` section at HEAD `091c9840`. Per that section's own
+instruction, panel 15A's six probes and panel 15B's savepoint tests were used verbatim (adapted only
+where the module's existing helper names differed), not re-derived.
+
+**Item 1 — no-op `update_status` guard.** Added `update_status_same_status_emits_no_status_event`.
+Bite proof (`hierarchy.rs:62-64`'s `&& old_status != status` deleted via `.wai-scratch` file copy,
+diff-verified byte-identical on restore):
+```text
+# guard deleted:
+test ...update_status_same_status_emits_no_status_event ... FAILED
+panicked: no-op update_status must not emit task_status_changed: [("task_status_changed",
+  "{\"type\":\"task_status_changed\",...,\"old_status\":\"todo\",\"new_status\":\"todo\"}")]
+test result: FAILED. 0 passed; 1 failed
+
+# guard restored:
+test ...update_status_same_status_emits_no_status_event ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+**Item 2 — append-failure atomicity for the three pool-taking sites.** Added
+`create_rolls_back_when_append_fails`, `update_status_rolls_back_when_append_fails` (also pins the
+dismissal clear rolls back — the sub-gap the task file named specifically), and
+`update_rolls_back_when_append_fails`. All three hide `event_journal`, force the write to succeed and
+the append to fail, and assert the state write was undone.
+
+**Item 3 — pin `task_id` in `Task::update`'s event.** Fixed the shipped
+`update_with_status_change_emits_task_status_changed` to destructure `task_id: tid` instead of `..`
+and assert it equals the real task id (previously `Uuid::nil()` would have survived undetected). Also
+added panel 15A's dedicated `update_event_carries_the_right_task_id` probe as additional coverage —
+not a replacement for the fix, since the task file's literal text was "name `task_id` and assert it"
+on the EXISTING test.
+
+**Item 4 — false rationale in a test comment.** `queries.rs`'s journal-repair comment claimed the
+reason was "the process-wide template database other tests copy from." These tests use
+`create_test_pool_with_migrations` (`test_utils.rs:108-129`), a fresh `TempDir` per call that never
+touches the template `create_test_pool` copies from. Comment corrected to state the real reason (don't
+leave THIS test's own table renamed) and note the prior claim was wrong, rather than silently
+replacing it.
+
+**Item 5 — the savepoint test was vacuous; paired, not deleted.** `delete_via_savepoint_rolls_back_
+cleanly_on_append_failure`'s final act rolls the outer transaction back, so "the task still exists" is
+true whether or not the inner savepoint actually rolled anything back — it passes unchanged against
+`.acquire()`, the exact defect it was written to disprove. This was the task file's own specification
+error (it required that assertion shape verbatim), not this implementer's on either attempt. KEPT the
+existing test (it still proves a real, different property: the connection wasn't poisoned). ADDED
+`delete_savepoint_failure_is_undone_even_if_the_caller_commits` (discriminator: COMMITS the outer
+transaction instead of rolling back, and reads the row back INSIDE the transaction, on the connection's
+very next command, before that commit — the FIFO-ordering probe) and
+`failed_savepoint_leaves_the_outer_transaction_usable` (the caller keeps using the transaction after
+the failure and commits; both the failed delete's absence and the caller's own subsequent write must
+survive). Applied the A2 error-identity guard to `delete_via_pool_is_atomic_when_append_fails`:
+`result.expect_err(...)` plus `format!("{err:?}").contains("event_journal")`, so a regression that
+makes `delete` fail at an earlier statement can't pass this test vacuously with the task trivially still
+present.
+
+Bite proof, run BEFORE items 6/7's signature collapse (against `.acquire()`, `.wai-scratch` file copy,
+byte-identical restore verified) — three savepoint tests, one command:
+```text
+running 3 tests
+test ...delete_savepoint_failure_is_undone_even_if_the_caller_commits ... FAILED
+test ...delete_via_savepoint_rolls_back_cleanly_on_append_failure ... ok
+test ...failed_savepoint_leaves_the_outer_transaction_usable ... FAILED
+test result: FAILED. 1 passed; 2 failed
+```
+
+One execution, one defect, the shipped (vacuous-on-its-own) test green while both new discriminating
+tests are red — exactly the finding the task file predicted. Re-ran the SAME three tests again after
+items 6/7 (signature collapse + `DELETE...RETURNING`) with `.begin()` restored: `3 passed; 0 failed`.
+Attempted to re-run the `.acquire()` half of the bite proof a SECOND time against the fully-collapsed
+code too, for maximal rigor — this instead surfaced a bonus confirmation under item 6, recorded there.
+
+**Item 6 — collapse the HRTB workaround.** `delete` is now `pub async fn delete<'c, E>(executor: E,
+id: Uuid) -> Result<u64, sqlx::Error> where E: Acquire<'c, Database = Sqlite> + Send` — the
+`impl Future` + split `'a`/`'c` lifetimes + `#[allow(clippy::manual_async_fn)]` shape is gone. Doc
+comment rewritten to state what actually forced the old shape: `.acquire()`'s
+`Acquire::Connection = &'c mut SqliteConnection` is a BORROW carrying the bound's `'c` lifetime through
+the reborrow into the returned future; `.begin()` returns an OWNED `Transaction<'c, _>` instead, so
+nothing borrows `executor` past that point and there is no reborrow-through-a-lifetime for the HRTB
+solver to fail to prove. Added `_assert_delete_future_is_send` (the `assert_send` compile-time net from
+`.wai-scratch/panel15b-savepoint-tests.rs`, `#[allow(dead_code)]` since it exists to be TYPE-CHECKED,
+never called).
+
+Re-verified independently — not trusting panel 15B's proof as a substitute, per the task file's own
+instruction: `cargo check --workspace --all-targets` after the collapse is clean (`Finished` in 16.40s,
+zero errors/warnings).
+
+**Bonus confirmation, unplanned.** Attempting to redo item 5's bite proof a second time against the
+FINAL (post-collapse) code — swap `.begin()` back to `.acquire()` inside `delete`'s new plain-`async
+fn` body — the crate no longer compiles AT ALL:
+```text
+error[E0521]: borrowed data escapes outside of associated function
+  --> crates/db/src/models/task/queries.rs:516:9
+   |
+516 |         assert_send(&Task::delete(conn, id));
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `conn` escapes the associated function body here
+
+error: implementation of `sqlx::Acquire` is not general enough
+  --> crates/db/src/models/task/queries.rs:516:9
+```
+
+This is `_assert_delete_future_is_send` doing exactly its named job — catching an `.acquire()`
+regression at COMPILE time, before any test runs, which is a strictly stronger guarantee than item 5's
+runtime bite proof. It also means a literal three-test RUN against `.acquire()` is no longer obtainable
+on the shipped code without also disabling this net — the pre-collapse bite proof above (captured
+before item 6 existed, unconfounded by it) is the runtime evidence for item 5; this compile failure is
+independent, additional evidence that item 6's net is live and correctly wired, not a substitute for
+either bite proof.
+
+**Item 7 — write-first `DELETE ... RETURNING`.** Replaced the separate `SELECT project_id` +
+`DELETE FROM tasks WHERE id = $1` with a single
+`DELETE FROM tasks WHERE id = ? RETURNING project_id` (runtime API — new SQL text can't go through a
+macro per this task's standing Change-section directive). `project_id.is_some()` now IS the "was a row
+deleted" signal; the separate `rows_affected() > 0` check is gone, since `RETURNING` producing a row
+and a row having been deleted are the same fact. `RETURNING project_id` supplied everything the event
+needed, so no STOP was required here.
+
+**Item 8 — three call sites, not two. No code change; correcting the count.** The orchestrator's own
+ledger entries (`F15A-4`, `F15B-4`, this file) already carry the authoritative correction and
+root-cause analysis (a `head -12`-truncated enumerating grep) — not duplicated here. Two things worth
+recording from this implementer's side: (1) this task's ORIGINAL "Undictated choice 4" section (the
+`Acquire` bound rationale, attempt 1) already enumerated all three sites correctly
+(`remote.rs:254`, `remote.rs:266`, `core.rs:663`) when verifying no caller would break — the
+orchestrator's own ledger entry confirms this independently. (2) My later "### Follow-up" section
+(the `.begin()` fix write-up, same day) undercounted to "a second production caller" (two total),
+missing `remote.rs:266` — that section is left as originally written, per this ledger's own convention
+of correcting forward rather than editing history; this entry is that correction, cross-referenced to
+the orchestrator's fuller account.
+
+### Verification for attempt 2 (all from `/data/Code/vk-swarm-worktrees/event-bus`)
+
+- `cargo test -p db`: **244 passed, 0 failed, 7 ignored** (unit) + all six integration test binaries
+  green + 11 doctests green.
+- `cargo fmt --all -- --check`: exit 0 (one round found two reflow diffs from the new assertions;
+  applied via `cargo fmt --all`, re-checked clean).
+- `cargo clippy -p db --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo clippy --all --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo check --workspace --all-targets`: exit 0 (the item-6 gate: did not pass would have meant
+  STOP and report, per the task file).
+- `git status --porcelain`: only `crates/db/src/models/task/queries.rs` changed from the attempt-1
+  commit (`4772da26`) — `hierarchy.rs` and `activity_dismissal.rs` needed no attempt-2 changes; both
+  were restored byte-identical after item 1's temporary bite-proof edit.
+
+**Task 006 attempt 2 complete: eight remediations applied, two required bite proofs captured verbatim,
+one unplanned compile-time confirmation of item 6's net, pending panel re-review.**
