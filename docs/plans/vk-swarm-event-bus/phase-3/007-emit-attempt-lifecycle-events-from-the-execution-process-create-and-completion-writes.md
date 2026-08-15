@@ -159,3 +159,117 @@ anything red, STOP — that means something still needs it and the orphan analys
 directory-expansion loop whose dotted-basename heuristic breaks on `.sqlx` (agent-plugins #105). A
 specific `query-<hash>.json` file can therefore be declared; only the directory scope cannot. Do not
 generalise this into declaring `crates/db/.sqlx` — that still covers nothing.
+
+---
+
+## REQUIRED — attempt 2, after panels 17A and 17B
+
+Two panels reviewed attempt 1 with disjoint remits. **Both rejected it, on different defects.** The
+emission logic, the executor sourcing, the identity fields and the orphan predicate are all correct
+and stay — every one was attacked and held. What follows is three real defects and five corrections.
+
+**READ THIS FIRST: the two panels' remediations CONFLICT, and resolving that is the substance of
+this attempt.**
+
+### THE CONFLICT
+
+- **17A** says: `update_completion` emits on every terminal WRITE rather than on a terminal
+  TRANSITION. Its proposed fix is to fold `ep.status` into the owner JOIN and **move that SELECT
+  before the UPDATE**.
+- **17B** proves: a deferred transaction that **reads then upgrades to a write** acquires
+  `SQLITE_BUSY_SNAPSHOT` (517), which SQLite's busy handler **does not retry**, so `busy_timeout`
+  never applies. Measured 6/200 vs 0/200 for the pre-007 shape.
+
+`update_completion` today is **write-first** — UPDATE at `lifecycle.rs:64`, SELECT at `:80` — so it
+has NO snapshot exposure. **Applying 17A's fix literally would introduce 17B's defect into a function
+that does not currently have it.**
+
+**You must satisfy both constraints: gate emission on a real transition AND never read-then-upgrade.
+I am not dictating the shape.** Candidates, none pre-blessed:
+
+- **(a) Gate in the UPDATE's own WHERE clause** — e.g. `UPDATE ... WHERE id = ? AND status = 'running'
+  RETURNING task_attempt_id`, treating "no row returned" as "no transition, no event". Write-first and
+  atomic, no TOCTOU. **But it changes write behaviour**: an already-terminal row would no longer be
+  overwritten at all. Assess whether any caller depends on that overwrite before choosing it, and say
+  what you found either way.
+- **(b) Capture the prior status in the same statement**, e.g. a CTE reading `status` before the
+  UPDATE within one statement. Keeps both properties if SQLite evaluates it as you expect — prove it
+  rather than assuming.
+- **(c) Take the write lock up front** (`BEGIN IMMEDIATE`) so the read is not an upgrade. 17B flagged
+  that it did **not** verify this sqlx version exposes it — check before adopting.
+- **(d) Something better.** If you find one, say why.
+
+**REQUIRED regardless of choice: a test proving the chosen shape does NOT read-then-upgrade.** 17B's
+harness is the pattern — two connections, prod-like pool config (WAL, `busy_timeout`,
+`max_connections(10)`), an independent writer committing between the read and the write. The pre-007
+shape scored 0/200; yours must too.
+
+### 1. BLOCKING — gate `update_completion` on a real transition (17A-1, 17B-4)
+
+Three identical `Completed` writes emit three `attempt_finished`. `Completed → Killed` emits **both**
+`attempt_finished` and `attempt_failed` for one process. SC2 names a singular terminal outcome.
+
+Task 006's `Task::update` is the sibling that does this right (`task/queries.rs:340-386`): it reads
+`old_status` inside the transaction and gates on `old_status != task.status`. Your doc comment
+already invokes "same reasoning as `Task::update`'s prior-status read" while not doing the read — fix
+the code, and fix that comment.
+
+**Boundary tests REQUIRED** (17A-2 proved the guard is entirely untested — mutating `is_terminal` to
+`true` leaves all 254 green): a `Running` write emits nothing; a repeated identical terminal write
+emits once; `Completed → Killed` emits once, not two contradictory events.
+
+**Note test 4 is misnamed for what it does.** `non_terminal_update_emits_nothing` drives
+`update_pid`, which never enters `update_completion`. **That is my task file's example being wrong,
+not your implementation.** Keep it (it guards a real thing) but add the real ones.
+
+### 2. BLOCKING — remove the read-then-upgrade from `mark_orphaned_as_failed` (17B-1)
+
+It reads the rows about to transition, then UPDATEs — the shape that scores 517. The sweep runs as a
+background task at startup (`server/src/main.rs:126-146`) alongside a sibling that writes the same
+table, and the error is swallowed into `tracing::warn!` at `:135`, so the whole batch stays `running`
+and emits **nothing** — the exact SC2 hole this task exists to close.
+
+**`UPDATE ... RETURNING id` first, then load identities for exactly those ids.** Write-first, and it
+makes `rows_affected` and the event count structurally identical rather than merely equal by
+argument — which also closes item 3. This is the same fix `DELETE ... RETURNING` gave task 006 for
+the same shape; it is the second time this pattern has bitten this run.
+
+### 3. The identity JOIN can miss rows the state write hit (17B-2)
+
+The SELECT has `JOIN task_attempts`; the UPDATE does not. A row whose parent attempt is absent
+transitions but emits nothing. Zero live occurrences across all three local DBs, so this is latent —
+but item 2's remediation closes it structurally, and **two shipped statements assert the opposite**
+and must be corrected: `lifecycle.rs`'s comment that "`owner` is None only when `id` did not match any
+row", and the ledger's "same predicate" in Undictated choice 4.
+
+### 4. NULL executor silently emits `"executor": ""` (17A-3, 17B-3 — found independently by both)
+
+`task_attempts.executor` is nullable and sqlx decodes SQL NULL into `String` as `""` rather than
+erroring. **Your tests assert `!executor.is_empty()` with the message "SC2 requires non-empty executor
+identity" — but the code never enforces it**; the assertion passes only because every fixture sets it.
+
+Decode as `Option<String>` and handle NULL explicitly. **You choose** whether that means refusing to
+emit, emitting a sentinel, or failing the write — argue it in the ledger. Reachability is
+legacy-data-only (the typed enum prevents new NULLs), so this is about the code meaning what its
+tests claim.
+
+### 5. Corrections, no behaviour change
+
+- **Breakdown is enumerated wrongly** in the ledger and commit message. `ExecutorAction::base_executor()`
+  returns `None` only for `ScriptRequest`; Breakdown is constructed with `CodingAgentInitialRequest`,
+  which carries a profile. The decision stands (three of four still lack a source, and the JOIN is
+  needed for `task_id` regardless) — fix the enumeration.
+- **Add the missing rollback tests.** 007 ships none for `update_completion` or
+  `mark_orphaned_as_failed`; 006 ships one per site. 17B probed all three and they behave correctly —
+  pin them.
+- **Record the `(Completed, None)` bus/table contradiction** (17A-4) as a ledger residual: the row's
+  `status` column reads `completed` while the journal says failed. Unreachable from every production
+  caller today, so a design note, not a defect.
+- **Record the ~3.1x `update_completion` slowdown** (17B-5: ≈1.54ms vs 0.50ms) as a declared residual.
+
+## Verification for attempt 2
+
+`cargo test -p db`, `cargo fmt --all -- --check`, `cargo clippy -p db --all-targets --all-features
+-- -D warnings`, `cargo check --workspace --all-targets` — all exit 0. Plus, verbatim: the
+no-read-then-upgrade test result, and a bite proof for the transition guard (mutate it away, the new
+boundary tests must fail).
