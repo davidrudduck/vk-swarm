@@ -233,3 +233,115 @@ notes; a table rename or payload corruption is what works.
 
 Keep the `impl Future` return shape and its `#[allow(clippy::manual_async_fn)]`; the HRTB limitation
 that forced it is unrelated to this change and still applies.
+
+---
+
+## REQUIRED — attempt 2, after panels 15A and 15B
+
+Two panels reviewed attempt 1 with disjoint remits. **Neither found a blocking defect and both
+concluded the production code is correct.** 15A's framing: *"I proved the code right and the tests
+thin."* 15B affirmatively proved the savepoint-ordering claim by experiment.
+
+**Do not redo the implementation.** The emission logic, the `Acquire` bound, `.begin()`, and every
+payload are correct and stay. Eight remediations follow: seven are tests or comments, one is a
+two-line signature simplification and one a single-statement SQL change.
+
+**Most of the test source already exists and is verified.** Panel 15A's six probes are in
+`/tmp/claude-1000/-data-Code-vk-swarm/7ada6c82-d888-446d-9d5c-48560bedfbbb/scratchpad/panel15a-probes.rs.txt`
+(green on clean code, red on each mutation). Panel 15B's two savepoint tests plus the A2 guard and
+the `assert_send` net are in `.wai-scratch/panel15b-savepoint-tests.rs` (green on shipped `.begin()`,
+red on `.acquire()`). **Use them. Do not re-derive them** — the whole of finding 5 below is that
+these tests are easy to write wrong, and both panels wrote them wrong at least once before getting
+them right. Adapt only what does not compile.
+
+### 1. No-op `update_status` must emit nothing (15A-1)
+
+Deleting `&& old_status != status` from `hierarchy.rs:62-64` survives the entire crate suite
+(`ok. 236 passed; 0 failed`). Add the negative-path test. The guard is load-bearing: seven production
+writers of `Done`/`InReview` (`git_ops.rs:99`, `github.rs:279`, `pr_monitor.rs:186`, `:259`,
+`container.rs:296`, `:597`, `:1594`) call `update_status` without checking current status, while
+`approvals.rs:465` does gate on it — the asymmetry is what the guard absorbs.
+
+**Prove it bites:** delete the guard, the new test must FAIL. Paste both runs.
+
+### 2. Append-failure atomicity for the three pool-taking sites (15A-2)
+
+`Task::create`, `Task::update`, `Task::update_status` have no test forcing the APPEND to fail.
+`failed_write_journals_nothing` runs the opposite direction, which is why the axis reads covered.
+Swallowing the append error in `Task::create` — a committed task with no journal row, the exact SC1
+violation — survives every shipped test.
+
+Add 15A's three probes. Include its sub-gap: pin that the **dismissal clear** rides the transaction
+too, which is the single reason `clear_for_task` was generalised.
+
+### 3. Pin `task_id` in `Task::update`'s event (15A-3)
+
+`update_with_status_change_emits_task_status_changed` destructures `{ old_status, new_status, .. }`,
+so `task_id: Uuid::nil()` survives. Name `task_id` and assert it.
+
+### 4. Correct a false rationale in a test comment (15A-5)
+
+`queries.rs:1139-1140` justifies the table repair by "the process-wide template database other tests
+copy from". These tests use `create_test_pool_with_migrations`, which builds a fresh `TempDir` per
+call (`test_utils.rs:107-131`) and never touches the template `create_test_pool` uses. The repair is
+good hygiene; the reason is wrong.
+
+### 5. The savepoint test is VACUOUS — pair it, do not delete it (15B-1)
+
+`delete_via_savepoint_rolls_back_cleanly_on_append_failure` **passes against the exact `.acquire()`
+defect it was added to disprove**, because its final act rolls the outer transaction back, making
+"the task still exists" true either way.
+
+**This was my specification error, not yours.** I required that assertion verbatim.
+
+**KEEP the existing test** — it rules out a poisoned connection, which is a real property. **ADD**
+`delete_savepoint_failure_is_undone_even_if_the_caller_commits` and
+`failed_savepoint_leaves_the_outer_transaction_usable` from `.wai-scratch/panel15b-savepoint-tests.rs`.
+The discriminator is COMMITTING the outer transaction rather than rolling it back. Also apply the A2
+error-identity guard to the existing pool test.
+
+**Prove it bites:** with `.acquire()` restored, the two new tests must FAIL while the existing
+savepoint test still passes. That single run is the finding.
+
+### 6. Collapse the HRTB workaround (15B-2)
+
+The `impl Future` + split `'a`/`'c` + `#[allow(clippy::manual_async_fn)]` shape was required by the
+`.acquire()` body, not the `.begin()` one. Nobody re-tested after the switch, and the doc comment now
+tells the next reader that simplifying will break the build — false, and load-bearing guidance.
+
+Collapse to `pub async fn delete<'c, E>(executor: E, id: Uuid) -> Result<u64, sqlx::Error> where
+E: Acquire<'c, Database = Sqlite> + Send`, drop the `#[allow]`, and rewrite the comment to record
+what actually happened: `.acquire()` forced the HRTB obligation because
+`Acquire::Connection = &'c mut SqliteConnection` carries the bound's lifetime through the reborrow;
+`.begin()` returns an owned `Transaction<'c, _>` and dissolves it.
+
+**Add the `assert_send` compile test** from the scratch file. `async fn` infers `Send` where
+`impl Future + Send` asserts it, so without it a future caller breaking Send-ness fails at that
+caller with an opaque axum `Handler` error instead of here.
+
+**If `cargo check --workspace --all-targets` does not pass after collapsing, STOP and report** —
+15B proved it clean, but its proof is not a substitute for yours.
+
+### 7. Remove the read-then-upgrade (15B-3)
+
+`.begin()` on the POOL path makes a deferred transaction that reads then upgrades to a write, and
+SQLite does not invoke the busy handler for that upgrade: 6 failures in 40 under contention versus 0
+with `.acquire()`. **Atomicity held in every run** (`journaled == ok`) — an error-rate cost, not a
+torn write, and `.acquire()` traded a retryable error for a torn write, so `.begin()` stays.
+
+Replace the separate `SELECT project_id` + `DELETE` with a single
+`DELETE FROM tasks WHERE id = $1 RETURNING project_id`. Write-first, no upgrade, one round trip
+fewer. Runtime API, not a macro. If `RETURNING` cannot give you what the event needs, STOP and say
+so rather than reverting to two statements silently.
+
+### 8. Three call sites, not two (15A-4, 15B-4)
+
+My amendment and three ledger sections say two. Correct the count wherever it appears in the task
+file and ledger. **No code change** — `remote.rs:266` is pool-shaped exactly like `:254` and already
+covered.
+
+## Verification for attempt 2
+
+`cargo test -p db`, `cargo fmt --all -- --check`, `cargo clippy -p db --all-targets --all-features
+-- -D warnings`, `cargo check --workspace --all-targets` — all exit 0. Plus the two bite proofs
+(items 1 and 5) verbatim.
