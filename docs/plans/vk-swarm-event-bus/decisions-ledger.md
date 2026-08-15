@@ -4356,3 +4356,78 @@ No task files are being edited for this: the `Done when` line is inherited boile
 decompose template, the orchestrator runs the gate itself with the resolved path, and rewriting the
 line in nineteen task files would touch every one of them for no behavioural gain. Recorded here so
 the next implementer does not spend time on it.
+
+## 2026-08-15 ESCALATION: phase 3 as decomposed cannot satisfy SC1 — three production task-creation paths bypass `Task::create`
+
+Found by the orchestrator BEFORE dispatching task 006, while re-verifying that task's two
+pre-resolved STOP triggers rather than trusting them at three days old. This is run-level
+reachability gate (a) evidence arriving early, which is the cheap time to find it.
+
+### The finding
+
+SC1 quantifies universally over task creation:
+
+> SC1: On a running node, **creating**, moving (status change), and deleting a task **each produce a
+> journaled event** with a monotonic seq, observable via the subscription endpoint and queryable from
+> the journal afterwards.
+
+Task 006 instruments four functions in `crates/db/src/models/task/`. `git grep -n "INSERT INTO tasks"`
+finds ten sites; classifying each by whether it sits below a `#[cfg(test)]` marker:
+
+| site | production? | notes |
+|---|---|---|
+| `task/queries.rs:270` | YES | `Task::create` — task 006 covers this |
+| `task_breakdown/queries.rs:406` | **YES** | `accept_proposal`, routed at `breakdown.rs:273` — NOT covered |
+| `task/sync.rs:32` | **YES** | `sync_from_shared_task`, hive->node inbound — NOT covered |
+| `task/sync.rs:283` | **YES** | hive upsert path guarded by `has_unacked_for_entity` — NOT covered |
+| `execution_process/queries.rs:582,734` | no | below `#[cfg(test)]` at :560 |
+| `workstream_state.rs:115` | no | below `#[cfg(test)]` at :87 |
+| `message_queue.rs:325,393` | no | below `#[cfg(test)]` at :291 |
+| `db/tests/task_visibility_discriminator.rs:43` | no | integration test |
+
+`task_breakdown` is the sharpest case. Its own source calls the divergence deliberate:
+
+```text
+/// DELIBERATE, PRE-AUTHORIZED divergence from `Task::create`'s documented
+/// best-effort post-insert enqueue: acceptance requires all-or-nothing, so the
+/// outbox INSERT runs against the transaction handle and errors are PROPAGATED
+```
+
+It creates **real child tasks** in one transaction, is reachable from a live route, and is
+user-initiated. A user accepting a breakdown proposal creates tasks that would emit no event.
+
+### Why the plan missed it
+
+`task_breakdown` landed in PR #475 on **2026-08-11**, concurrent with this workstream's
+`/wai:decompose`. The spec's Design enumerates emission choke points including "task CRUD in
+`crates/db/src/models/task/`" — a directory `task_breakdown/` is not in. The spec is not wrong about
+anything it says; its site enumeration is simply incomplete against code that merged alongside it.
+
+### Why this is an ESCALATION and not an orchestrator fix
+
+The plan is mine to amend; the **spec is frozen (ADR-0001)** and its Design section enumerates the
+emission sites. SC1 (the outcome) and the Design (the mechanism) are now internally inconsistent
+given merged code — the same class as the two contradictions resolved on 2026-08-11, both of which
+were "decided by the spec owner". I am not self-amending a frozen spec, and I am not silently
+shipping a phase 3 that cannot satisfy its own SC1.
+
+### Correction to task 006's own text
+
+Task 006's pre-resolved STOP triggers assert: *"There is no bypass path, so SC1 coverage is complete
+with the four named functions."* The **status** half of that claim is still true and re-verified today
+(`git grep -n "SET status" -- 'crates/**/*.rs'` — the only `tasks.status` write is `hierarchy.rs:19`,
+which IS `update_status`, plus `Task::update`'s own multi-column write). The **completeness** claim is
+now false for CREATION and must be struck specifically rather than annotated beside — a half-corrected
+claim has cost this run two rejection cycles already.
+
+### The sync paths are a SEPARATE question, not the same finding
+
+Treating breakdown and sync as one item would be a mistake. Breakdown is local, user-initiated task
+creation that the spec plainly intends to cover. The two `sync.rs` paths are hive->node INBOUND
+replication, they live inside `crates/db/src/models/task/` (so arguably already in the Design's named
+scope), and journaling them raises an echo hazard: a node event consumed by a trigger hook that
+writes back toward the hive could feed a loop. That is a design decision with a real downside, not an
+oversight to be closed by default.
+
+Escalated to the spec owner with both branches. Phase 3 dispatch is held only insofar as the answer
+changes task 006's `files:`; if breakdown becomes its own task, 006 proceeds unchanged.
