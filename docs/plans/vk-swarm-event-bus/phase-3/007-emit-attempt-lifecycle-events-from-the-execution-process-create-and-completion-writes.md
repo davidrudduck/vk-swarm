@@ -2,7 +2,7 @@
 id: "007"
 phase: 3
 title: "Emit attempt lifecycle events from the execution-process create and completion writes"
-status: ready
+status: passed
 depends_on: ["006"]
 parallel: false
 conflicts_with: []

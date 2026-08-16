@@ -6294,3 +6294,40 @@ superseded by this, not merely supplemented.
   `#[cfg(test)]`).
 
 Task-gate.sh not run by this implementer — same deferral as attempts 1-3.
+
+### Task 007 PASSED — four attempts, five panels, no fifth panel on attempt 4
+
+Attempt 4's gate: `CONFORMS`, file-set 3 paths, typecheck exit 0 (including `cargo fmt --all --
+--check` and `cargo check --workspace --all-targets`), `crates/db` green at 266 tests.
+
+**No panel was run on attempt 4, deliberately and stated in advance to the implementer.** Panel 19
+specified each of the four fixes precisely, none involves logic (verified: every hunk in both files
+sits inside `mod lifecycle_event_tests`, with `#[cfg(test)]` at `lifecycle.rs:320` and
+`queries.rs:692` and the earliest hunks at `:777` and `:1189`), and a panel checking whether a
+sentence was rewritten correctly buys less than it costs. The implementer was told the gate was the
+last check so it would not write to a reviewer that was never coming.
+
+**What 007 cost, and what the cost bought.** Four attempts, five panels (17A, 17B, 18, 19, plus the
+two-panel split that produced 17A/17B). Seven blocking findings across them. **Three were defects in
+the task file or in claims the orchestrator accepted rather than in the implementation:**
+
+1. Test 4's worked example (`e.g. setting a pid`) produced a test that pinned nothing about the guard
+   it was named for — `update_pid` never enters `update_completion`, so the `is_terminal` guard sat
+   entirely untested while a test appeared to cover it.
+2. The `stop_execution` caller-trace was inverted. The implementer traced it backwards and I accepted
+   a load-bearing claim without re-deriving it — on a decision that changed user-visible UI behaviour.
+3. The `contains(' ')` shape assertion I required without verifying its premise; the premise was
+   sound and the assertion could never fire.
+
+**And the structural result worth carrying forward:** panels 17A and 17B were given disjoint remits,
+and their remediations CONFLICTED — 17A's fix would have introduced 17B's defect. Neither could see
+it from its own remit; only the orchestrator's seat could. Panel 18 then vindicated the adjudication
+by injecting 17A's literally-proposed fix into the real function and measuring 15/200
+`SQLITE_BUSY_SNAPSHOT`. **A single wide-remit panel would have found one defect and prescribed a fix
+that shipped the other.** That is the concrete argument for the two-panel rule on 006/007/008, beyond
+"more eyes".
+
+**The read-then-upgrade pattern has now bitten twice** — `Task::delete`'s pool path (006) and
+`mark_orphaned_as_failed` (007) — both times when a previously-autocommit write was wrapped in a
+transaction, and both times `... RETURNING` was the fix. Task 008 wraps another write and its brief
+carries this up front rather than rediscovering it a third time.
