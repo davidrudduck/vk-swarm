@@ -2,7 +2,7 @@
 id: "022"
 phase: 3
 title: "Emit task_created / task_status_changed from Task::upsert_remote_task"
-status: ready
+status: passed
 depends_on: ["006"]
 parallel: false
 conflicts_with: []

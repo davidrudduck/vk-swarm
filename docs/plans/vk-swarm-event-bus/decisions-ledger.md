@@ -7186,3 +7186,22 @@ the other. Recorded so a future reader greps for both codes, not one.
 `aaa97ad1`; the dirty-guard, `BEGIN IMMEDIATE`, the SELECT probe, the `INSERT ... ON CONFLICT` SQL
 text, the four-case emission table, the commit and the stale-skip fallback are all untouched, and
 tests 1-5 are unchanged.
+
+## Task 022 PASSED (2026-08-16, orchestrator)
+
+Final chain: feba43c4 (attempt 1) → aaa97ad1 (attempt 2: IMMEDIATE-begin read probe + test 6)
+→ 1882e054 (panel-A re-verify remediation: production-shape concurrency test). Gates CONFORMS on
+all three validated commits (the last with --all-targets, adopting the implementer's catch that my
+verify list was narrower than the task's Done-when). Stage-2: panels A+B rejected attempt 1 (my
+probe design fired the production update hook; two ledger-integrity blockings); panel A re-measured
+attempt 2 to hook-for-hook baseline equivalence (stale=[], applying=1×) and produced a red proof
+capturing literal 517s; the implementer's own red proofs captured code 5 — both members of the
+read-then-upgrade family, recorded so future readers grep BOTH codes.
+
+Attribution honesty: attempt 1's blocking was MY task-file defect (probe premise checked
+CREATE TRIGGER, missed the app-level update hook — enumeration-in-the-wrong-place #5). The
+emission logic and tests survived 7/7 panel mutations from the first attempt. Sibling divergence
+resolved in the safe direction; task 023 aligns the 006 siblings to the IMMEDIATE shape.
+
+Backlog: F-2026-08-16-03 filed for the pre-existing dead version-guard arm (panel A note).
+Board: 14/23 passed. Next: 023, then 021, then 015.
