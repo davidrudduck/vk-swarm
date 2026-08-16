@@ -361,3 +361,63 @@ assertion (contains whitespace, or `!= to_uppercase()`). Real executors are SCRE
 `cargo test -p db`, `cargo fmt --all -- --check`, `cargo clippy -p db --all-targets --all-features
 -- -D warnings`, `cargo check --workspace --all-targets` — all exit 0. Plus both bite proofs from
 item 2, verbatim.
+
+---
+
+## REQUIRED — attempt 4, after panel 19 (comments and ledger only)
+
+Panel 19 confirmed **both of panel 18's blocking findings are genuinely closed**, with a better drift
+proof than attempt 3 supplied. All four of its findings are non-blocking documentation defects.
+**Change no code except deleting or documenting one dead assert.** No logic, no tests removed.
+
+### 1. Propagate the relabel (F19-1)
+
+Attempt 3 corrected the control's docstring but not three other sites carrying the same
+corrected-away claim:
+
+- `lifecycle.rs:1154` — `// Attempt 1's shape: SELECT (read) first...`
+- `lifecycle.rs:1185` — the runtime output string `"...(control, attempt-1 read-then-write shape)"`,
+  which is byte-identical to `queries.rs:1447`, making the two controls indistinguishable in output.
+  Disambiguate them.
+- `lifecycle.rs:779-780` — describes the bite-proof closure as "SELECT owner (unconditionally), then
+  UPDATE (unconditionally)" while the closure at `:793-812` does **UPDATE first, then SELECT**. Wrong
+  about attempt 1 and about the code beneath it.
+
+`lifecycle.rs`'s control reconstructs **17A's proposed remediation**; `queries.rs`'s control IS
+faithful to attempt 1's `mark_orphaned_as_failed`. Say so at each site.
+
+### 2. The shape assertion is dead code (F19-2)
+
+If the preceding `assert_eq!` against the sentinel literal passes, `executor` IS that literal and
+contains spaces — so `assert!(executor.contains(' '))` can never fire. Every panic under both
+sentinel mutations was at the `assert_eq!` line.
+
+**The premise is sound** — the panel verified all ten `BaseCodingAgent` variants are space-free
+SCREAMING_SNAKE, production writes go through the typed `CreateTaskAttempt.executor`, every
+raw-string executor INSERT is inside `#[cfg(test)]`, and neither legacy migration can introduce a
+space. So this is redundancy, not a false claim.
+
+**Your choice, argued in the ledger:** delete the assert, or keep it and correct the docstring to
+say the literal is load-bearing and the shape line is documentation. Do not leave it presented as a
+second discriminator.
+
+### 3. Correct the "production logic changed" claim (F19-3)
+
+The ledger says "no production logic changed this attempt except item 2's `create` fix". Attempt 3
+changed **zero** production logic — its only production-region hunks are two doc comments, and
+`create`'s sentinel shipped in attempt 2. Correct it in a NEW ledger entry.
+
+Note for the record: this false claim propagated from the ledger into the attempt-3 commit message
+and then into panel 19's own brief, where it came back as a finding.
+
+### 4. Correct the drift bite proof (F19-4)
+
+The ledger's Mutation 2 changed both sentinel constants simultaneously, which cannot distinguish
+drift from a coordinated change. Panel 19 proved the claim properly by mutating each copy
+independently and observing **disjoint** failing test sets. Record its evidence in place of yours.
+
+## Verification for attempt 4
+
+`cargo test -p db`, `cargo fmt --all -- --check`, `cargo clippy -p db --all-targets --all-features
+-- -D warnings`, `cargo check --workspace --all-targets` — all exit 0. No bite proofs required:
+nothing behavioural changes, and panel 19 already proved every guard live.

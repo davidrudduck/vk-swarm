@@ -6114,3 +6114,67 @@ the mutation proves the de-tautologised versions now actually discriminate.
   "change no production logic except item 2" constraint exactly.
 
 Task-gate.sh not run by this implementer — same deferral as attempts 1 and 2.
+
+### Panel 19 (task 007 attempt 3): CITED DISSENT — 4 findings, ALL NON-BLOCKING
+
+Opus, own detached worktree at `93484d45`, removed with its target dir, tree-clean proof for both
+worktrees. **Both of panel 18's blocking findings are genuinely closed, proven by mutation** — and
+one proof is better than the one attempt 3 supplied.
+
+**Axis 3, the drift proof attempt 3 could not give.** Five independent mutations, each restored and
+diff-verified between runs: reverting the sentinel at `update_completion`, at
+`mark_orphaned_as_failed`, and at `create` each failed **exactly one** test — including M3c, the
+`create` mutation panel 18 proved nothing caught. Then mutating `lifecycle.rs:32` and `queries.rs:31`
+to `"CLAUDE_CODE"` **independently** failed **disjoint** test sets. That is the drift detection the
+ledger claimed; attempt 3's own Mutation 2 changed both constants at once and could not distinguish
+drift from a coordinated change (F19-4).
+
+**Axis 2, the discard test bites both ways.** Dropping the gate produces:
+
+```text
+assertion `left == right` failed: the Stop's status, completion_reason, AND completion_message must all be discarded
+  left: ("killed", Some("killed"), Some("user pressed stop"))
+ right: ("failed", Some("eof"), None)
+```
+
+**Axis 1, the corrected trace verified against CODE rather than the ledger**, as briefed — including
+a clause nobody had checked: `services/container.rs:562` is fed by `find_running_with_pids` (running
+rows only), and `:1572` fires on `start_execution_inner` returning `Err`, where the exit-monitor spawn
+is the last statement before `Ok(())`, so no terminal write can precede it. The corrected trace holds.
+
+**F19-1 (non-blocking) — item 3's relabel is incomplete.** Three sites still carry the claim the
+relabel corrected away: `lifecycle.rs:1154` and `:1185` sit INSIDE the very test whose docstring was
+corrected 30 lines above, and `:1185` is the runtime output string (byte-identical to
+`queries.rs:1447`, so the two controls are indistinguishable in output). Worse, `:779-780` describes
+its closure as "SELECT owner (unconditionally), then UPDATE" while the closure beneath it at
+`:793-812` does UPDATE first — wrong about attempt 1 AND about the code directly below it.
+
+**F19-2 (non-blocking) — the `contains(' ')` shape assertion is unreachable as a failure.** If the
+preceding `assert_eq!` against the literal passes, `executor` IS that literal, which contains spaces,
+so the shape assert can never fire. Confirmed empirically: under both sentinel mutations every panic
+was at the `assert_eq!` line, never the `contains` line. **The underlying claim is nonetheless TRUE
+and the panel proved it** — `BaseCodingAgent` has ten variants, all space-free SCREAMING_SNAKE;
+production writes go through the typed `CreateTaskAttempt.executor`; every raw-string
+`INSERT INTO task_attempts (... executor ...)` in the tree is inside `#[cfg(test)]` (each verified by
+line number); and neither legacy migration can introduce a space. So it is dead code, not a
+tautology-with-extra-steps — the literal already catches everything.
+
+**This answers the axis I added to the brief.** I required the shape assertion without verifying its
+premise; the premise is sound and the assertion is redundant.
+
+**F19-3 (non-blocking) — a false claim propagated ledger → commit message → my own panel brief.**
+The ledger says "no production logic changed this attempt except item 2's `create` fix". Attempt 3
+changed **zero** production logic: verified, its only production-region hunks are two doc comments,
+and `create`'s sentinel already shipped in attempt 2 (`git show aee0a3fd:...queries.rs` line 500).
+Panel 18's own F18-2 presupposed it. I repeated the claim in the attempt-3 commit message and then
+again in panel 19's brief, where it was returned to me as a finding. **The direction is safe (it
+over-reports change) but the chain is the lesson: an unverified claim in a ledger becomes an
+unverified claim in a brief, and a panel is the only thing that stops it.**
+
+**F19-4 (non-blocking)** — recorded above under axis 3.
+
+**Clean axes:** the `is_terminal` guard still bites; both contention tests `0/200` across 5
+consecutive runs (the flagged `other_errors == 0` flake risk did not materialise); the relabelled
+control still reproduces the failure across 5 runs each (`20,11,18,13,18` and `4,23,20,17,20` per
+200 — never 0, thinnest margin 4/200); the ledger supersedes rather than edits and states the
+inversion plainly including attribution; and all three stage gates independently reproduced.
