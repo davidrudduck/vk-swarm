@@ -6856,3 +6856,43 @@ coordinates should cite symbol or predicate alongside line numbers (third coordi
 task).
 
 Board: 13/22 passed. Next ready in phase 3: 022, then 021, then 015.
+
+## Task 022 implementation (attempt 1, 2026-08-16)
+
+**Undictated choices declared:**
+
+1. **Helper duplication: `journal_err_to_sqlx`** — duplicated into `sync.rs` (lines 19-25) from
+   `task::queries` following the same pattern as `task::hierarchy` (hierarchy.rs:16-23). Module-level
+   import of `crate::models::event_journal::EventJournalError` added. Doc comment cites the hierarchy
+   precedent and the rationale (avoid exporting private helpers across module boundaries). Byte-faithful
+   copy including the dual-arm match on Database and Serde variants.
+
+2. **Baseline-isolation strategy for tests 4 and 5** — Used `DELETE FROM event_journal` after
+   `setup_test_pool()` to clear any baseline rows before the upsert under test. This was chosen
+   over a high-water-mark filter because: (a) both tests clear the journal anyway (version_stale and
+   dirty_guard both should emit nothing), (b) the DELETE is explicit and easy to audit, (c) it matches
+   the task's cited "DELETE FROM event_journal reset after setup" option. Tests 1–3 do not use
+   DELETE; they rely on filtering by `event_type` in the assertions, which is safe because
+   `Task::create` and `upsert_remote_task` emit distinct event types (`task_created` on create, not
+   on upsert insert in test baseline).
+
+3. **Probe query typing** — Probe (line 332) uses `sqlx::query_as::<_, (Uuid, TaskStatus)>(...)` at
+   runtime (not a compile-time macro), because the WHERE clause `shared_task_id = ?` is new SQL and
+   cannot use the `query_as!` macro which would require it to exist in the schema at compile-time
+   check. The runtime form is safe here because `shared_task_id` is a column (verified by the
+   INSERT...ON CONFLICT target at line 341), and TaskStatus has a `FromRow` impl in the schema.
+
+**Verification summary:**
+
+- cargo fmt --all -- --check: EXIT=0 (after applying rustfmt fixes)
+- cargo check --workspace: Finished `dev` profile (0 errors)
+- cargo test -p db: 273 passed; 0 failed; 5 new tests green
+  - upsert_insert_emits_task_created: PASS
+  - upsert_status_change_emits_task_status_changed: PASS
+  - upsert_without_status_change_emits_nothing: PASS
+  - version_stale_upsert_emits_nothing: PASS
+  - dirty_guard_skip_emits_nothing: PASS
+- cargo clippy -p db --all-targets -- -D warnings: EXIT=0 (after removing redundant NodeEvent import)
+- cargo test -p services --test electric_task_sync: 12 passed; 0 failed (existing upsert callers unaffected)
+
+**No STOP triggers encountered. All four emission cases and their assertions verified green.**
