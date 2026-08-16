@@ -7332,3 +7332,85 @@ only the 022 panel cycle forced the concurrency tests that exposed it. Three sit
 transaction discipline: IMMEDIATE begin → read probe → write → append → commit.
 
 Board: 15/23 passed. Next: 021 (conformance guard), then 015, then phases 4-5.
+
+## Task 021 implementation (attempt 1, 2026-08-16)
+
+### EXPECTED table (committed to test)
+
+Generated via empty-table scan, reconciled against task's classification table:
+
+```rust
+let expected: &[&str] = &[
+    // execution_process/lifecycle.rs
+    "db/src/models/execution_process/lifecycle.rs UPDATE execution_processes x6", // :126 INSTRUMENTED (task 007 update_completion); :231/:249/:263/:282/:303 metadata, ALLOWLISTED
+    // execution_process/queries.rs
+    "db/src/models/execution_process/queries.rs DELETE FROM execution_processes x1", // :533 post-terminal cleanup, ALLOWLISTED
+    "db/src/models/execution_process/queries.rs INSERT INTO execution_processes x1", // :473 INSTRUMENTED (task 007)
+    "db/src/models/execution_process/queries.rs UPDATE execution_processes x3", // :169 INSTRUMENTED (task 007); :231/:262 metadata, ALLOWLISTED
+    // execution_process/sync.rs
+    "db/src/models/execution_process/sync.rs UPDATE execution_processes x3", // hive_synced_at metadata, ALLOWLISTED
+    // task/archive.rs
+    "db/src/models/task/archive.rs UPDATE tasks x4", // archived_at only — outside event vocabulary, ALLOWLISTED
+    // task/cleanup.rs
+    "db/src/models/task/cleanup.rs DELETE FROM tasks x1", // retention purge of archived terminal tasks, ALLOWLISTED
+    // task/hierarchy.rs
+    "db/src/models/task/hierarchy.rs UPDATE tasks x2", // :50 INSTRUMENTED (006 update_status); :90 parent_task_id nullify — metadata, ALLOWLISTED
+    // task/queries.rs
+    "db/src/models/task/queries.rs DELETE FROM tasks x1", // INSTRUMENTED (task 006)
+    "db/src/models/task/queries.rs INSERT INTO tasks x1", // INSTRUMENTED (task 006)
+    "db/src/models/task/queries.rs UPDATE tasks x1", // INSTRUMENTED (task 006)
+    // task/sync.rs
+    "db/src/models/task/sync.rs DELETE FROM tasks x2", // dead/test-only (ADR-0007 soft-unlink), ALLOWLISTED
+    "db/src/models/task/sync.rs INSERT INTO tasks x2", // :283 INSTRUMENTED (task 022); :32 sync_from_shared_task dead (zero callers), ALLOWLISTED
+    "db/src/models/task/sync.rs UPDATE tasks x13", // sync metadata only, ALLOWLISTED
+    // task_breakdown/queries.rs
+    "db/src/models/task_breakdown/queries.rs INSERT INTO tasks x1", // INSTRUMENTED (task 020)
+    // server/src/bin/cleanup_duplicate_tasks.rs
+    "server/src/bin/cleanup_duplicate_tasks.rs DELETE FROM tasks x1", // one-off ops binary, ALLOWLISTED
+];
+```
+
+All 16 entries reconcile exactly with task's classification table. No unknown files, no count surprises.
+
+### Mutation check output (temporary UPDATE line added to archive.rs:archive, then removed)
+
+```
+ACTUAL: ["db/src/models/execution_process/lifecycle.rs UPDATE execution_processes x6", ..., "db/src/models/task/archive.rs UPDATE tasks x5", ...]
+EXPECTED: ["db/src/models/execution_process/lifecycle.rs UPDATE execution_processes x6", ..., "db/src/models/task/archive.rs UPDATE tasks x4", ...]
+```
+
+Test FAILED with expected message: archive.rs UPDATE count bumped from x4 to x5, proving the scanner detects production-code mutations. Temporary line removed; git diff of archive.rs is EMPTY.
+
+### Comment-stripping verification
+
+Added `// Note: This would be UPDATE tasks SET title = 'test'` to archive.rs:2. Test still PASSES with expected inventory (UPDATE tasks x4). Comment was NOT counted. Removed comment; git diff of archive.rs is EMPTY. Rule verified: comments are stripped before pattern matching.
+
+### Undictated choices
+
+1. **Walk implementation**: Used std::fs recursively with manual sorting, no external dependency. Scan rules applied exactly as dictated (test-region stripping with mod lookahead, comment suffix strip, substring pattern match on six patterns).
+2. **Test-region stripping edge case**: The lookahead rule correctly distinguishes `#[cfg(test)]` item-level attributes (e.g., on a function or field) from terminal test modules (`#[cfg(test)] mod ...`). Verified no false positives on crates/local-deployment/src/container.rs:108 (item-level cfg; does not trigger truncation).
+
+### QA gate passed
+
+```
+cargo fmt --all -- --check; echo EXIT=$?
+  EXIT=0
+
+cargo check --workspace --all-targets
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.55s
+
+cargo test -p db --test emission_conformance
+  test result: ok. 1 passed
+
+cargo test -p db
+  test result: ok. 276 passed; 0 failed; 7 ignored
+
+cargo clippy -p db --all-targets -- -D warnings; echo EXIT=$?
+  EXIT=0
+
+git diff --cached --name-only
+  crates/db/tests/emission_conformance.rs
+  docs/plans/.wai-task-base
+```
+
+All verification steps pass. Two files created (new test, baseline commit marker); no production code modified.
