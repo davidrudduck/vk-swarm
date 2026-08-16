@@ -6331,3 +6331,33 @@ that shipped the other.** That is the concrete argument for the two-panel rule o
 `mark_orphaned_as_failed` (007) — both times when a previously-autocommit write was wrapped in a
 transaction, and both times `... RETURNING` was the fix. Task 008 wraps another write and its brief
 carries this up front rather than rediscovering it a third time.
+
+## Task 008 pre-dispatch amendment (2026-08-16, orchestrator)
+
+Amended `phase-3/008-*.md` before first dispatch, after verifying every cited anchor against the
+live tree (all held: `node_runner.rs:697/806/863/1166/1213/1249-1254/817-822/1157-1162`,
+`hive_client.rs:761-772/783/808-824`). Three defects found and resolved:
+
+1. **`WAI_TEST_CMD` named a non-existent target.** `cargo test -p services --test event_emission` —
+   `crates/services/tests/` has no `event_emission.rs` (verified by `ls`). The task's tests are
+   colocated in `node_runner.rs`. Fixed to `cargo test -p services --lib` (full lib, so the existing
+   colocated node_runner test modules also gate the `sync_remote_projects` signature change).
+2. **Test 6 was unimplementable as specified.** The task told the implementer to "derive the
+   clean-close case from the `Connected` event ceasing" — but the clean-close `Ok(())` arm at
+   `hive_client.rs:810-814` sends NO event, and at the node_runner layer the absence of events is
+   indistinguishable from an idle connection. The task's own STOP trigger predicted this; resolved
+   pre-dispatch instead of paying a dispatch round-trip. Resolution: one dictated
+   `event_tx.send(HiveEvent::Disconnected { reason: "connection closed cleanly" })` in the `Ok(())`
+   arm, `hive_client.rs` added to `files:` with that single addition authorised and nothing else.
+   Verified safe: the only `HiveEvent::Disconnected` consumer is `process_event`
+   (`node_runner.rs:375`), idempotent `state.connected = false` + log — today a clean close leaves
+   that state stale-true, so the send also fixes a latent state bug. The transition gate absorbs
+   repeats.
+3. **No test harness was dictated.** The six named tests cannot drive the loop (it is inline in
+   `spawn_node_runner`, spawning the hive connection, sync service and heartbeat). Left as-is this
+   was an underspecified fork guaranteeing a STOP or improvisation. Dictated: a colocated
+   `ConnectivityJournal { was_connected }` helper the loop arms delegate to one-line, unit-tested
+   directly in `mod connectivity_event_tests` against `create_test_pool()`; edge bookkeeping flips
+   on the EVENT, never on journal success; append errors are `error!`-logged and not propagated
+   (no accompanying state write exists to roll back). The `hive_client.rs` one-liner itself is
+   proven at the seam by task 015 and live by task 012's SC3 check.

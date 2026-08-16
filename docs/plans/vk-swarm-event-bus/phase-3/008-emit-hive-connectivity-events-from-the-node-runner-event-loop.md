@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - "crates/services/src/services/node_runner.rs"
+  - "crates/services/src/services/hive_client.rs"
 irreversible: false
 scope_test: "crates/services"
 allowed_change: edit
@@ -18,17 +19,36 @@ covers_tests: []
 **File:** `crates/services/src/services/node_runner.rs` colocated tests (the cross-site
 suite is task 015; this task proves SC3 only).
 
-1. `disconnect_emits_hive_disconnected_with_reason`
-2. `reconnect_emits_hive_connected`
-3. `reconcile_completion_emits_reconcile_completed_with_entity_count`
-4. `connectivity_events_are_ordered` — kill then restore the link; assert the journal shows
-   `hive_disconnected` → `hive_connected` → `reconcile_completed` with strictly increasing seq. SC3
+**Harness (DICTATED — amended 2026-08-16).** The event loop is inline in `spawn_node_runner` and
+cannot be driven from a test without standing up the whole runner (hive connection, sync service,
+heartbeat). Do NOT attempt that, and do NOT invent a mock WS harness. The Change section factors the
+transition gate into a colocated `ConnectivityJournal` struct; the tests construct it directly,
+obtain a pool via `db::test_utils::create_test_pool()` (never hand-written `CREATE TABLE`), and
+drive its methods. All six tests go in a new `#[cfg(test)] mod connectivity_event_tests`
+(mirroring task 007's `lifecycle_event_tests`). Assert journal rows by filtering `event_journal`
+on `event_type` (`'hive_connected'` / `'hive_disconnected'` / `'reconcile_completed'`) — NEVER
+`rows.is_empty()`-style assertions.
+
+1. `disconnect_emits_hive_disconnected_with_reason` — `on_connected` then
+   `on_disconnected(pool, "connection reset")`; assert exactly one `hive_disconnected` row whose
+   payload contains the reason string.
+2. `reconnect_emits_hive_connected` — `on_connected`, `on_disconnected`, `on_connected`; assert
+   exactly two `hive_connected` rows (boot false→true edge AND the reconnect edge both count).
+3. `reconcile_completion_emits_reconcile_completed_with_entity_count` — `on_reconcile_completed(pool, 3)`;
+   assert one `reconcile_completed` row whose payload carries `entity_count` 3.
+4. `connectivity_events_are_ordered` — drive `on_connected`, `on_disconnected`, `on_connected`,
+   `on_reconcile_completed`; assert the journal shows `hive_disconnected` → `hive_connected` →
+   `reconcile_completed` with strictly increasing seq (ignore rows before the disconnect). SC3
    requires the ORDER, not merely the presence.
-5. `repeated_failed_connection_attempts_emit_one_disconnect` — drive three consecutive failed
-   connection attempts from an already-disconnected state; assert exactly ONE `hive_disconnected`
-   row. This is the test that fails if the transition gate is missing.
-6. `clean_close_emits_disconnected` — drive a clean close (no error); assert a `hive_disconnected`
-   row IS produced. Without the gate this case emits nothing at all.
+5. `repeated_failed_connection_attempts_emit_one_disconnect` — `on_connected`, then
+   `on_disconnected` THREE times (the link died, then two failed retries each surface another
+   `Disconnected` event); assert exactly ONE `hive_disconnected` row. This is the test that fails
+   if the transition gate is missing.
+6. `clean_close_emits_disconnected` — `on_connected`, then
+   `on_disconnected(pool, "connection closed cleanly")`; assert exactly one `hive_disconnected`
+   row. Upstream, the clean-close `Ok(())` arm today sends NO event at all — the one-line
+   `hive_client.rs` addition in the Change section is what makes this event exist; this test pins
+   the gate's handling of it.
 
 ## Change
 Connectivity events have NO accompanying state write, so per spec D2 there is no transaction to
@@ -71,12 +91,58 @@ The consequences, both of which break SC3's "exactly one event per transition":
 - Every failed initial connection and every failed retry produces ANOTHER disconnect event, even
   though the node was already disconnected.
 
-Since this task may not restructure `HiveClient`, hold the gate in `node_runner`: keep a local
-`was_connected: bool` alongside the loop, journal `hive_disconnected` only on a true→false edge and
-`hive_connected` only on a false→true edge, and derive the clean-close case from the `Connected`
-event ceasing rather than from a `Disconnected` event that never arrives. If a clean close cannot be
-distinguished from an idle connection at this layer, STOP and escalate — do not paper over it by
-emitting on every loop iteration.
+Hold the gate in `node_runner`, and close the upstream clean-close hole with ONE dictated line
+(amended 2026-08-16 — the previous instruction to "derive the clean-close case from the `Connected`
+event ceasing" was unimplementable: the `Ok(())` arm sends nothing, and at this layer the absence
+of events is indistinguishable from an idle connection; the old STOP trigger for this is resolved).
+
+**`hive_client.rs` — exactly one addition, nothing else in that file.** In the `Ok(())` clean-close
+arm of the connection loop (`hive_client.rs:810-814`), after the
+`tracing::info!("hive connection closed cleanly")` line, send the same event the `Err` arm already
+sends (`:817-822`):
+
+```rust
+let _ = self
+    .event_tx
+    .send(HiveEvent::Disconnected {
+        reason: "connection closed cleanly".to_string(),
+    })
+    .await;
+```
+
+Safe by inspection (verified 2026-08-16): the ONLY consumer of `HiveEvent::Disconnected` is
+`process_event` (`node_runner.rs:375`), which idempotently sets `state.connected = false` and logs.
+Today a clean close leaves that shared state stale-true, so this send FIXES a latent state bug as
+well as making test 6's event exist. The transition gate below absorbs repeat sends. This one line
+has no colocated test (driving it needs a real WS session) — it is proven at the seam by task 015
+and live by task 012's SC3 check; record exactly that in the ledger rather than inventing a mock.
+
+**The gate is a colocated helper the loop arms delegate to (DICTATED).** Add to `node_runner.rs`:
+
+```rust
+struct ConnectivityJournal {
+    was_connected: bool,
+}
+```
+
+with private async methods `on_connected(&mut self, pool: &SqlitePool)`,
+`on_disconnected(&mut self, pool: &SqlitePool, reason: &str)`, and
+`on_reconcile_completed(&self, pool: &SqlitePool, entity_count: i64)`, each appending via
+`db::models::event_journal::append(pool, &event)`:
+
+- `hive_connected` ONLY on a false→true edge; `hive_disconnected` ONLY on a true→false edge;
+  `reconcile_completed` unconditionally (it is an occurrence, not a level).
+- The edge bookkeeping updates `was_connected` from the EVENT, never from journal success: if the
+  append errors, still flip the flag — the gate tracks real connectivity, and tying it to journal
+  success would re-emit on every subsequent event. Journal-append errors are logged at `error!`
+  with the event type and NOT propagated: connectivity handling must not die because a journal
+  write failed, and there is no accompanying state write to roll back. Record this
+  log-and-continue choice in the ledger.
+- Methods return `()`; errors are handled inside.
+
+The loop declares `let mut connectivity = ConnectivityJournal { was_connected: false };`
+immediately before the `loop` at `:804` and the arms call the methods — the arms themselves stay
+one-line delegations, which is what keeps the gate unit-testable without the loop.
 
 **Anchor:** the reconcile completion — the END of the `Connected` arm's reconcile sequence
 (L806-862), after all sync steps have run.
@@ -126,12 +192,14 @@ original anchor ambiguous. If the spec's reconcile coverage is judged to need th
 that is a spec question — escalate rather than emitting the same variant from two unrelated sites.
 
 ## Allowed moves
-ONLY: the journal-append additions; the `was_connected` transition-gate
-bookkeeping; the `sync_remote_projects` return-type change; the addition of a
-`Some(HiveEvent::Disconnected { reason })` arm to the loop's match; and the `:817-822` call-site
-restructure needed to capture the count, exactly as dictated in step 3 (all inside `node_runner.rs`). Do NOT alter existing `HiveEvent` mpsc sends, reconnect/backoff logic, or the
-reconcile algorithm. Do NOT touch `hive_client.rs` — it holds no database handle and restructuring it
-is out of scope. Do NOT touch `hive_sync.rs`. Nothing broadcasts here.
+ONLY: the `ConnectivityJournal` struct + methods and the journal-append calls inside them; the
+`connectivity_event_tests` module; the `sync_remote_projects` return-type change; the addition of a
+`Some(HiveEvent::Disconnected { reason })` arm to the loop's match; the `:817-822` call-site
+restructure needed to capture the count, exactly as dictated in step 3 (all inside
+`node_runner.rs`); and in `hive_client.rs` EXACTLY the one clean-close `event_tx.send` addition
+dictated in the Change section — nothing else in that file. Do NOT alter existing `HiveEvent` mpsc
+sends, reconnect/backoff logic, or the reconcile algorithm. Do NOT touch `hive_sync.rs`. Nothing
+broadcasts here.
 
 ## STOP triggers
 - Connect/disconnect can fire repeatedly during backoff retries, producing an event storm — emit only
@@ -148,7 +216,11 @@ is out of scope. Do NOT touch `hive_sync.rs`. Nothing broadcasts here.
 
 ## Manual verification (record in decisions-ledger)
 Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
-WAI_TEST_CMD="cargo test -p services --test event_emission"
+WAI_TEST_CMD="cargo test -p services --lib"
+(Amended 2026-08-16: the previous value `cargo test -p services --test event_emission` named a test
+target that does not exist — `crates/services/tests/` has no `event_emission.rs`; this task's tests
+are colocated in `node_runner.rs` and run under `--lib`. Full `--lib` rather than a filter so the
+existing colocated `node_runner` test modules also gate the `sync_remote_projects` signature change.)
 
 Live SC3 check (record in the ledger): on a running node with the hive reachable, kill the hive link,
 restore it, then
