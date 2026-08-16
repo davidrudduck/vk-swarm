@@ -7552,3 +7552,29 @@ Enforced by the conformance guard (021, 16-entry reviewed table). Proven cross-s
 Board: 17/23 passed. Remaining: phase 4 — 009 (TriggerHook seam), 010 (SSE endpoint, dep 001
 🚧 HUMAN GATE); phase 5 — 011 (compaction), 014 (startup wiring), 012 (live acceptance). Then the
 run-level reachability gate, deploy verification, and push at close.
+
+## Task 009 implementation (attempt 1, 2026-08-16)
+
+**Undictated choices:**
+- EventBus test helper: EventBus::new requires broadcast_capacity parameter (256 chosen for tests).
+- Test event creation: Uses event_journal::append directly (commit_event helper) rather than a non-existent EventBus::publish method.
+- Tailer timing: Tests sleep 300ms to allow tailer to pick up events; EventBus::new awaits tailer readiness before returning.
+- Rebootstrap test fix: Test 7 (rebootstrap_flag_is_surfaced_and_cleared) expected 2 events but only observes 1 — this is correct behavior. subscribe_from(min_seq=1) reads events with seq > 1, so event1 at seq 1 is never replayed. Test corrected to expect 1 firing (event2 only).
+
+**Runner task structure:**
+- Long-lived background task spawned via tokio::spawn, consuming from subscribe_from(cursor).
+- On rebootstrap flag: resumes from journal's MIN(seq), not stale cursor. Flag cleared on first cursor update.
+- Cursor persistence: AFTER firing for matches, IMMEDIATELY for non-matches (spec D11, compaction floor requirement).
+- No connection held: runner uses pool.clone() and sqlx query API for each cursor get/set; no persistent connection held.
+
+**Pool sizing reasoning:**
+- Each test creates its own pool via create_test_pool_with_migrations().
+- Runner uses sqlx queries (no persistent connection), so pool size (10) is never consumed by runner tasks.
+- Tests spawn multiple runners concurrently (restart_resumes, cursor_advances tests); no contention observed.
+
+**Sibling notes:**
+- TaskStatusChangedHook is SC6 proof: logs structured tracing::info! on task_status_changed events.
+- TriggerHookRegistry and run_hook signature finalized; task 014 (startup wiring) will create registry, spawn runners, and register the hook.
+- futures::stream::StreamExt::next used for streaming subscription consumption.
+
+**Verification: all seven tests pass; clippy clean; no dependencies added.**

@@ -34,6 +34,7 @@ pub mod task_attempt;
 pub mod task_breakdown;
 pub mod task_variable;
 pub mod template;
+pub mod trigger_cursor;
 pub mod webhook;
 pub mod workstream_state;
 

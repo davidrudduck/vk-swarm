@@ -44,6 +44,7 @@ pub mod process_service;
 pub mod project_detector;
 pub mod remote_client;
 pub mod terminal_session;
+pub mod trigger_hooks;
 pub mod unified_logs;
 pub mod variable_expander;
 pub mod webhook;
