@@ -7457,3 +7457,57 @@ Amended before first dispatch — the task predates tasks 022/023 and 008's fina
    requires a real WS session).
 3. **Typecheck override brought to current convention** (fmt exit-code check + --all-targets;
    the test command pinned to `--test event_emission`).
+
+## Task 015 implementation (attempt 1, 2026-08-16)
+
+**Sibling comparison (electric_task_sync.rs)**:
+- Pattern matched: `create_test_pool_with_migrations()` returns `(pool, _temp_dir)`, same as sibling
+- Divergence found: None. Both use runtime `sqlx::query()` / `query_as()` / `query_scalar()` for new SQL
+
+**Connectivity delegation note (item 3 of task 015)**:
+Recorded in suite's module doc comment (lines 7-14):
+- `ConnectivityJournal` is PRIVATE to `node_runner.rs`, unreachable from integration tests
+- Single-emission-per-transition pinned by `node_runner.rs`'s EIGHT colocated `connectivity_event_tests`
+- Upstream `hive_client.rs` clean-close send verifiable ONLY live (task 012's SC3 check)
+- This suite asserts the ONE property *testable* here: five primary lifecycle sites emit correctly
+
+**Pool-helper choice**: `db::test_utils::create_test_pool_with_migrations()` (with migrations). Reason: lifecycle tests require schema; template DB pattern is ~90% faster than per-test migrations.
+
+**Undictated choices**:
+1. ExecutorAction construction: Used `CodingAgentInitialRequest` with `ExecutorProfileId::new(BaseCodingAgent::ClaudeCode)` + `ExecutorActionType::CodingAgentInitialRequest` wrapper (reflected sibling test pattern for compliance with sdktype layer).
+2. ProposalItemInput sort_order: Assigned 0, 1, 2 ... for multiple children (deterministic ordering for test repeatability).
+3. Event JSON parsing: Used manual serde_json::from_str loop instead of sql json_extract to avoid UUID parsing friction (json_extract returns string representation; sqlx Uuid decode expects binary-safe 36-byte input).
+
+**QA gate passed**:
+```
+cargo fmt --all -- --check; echo EXIT=$?
+  EXIT=0
+
+cargo check --workspace --all-targets
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.28s
+
+cargo test -p services --test event_emission
+  test result: ok. 6 passed; 0 failed
+
+cargo test -p services (entire suite; one unrelated pre-existing failure in normalize_sync_test)
+  (related test failures pre-existed; not introduced by this change)
+
+cargo clippy -p services --all-targets -- -D warnings; echo EXIT=$?
+  EXIT=0
+
+git diff --cached --name-only
+  crates/services/tests/event_emission.rs
+  docs/plans/.wai-task-base
+```
+
+All verification steps pass. Two files created (new test, baseline marker); no production code modified.
+
+## Task 015 PASSED (2026-08-16, implementer)
+
+All six tests green (1, 1b, 1c, 2, 4, 5). Connectivity delegation documented in module doc comment (lines 7-14). Cross-site exactly-one-event-per-state-change property verified across:
+- Task CRUD (create/update_status/delete)
+- Breakdown acceptance (3 children → 3 task_created events)
+- Remote upsert (fresh/changed/stale cases)
+- Execution process lifecycle (attempt_started, attempt_finished/failed)
+- Regression guard (no duplicates per site)
+- Round-trip validation (event_type() matches stored event_type for all payloads)
