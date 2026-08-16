@@ -6178,3 +6178,119 @@ consecutive runs (the flagged `other_errors == 0` flake risk did not materialise
 control still reproduces the failure across 5 runs each (`20,11,18,13,18` and `4,23,20,17,20` per
 200 — never 0, thinnest margin 4/200); the ledger supersedes rather than edits and states the
 inversion plainly including attribution; and all three stage gates independently reproduced.
+
+## 2026-08-16 task 007 attempt 4 — comments and ledger only, after panel 19
+
+Re-engaged (same implementer, continued context) at HEAD `ddf834c9`. Read `## REQUIRED — attempt 4`
+in full first. **Panel 19 confirmed both of panel 18's blocking findings are genuinely closed** —
+this attempt is documentation-only, per the amendment's own "change no code except deleting or
+documenting one dead assert" constraint. No bite proofs required or performed; nothing behavioural
+changes, and panel 19 already proved every guard live by mutation (evidence recorded under item 4
+below, replacing this ledger's own weaker attempt-3 proof).
+
+### Item 1 (F19-1) — relabel propagated to the three remaining sites
+
+Attempt 3 corrected `control_prior_status_read_reproduces_busy_snapshot`'s docstring (renaming and
+relabelling it as 17A's proposed remediation, not attempt 1's code) but left three sites inside/near
+that same test still carrying the claim the relabel corrected away:
+- `lifecycle.rs`'s in-loop comment (`// Attempt 1's shape: SELECT (read) first...`) — now says "17A's
+  proposed remediation's shape (NOT attempt 1's — see this fn's docstring...)".
+- The `eprintln!` output string — was byte-identical to `queries.rs`'s own control's output string
+  (`"no_read_then_upgrade(control, attempt-1 read-then-write shape)"`), making the two controls'
+  results indistinguishable when both run together. `queries.rs`'s IS faithful to attempt 1's actual
+  `mark_orphaned_as_failed` code (left unchanged — verified again this attempt, still accurate).
+  `lifecycle.rs`'s now reads `"no_read_then_upgrade(control, update_completion, 17A's proposed
+  prior-status-read shape)"`.
+- `bite_proof_ungated_shape_reproduces_17a1_p1_and_p2`'s own docstring, unrelated to the control but
+  carrying the SAME class of error independently: it described its closure as "SELECT owner
+  (unconditionally), then UPDATE (unconditionally)" while the closure directly beneath it
+  (`update_completion_ungated`, `:793-812` at the time) does UPDATE first, then SELECT — wrong both
+  about attempt 1's actual write-first shape and about the code the docstring sits directly above.
+  Corrected the ordering in the docstring's prose.
+
+Verified against the code, not against the prior ledger claims, before editing each site.
+
+### Item 2 (F19-2) — the `contains(' ')` shape assert deleted
+
+**Decision: deleted, not kept as documentation.** The premise panel 19 verified is true (all ten
+`BaseCodingAgent` variants are space-free `SCREAMING_SNAKE_CASE`; every raw-string executor `INSERT`
+in the tree is `#[cfg(test)]`-only; neither legacy migration can introduce a space), but the assert
+itself is unreachable as a failure: if the preceding `assert_eq!` against the sentinel literal
+passes, `executor` already equals that literal, which already contains a space — so
+`assert!(executor.contains(' '))` can never be the one that fires. Confirmed by re-reading the panel's
+own empirical evidence (every panic under both sentinel mutations landed on the `assert_eq!` line)
+rather than re-running the mutations myself, since the amendment says no bite proofs are required
+this attempt and the claim is about dead code, not behavior.
+
+Chose deletion over "keep and document as inert" because: the helper's whole purpose is to be a
+discriminating test assertion, and a line that reads as an assertion but structurally cannot
+discriminate is worse than no line at all — a future reader skimming the helper would reasonably
+read two `assert!`s as two independent checks, which is exactly the "presented as a second
+discriminator" framing the amendment warned against. The TRUE claim it encoded (real executors are
+space-free) is preserved as prose in the doc comment instead, where it explains *why* the literal
+comparison alone is sufficient rather than implying it needs help. Removed from both copies
+(`lifecycle.rs`, `queries.rs`) — the duplication pattern is unaffected, only the dead line inside
+each copy.
+
+### Item 3 (F19-3) — correcting a claim that propagated ledger → commit → panel brief
+
+**Correction, superseding rather than editing the attempt-3 entry above:** that entry's Verification
+section said "no production logic changed this attempt except item 2's `create` fix." This is WRONG.
+**Attempt 3 changed ZERO production logic.** `ExecutionProcess::create`'s NULL-executor sentinel
+handling (the `unwrap_or_else` substituting `UNKNOWN_EXECUTOR`) shipped in attempt 2
+(`git show aee0a3fd:crates/db/src/models/execution_process/queries.rs` — the substitution is already
+present at what was then line ~500); attempt 3's own item 2 added a NEW TEST exercising that
+pre-existing code path (`create_null_executor_emits_sentinel_not_empty_string`) and de-tautologised
+the assertion helper — it touched zero lines inside `impl ExecutionProcess`'s production functions.
+Attempt 3's actual code-region hunks were two doc-comment corrections (the `update_completion`
+doc comment's caller trace, item 1) — comments, not logic.
+
+**How the error travelled, recorded because it is the more useful part of this correction:** I wrote
+the false claim in the attempt-3 ledger entry, repeated it verbatim in the attempt-3 commit message,
+and repeated it again in the brief handed to panel 19 — which returned it to me as a finding (F19-3)
+rather than the panel independently discovering something new about the code. The direction of the
+error was safe (it over-reported how much changed, not under-reported), but the propagation path is
+the lesson: an unverified sentence in a ledger becomes an unverified sentence in a commit message and
+then in a review brief, each hop treating the prior one as established fact, and a panel — not a
+self-check — was what stopped it here.
+
+### Item 4 (F19-4) — the drift bite proof replaced with panel 19's stronger evidence
+
+**Correction, superseding rather than editing the attempt-3 entry's "Mutation 2":** that mutation set
+`UNKNOWN_EXECUTOR` to `"CLAUDE_CODE"` in BOTH `lifecycle.rs` and `queries.rs` simultaneously. A
+simultaneous two-constant mutation cannot distinguish "the two copies drifted from each other" (the
+property the helper's own docstring claims to catch) from "someone made the same coordinated change
+in both places" — both scenarios produce the identical observed result (all three sentinel tests
+fail together). It is evidence that SOMETHING is pinned, not evidence that DRIFT specifically is
+caught.
+
+**Panel 19's evidence, recorded here in place of mine** (own detached worktree at `93484d45`, five
+independent mutations, each restored and `diff`-verified between runs):
+- Reverting the sentinel substitution at `update_completion` alone: exactly one test failed.
+- Reverting it at `mark_orphaned_as_failed` alone: exactly one test failed.
+- Reverting it at `create` alone: exactly one test failed — this is the mutation panel 18 (F18-2)
+  proved nothing caught before attempt 3's fix; panel 19 re-ran it against the attempt-3 code and
+  confirmed the fix holds.
+- Mutating `lifecycle.rs:32`'s `UNKNOWN_EXECUTOR` to `"CLAUDE_CODE"` ALONE (queries.rs's copy left
+  untouched): failed a DIFFERENT, disjoint set of tests than mutating `queries.rs:31` alone.
+
+The disjoint failing sets under independent single-constant mutation are what actually demonstrate
+drift detection — each copy is caught only by the tests that read through it, which is exactly what
+"duplicated, not shared" should mean for a test suite to actually verify. My attempt-3 evidence is
+superseded by this, not merely supplemented.
+
+### Verification for attempt 4
+
+- `cargo test -p db`: 266 passed (unchanged from attempt 3 — no tests added or removed this
+  attempt, only comment/docstring corrections and one dead-code deletion per site), 0 failed,
+  7 ignored.
+- `cargo fmt --all -- --check`: exit 0 (ran `cargo fmt --all` once; clean after).
+- `cargo clippy -p db --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo clippy --all --all-targets --all-features -- -D warnings`: exit 0.
+- `cargo check --workspace --all-targets`: exit 0.
+- `git status --porcelain`: only `lifecycle.rs`, `queries.rs`, plus this ledger entry — no test
+  removed, no production logic touched (confirmed: every hunk in both files this attempt is inside
+  a `#[cfg(test)]` module, a doc comment, or the deleted dead `assert!` line, also inside
+  `#[cfg(test)]`).
+
+Task-gate.sh not run by this implementer — same deferral as attempts 1-3.

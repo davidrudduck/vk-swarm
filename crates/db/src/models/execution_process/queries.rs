@@ -1189,18 +1189,21 @@ mod lifecycle_event_tests {
     /// helper (duplicated, not shared: no `mod.rs` in this task's file set). NOT
     /// `assert_eq!(executor, UNKNOWN_EXECUTOR)`: comparing the emitted value to the imported
     /// constant it was BUILT from is a tautology that passes even if the constant were changed to
-    /// a real executor value. Asserts the literal (catches drift between `lifecycle.rs:32` and
-    /// `queries.rs:31`) AND a shape property no real executor value has (contains a space).
+    /// a real executor value. Asserts the LITERAL instead, so drift between the two copies of the
+    /// constant (`lifecycle.rs:32`/`queries.rs:31`) is caught by EITHER file's test — panel 19
+    /// proved this discriminates by mutating each copy independently and observing disjoint
+    /// failing test sets (ledger, attempt 4).
+    ///
+    /// Attempt 4/F19-2: previously ALSO asserted `executor.contains(' ')` as a second, independent
+    /// "shape" discriminator. Deleted, per `lifecycle.rs`'s identical helper's doc comment: it can
+    /// never fire once the `assert_eq!` above has already passed (confirmed empirically — every
+    /// panic under both sentinel mutations landed on the `assert_eq!` line). Dead-redundant as
+    /// code, not kept as inert documentation.
     fn assert_is_unknown_executor_sentinel(executor: &str) {
         assert_eq!(
             executor, "unknown (legacy NULL task_attempts.executor)",
             "must match the sentinel LITERAL — comparing against the imported UNKNOWN_EXECUTOR \
              constant instead is what attempt 2 shipped, and it is a tautology: '{executor}'"
-        );
-        assert!(
-            executor.contains(' '),
-            "a real executor identity never contains a space — this shape check must fail if the \
-             sentinel were ever set to a real value like \"CLAUDE_CODE\": '{executor}'"
         );
     }
 

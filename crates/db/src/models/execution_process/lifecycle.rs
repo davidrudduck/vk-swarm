@@ -777,11 +777,13 @@ mod lifecycle_event_tests {
 
     /// Bite proof for the three tests above: without the transition gate, `update_completion`
     /// reproduces 17A-1's own findings exactly. Reconstructs the pre-attempt-2 (attempt 1) shape
-    /// directly — SELECT owner (unconditionally), then UPDATE (unconditionally), emit whenever
-    /// terminal — as a local closure, rather than editing production code via `.wai-scratch`
-    /// swap-and-restore, since the property under test (gate presence) is naturally expressible
-    /// as "does an unconditional-emit shape diverge from the real one," which is a cheaper and
-    /// equally direct proof than a file-level revert.
+    /// directly — UPDATE (unconditionally), then SELECT owner (unconditionally), emit whenever
+    /// terminal (corrected, attempt 4/F19-1: this previously said the SELECT came first, backwards
+    /// both about attempt 1's actual write-first code AND about the closure directly below, which
+    /// does UPDATE before SELECT) — as a local closure, rather than editing production code via
+    /// `.wai-scratch` swap-and-restore, since the property under test (gate presence) is naturally
+    /// expressible as "does an unconditional-emit shape diverge from the real one," which is a
+    /// cheaper and equally direct proof than a file-level revert.
     #[tokio::test]
     async fn bite_proof_ungated_shape_reproduces_17a1_p1_and_p2() {
         async fn update_completion_ungated(
@@ -939,20 +941,26 @@ mod lifecycle_event_tests {
     /// De-tautologised sentinel assertion (attempt 3, F18-2): NOT `assert_eq!(executor,
     /// UNKNOWN_EXECUTOR)` — comparing the emitted value to the imported constant it was BUILT
     /// from is a tautology that passes even if the constant were changed to a real executor value
-    /// (`"CLAUDE_CODE"`). Asserts a literal (so drift between the two copies of the constant,
-    /// `lifecycle.rs:32`/`queries.rs:31`, is caught by EITHER file's test) AND a shape property no
-    /// real executor value has: every real value is a single `SCREAMING_SNAKE_CASE` token with no
-    /// spaces (`"CLAUDE_CODE"`, `"AMP"`, `"QA_MOCK"`); the sentinel is deliberately prose-shaped.
+    /// (`"CLAUDE_CODE"`). Asserts the LITERAL instead, so drift between the two copies of the
+    /// constant (`lifecycle.rs:32`/`queries.rs:31`) is caught by EITHER file's test — panel 19
+    /// proved this discriminates by mutating each copy independently and observing disjoint
+    /// failing test sets (ledger, attempt 4).
+    ///
+    /// Attempt 4/F19-2: previously ALSO asserted `executor.contains(' ')` as a second,
+    /// independent "shape" discriminator (no real executor value has a space). Deleted: if the
+    /// `assert_eq!` above passes, `executor` IS the literal, which already contains a space — so
+    /// that assert could never fire, confirmed empirically (every panic under both sentinel
+    /// mutations landed on the `assert_eq!` line, never this one). The underlying claim was true
+    /// (panel 19 verified all ten `BaseCodingAgent` variants are space-free `SCREAMING_SNAKE_CASE`,
+    /// every raw-string executor `INSERT` in the tree is `#[cfg(test)]`-only, and no migration can
+    /// introduce a space) but dead-redundant as CODE once the literal is asserted first — not kept
+    /// as inert documentation, to avoid presenting it as a second discriminator when it discriminates
+    /// nothing.
     fn assert_is_unknown_executor_sentinel(executor: &str) {
         assert_eq!(
             executor, "unknown (legacy NULL task_attempts.executor)",
             "must match the sentinel LITERAL — comparing against the imported UNKNOWN_EXECUTOR \
              constant instead is what attempt 2 shipped, and it is a tautology: '{executor}'"
-        );
-        assert!(
-            executor.contains(' '),
-            "a real executor identity never contains a space — this shape check must fail if the \
-             sentinel were ever set to a real value like \"CLAUDE_CODE\": '{executor}'"
         );
     }
 
@@ -1151,7 +1159,8 @@ mod lifecycle_event_tests {
         let mut busy_snapshot_errors = 0usize;
         for process_id in &process_ids {
             let mut tx = pool.begin().await.unwrap();
-            // Attempt 1's shape: SELECT (read) first...
+            // 17A's proposed remediation's shape (NOT attempt 1's — see this fn's docstring,
+            // corrected attempt 4/F19-1): SELECT (read) first...
             let owner: Option<(Uuid,)> =
                 sqlx::query_as("SELECT task_attempt_id FROM execution_processes WHERE id = ?")
                     .bind(process_id)
@@ -1181,8 +1190,12 @@ mod lifecycle_event_tests {
         }
         writer.abort();
 
+        // Attempt 4/F19-1: disambiguated from `queries.rs`'s identically-shaped output string —
+        // that one IS attempt 1's actual shape (mark_orphaned_as_failed's), this one is 17A's
+        // proposed-but-never-shipped remediation for update_completion. Previously byte-identical,
+        // making the two controls indistinguishable in test output.
         eprintln!(
-            "no_read_then_upgrade(control, attempt-1 read-then-write shape): \
+            "no_read_then_upgrade(control, update_completion, 17A's proposed prior-status-read shape): \
              {busy_snapshot_errors}/{ITERATIONS} SQLITE_BUSY_SNAPSHOT"
         );
         assert!(
