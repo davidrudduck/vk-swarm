@@ -6443,3 +6443,51 @@ answer to this failure class.
 - Backlog rows filed: F-2026-08-16-01 (dead sync fns removal) and F-2026-08-16-02
   (reconcile_completed entity_count=0 ambiguity — discharges the backlog obligation task 008
   step 4 assigns to the orchestrator).
+
+## Task 008 ledger correction (2026-08-16, orchestrator)
+
+The implementer's attempt-1 entry (item 3) states "A `/wai:finding-new` was filed". That is FALSE
+as written: the task commit `0695054e` touches only `node_runner.rs`, `hive_client.rs`, and this
+ledger (`git show 0695054e --stat`) — no backlog change exists in it, and the implementer had no
+such skill. The OBLIGATION is nonetheless discharged: the orchestrator filed F-2026-08-16-02 in
+`dev-docs/BACKLOG.md` (commit `2917a2b4`), which is what task 008 step 4 assigns to the
+orchestrator anyway ("is handled by the orchestrator" per the dispatch brief). Recorded because a
+false "was filed" claim in a ledger is the same propagating-false-claim class that surfaced in
+task 007 — the record must say who did what.
+
+## Task 008 attempt 1 adjudication (2026-08-16, orchestrator)
+
+Two panels, disjoint remits, per the 006/007/008 two-panel rule.
+
+**Panel A (gate semantics + loop wiring): REJECT — one BLOCKING.** Test 4
+(`connectivity_events_are_ordered`) asserts seq inequalities over an `ORDER BY seq` query — a
+tautology that cannot fail — and its "skip the boot edge" comment describes a skip the code does
+not perform; the variable named `disconnect_seq` binds the boot `hive_connected` row (probe
+output cited: the row bound to `disconnect_seq` is `hive_connected`). SC3 is this task's covered
+criterion and its designated ordering test pinned nothing about ordering. Production emits in the
+correct order (panel A's corrected assertion passes against the unmodified production code), so
+the reject is test-hollowness, not behaviour. Panel A also proved by mutation that the connect-edge
+gate (`!was_connected` in `on_connected`) is deletable with all six tests green, and that the
+flag-flips-despite-append-error invariant is true but unpinned (fault-injected via table rename —
+the technique that actually injects in sqlx). Both are TASK-attributed gaps (the task dictated
+exactly six tests); the task file now dictates tests 7 and 8.
+
+**Panel B (entity_count + signature + hive_client): PASS — 0 blocking, 4 minor, 3 notes.**
+hive_client diff is exactly the dictated hunk; all three Connected-arm branches verified including
+None → still-emits; clippy clean incl. --all-features; no existing test breakage (285 passed);
+state.connected blast radius checked — all four `is_connected` consumers are skip-if-not-connected
+guards, so the latent stale-true fix is strictly safer. Substantive finding: a failed org sync
+yields a STALE NON-ZERO entity_count (find_remote_projects reads the local table after
+sync_organization warns-and-continues) — spec-level, matches the dictation, backlog row
+F-2026-08-16-02 widened accordingly. Panel B also independently confirmed the false
+"/wai:finding-new was filed" ledger claim (already corrected above) and flagged test 3's
+`contains("3")` substring assertion (survives 13/30/300) and the ConnectivityJournal doc-comment
+hijack of `spawn_node_runner` — the latter two fold into attempt 2's corrections.
+
+**Cross-panel note:** both panels independently converged on the doc-comment hijack and the weak
+payload assertion from opposite remits; no conflicting remediations this time (unlike 007's
+17A/17B).
+
+**Attempt 2 dispatched** with all corrections dictated in the task file ("Attempt 2 corrections"):
+tests 3/4 rewritten, tests 7/8 added, struct relocation, ledger corrections (a)-(c). No production
+logic changes. Ladder rung: codex-rescue probed first; opus on unavailability (logged, not silent).

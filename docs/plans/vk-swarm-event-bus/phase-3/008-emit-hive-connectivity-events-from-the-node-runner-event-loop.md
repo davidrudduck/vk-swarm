@@ -35,11 +35,16 @@ on `event_type` (`'hive_connected'` / `'hive_disconnected'` / `'reconcile_comple
 2. `reconnect_emits_hive_connected` — `on_connected`, `on_disconnected`, `on_connected`; assert
    exactly two `hive_connected` rows (boot false→true edge AND the reconnect edge both count).
 3. `reconcile_completion_emits_reconcile_completed_with_entity_count` — `on_reconcile_completed(pool, 3)`;
-   assert one `reconcile_completed` row whose payload carries `entity_count` 3.
+   assert one `reconcile_completed` row whose payload PARSES as JSON and whose `entity_count`
+   field equals 3 exactly (amended 2026-08-16 after panel A: substring assertions are FORBIDDEN —
+   `payload.contains("3")` passes for 13, 30 and 300, demonstrated by mutation).
 4. `connectivity_events_are_ordered` — drive `on_connected`, `on_disconnected`, `on_connected`,
-   `on_reconcile_completed`; assert the journal shows `hive_disconnected` → `hive_connected` →
-   `reconcile_completed` with strictly increasing seq (ignore rows before the disconnect). SC3
-   requires the ORDER, not merely the presence.
+   `on_reconcile_completed`; select `(seq, event_type)` ordered by seq and assert the EVENT TYPES:
+   `assert_eq!(&types[1..4], ["hive_disconnected", "hive_connected", "reconcile_completed"])`
+   (index 0 is the boot `hive_connected` edge). SC3 requires the ORDER of event types.
+   (Amended 2026-08-16 after panel A: the previous wording invited comparing seq values from an
+   ORDER BY seq query — a tautology that cannot fail. Panel A demonstrated this exact assertion
+   passes against the current production code.)
 5. `repeated_failed_connection_attempts_emit_one_disconnect` — `on_connected`, then
    `on_disconnected` THREE times (the link died, then two failed retries each surface another
    `Disconnected` event); assert exactly ONE `hive_disconnected` row. This is the test that fails
@@ -49,6 +54,19 @@ on `event_type` (`'hive_connected'` / `'hive_disconnected'` / `'reconcile_comple
    row. Upstream, the clean-close `Ok(())` arm today sends NO event at all — the one-line
    `hive_client.rs` addition in the Change section is what makes this event exist; this test pins
    the gate's handling of it.
+7. `repeated_connected_emits_one_hive_connected` (added 2026-08-16 after panel A) — `on_connected`
+   twice consecutively; assert exactly ONE `hive_connected` row. This is the connect-edge
+   counterpart of test 5: panel A proved that deleting the `!was_connected` check survives the
+   original six tests.
+8. `flag_flips_even_when_append_errors` (added 2026-08-16 after panel A) — pin the dictated
+   invariant that `was_connected` tracks the EVENT, not journal success. Fault-inject the append
+   by renaming the table (`ALTER TABLE event_journal RENAME TO event_journal_hidden`, issued as a
+   plain statement OUTSIDE any transaction — chmod and pool-close inject nothing in sqlx), call
+   `on_connected` during the outage (append errors; flag must still flip), rename the table BACK,
+   then call `on_connected` again and assert the journal has ZERO `hive_connected` rows (the flag
+   already flipped, so the second call is a non-edge); finally `on_disconnected` and assert
+   exactly one `hive_disconnected` row. Panel A ran exactly this probe against the production
+   code: it passes as-is and fails the flag-only-on-Ok mutation.
 
 ## Change
 Connectivity events have NO accompanying state write, so per spec D2 there is no transaction to
@@ -213,6 +231,33 @@ broadcasts here.
   quantity for `entity_count`. (Amended 2026-08-12: this trigger previously read "`entity_count` is
   not available at reconcile completion — record what is used instead", which invited the implementer
   to pick a substitute quantity silently. The sourcing is now dictated in the Change section.)
+
+## Attempt 2 corrections (2026-08-16 — panel A REJECT, panel B PASS-with-minors; all dictated)
+Attempt 1 (commit `0695054e`) is production-correct; every correction below is tests/docs/placement.
+Do NOT change any production logic in `ConnectivityJournal`, the loop arms, `sync_remote_projects`,
+or `hive_client.rs`.
+
+1. Rewrite test 4's assertion to the event-type window dictated in the Failing test section
+   (the seq-inequality assert is a tautology), and fix its comment — the current
+   "Skip to find the disconnect (ignore boot-true edge)" comment describes a skip that does not
+   happen.
+2. Rewrite test 3's assertion to parse the payload JSON and assert the `entity_count` field
+   equals 3 (substring `contains("3")` forbidden).
+3. Add tests 7 and 8 exactly as dictated in the Failing test section.
+4. Relocate the `ConnectivityJournal` struct + impl to BELOW the end of `spawn_node_runner`'s
+   function body: attempt 1 spliced it between `spawn_node_runner`'s doc comment and the function,
+   so the rustdoc now documents the struct and the public function is undocumented. After the
+   move, `spawn_node_runner`'s original doc block ("Spawn the node runner event loop...") must sit
+   directly above `pub fn spawn_node_runner` again, and the struct keeps only its own one-line doc
+   comment.
+5. Append (never edit) a correction to the ledger's attempt-1 entry stating: (a) attempt 1's
+   "verify transitions, ordering, idempotence" overclaimed — the ordering test asserted nothing
+   about ordering until attempt 2; (b) the claim that `clean_close_emits_disconnected` "proves"
+   the `hive_client.rs` addition is wrong — that test executes zero lines of hive_client.rs; the
+   addition is proven at the seam by task 015 and live by task 012's SC3 check (the wording the
+   task originally dictated); (c) the claim "both call sites use `if let Err(e)`" is wrong for the
+   Connected arm, which attempt 1 itself restructured to a `match` as dictated — only the
+   digest-heal caller retains `if let Err(e)`.
 
 ## Manual verification (record in decisions-ledger)
 Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
