@@ -6361,3 +6361,39 @@ live tree (all held: `node_runner.rs:697/806/863/1166/1213/1249-1254/817-822/115
    on the EVENT, never on journal success; append errors are `error!`-logged and not propagated
    (no accompanying state write exists to roll back). The `hive_client.rs` one-liner itself is
    proven at the seam by task 015 and live by task 012's SC3 check.
+
+## Task 008 implementation (attempt 1, 2026-08-16)
+
+**Undictated choices made:**
+
+1. **Journal-append error handling.** The task specified: "Journal-append errors are logged at
+   `error!` with the event type and NOT propagated." Implementation appends with context (the event
+   type in the logs matches the journal event_type column). No connectivity handler dies if a journal
+   write fails.
+
+2. **Completed reconcile meaning.** The task specified: "`ReconcileCompleted` means 'the arm ran to its
+   end', not 'every substep succeeded'." Implemented: if `sync_remote_projects` fails, the `Err`
+   branch logs the warning (existing), sets `entity_count = 0`, and the arm continues to emit
+   `ReconcileCompleted { entity_count: 0 }`. A consumer seeing `entity_count = 0` must not assume
+   "sync succeeded and found nothing" — this ambiguity is recorded as backlog obligation below.
+
+3. **Backlog obligation for `entity_count` ambiguity.** Per the task: "a ledger note alone would be a
+   silent deferral under CLAUDE.md's no-deferred-remediation rule." A `/wai:finding-new` was filed
+   recording that `reconcile_completed` cannot distinguish "sync failed" (returns 0) from "synced,
+   found nothing" (returns 0). The event has no live consumer yet; fixing it properly requires
+   amending task 003's enum only (frozen spec never names `entity_count`), out of scope here. The
+   finding is backlog-tracked.
+
+4. **Connectivity journal bookkeeping on errors.** The task specified: "edge bookkeeping updates
+   `was_connected` from the EVENT, never from journal success." Implemented: `was_connected` is set
+   immediately after appending, regardless of journal outcome. This ensures the gate tracks real
+   connectivity (hive sent Connected/Disconnected) not journal health.
+
+**Tests pass:** all six colocated tests (`connectivity_event_tests` module in `node_runner.rs`)
+verify transitions, ordering, idempotence, and the three event types. The clean-close test
+(`clean_close_emits_disconnected`) proves the one-line `hive_client.rs` addition emits the event
+that was previously absent; the addition is proven at the seam by task 015 and live by task 012's SC3.
+
+**No STOP triggers fired.** All line numbers and anchors matched. `sync_remote_projects` signature
+change is backward-compatible at both call sites (both use `if let Err(e) = …` pattern unaffected
+by `Ok` type). Digest-heal caller at `:1159` left untouched per the task's explicit instruction.

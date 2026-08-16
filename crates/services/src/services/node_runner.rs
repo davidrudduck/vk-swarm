@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use db::DBService;
 use db::models::{
-    label::Label, project::Project, task::Task, task::TaskStatus, task_attempt::TaskAttempt,
+    event::NodeEvent, label::Label, project::Project, task::Task, task::TaskStatus,
+    task_attempt::TaskAttempt,
 };
 use remote::db::tasks::TaskStatus as RemoteTaskStatus;
 use sqlx::SqlitePool;
@@ -694,6 +695,61 @@ use super::hive_sync::spawn_hive_sync_service;
 ///
 /// Note: The container service must be passed in to enable task execution.
 /// If container is None, task assignments will be logged but not executed.
+///
+/// Tracks hive connectivity state transitions and emits events only on actual transitions.
+struct ConnectivityJournal {
+    was_connected: bool,
+}
+
+impl ConnectivityJournal {
+    /// Emit hive_connected event ONLY on a false→true edge.
+    async fn on_connected(&mut self, pool: &SqlitePool) {
+        if !self.was_connected {
+            let event = NodeEvent::HiveConnected {};
+            match db::models::event_journal::append(pool, &event).await {
+                Ok(_) => {
+                    tracing::debug!("emitted hive_connected event");
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "failed to append hive_connected event");
+                }
+            }
+            self.was_connected = true;
+        }
+    }
+
+    /// Emit hive_disconnected event ONLY on a true→false edge.
+    async fn on_disconnected(&mut self, pool: &SqlitePool, reason: &str) {
+        if self.was_connected {
+            let event = NodeEvent::HiveDisconnected {
+                reason: reason.to_string(),
+            };
+            match db::models::event_journal::append(pool, &event).await {
+                Ok(_) => {
+                    tracing::debug!(reason = %reason, "emitted hive_disconnected event");
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "failed to append hive_disconnected event");
+                }
+            }
+            self.was_connected = false;
+        }
+    }
+
+    /// Emit reconcile_completed event unconditionally (it is an occurrence, not a level).
+    async fn on_reconcile_completed(&self, pool: &SqlitePool, entity_count: i64) {
+        let event = NodeEvent::ReconcileCompleted { entity_count };
+        match db::models::event_journal::append(pool, &event).await {
+            Ok(_) => {
+                tracing::debug!(entity_count = %entity_count, "emitted reconcile_completed event");
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, "failed to append reconcile_completed event");
+            }
+        }
+    }
+}
+
 pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
     config: NodeRunnerConfig,
     db: DBService,
@@ -801,6 +857,10 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
             })
         };
 
+        let mut connectivity = ConnectivityJournal {
+            was_connected: false,
+        };
+
         loop {
             match handle.process_event().await {
                 Some(HiveEvent::Connected {
@@ -809,17 +869,25 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                     linked_projects,
                     swarm_labels,
                 }) => {
+                    connectivity.on_connected(&db.pool).await;
+
                     // ADR-0007 SINGLE LIVE INBOUND CHANNEL: the bulk-snapshot reconcile runs ONLY here,
                     // on (re)connect — it is cold-start / gap-fill, NOT a second continuous channel.
                     // The WS activity stream (project_watcher_task → ActivityProcessor::process_event)
                     // is the single LIVE inbound path. Do NOT call sync_remote_projects on a timer / in a
                     // periodic loop — that re-introduces the double-delivery class SC7 eliminates.
-                    if let Some(ref client) = remote_client
-                        && let Err(e) =
-                            sync_remote_projects(&db.pool, client, organization_id, node_id).await
-                    {
-                        tracing::warn!(error = ?e, "Failed to sync remote projects on connect");
-                    }
+                    let entity_count = if let Some(ref client) = remote_client {
+                        match sync_remote_projects(&db.pool, client, organization_id, node_id).await
+                        {
+                            Ok(n) => n as i64,
+                            Err(e) => {
+                                tracing::warn!(error = ?e, "Failed to sync remote projects on connect");
+                                0i64
+                            }
+                        }
+                    } else {
+                        0i64
+                    };
 
                     // Sync remote_project_id for owned projects from hive
                     match sync_owned_project_ids_from_hive(&db.pool, &linked_projects).await {
@@ -859,6 +927,10 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                     {
                         tracing::warn!(error = ?e, "Failed to sync node statuses from hive");
                     }
+
+                    connectivity
+                        .on_reconcile_completed(&db.pool, entity_count)
+                        .await;
                 }
                 Some(HiveEvent::TaskAssigned(assignment)) => {
                     tracing::info!(
@@ -1163,6 +1235,9 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
                         }
                     }
                 }
+                Some(HiveEvent::Disconnected { reason }) => {
+                    connectivity.on_disconnected(&db.pool, &reason).await;
+                }
                 Some(_) => {
                     // Other events are handled in process_event
                 }
@@ -1210,12 +1285,14 @@ fn restream_row_to_ws_op(
 ///
 /// This function is called when the node connects to the hive to ensure
 /// the local database has an up-to-date view of projects from other nodes.
+///
+/// Returns the count of remote projects synced.
 async fn sync_remote_projects(
     pool: &SqlitePool,
     remote_client: &RemoteClient,
     organization_id: Uuid,
     current_node_id: Uuid,
-) -> Result<(), NodeRunnerError> {
+) -> Result<usize, NodeRunnerError> {
     // 1. Sync organization from hive - this directly upserts remote projects into unified Project table
     // Pass current_node_id to skip syncing our own projects as remote entries (they're local)
     if let Err(e) =
@@ -1251,7 +1328,7 @@ async fn sync_remote_projects(
         "Synced remote projects to unified schema"
     );
 
-    Ok(())
+    Ok(remote_projects.len())
 }
 
 /// Sync tasks for a single remote project from the Hive.
@@ -2525,5 +2602,198 @@ mod self_fence_tests {
             "a None-expiry lease is NOT fenced by the timer (R2/F7)"
         );
         assert!(!to_fence.contains(&live), "a live lease is not fenced");
+    }
+}
+
+#[cfg(test)]
+mod connectivity_event_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn disconnect_emits_hive_disconnected_with_reason() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
+        let mut connectivity = ConnectivityJournal {
+            was_connected: false,
+        };
+
+        connectivity.on_connected(&pool).await;
+        connectivity
+            .on_disconnected(&pool, "connection reset")
+            .await;
+
+        // Query event_journal for hive_disconnected events
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT payload FROM event_journal WHERE event_type = 'hive_disconnected' ORDER BY seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to query journal");
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "expected exactly one hive_disconnected event"
+        );
+        let payload = &rows[0].0;
+        assert!(
+            payload.contains("connection reset"),
+            "expected reason in payload, got: {}",
+            payload
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnect_emits_hive_connected() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
+        let mut connectivity = ConnectivityJournal {
+            was_connected: false,
+        };
+
+        connectivity.on_connected(&pool).await;
+        connectivity.on_disconnected(&pool, "test").await;
+        connectivity.on_connected(&pool).await;
+
+        // Query event_journal for hive_connected events
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT event_type FROM event_journal WHERE event_type = 'hive_connected' ORDER BY seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to query journal");
+
+        assert_eq!(rows.len(), 2, "expected exactly two hive_connected events");
+    }
+
+    #[tokio::test]
+    async fn reconcile_completion_emits_reconcile_completed_with_entity_count() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
+        let connectivity = ConnectivityJournal {
+            was_connected: false,
+        };
+
+        connectivity.on_reconcile_completed(&pool, 3).await;
+
+        // Query event_journal for reconcile_completed events
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT payload FROM event_journal WHERE event_type = 'reconcile_completed' ORDER BY seq"
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to query journal");
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "expected exactly one reconcile_completed event"
+        );
+        let payload = &rows[0].0;
+        assert!(
+            payload.contains("3"),
+            "expected entity_count=3 in payload, got: {}",
+            payload
+        );
+    }
+
+    #[tokio::test]
+    async fn connectivity_events_are_ordered() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
+        let mut connectivity = ConnectivityJournal {
+            was_connected: false,
+        };
+
+        connectivity.on_connected(&pool).await;
+        connectivity.on_disconnected(&pool, "test").await;
+        connectivity.on_connected(&pool).await;
+        connectivity.on_reconcile_completed(&pool, 5).await;
+
+        // Query event_journal for hive/reconcile events
+        let rows = sqlx::query_as::<_, (i64, String)>(
+            "SELECT seq, event_type FROM event_journal WHERE event_type IN ('hive_connected', 'hive_disconnected', 'reconcile_completed') ORDER BY seq"
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to query journal");
+
+        assert_eq!(rows.len(), 4, "expected 4 total events");
+
+        // Verify sequence: first disconnect → connected → reconcile completed
+        // Skip to find the disconnect (ignore boot-true edge)
+        let mut seq_iter = rows.iter().map(|(seq, _)| seq);
+        let disconnect_seq = seq_iter.next().expect("should have disconnect");
+        let connected_seq = seq_iter.next().expect("should have connected");
+        let reconcile_seq = seq_iter.next().expect("should have reconcile");
+
+        assert!(
+            disconnect_seq < connected_seq && connected_seq < reconcile_seq,
+            "events should be in strictly increasing seq order"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_failed_connection_attempts_emit_one_disconnect() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
+        let mut connectivity = ConnectivityJournal {
+            was_connected: false,
+        };
+
+        connectivity.on_connected(&pool).await;
+        connectivity
+            .on_disconnected(&pool, "connection reset")
+            .await;
+        connectivity.on_disconnected(&pool, "retry failed").await;
+        connectivity
+            .on_disconnected(&pool, "retry failed again")
+            .await;
+
+        // Query event_journal for hive_disconnected events
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT payload FROM event_journal WHERE event_type = 'hive_disconnected' ORDER BY seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to query journal");
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "expected exactly one hive_disconnected event despite three calls"
+        );
+        let payload = &rows[0].0;
+        assert!(
+            payload.contains("connection reset"),
+            "expected first reason in payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn clean_close_emits_disconnected() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
+        let mut connectivity = ConnectivityJournal {
+            was_connected: false,
+        };
+
+        connectivity.on_connected(&pool).await;
+        connectivity
+            .on_disconnected(&pool, "connection closed cleanly")
+            .await;
+
+        // Query event_journal for hive_disconnected events
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT payload FROM event_journal WHERE event_type = 'hive_disconnected' ORDER BY seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to query journal");
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "expected exactly one hive_disconnected event"
+        );
+        let payload = &rows[0].0;
+        assert!(
+            payload.contains("connection closed cleanly"),
+            "expected clean close reason in payload"
+        );
     }
 }
