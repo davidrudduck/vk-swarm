@@ -7116,3 +7116,73 @@ the 10/10 failure above is attributable to the mutation, not to an inherently fl
 - `cargo fmt` accepted the new code with no reformatting, so no fmt-fixup commit was needed.
 - Mutation 2's failure code (5, not 517) is the only factual divergence from the task file's own
   prediction; it strengthens rather than weakens the case for IMMEDIATE.
+
+## Task 022 panel-A re-verify remediation (2026-08-16)
+
+Panel A re-verified attempt 2 and returned PASS: the update-hook firings are gone, baseline
+equivalence is exact, and its own red proof against the deferred shape captured LITERAL code-517
+(`SQLITE_BUSY_SNAPSHOT`) errors. One MINOR was raised and is closed here.
+
+**The finding.** Test 6 as shipped in `aaa97ad1` was narrower than production shape in two ways:
+it hoisted ONE `local_id` above the spawn loop (all 16 writers shared the primary key), and all 16
+passed an identical status. Production callers — the remote-task route handlers
+(`crates/server/src/routes/tasks/handlers/remote.rs`, `status.rs`), the share activity processor
+(`crates/services/src/services/share/processor.rs:379`) and the node_runner reconcile leg
+(`crates/services/src/services/node_runner.rs:1361`) — each mint a fresh `Uuid::new_v4()` per call.
+A losing racer's INSERT therefore resolves via `ON CONFLICT(shared_task_id)` against a row whose
+PRIMARY KEY it does NOT share, and the identical-status setup meant the status-changed emission
+path was never exercised under contention at all. The shipped test exercised neither.
+
+**The strengthening (test 6 only; the production function is byte-unchanged).**
+
+- `local_id` generation moved INSIDE the spawned closure: a fresh `Uuid::new_v4()` per writer, so
+  every losing writer takes the ON CONFLICT arm against a foreign PK, as in production.
+- Status alternates by writer index (`version % 2 == 0` -> `Todo`, else `InProgress`), so the
+  `task_status_changed` emission path runs under contention.
+- Assertions kept: zero errors, and exactly one `task_created` row (filtered by `event_type`).
+- NEW deterministic assertion: every `task_status_changed` payload is parsed and asserted
+  `old_status != new_status`. The COUNT of such rows is deliberately NOT asserted — it depends on
+  the interleaving and on which versions win the version-monotonic guard, so a count assertion
+  would be flaky. The transition invariant is what is deterministic, and it is exactly what breaks
+  if the probe ever escapes the write transaction: an `old_status` equal to `new_status` would mean
+  the probe read a status that was not the one the upsert overwrote.
+
+**Evidence.**
+
+- `cargo fmt --all -- --check` -> EXIT=0; `cargo clippy -p db --all-targets -- -D warnings` -> EXIT=0
+- `cargo test -p db --lib sync_event_tests` run FOUR times, all green:
+
+```
+run 1: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.80s
+run 2: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.80s
+run 3: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.79s
+run 4: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.82s
+```
+
+- Red-proof re-check on the STRENGTHENED test: reverted `begin_with("BEGIN IMMEDIATE")` to
+  `begin()` (SELECT probe kept), ran test 6 once -> EXIT=101,
+  `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 280 filtered out`:
+
+```
+all concurrent upserts must succeed, got 7 error(s):
+["Database(SqliteError { code: 5, message: \"database is locked\" })", ... x7]
+```
+
+  Restored by `cp` from backup: `diff` printed nothing, md5 `260c3bda00eb6ca98f1c7046b2b70c9b`
+  before and after, `begin_with("BEGIN IMMEDIATE")` confirmed back at `:300`, and
+  `cargo test -p db --lib sync_event_tests` re-run green (6 passed). No `git checkout`/`restore`/
+  `stash` at any point.
+
+**On the "SQLITE_BUSY_SNAPSHOT (517) class" wording in test 6's doc comment.** Panel A's red proof
+captured literal code-517 errors, so the comment's wording is validated as literally accurate and
+stands unchanged. This implementer's three red-proof runs (the 10-run loop in the attempt-2 entry
+above, and the single re-check here) captured code **5** (`SQLITE_BUSY`) rather than 517 — the
+other member of the same read-then-upgrade family, returned immediately without invoking the busy
+handler. Which member surfaces depends on whether the competing writer has already committed a
+newer snapshot at the moment of upgrade, so BOTH observations are correct and neither invalidates
+the other. Recorded so a future reader greps for both codes, not one.
+
+**Scope:** test 6 only, plus this ledger section. `upsert_remote_task` itself is byte-identical to
+`aaa97ad1`; the dirty-guard, `BEGIN IMMEDIATE`, the SELECT probe, the `INSERT ... ON CONFLICT` SQL
+text, the four-case emission table, the commit and the stale-skip fallback are all untouched, and
+tests 1-5 are unchanged.

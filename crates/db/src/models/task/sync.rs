@@ -2412,6 +2412,8 @@ mod sync_event_tests {
     /// Regression guard for the SQLITE_BUSY_SNAPSHOT (517) class: if the transaction is ever
     /// reverted to a deferred `begin()` with a read as its first statement, concurrent upserts on
     /// the same row take a read snapshot and fail to upgrade. Only concurrency surfaces that.
+    /// Shaped like production: a fresh `local_id` per writer and alternating statuses, so the
+    /// ON CONFLICT arm resolves against a row the losing writer does not own the PK of.
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_upserts_serialize_without_errors() {
         let (pool, _temp_dir) = setup_test_pool().await;
@@ -2430,15 +2432,23 @@ mod sync_event_tests {
             .await
             .unwrap();
 
-        let local_id = Uuid::new_v4();
         let shared_task_id = Uuid::new_v4();
 
-        // 16 concurrent upserts of the SAME shared_task_id: distinct remote_versions and titles,
-        // identical status (so no task_status_changed is expected regardless of interleaving).
+        // 16 concurrent upserts of the SAME shared_task_id, in PRODUCTION shape: every caller mints
+        // a FRESH `local_id` (the remote-task handlers, the share processor and the node_runner
+        // reconcile leg all pass `Uuid::new_v4()` per call), so a losing racer's INSERT resolves via
+        // ON CONFLICT(shared_task_id) against a row whose PRIMARY KEY it does not share. Statuses
+        // alternate by index so the status-changed path is exercised under contention too.
         let mut handles = Vec::new();
         for version in 1..=16i64 {
             let pool = pool.clone();
             handles.push(tokio::spawn(async move {
+                let local_id = Uuid::new_v4();
+                let status = if version % 2 == 0 {
+                    TaskStatus::Todo
+                } else {
+                    TaskStatus::InProgress
+                };
                 Task::upsert_remote_task(
                     &pool,
                     local_id,
@@ -2446,7 +2456,7 @@ mod sync_event_tests {
                     shared_task_id,
                     format!("Task v{}", version),
                     None,
-                    TaskStatus::Todo,
+                    status,
                     None,
                     None,
                     None,
@@ -2484,5 +2494,26 @@ mod sync_event_tests {
             1,
             "exactly one task_created across 16 concurrent upserts"
         );
+
+        // How MANY task_status_changed rows land is nondeterministic (it depends on the interleaving
+        // and on which versions win the version-monotonic guard), so the count is deliberately not
+        // asserted. What IS deterministic: every row that lands must record a REAL transition. An
+        // old_status equal to new_status would mean the probe read a status that was not the one the
+        // upsert overwrote — i.e. the probe escaped the write transaction.
+        let status_change_payloads: Vec<(String,)> = sqlx::query_as(
+            "SELECT payload FROM event_journal WHERE event_type = 'task_status_changed'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        for (payload,) in &status_change_payloads {
+            let parsed: serde_json::Value =
+                serde_json::from_str(payload).expect("valid JSON payload");
+            assert_ne!(
+                parsed["old_status"], parsed["new_status"],
+                "task_status_changed must record a real transition, got {}",
+                payload
+            );
+        }
     }
 }
