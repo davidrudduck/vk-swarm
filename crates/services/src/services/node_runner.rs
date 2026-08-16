@@ -695,61 +695,6 @@ use super::hive_sync::spawn_hive_sync_service;
 ///
 /// Note: The container service must be passed in to enable task execution.
 /// If container is None, task assignments will be logged but not executed.
-///
-/// Tracks hive connectivity state transitions and emits events only on actual transitions.
-struct ConnectivityJournal {
-    was_connected: bool,
-}
-
-impl ConnectivityJournal {
-    /// Emit hive_connected event ONLY on a false→true edge.
-    async fn on_connected(&mut self, pool: &SqlitePool) {
-        if !self.was_connected {
-            let event = NodeEvent::HiveConnected {};
-            match db::models::event_journal::append(pool, &event).await {
-                Ok(_) => {
-                    tracing::debug!("emitted hive_connected event");
-                }
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to append hive_connected event");
-                }
-            }
-            self.was_connected = true;
-        }
-    }
-
-    /// Emit hive_disconnected event ONLY on a true→false edge.
-    async fn on_disconnected(&mut self, pool: &SqlitePool, reason: &str) {
-        if self.was_connected {
-            let event = NodeEvent::HiveDisconnected {
-                reason: reason.to_string(),
-            };
-            match db::models::event_journal::append(pool, &event).await {
-                Ok(_) => {
-                    tracing::debug!(reason = %reason, "emitted hive_disconnected event");
-                }
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to append hive_disconnected event");
-                }
-            }
-            self.was_connected = false;
-        }
-    }
-
-    /// Emit reconcile_completed event unconditionally (it is an occurrence, not a level).
-    async fn on_reconcile_completed(&self, pool: &SqlitePool, entity_count: i64) {
-        let event = NodeEvent::ReconcileCompleted { entity_count };
-        match db::models::event_journal::append(pool, &event).await {
-            Ok(_) => {
-                tracing::debug!(entity_count = %entity_count, "emitted reconcile_completed event");
-            }
-            Err(e) => {
-                tracing::error!(error = ?e, "failed to append reconcile_completed event");
-            }
-        }
-    }
-}
-
 pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
     config: NodeRunnerConfig,
     db: DBService,
@@ -1253,6 +1198,60 @@ pub fn spawn_node_runner<C: ContainerService + Sync + Send + 'static>(
     });
 
     Some(context)
+}
+
+/// Tracks hive connectivity state transitions and emits events only on actual transitions.
+struct ConnectivityJournal {
+    was_connected: bool,
+}
+
+impl ConnectivityJournal {
+    /// Emit hive_connected event ONLY on a false→true edge.
+    async fn on_connected(&mut self, pool: &SqlitePool) {
+        if !self.was_connected {
+            let event = NodeEvent::HiveConnected {};
+            match db::models::event_journal::append(pool, &event).await {
+                Ok(_) => {
+                    tracing::debug!("emitted hive_connected event");
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "failed to append hive_connected event");
+                }
+            }
+            self.was_connected = true;
+        }
+    }
+
+    /// Emit hive_disconnected event ONLY on a true→false edge.
+    async fn on_disconnected(&mut self, pool: &SqlitePool, reason: &str) {
+        if self.was_connected {
+            let event = NodeEvent::HiveDisconnected {
+                reason: reason.to_string(),
+            };
+            match db::models::event_journal::append(pool, &event).await {
+                Ok(_) => {
+                    tracing::debug!(reason = %reason, "emitted hive_disconnected event");
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "failed to append hive_disconnected event");
+                }
+            }
+            self.was_connected = false;
+        }
+    }
+
+    /// Emit reconcile_completed event unconditionally (it is an occurrence, not a level).
+    async fn on_reconcile_completed(&self, pool: &SqlitePool, entity_count: i64) {
+        let event = NodeEvent::ReconcileCompleted { entity_count };
+        match db::models::event_journal::append(pool, &event).await {
+            Ok(_) => {
+                tracing::debug!(entity_count = %entity_count, "emitted reconcile_completed event");
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, "failed to append reconcile_completed event");
+            }
+        }
+    }
 }
 
 /// Map a db `OutboxOp` row into the WS `OutboxOp` wire shape for a digest heal re-stream.
@@ -2686,10 +2685,15 @@ mod connectivity_event_tests {
             1,
             "expected exactly one reconcile_completed event"
         );
+        // Parse the payload as JSON and assert the entity_count FIELD, not a substring:
+        // `payload.contains("3")` also passes for 13, 30 and 300 (panel A, 2026-08-16).
         let payload = &rows[0].0;
-        assert!(
-            payload.contains("3"),
-            "expected entity_count=3 in payload, got: {}",
+        let parsed: serde_json::Value =
+            serde_json::from_str(payload).expect("payload must parse as JSON");
+        assert_eq!(
+            parsed.get("entity_count").and_then(|v| v.as_i64()),
+            Some(3),
+            "expected entity_count field to equal 3 exactly, got: {}",
             payload
         );
     }
@@ -2716,16 +2720,15 @@ mod connectivity_event_tests {
 
         assert_eq!(rows.len(), 4, "expected 4 total events");
 
-        // Verify sequence: first disconnect → connected → reconcile completed
-        // Skip to find the disconnect (ignore boot-true edge)
-        let mut seq_iter = rows.iter().map(|(seq, _)| seq);
-        let disconnect_seq = seq_iter.next().expect("should have disconnect");
-        let connected_seq = seq_iter.next().expect("should have connected");
-        let reconcile_seq = seq_iter.next().expect("should have reconcile");
-
-        assert!(
-            disconnect_seq < connected_seq && connected_seq < reconcile_seq,
-            "events should be in strictly increasing seq order"
+        // SC3 requires the ORDER of the EVENT TYPES. Index 0 is the boot false→true
+        // `hive_connected` edge; the window [1..4] is the transition sequence under test.
+        // (Comparing seq values from an `ORDER BY seq` query is a tautology — panel A, 2026-08-16.)
+        let types: Vec<&str> = rows.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(
+            &types[1..4],
+            ["hive_disconnected", "hive_connected", "reconcile_completed"],
+            "connectivity events must be journalled in transition order, got: {:?}",
+            types
         );
     }
 
@@ -2794,6 +2797,88 @@ mod connectivity_event_tests {
         assert!(
             payload.contains("connection closed cleanly"),
             "expected clean close reason in payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_connected_emits_one_hive_connected() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
+        let mut connectivity = ConnectivityJournal {
+            was_connected: false,
+        };
+
+        // The connect edge fires once; a second Connected event is not a transition.
+        connectivity.on_connected(&pool).await;
+        connectivity.on_connected(&pool).await;
+
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT event_type FROM event_journal WHERE event_type = 'hive_connected' ORDER BY seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to query journal");
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "expected exactly one hive_connected event despite two calls"
+        );
+    }
+
+    #[tokio::test]
+    async fn flag_flips_even_when_append_errors() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
+        let mut connectivity = ConnectivityJournal {
+            was_connected: false,
+        };
+
+        // Fault-inject the journal append by hiding the table. Issued as a plain statement
+        // outside any transaction — chmod and pool-close inject nothing under sqlx.
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_hidden")
+            .execute(&pool)
+            .await
+            .expect("failed to hide event_journal");
+
+        // The append fails, but `was_connected` tracks the EVENT, not journal success.
+        connectivity.on_connected(&pool).await;
+
+        sqlx::query("ALTER TABLE event_journal_hidden RENAME TO event_journal")
+            .execute(&pool)
+            .await
+            .expect("failed to restore event_journal");
+
+        // The flag already flipped during the outage, so this is a non-edge: nothing is journalled.
+        connectivity.on_connected(&pool).await;
+
+        let connected = sqlx::query_as::<_, (String,)>(
+            "SELECT event_type FROM event_journal WHERE event_type = 'hive_connected' ORDER BY seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to query journal");
+
+        assert_eq!(
+            connected.len(),
+            0,
+            "expected zero hive_connected events: the flag flipped during the journal outage"
+        );
+
+        // The true→false edge is still live, proving the flag really holds `true`.
+        connectivity
+            .on_disconnected(&pool, "connection reset")
+            .await;
+
+        let disconnected = sqlx::query_as::<_, (String,)>(
+            "SELECT event_type FROM event_journal WHERE event_type = 'hive_disconnected' ORDER BY seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("failed to query journal");
+
+        assert_eq!(
+            disconnected.len(),
+            1,
+            "expected exactly one hive_disconnected event"
         );
     }
 }

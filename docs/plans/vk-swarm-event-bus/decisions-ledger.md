@@ -6491,3 +6491,101 @@ payload assertion from opposite remits; no conflicting remediations this time (u
 **Attempt 2 dispatched** with all corrections dictated in the task file ("Attempt 2 corrections"):
 tests 3/4 rewritten, tests 7/8 added, struct relocation, ledger corrections (a)-(c). No production
 logic changes. Ladder rung: codex-rescue probed first; opus on unavailability (logged, not silent).
+
+## Task 008 attempt 2 (2026-08-16)
+
+Tests, docs and placement only. No production logic changed: `ConnectivityJournal`'s bodies, the
+loop arms, `sync_remote_projects` and `hive_client.rs` are untouched
+(`git diff 0695054e -- crates/services/src/services/hive_client.rs` is EMPTY, verified before
+commit).
+
+**Corrections to the attempt-1 entry above (appended, never edited, per the task's item 5):**
+
+(a) **"verify transitions, ordering, idempotence" overclaimed.** Attempt 1's "Tests pass" paragraph
+claims the six colocated tests verify ordering. They did not: `connectivity_events_are_ordered`
+asserted seq inequalities over an `ORDER BY seq` query — a tautology that cannot fail — and the
+comment "Skip to find the disconnect (ignore boot-true edge)" described a skip the code never
+performed (the variable named `disconnect_seq` bound the boot `hive_connected` row). Nothing about
+ordering was pinned until attempt 2. SC3 is this task's covered criterion, so the claim was the
+load-bearing one.
+
+(b) **`clean_close_emits_disconnected` does not "prove" the `hive_client.rs` addition.** That test
+constructs `ConnectivityJournal` directly and executes ZERO lines of `hive_client.rs`; it pins only
+the gate's handling of a disconnect whose reason happens to be the clean-close string. The one-line
+`event_tx.send` addition has no colocated test (driving it needs a real WS session) — it is proven
+at the seam by task 015 and live by task 012's SC3 check, which is the wording the task originally
+dictated.
+
+(c) **"both call sites use `if let Err(e)`" is wrong for the Connected arm.** Attempt 1's "No STOP
+triggers fired" paragraph says the `sync_remote_projects` signature change is backward-compatible
+because both call sites use `if let Err(e) = …`. Attempt 1 itself restructured the Connected-arm
+call site to a `match` (as step 3 dictates, to capture `Ok(n)`), so only the digest-heal caller
+(`:1159` pre-change) still uses `if let Err(e)`. The conclusion (heal caller needs no edit) stands;
+the stated reason did not describe the code attempt 1 had just written.
+
+**What attempt 2 changed (all five dictated items):**
+
+1. **Test 4 rewritten** to the dictated event-type window: it now selects `(seq, event_type)`
+   ordered by seq and asserts
+   `assert_eq!(&types[1..4], ["hive_disconnected", "hive_connected", "reconcile_completed"])`,
+   with the row-count assert kept ahead of it so a wrong count fails before the slice index. The
+   misleading "skip" comment is gone, replaced by one recording that index 0 is the boot edge.
+2. **Test 3 rewritten** to parse the payload with `serde_json::from_str` and assert
+   `parsed.get("entity_count").and_then(|v| v.as_i64()) == Some(3)`. The substring form is gone.
+3. **Tests 7 and 8 added.** `repeated_connected_emits_one_hive_connected` (two consecutive
+   `on_connected`, exactly one row) and `flag_flips_even_when_append_errors` (fault-inject by
+   `ALTER TABLE event_journal RENAME TO event_journal_hidden`, issued as a plain statement on the
+   pool OUTSIDE any transaction; `on_connected` during the outage; rename BACK; second
+   `on_connected` must journal nothing; then `on_disconnected` must journal exactly one row).
+   All assertions are filtered-count form — never `is_empty()`.
+4. **`ConnectivityJournal` relocated** to below the closing brace of `spawn_node_runner`, so that
+   function's original doc block sits directly above `pub fn spawn_node_runner` again and the
+   struct carries only its own one-line doc comment. Verified as a pure move: the removal hunk's
+   `-` lines and the addition hunk's `+` lines differ by exactly one line — the stray `///`
+   continuation attempt 1 had spliced into the function's doc block. The insertion was anchored on
+   the text spanning `Some(context) }` and the `Map a db OutboxOp row` doc line so the move could
+   not re-create the same hijack on `restream_row_to_ws_op`; its doc block is confirmed still
+   directly above `fn restream_row_to_ws_op`. The doc block above `pub fn spawn_node_runner` now
+   matches `0695054e^` byte for byte.
+5. This ledger entry.
+
+**Mutation evidence (run this session, each mutation reverted by inverse edit — no
+checkout/restore/stash was used at any point; the post-revert `git diff` was byte-compared against
+the pre-mutation diff and is identical):**
+
+- `!self.was_connected` → `true` in `on_connected`: tests 7 AND 8 fail (7: `left: 2, right: 1`;
+  8: `left: 1, right: 0`). Under attempt 1's six tests this mutation survived — panel A's finding
+  is now pinned from both edges.
+- `was_connected = true` moved inside the `Ok(_)` arm (flag-only-on-journal-success): test 8 fails
+  (`left: 1, right: 0`); the other seven pass. The dictated
+  flag-tracks-the-EVENT-not-journal-success invariant is now the only thing holding that test up.
+- `entity_count * 10` in `on_reconcile_completed`: test 3 fails with
+  `left: Some(30), right: Some(3)` on payload `{"type":"reconcile_completed","entity_count":30}` —
+  exactly the value attempt 1's `payload.contains("3")` would have accepted.
+- `on_disconnected` appending `HiveConnected {}`: test 4 fails on the type window
+  (`got: ["hive_connected", "hive_connected", "hive_connected", "reconcile_completed"]`),
+  demonstrating the rewritten assertion reads real event types rather than re-checking `ORDER BY`.
+
+**Verification (all green, this working tree, before commit):**
+
+- `cargo fmt --all -- --check` → exit 0.
+- `cargo check --workspace` → exit 0, "Finished dev profile ... in 11.57s".
+- `cargo test -p services --lib` → `test result: ok. 287 passed; 0 failed; 5 ignored; 0 measured;
+  0 filtered out; finished in 12.19s` (attempt 1's baseline was 285; +2 = tests 7 and 8).
+- `cargo test -p services --lib connectivity_event_tests` → `8 passed; 0 failed`.
+- `cargo clippy -p services --all-targets --all-features -- -D warnings` → exit 0.
+- `git diff 0695054e -- crates/services/src/services/hive_client.rs` → empty.
+
+**Notes for the record.** `event_journal` has no views, triggers or foreign-key references
+(`grep -rn "REFERENCES event_journal" crates/db/migrations/` is empty), so the rename fault
+injection in test 8 is self-contained and its rename-back restores the schema exactly; the pool's
+other connections observe the DDL because it lands in the database file, and SQLite re-prepares the
+cached INSERT after the schema change. `create_test_pool` copies the migrated template into a
+per-call `TempDir` (`crates/db/src/test_utils.rs:68-78`), so test 8's DDL cannot leak into a
+concurrently running sibling test. The doc-block restoration was verified mechanically, not by eye:
+the block from "Spawn the node runner event loop." through `pub fn spawn_node_runner` diffs empty
+against `0695054e^`. The one remaining line-number offset versus `0695054e^` in this region is
+attempt 1's own `event::NodeEvent` import, which rustfmt rewrapped in the `db::models::{…}` group
+(`node_runner.rs:12-13`) — attempt 2's diff contains no hunk there. The live SC3 check dictated under "Manual verification"
+remains outstanding for this task — it needs a running node with a reachable hive and was not
+performed in this worktree.
