@@ -7511,3 +7511,20 @@ All six tests green (1, 1b, 1c, 2, 4, 5). Connectivity delegation documented in 
 - Execution process lifecycle (attempt_started, attempt_finished/failed)
 - Regression guard (no duplicates per site)
 - Round-trip validation (event_type() matches stored event_type for all payloads)
+
+## Task 015 panel remediation (2026-08-16)
+
+**Corrections:**
+1. Coverage scope clarified: suite drives ONLY (Completed, Some(0)) exit → `attempt_finished` covered HERE; `attempt_failed` branches pinned by task 007's colocated tests (panel ran them red under forced-AttemptFinished mutation: 3 failures). Removed overstated coverage implication.
+
+**Panel scope record (for future readers):**
+- Test 4 (regression guard): COUNT-DELTA ONLY; typed enum coverage lives in tests 1/1b/1c/2
+- Test 2 payload validation: `update_status` fields pinned by task 006's colocated tests, NOT parsed here
+- Test 5 round-trip: pins `append()-bypass` (two different code paths calling append), not `event_type()`-literal drift (literal pinned by event.rs's own property tests)
+- seq > COUNT scoping: VALID only on fresh per-test DBs (journal assumed never compacted in test environment)
+- Staged files note: `.wai-task-base` was UNTRACKED (not committed); commit contains suite + ledger only
+
+**Fixes applied:**
+1. Test 2 (~:564): Added `else { panic!("failed to parse payload JSON") }` — silent skip replaced with hard fail
+2. Test 1 phase labels: Relabeled "Test 1a/1b/1c" → "phase 1/2/3: create/status/delete" to avoid collision with task's 1b/1c test names
+3. Ledger: Recorded panel's scope boundaries and corrections above

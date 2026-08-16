@@ -49,7 +49,7 @@ async fn task_crud_emits_exactly_one_event_each() {
         .await
         .unwrap();
 
-    // Test 1a: Task::create emits exactly one TaskCreated
+    // Phase 1: Task::create emits exactly one TaskCreated
     let task_id = Uuid::new_v4();
     let create_data = CreateTask {
         project_id,
@@ -86,7 +86,7 @@ async fn task_crud_emits_exactly_one_event_each() {
 
     let before_status_change_count = after_create_count;
 
-    // Test 1b: Task::update_status to a new status emits exactly one TaskStatusChanged
+    // Phase 2: Task::update_status to a new status emits exactly one TaskStatusChanged
     Task::update_status(&pool, task.id, TaskStatus::InProgress)
         .await
         .expect("update_status failed");
@@ -117,7 +117,7 @@ async fn task_crud_emits_exactly_one_event_each() {
 
     let before_delete_count = after_status_change_count;
 
-    // Test 1c: Task::delete emits exactly one TaskDeleted
+    // Phase 3: Task::delete emits exactly one TaskDeleted
     Task::delete(&pool, task.id).await.expect("delete failed");
 
     let after_delete_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM event_journal")
@@ -567,6 +567,8 @@ async fn attempt_lifecycle_emits_exactly_one_event_each() {
             .and_then(|v| v.as_i64())
             .expect("exit_code");
         assert_eq!(exit_code, 0, "exit_code should be 0");
+    } else {
+        panic!("failed to parse payload JSON");
     }
 }
 
