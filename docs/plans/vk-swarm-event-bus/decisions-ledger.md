@@ -7205,3 +7205,110 @@ resolved in the safe direction; task 023 aligns the 006 siblings to the IMMEDIAT
 
 Backlog: F-2026-08-16-03 filed for the pre-existing dead version-guard arm (panel A note).
 Board: 14/23 passed. Next: 023, then 021, then 015.
+
+## Task 023 implementation (attempt 1, 2026-08-16)
+
+### Pre-conversion observations
+
+Tests written to detect SQLITE_BUSY_SNAPSHOT (517) class errors on the two 006-instrumented functions 
+under concurrent load.
+
+Test 1: `concurrent_updates_serialize_without_errors` (queries.rs) — one task, 16 concurrent 
+`Task::update` calls against it with distinct titles but SAME status (Todo); pool.begin() still active.
+
+4-run pre-conversion behavior (pool.begin()):
+```
+run 1: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 10 error(s): code 5 (×4), code 517 (×3), code 5 (×3)
+run 2: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 11 error(s): code 517 (×5), code 5 (×6)
+run 3: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 11 error(s): code 5 (×6), code 517 (×3), code 5 (×2)
+run 4: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 11 error(s): code 517 (×2), code 5 (×9)
+```
+Summary: **4/4 red** with database-locked errors (code 5 and 517), as expected for the deferred-transaction 
+read-snapshot defect.
+
+Test 2: `concurrent_status_updates_serialize_without_errors` (hierarchy.rs) — one task, 16 concurrent 
+`Task::update_status` calls alternating two statuses; pool.begin() still active.
+
+4-run pre-conversion behavior (pool.begin()):
+```
+run 1: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 10 error(s): all code 5
+run 2: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 9 error(s): code 5 (×6), code 517 (×3)
+run 3: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 12 error(s): code 5 (×6), code 517 (×4), code 5 (×2)
+run 4: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 10 error(s): code 5 (×7), code 517 (×3)
+```
+Summary: **4/4 red** with database-locked errors (code 5 and 517), as expected for the deferred-transaction 
+read-snapshot defect.
+
+### Change applied
+
+- `crates/db/src/models/task/queries.rs:336` → `pool.begin_with("BEGIN IMMEDIATE").await?` with comment explaining 
+  SQLITE_BUSY_SNAPSHOT (517) avoidance (task 023).
+- `crates/db/src/models/task/hierarchy.rs:39` → `pool.begin_with("BEGIN IMMEDIATE").await?` with comment explaining 
+  SQLITE_BUSY_SNAPSHOT (517) avoidance (task 023).
+
+No other changes to either function: SELECT-then-UPDATE body preserved, emission logic preserved, 
+Task::create and Task::delete untouched, sync.rs untouched.
+
+### Post-conversion verification
+
+Test 1: concurrent_updates_serialize_without_errors (queries.rs) — pool.begin_with("BEGIN IMMEDIATE") active.
+
+4-run post-conversion behavior:
+```
+run 1: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.20s
+run 2: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.25s
+run 3: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.22s
+run 4: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.29s
+```
+Summary: **4/4 green**. All concurrent updates serialize without error.
+
+Test 2: concurrent_status_updates_serialize_without_errors (hierarchy.rs) — pool.begin_with("BEGIN IMMEDIATE") active.
+
+4-run post-conversion behavior:
+```
+run 1: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.21s
+run 2: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.21s
+run 3: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.20s
+run 4: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.21s
+```
+Summary: **4/4 green**. All concurrent status updates serialize without error.
+
+### Shared discipline note
+
+Three sites now share one transaction discipline: IMMEDIATE begin, read probe, write, append, commit:
+1. `Task::upsert_remote_task` (sync.rs:300) — task 022, shipped in attempt 2 (aaa97ad1)
+2. `Task::update` (queries.rs:336) — task 023, this entry
+3. `Task::update_status` (hierarchy.rs:39) — task 023, this entry
+
+BEGIN IMMEDIATE takes SQLite's RESERVED (write) lock at BEGIN, so the transaction never holds a read 
+snapshot it must later upgrade. The SQLITE_BUSY_SNAPSHOT (517) class that a deferred SELECT-first 
+transaction earns is structurally gone; contention surfaces at BEGIN as plain SQLITE_BUSY (code 5), 
+which the busy_timeout handler retries.
+
+### Undictated choices
+
+None. The task file's "Change" section was followed exactly: two pool.begin() → pool.begin_with("BEGIN 
+IMMEDIATE") conversions with explanatory comments, mirroring task 022's comment style; two regression 
+tests written (Test 1 and Test 2 above), run 4/4 times pre and post conversion; zero other touches to 
+either function or related code.
+
+### QA gate passed
+
+```
+cargo fmt --all -- --check; echo EXIT=$?
+  EXIT=0
+
+cargo check --workspace --all-targets
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 51s
+
+cargo test -p db
+  test result: ok. 276 passed; 0 failed; 7 ignored; 0 measured
+
+cargo clippy -p db --all-targets -- -D warnings; echo EXIT=$?
+  EXIT=0
+
+git diff --name-only
+  crates/db/src/models/task/hierarchy.rs
+  crates/db/src/models/task/queries.rs
+```
+All verification steps pass. Two source files changed, no others.

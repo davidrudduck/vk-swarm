@@ -333,7 +333,11 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         status: TaskStatus,
         parent_task_id: Option<Uuid>,
     ) -> Result<Self, sqlx::Error> {
-        let mut tx = pool.begin().await?;
+        // BEGIN IMMEDIATE takes SQLite's RESERVED (write) lock at BEGIN, so this transaction never
+        // holds a read snapshot it must later upgrade — the SQLITE_BUSY_SNAPSHOT (517) class that a
+        // deferred SELECT-first transaction earns is structurally gone, and contention surfaces at
+        // BEGIN as plain SQLITE_BUSY, which busy_timeout retries (task 023).
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
         // Read the prior status INSIDE the transaction — reading it before begin() (or via a
         // separate pool connection) would race a concurrent writer and could report a stale
@@ -833,6 +837,8 @@ mod lifecycle_event_tests {
     use super::*;
     use crate::models::activity_dismissal::ActivityDismissal;
     use crate::models::event::NodeEvent;
+    use crate::models::project::{CreateProject, Project};
+    use crate::models::task::tests::setup_test_pool;
     use crate::test_utils::create_test_pool_with_migrations;
 
     async fn seed_project(pool: &SqlitePool) -> Uuid {
@@ -1644,6 +1650,94 @@ mod lifecycle_event_tests {
         assert!(
             read_journal_rows(&pool).await.is_empty(),
             "no-op delete must journal nothing"
+        );
+    }
+
+    /// Regression guard for the SQLITE_BUSY_SNAPSHOT (517) class: if the transaction is ever
+    /// reverted to a deferred `begin()` with a read as its first statement, concurrent updates
+    /// on the same row take a read snapshot and fail to upgrade. Only concurrency surfaces that.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_updates_serialize_without_errors() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
+
+        let task_id = Uuid::new_v4();
+        let task_data =
+            CreateTask::from_title_description(project_id, "Initial Title".to_string(), None);
+        Task::create(&pool, &task_data, task_id).await.unwrap();
+
+        // 16 concurrent updates of the SAME task, each with a distinct title but SAME status
+        let mut handles = Vec::new();
+        for version in 1..=16i64 {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                Task::update(
+                    &pool,
+                    task_id,
+                    project_id,
+                    format!("Task Title v{}", version),
+                    None,
+                    TaskStatus::Todo,
+                    None,
+                )
+                .await
+            }));
+        }
+
+        let mut errors: Vec<String> = Vec::new();
+        for handle in handles {
+            match handle.await.expect("update task panicked") {
+                Ok(_) => {}
+                Err(e) => errors.push(format!("{:?}", e)),
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "all concurrent updates must succeed, got {} error(s): {:?}",
+            errors.len(),
+            errors
+        );
+
+        // Since status is unchanged (all updates set status to Todo, which is the initial status),
+        // zero task_status_changed events should be emitted.
+        let status_change_events: Vec<(String,)> = sqlx::query_as(
+            "SELECT event_type FROM event_journal WHERE event_type = 'task_status_changed'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            status_change_events.len(),
+            0,
+            "no status changes so zero task_status_changed rows expected"
+        );
+
+        // Verify the final title is one of the 16 written values
+        let final_task = Task::find_by_id(&pool, task_id)
+            .await
+            .unwrap()
+            .expect("task should exist");
+        let title_numbers: Vec<i64> = (1..=16).collect();
+        let is_valid_title = title_numbers
+            .iter()
+            .any(|n| final_task.title == format!("Task Title v{}", n));
+        assert!(
+            is_valid_title,
+            "final title should be one of the 16 written titles, got: {}",
+            final_task.title
         );
     }
 }
