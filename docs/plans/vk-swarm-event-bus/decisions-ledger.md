@@ -6397,3 +6397,49 @@ that was previously absent; the addition is proven at the seam by task 015 and l
 **No STOP triggers fired.** All line numbers and anchors matched. `sync_remote_projects` signature
 change is backward-compatible at both call sites (both use `if let Err(e) = …` pattern unaffected
 by `Ok` type). Digest-heal caller at `:1159` left untouched per the task's explicit instruction.
+
+## Spec amendment 3 — full-invariant coverage (2026-08-16, orchestrator, spec-owner decided)
+
+The spec owner asked for a 10,000-ft review of the workstream against its outcome (umbrella
+refactor-SC4: a bus downstream triggers can rely on). Analysis surfaced that the plan's emission
+sites were enumeration-derived, and enumeration had already failed three times this session.
+Options presented with outcomes (full invariant / guard-only / as-specced); owner chose
+**full invariant**.
+
+**The enumeration sequence, recorded honestly.** My first framing named "two sync sites"
+(sync.rs:32, :283). A complete grep grew that to four (adding the two DELETE fns) — and my first
+DRAFT of the spec amendment listed all four as emission sites. Caller analysis then inverted it
+again: `sync_from_shared_task` has ZERO callers, both DELETE fns have test-only callers
+(production hive deletion soft-unlinks per ADR-0007, processor.rs:436-444), and the single LIVE
+gap is `Task::upsert_remote_task` — whose callers include the remote-task ROUTES
+(remote.rs:82/165/369, status.rs:62/129/393), i.e. user-driven status changes on remote-project
+tasks, not just background sync. That is enumeration failure #4 of the session (filtered grep,
+truncated grep, partial-view caller model, and now sites-without-callers), and it happened INSIDE
+the amendment that exists to fix enumeration failures. The spec was corrected to the
+caller-verified facts before anything was committed; the conformance guard is the mechanical
+answer to this failure class.
+
+**Actions taken:**
+- Spec amended (SC1 origin clause, Design sites + "Coverage invariant" section, D12, TS3
+  broadened, amendment history); re-frozen twice via wai-precheck (final spec_sha=ac39e784).
+  Anchor check suppressed for the known truncated-prefix false positive (upstream issue #86) —
+  all six flagged paths hand-verified present on main under their full prefixes first.
+- Task 022 authored: instrument `upsert_remote_task` with a race-free created/status-changed
+  discrimination — self-assignment `UPDATE ... RETURNING id, status` probe as the transaction's
+  FIRST statement (a write, so no read-snapshot upgrade; the read-then-upgrade shape has bitten
+  twice and is explicitly forbidden in the task text). Dirty-guard reads stay on the pool.
+- Task 021 authored: the conformance guard, `crates/db/tests/emission_conformance.rs` — counts all
+  six lifecycle-write patterns across production `crates/**` with dictated test-region stripping
+  (`#[cfg(test)]` + `mod` lookahead, because item-level cfg(test) attributes exist, e.g.
+  local-deployment/container.rs:108), compared against a classification table enumerated and
+  caller-verified 2026-08-16. Mutation check dictated (temporary archive.rs write must fail the
+  guard).
+- plan.md table + 015 deps updated (015 now depends on 022); plan-lint PASS. Lint W: on 021's
+  sibling `crates/db/tests/bulk_operations.rs` acknowledged here: it is a DB-fixture behaviour
+  suite, not a pattern sibling of a filesystem-scanning architecture test — no conventions to
+  inherit. (Same-run note: the lint confirmed 015 creates `crates/services/tests/event_emission.rs`,
+  which is where task 008's phantom `--test event_emission` gate command came from — 008 runs
+  before 015, so the `--lib` correction stands.)
+- Backlog rows filed: F-2026-08-16-01 (dead sync fns removal) and F-2026-08-16-02
+  (reconcile_completed entity_count=0 ambiguity — discharges the backlog obligation task 008
+  step 4 assigns to the orchestrator).
