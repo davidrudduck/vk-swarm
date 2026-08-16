@@ -6589,3 +6589,29 @@ attempt 1's own `event::NodeEvent` import, which rustfmt rewrapped in the `db::m
 (`node_runner.rs:12-13`) — attempt 2's diff contains no hunk there. The live SC3 check dictated under "Manual verification"
 remains outstanding for this task — it needs a running node with a reachable hive and was not
 performed in this worktree.
+
+## Task 008 PASSED (2026-08-16, orchestrator)
+
+Attempt 2 (commit `988284a6`) gated CONFORMS (file-set 2 paths, typecheck exit 0, crates/services
+green — 287 tests, 8/8 connectivity). Passed WITHOUT a third panel, same justification class as
+task 007 attempt 4, strengthened: every correction was dictated by panel A with the exact
+assertion pre-verified against production, the implementer supplied mutation evidence for all four
+target mutations (guard deletion, flag-only-on-Ok, entity_count*10, wrong event type — each fails
+exactly the test built to catch it), and the orchestrator independently re-verified the diff shape
+(five hunks: one pure-move pair differing by exactly the stray `///`, three test-module hunks),
+the doc-block restoration above `pub fn spawn_node_runner`, both rewritten assertions, and
+`git diff 0695054e -- hive_client.rs` empty.
+
+Score for the two-panel rule on this task: attempt 1's single BLOCKING (tautological ordering
+assertion) came from panel A's remit; panel B's remit surfaced the stale-non-zero entity_count
+spec gap. Neither panel duplicated the other's work; both independently converged on the two
+shared-boundary minors (doc hijack, weak payload assertion). Three of the surviving findings were
+TASK-attributed (my six-test list lacked the connect-edge and append-error pins; my worked
+example let the ordering assertion be written as a tautology) — consistent with 007's pattern that
+the task author is a co-equal defect source.
+
+Outstanding, carried to run close (recorded, not deferred silently): the live SC3 sqlite3 check
+(needs a deployed node + reachable hive — task 012 / Deploy verification), and the seam proof of
+the hive_client one-liner (task 015).
+
+Board: 12/22 passed. Next ready in phase 3: 020, then 022, then 021, then 015.

@@ -2,7 +2,7 @@
 id: "008"
 phase: 3
 title: "Emit hive connectivity events from the node_runner event loop"
-status: ready
+status: passed
 depends_on: ["007"]
 parallel: false
 conflicts_with: []
