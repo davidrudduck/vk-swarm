@@ -8,7 +8,21 @@ use super::{
     BreakdownStatus, ProposalItemInput, TaskBreakdownProposal, TaskBreakdownProposalItem,
     TaskDependency,
 };
+use crate::models::event::NodeEvent;
+use crate::models::event_journal::{self, EventJournalError};
 use crate::models::task::{Task, TaskStatus};
+
+/// Map a journal-append failure onto `sqlx::Error` so the acceptance function maintains
+/// its pre-existing `Result<_, sqlx::Error>` signature. `Database` unwraps directly; `Serde`
+/// (payload serialization) has no sqlx::Error analogue, so it is reported via `Protocol`.
+fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
+    match e {
+        EventJournalError::Database(err) => err,
+        EventJournalError::Serde(err) => {
+            sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
+        }
+    }
+}
 
 /// Insert a new draft proposal for a task.
 pub async fn create(
@@ -446,6 +460,18 @@ pub async fn accept_proposal(
         )
         .execute(&mut *tx)
         .await?;
+
+        // Event journal append: one TaskCreated per child (errors propagated — aborts accept).
+        // This matches the same shape Task::create uses for directly-created tasks: same event
+        // construction, same field sourcing (task.id, parent.project_id). To a consumer, a task
+        // from breakdown acceptance is indistinguishable from one created via Task::create.
+        let event = NodeEvent::TaskCreated {
+            task_id: task.id,
+            project_id: parent.project_id,
+        };
+        event_journal::append(&mut *tx, &event)
+            .await
+            .map_err(journal_err_to_sqlx)?;
 
         item_to_task.insert(item.id, task.id);
         created_tasks.push(task);

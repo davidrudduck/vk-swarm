@@ -6615,3 +6615,15 @@ Outstanding, carried to run close (recorded, not deferred silently): the live SC
 the hive_client one-liner (task 015).
 
 Board: 12/22 passed. Next ready in phase 3: 020, then 022, then 021, then 015.
+
+## Task 020 implementation (attempt 1, 2026-08-16)
+
+**SECONDARY Fix 2 residency note:** The "one-shot publisher" mutation class (publishes the first
+row it ever tails, then never again, cursor still advancing) was caught by test 1 in task 019's
+pre-restructure shape (2/2 kills) and is now missed by test 1 in the post-restructure shape
+(passes instantly). Suite coverage is retained — test 2 still catches it (timed out while waiting
+for seq 4 in the first assertion). This residency is deliberate: test 1 focuses on the immediate
+tailing behavior (emit-immediately on subscribe), and test 2 covers the cursor-advancement
+invariant (no stuck-cursor regressions). A reader of `event_bus_end_to_end.rs` should not assume
+test 1 is strictly stronger than its predecessors; both tests are required for full mutation
+coverage.

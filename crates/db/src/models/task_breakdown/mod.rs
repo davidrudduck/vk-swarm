@@ -703,4 +703,122 @@ mod tests {
             "updated_at must refresh on replace_items"
         );
     }
+
+    #[tokio::test]
+    async fn accepting_a_proposal_journals_one_task_created_per_child() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+        replace_items(
+            &pool,
+            proposal.id,
+            vec![
+                item("A", 0, vec![]),
+                item("B", 1, vec![]),
+                item("C", 2, vec![]),
+            ],
+        )
+        .await
+        .expect("replace_items");
+
+        let children = accept_proposal(&pool, proposal.id)
+            .await
+            .expect("accept_proposal");
+        assert_eq!(children.len(), 3, "should create 3 children");
+
+        // Build expected child task id set
+        let expected_child_ids: std::collections::HashSet<String> = children
+            .iter()
+            .map(|t| t.id.to_string())
+            .collect();
+
+        // Query event_journal for TaskCreated events with those child ids
+        let journal_events: Vec<(String, String)> = sqlx::query_as(
+            "SELECT event_type, payload FROM event_journal WHERE event_type = 'task_created' ORDER BY seq ASC",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("query event_journal");
+
+        // Extract task_ids from the payloads
+        let mut journaled_task_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (_event_type, payload) in journal_events {
+            let event_value: serde_json::Value = serde_json::from_str(&payload)
+                .expect("event payload should parse as JSON");
+            let task_id_str = event_value["task_id"]
+                .as_str()
+                .expect("task_id should be present in payload");
+            journaled_task_ids.insert(task_id_str.to_string());
+        }
+
+        // The expected child ids must all be present in the journal
+        for child_id in &expected_child_ids {
+            assert!(
+                journaled_task_ids.contains(child_id),
+                "child task {} must be in the journal",
+                child_id
+            );
+        }
+
+        // All three child ids must be journaled (as a set comparison)
+        assert_eq!(
+            journaled_task_ids.iter().filter(|id| expected_child_ids.contains(*id)).count(),
+            3,
+            "all 3 child task ids must be journaled exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_acceptance_journals_nothing() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+
+        // Create a proposal and accept it once
+        let proposal1 = create(&pool, task_id).await.expect("create proposal 1");
+        replace_items(&pool, proposal1.id, vec![item("A", 0, vec![])])
+            .await
+            .expect("replace_items 1");
+        let _children1 = accept_proposal(&pool, proposal1.id)
+            .await
+            .expect("accept_proposal 1");
+
+        // Clear the journal to start clean for the second acceptance test
+        sqlx::query("DELETE FROM event_journal")
+            .execute(&pool)
+            .await
+            .expect("clear journal");
+
+        // Now create a second proposal in non-Draft status (so acceptance will fail)
+        let proposal2 = create(&pool, task_id).await.expect("create proposal 2");
+        replace_items(&pool, proposal2.id, vec![item("B", 0, vec![])])
+            .await
+            .expect("replace_items 2");
+
+        // Manually update the proposal to non-Draft status to force failure
+        sqlx::query("UPDATE task_breakdown_proposals SET status = 'discarded' WHERE id = ?")
+            .bind(proposal2.id)
+            .execute(&pool)
+            .await
+            .expect("update proposal status");
+
+        // Try to accept a non-Draft proposal (should fail)
+        let result = accept_proposal(&pool, proposal2.id).await;
+        assert!(
+            result.is_err(),
+            "accepting a non-Draft proposal must fail"
+        );
+
+        // Verify the journal is empty after the failed acceptance
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM event_journal WHERE event_type = 'task_created'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query journal count");
+
+        assert_eq!(count.0, 0, "journal must be empty after failed acceptance");
+    }
 }

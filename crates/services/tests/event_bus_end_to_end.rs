@@ -177,8 +177,10 @@ fn assert_task_created_body(
 
 /// A committed row reaches a subscriber that is already live (subscribed before the commit).
 ///
-/// The warm-up commit/receive pair is not part of the property under test — it exists solely to
-/// provably exhaust `subscribe_from`'s one-time journal replay window (see the file header)
+/// The warm-up commit/receive pair is not part of the property under test — it exists to
+/// provably exhaust `subscribe_from`'s one-time journal replay window (see the file header) AND
+/// to give the tailer a non-zero initial mark, ensuring the row under test is the FIRST row it
+/// must ever publish (see task 019)
 /// before the row under test is committed, so that row is GUARANTEED to travel
 /// `commit -> tailer -> broadcast -> subscribe_from`'s live arm rather than
 /// `subscribe_from`'s own direct read, deterministically. The row itself is then a single
