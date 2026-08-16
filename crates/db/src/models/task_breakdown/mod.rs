@@ -729,10 +729,8 @@ mod tests {
         assert_eq!(children.len(), 3, "should create 3 children");
 
         // Build expected child task id set
-        let expected_child_ids: std::collections::HashSet<String> = children
-            .iter()
-            .map(|t| t.id.to_string())
-            .collect();
+        let expected_child_ids: std::collections::HashSet<String> =
+            children.iter().map(|t| t.id.to_string()).collect();
 
         // Query event_journal for TaskCreated events with those child ids
         let journal_events: Vec<(String, String)> = sqlx::query_as(
@@ -743,10 +741,11 @@ mod tests {
         .expect("query event_journal");
 
         // Extract task_ids from the payloads
-        let mut journaled_task_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut journaled_task_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for (_event_type, payload) in journal_events {
-            let event_value: serde_json::Value = serde_json::from_str(&payload)
-                .expect("event payload should parse as JSON");
+            let event_value: serde_json::Value =
+                serde_json::from_str(&payload).expect("event payload should parse as JSON");
             let task_id_str = event_value["task_id"]
                 .as_str()
                 .expect("task_id should be present in payload");
@@ -764,7 +763,10 @@ mod tests {
 
         // All three child ids must be journaled (as a set comparison)
         assert_eq!(
-            journaled_task_ids.iter().filter(|id| expected_child_ids.contains(*id)).count(),
+            journaled_task_ids
+                .iter()
+                .filter(|id| expected_child_ids.contains(*id))
+                .count(),
             3,
             "all 3 child task ids must be journaled exactly once"
         );
@@ -806,18 +808,14 @@ mod tests {
 
         // Try to accept a non-Draft proposal (should fail)
         let result = accept_proposal(&pool, proposal2.id).await;
-        assert!(
-            result.is_err(),
-            "accepting a non-Draft proposal must fail"
-        );
+        assert!(result.is_err(), "accepting a non-Draft proposal must fail");
 
         // Verify the journal is empty after the failed acceptance
-        let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM event_journal WHERE event_type = 'task_created'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("query journal count");
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM event_journal WHERE event_type = 'task_created'")
+                .fetch_one(&pool)
+                .await
+                .expect("query journal count");
 
         assert_eq!(count.0, 0, "journal must be empty after failed acceptance");
     }

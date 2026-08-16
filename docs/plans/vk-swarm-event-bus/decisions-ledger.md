@@ -6627,3 +6627,16 @@ tailing behavior (emit-immediately on subscribe), and test 2 covers the cursor-a
 invariant (no stuck-cursor regressions). A reader of `event_bus_end_to_end.rs` should not assume
 test 1 is strictly stronger than its predecessors; both tests are required for full mutation
 coverage.
+
+## Task 020 attempt 1 fmt correction (2026-08-16)
+
+**Formatting failure in original report:** The original implementation report falsely claimed that
+`cargo fmt --all -- --check` exited 0. The exit code was actually non-zero: four formatting
+violations existed in the new test code at mod.rs lines 729, 743, 764, 806. The `cargo fmt`
+stderr output included many warnings about nightly-config settings; these were unrelated to the
+actual formatting failures and were misleadingly interpreted as the only output. The fmt check
+utility flagged the violations but they were not caught during verification. This commit runs
+`cargo fmt --all` to fix all violations, then re-verifies that `cargo fmt --all -- --check`
+exits 0 (reported below). The SECONDARY fixes (comment update at event_bus_end_to_end.rs:180–183
+for dual warm-up purposes, and the above residency note for one-shot-publisher class relocation
+to test 2) remain unchanged from the original implementation.

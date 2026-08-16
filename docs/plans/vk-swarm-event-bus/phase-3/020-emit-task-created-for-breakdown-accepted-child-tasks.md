@@ -47,11 +47,22 @@ existing acceptance tests live — read them first and follow their setup.
    items, accept it, and assert `event_journal` contains exactly three `TaskCreated` rows whose
    `task_id`s are exactly the three returned child ids, as a SET. Not a count alone: a count passes
    if the same id is journaled three times.
-2. `a_failed_acceptance_journals_nothing` — force the acceptance to abort after at least one child
-   has been inserted (the existing outbox-serialisation error path, or a proposal whose status is
-   not `Draft`), and assert `event_journal` is empty. This is the journal-first property that makes
-   the whole design safe: the append rides the same transaction, so a rollback takes the events with
-   it.
+2. `a_failed_acceptance_journals_nothing` — force the acceptance to abort AFTER the children have
+   been inserted and their events APPENDED, and assert `event_journal` has zero `task_created`
+   rows. This is the journal-first property that makes the whole design safe: the append rides the
+   same transaction, so a rollback takes the events with it.
+   (Amended 2026-08-16: the original parenthetical offered "a proposal whose status is not Draft"
+   as a mechanism — that contradicts the main clause, because the status check fails BEFORE any
+   child insert, so the test never exercises the rollback property at all; the append could sit
+   entirely outside the transaction and still pass. Dictated mechanism instead: build a Draft
+   proposal whose items carry a dependency (e.g. B depends on A) so `accept_proposal`'s SECOND
+   pass must write `task_dependencies` (`queries.rs:480-516`) — which runs after the first pass
+   has inserted every child AND appended every event. Before accepting, issue
+   `ALTER TABLE task_dependencies RENAME TO task_dependencies_hidden` as a plain statement on the
+   pool outside any transaction. Accept → must Err. Rename the table BACK. Then assert BOTH:
+   `COUNT(*) FROM event_journal WHERE event_type = 'task_created'` == 0, AND
+   `COUNT(*) FROM tasks WHERE parent_task_id = ?` == 0 for the parent — the rollback removed the
+   children AND their journaled events together.)
 
 **Query the journal directly** (`SELECT ... FROM event_journal`) rather than subscribing to a bus.
 This task is about EMISSION; going through the tailer would make a publication bug look like an
