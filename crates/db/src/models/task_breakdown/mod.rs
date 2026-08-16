@@ -723,6 +723,12 @@ mod tests {
         .await
         .expect("replace_items");
 
+        // Clear the journal before accepting so we measure only the acceptance's events
+        sqlx::query("DELETE FROM event_journal")
+            .execute(&pool)
+            .await
+            .expect("clear journal");
+
         let children = accept_proposal(&pool, proposal.id)
             .await
             .expect("accept_proposal");
@@ -732,43 +738,38 @@ mod tests {
         let expected_child_ids: std::collections::HashSet<String> =
             children.iter().map(|t| t.id.to_string()).collect();
 
-        // Query event_journal for TaskCreated events with those child ids
-        let journal_events: Vec<(String, String)> = sqlx::query_as(
-            "SELECT event_type, payload FROM event_journal WHERE event_type = 'task_created' ORDER BY seq ASC",
+        // Query event_journal for TaskCreated events (filter to just task_created rows)
+        let journal_rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT seq, payload FROM event_journal WHERE event_type = 'task_created' ORDER BY seq ASC",
         )
         .fetch_all(&pool)
         .await
         .expect("query event_journal");
 
-        // Extract task_ids from the payloads
-        let mut journaled_task_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        for (_event_type, payload) in journal_events {
-            let event_value: serde_json::Value =
-                serde_json::from_str(&payload).expect("event payload should parse as JSON");
-            let task_id_str = event_value["task_id"]
-                .as_str()
-                .expect("task_id should be present in payload");
-            journaled_task_ids.insert(task_id_str.to_string());
-        }
-
-        // The expected child ids must all be present in the journal
-        for child_id in &expected_child_ids {
-            assert!(
-                journaled_task_ids.contains(child_id),
-                "child task {} must be in the journal",
-                child_id
-            );
-        }
-
-        // All three child ids must be journaled (as a set comparison)
+        // Assert exactly 3 TaskCreated rows (catches duplicate appends)
         assert_eq!(
-            journaled_task_ids
-                .iter()
-                .filter(|id| expected_child_ids.contains(*id))
-                .count(),
+            journal_rows.len(),
             3,
-            "all 3 child task ids must be journaled exactly once"
+            "event_journal must contain exactly 3 TaskCreated rows"
+        );
+
+        // Extract task_ids from the payloads into a HashSet
+        let journaled_task_ids: std::collections::HashSet<String> = journal_rows
+            .iter()
+            .map(|(_seq, payload)| {
+                let event_value: serde_json::Value =
+                    serde_json::from_str(payload).expect("event payload should parse as JSON");
+                event_value["task_id"]
+                    .as_str()
+                    .expect("task_id should be present in payload")
+                    .to_string()
+            })
+            .collect();
+
+        // Assert strict HashSet equality: journaled ids must match expected ids exactly
+        assert_eq!(
+            journaled_task_ids, expected_child_ids,
+            "journaled task_ids must be exactly the 3 child ids"
         );
     }
 
@@ -778,45 +779,67 @@ mod tests {
         let project_id = create_project(&pool).await;
         let task_id = create_task(&pool, project_id).await;
 
-        // Create a proposal and accept it once
-        let proposal1 = create(&pool, task_id).await.expect("create proposal 1");
-        replace_items(&pool, proposal1.id, vec![item("A", 0, vec![])])
-            .await
-            .expect("replace_items 1");
-        let _children1 = accept_proposal(&pool, proposal1.id)
-            .await
-            .expect("accept_proposal 1");
+        // Build a Draft proposal with a dependency: B depends on A.
+        // This forces accept_proposal's SECOND pass (task_dependencies insert at queries.rs:480-516)
+        // to run AFTER the first pass has inserted all children AND appended all events.
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+        replace_items(
+            &pool,
+            proposal.id,
+            vec![item("A", 0, vec![]), item("B", 1, vec![0])],
+        )
+        .await
+        .expect("replace_items");
 
-        // Clear the journal to start clean for the second acceptance test
+        // Clear the journal before the fault injection so we can measure only the acceptance's events
         sqlx::query("DELETE FROM event_journal")
             .execute(&pool)
             .await
             .expect("clear journal");
 
-        // Now create a second proposal in non-Draft status (so acceptance will fail)
-        let proposal2 = create(&pool, task_id).await.expect("create proposal 2");
-        replace_items(&pool, proposal2.id, vec![item("B", 0, vec![])])
-            .await
-            .expect("replace_items 2");
-
-        // Manually update the proposal to non-Draft status to force failure
-        sqlx::query("UPDATE task_breakdown_proposals SET status = 'discarded' WHERE id = ?")
-            .bind(proposal2.id)
+        // Fault-inject: rename task_dependencies away BEFORE accepting.
+        // This is a plain statement, outside any transaction.
+        sqlx::query("ALTER TABLE task_dependencies RENAME TO task_dependencies_hidden")
             .execute(&pool)
             .await
-            .expect("update proposal status");
+            .expect("rename task_dependencies away");
 
-        // Try to accept a non-Draft proposal (should fail)
-        let result = accept_proposal(&pool, proposal2.id).await;
-        assert!(result.is_err(), "accepting a non-Draft proposal must fail");
+        // Try to accept: must fail when the second pass tries to INSERT into the missing table.
+        let result = accept_proposal(&pool, proposal.id).await;
+        assert!(
+            result.is_err(),
+            "accept must fail when task_dependencies is missing"
+        );
 
-        // Verify the journal is empty after the failed acceptance
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM event_journal WHERE event_type = 'task_created'")
+        // Restore the table (fault injection cleanup).
+        sqlx::query("ALTER TABLE task_dependencies_hidden RENAME TO task_dependencies")
+            .execute(&pool)
+            .await
+            .expect("rename task_dependencies back");
+
+        // Assert BOTH:
+        // (1) Journal is empty: no task_created rows (rollback took the appended events)
+        let journal_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM event_journal WHERE event_type = 'task_created'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query journal count");
+        assert_eq!(
+            journal_count.0, 0,
+            "journal must be empty after failed acceptance (rollback took events)"
+        );
+
+        // (2) No children were created: zero tasks with parent_task_id pointing to the parent
+        let child_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?")
+                .bind(task_id)
                 .fetch_one(&pool)
                 .await
-                .expect("query journal count");
-
-        assert_eq!(count.0, 0, "journal must be empty after failed acceptance");
+                .expect("query child count");
+        assert_eq!(
+            child_count.0, 0,
+            "no children should exist after failed acceptance (rollback removed them)"
+        );
     }
 }

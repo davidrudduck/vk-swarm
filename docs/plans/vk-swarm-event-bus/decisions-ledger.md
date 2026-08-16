@@ -6680,3 +6680,31 @@ verbatim from the orchestrator's context. Same root cause as the index race reco
 agents writing one worktree concurrently. Standing rule from both incidents: while an implementer
 is active in this worktree, the orchestrator makes NO commits and NO ledger writes; queue them
 until the implementer reports or is stood down.
+
+## Task 020 test corrections (2026-08-16, impl-020 attempt 2)
+
+Two test defects corrected per the amended task file (re-read item 2 of Failing-test section):
+
+**Test 1 defect:** The original assertion used an intersection predicate — counted how many
+journaled ids matched the expected set — which passes if (a) a spurious id outside the set is
+appended, or (b) a duplicate of one child id is appended. A HashSet deduplicates silently, so
+both cases evade detection. Rewritten test 1: (1) Assert `COUNT(*) FROM event_journal WHERE
+event_type = 'task_created'` == 3 (catches duplicate appends of the same id), (2) assert strict
+HashSet equality `journaled_task_ids == expected_child_ids` (catches spurious ids in either
+direction). Mutation evidence: adding a spurious append with `proposal.task_id` inside the child
+loop breaks the row count (6 vs 3) and the set equality both; test fails as expected.
+
+**Test 2 defect:** The original test mechanism forced abort via non-Draft status, which fails at
+the PRECHECK (queries.rs:371–375, BEFORE any child insert). The test never exercises the
+rollback property; the append could sit entirely outside the transaction and still pass.
+Rewritten test 2 per amended item 2: (1) Build a Draft proposal with B depending on A, (2)
+`ALTER TABLE task_dependencies RENAME TO task_dependencies_hidden` on the pool outside any
+transaction (fault injection), (3) accept (fails at the SECOND pass after all children are
+inserted and events appended), (4) rename the table BACK, (5) assert BOTH: (a)
+`COUNT(*) FROM event_journal WHERE event_type = 'task_created'` == 0 (rollback took appended
+events), (b) `COUNT(*) FROM tasks WHERE parent_task_id = ?` == 0 for the parent (rollback
+removed children). Mutation evidence: changing the second pass's `task_id` in the dependency
+insert would pass test 1 but test 2's assertion that children are gone catches it.
+
+Both tests now directly verify the journal-first property: the append rides the transaction, so
+rollback removes events and children together.
