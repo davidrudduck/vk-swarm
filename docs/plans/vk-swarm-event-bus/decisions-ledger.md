@@ -6932,3 +6932,187 @@ nothing committed on error paths; API verified in sqlx-core-0.8.6 pool/mod.rs:39
 unmerged on this branch, so it is fixed in-run, not deferred to a backlog row. Panel B's note on
 tests 4/5's post-DELETE unfiltered zero-count asserts is accepted as-is (strictly stronger than a
 filtered count, and mutations D/E landed through it).
+
+## Task 022 attempt 2 (2026-08-16, escalated rung)
+
+Attempt 2 executes the three dictated corrections in the task file's "Attempt 2 corrections"
+section. Attempt 1's four-case emission table, transaction ordering, and tests 1-5 are unchanged
+(panel B killed 7/7 mutations against them); only the probe mechanism changed, one test was added,
+and this correction block was appended.
+
+### (a) Correction — attempt 1's item-2 baseline-safety rationale was FALSE both ways
+
+Attempt 1's ledger entry claimed tests 1-3 are baseline-safe because "`Task::create` and
+`upsert_remote_task` emit distinct event types (`task_created` on create, not on upsert insert in
+test baseline)". Both halves are wrong: `Task::create` and the upsert-insert path emit the SAME
+event type, `task_created`. The TRUE reason tests 1-3 are baseline-safe is that their setup calls
+only `Project::create`, which journals nothing — verified: `grep -rn "NodeEvent::"
+crates/db/src/models/project/` returns 0 matches. **That is the invariant a future author must
+preserve**: if project creation ever starts journaling, or if these tests' setup grows a
+`Task::create` call, tests 1-3 must switch to the `DELETE FROM event_journal` reset that tests 4/5
+use, or to a high-water-mark filter.
+
+### (b) Correction — the dictated sibling-alignment divergence, now declared
+
+The task ordered a sibling-alignment declaration and attempt 1 omitted it. Declared now: the 006
+siblings `Task::update` (`crates/db/src/models/task/queries.rs:341-347`) and `Task::update_status`
+(`crates/db/src/models/task/hierarchy.rs:43-47`) read the old status with a SELECT as the FIRST
+statement of a DEFERRED transaction — the exact latent read-then-upgrade shape (SQLITE_BUSY on
+upgrade / SQLITE_BUSY_SNAPSHOT 517 under WAL) that this workstream has been bitten by twice
+(`Task::delete` pool path, `mark_orphaned_as_failed`). `upsert_remote_task` now uses
+IMMEDIATE + SELECT instead, so it diverges from its siblings *deliberately and in the safe
+direction*. Sibling alignment is restored by NEW TASK 023, which converts both siblings to the same
+IMMEDIATE shape with concurrency regression tests. The defect lives unmerged on this branch, so it
+is fixed in-run rather than deferred to a backlog row.
+
+### (c) Corrections — four factual inaccuracies in attempt 1's entry
+
+1. **Helper doc citation.** Attempt 1's entry said the `journal_err_to_sqlx` doc comment "cites the
+   hierarchy precedent". It does not: the doc comment at `crates/db/src/models/task/sync.rs:19-25`
+   cites `node_outbox.rs:79`, `task_breakdown/queries.rs:235`, and
+   `task::queries::journal_err_to_sqlx`. `hierarchy` appears nowhere in it.
+2. **`TaskStatus` trait derivation.** Attempt 1's item 3 said "TaskStatus has a `FromRow` impl in
+   the schema". False — `TaskStatus` derives `sqlx::Type` (`crates/db/src/models/task/mod.rs:21-24`,
+   `#[derive(Debug, Clone, Type, ...)]` with `#[sqlx(type_name = "task_status", rename_all =
+   "lowercase")]`). `FromRow` is derived on `Task` (the struct), not on the enum. The tuple
+   `(Uuid, TaskStatus)` decodes because each element implements `Decode`/`Type`, not `FromRow`.
+   The honest reason for avoiding the `query_as!` macro on the probe is that a new query would
+   require regenerating the offline `.sqlx` cache — not "the WHERE clause is new SQL the macro
+   cannot check".
+3. **Stale line refs.** The line numbers in attempt 1's entry (probe "line 332", ON CONFLICT target
+   "line 341") were already stale when written. Current anchors after attempt 2:
+   `journal_err_to_sqlx` :26, `upsert_remote_task` :272, `begin_with("BEGIN IMMEDIATE")` :300,
+   probe :312, `INSERT ... ON CONFLICT` :320, four-case `match` :380, `tx.commit()` :408,
+   `mod sync_event_tests` :1999, `concurrent_upserts_serialize_without_errors` :2416.
+   The task file's own STOP-trigger anchors (dirty-guard `:271-279`, upsert `:283`) are likewise
+   stale — the real dirty-guard is `:290-298` and the INSERT is `:320`. The SHAPE conforms exactly
+   (`find_by_shared_task_id` + `has_unacked_for_entity` -> `return Ok(existing)`; INSERT ... ON
+   CONFLICT(shared_task_id) ... WHERE excluded.remote_version > tasks.remote_version), so this was
+   NOT treated as a STOP.
+4. **Test count.** Attempt 1 reported "273 passed". The correct attempt-1 figures were 319 across
+   all `-p db` binaries / 280 in `--lib`. Attempt 2 (with test 6) measures 332 declared / 320
+   passed across all `-p db` binaries, of which `--lib` is 281 declared / 274 passed / 7 ignored.
+
+### (d) Correction — undeclared `setup_test_pool` substitution
+
+The task dictated `db::test_utils::create_test_pool()`; attempt 1 used
+`crate::models::task::tests::setup_test_pool()` without declaring the substitution. Declaring it
+now: functionally safe — `setup_test_pool` (`crates/db/src/models/task/mod.rs:188-208`) runs
+`sqlx::migrate!("./migrations")` against a WAL-mode temp-dir database, so the schema is the full
+migrated schema, and it is what the other 18 test-pool call sites in `sync.rs` already use. The
+one behavioural asymmetry worth recording: `setup_test_pool` takes sqlx's DEFAULTS for
+`max_connections` (10) and `busy_timeout` (5s), whereas production uses 30s
+(`DEFAULT_ACQUIRE_TIMEOUT_SECS`, `crates/db/src/lib.rs:49`). Test 6's transactions are sub-
+millisecond so 5s is ample, but a future author adding slower work inside the transaction should
+expect the TEST to go flaky before production does.
+
+### The attempt-2 change
+
+**Probe mechanism REPLACED (panel A BLOCKING).** Two lines of the function body changed; nothing
+else in `upsert_remote_task` was touched.
+
+- `let mut tx = pool.begin().await?;` -> `let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;`
+  (`sqlx-core-0.8.6 src/pool/mod.rs:391`, signature `statement: impl Into<Cow<'static, str>>` —
+  the BEGIN statement is passed verbatim). IMMEDIATE takes the RESERVED write lock AT BEGIN, so the
+  transaction never holds a read snapshot it must upgrade.
+- Probe changed from the self-assignment `UPDATE tasks SET remote_version = remote_version ...
+  RETURNING id, status` to a plain
+  `sqlx::query_as::<_, (Uuid, TaskStatus)>("SELECT id, status FROM tasks WHERE shared_task_id = ?")`
+  on `&mut *tx`. Binding name (`probe`) and type (`Option<(Uuid, TaskStatus)>`) are unchanged, so
+  the four-case match is byte-identical.
+- The comment now records WHY the probe must be a read: the write probe fired the SQLite UPDATE
+  HOOK installed on every production pool connection (`crates/services/src/services/events.rs:153`
+  `set_update_hook`; `HookTables` at `crates/services/src/services/events/types.rs:26` includes
+  `tasks`), producing false SSE record-patches and leaving a committed row-write on paths that must
+  write nothing. Both anchors hand-verified this session.
+- Unchanged: the dirty-guard, the `INSERT ... ON CONFLICT` SQL text, execution on `&mut *tx`, the
+  four-case emission table, `journal_err_to_sqlx` propagation, the single `tx.commit()`, and the
+  post-commit stale-skip fallback.
+
+**TEST 6 ADDED:** `concurrent_upserts_serialize_without_errors`
+(`crates/db/src/models/task/sync.rs:2416`), `#[tokio::test(flavor = "multi_thread")]` — 16
+`tokio::spawn`ed upserts of the SAME `shared_task_id` with distinct `remote_version`s 1..=16 and
+distinct titles but identical status, through clones of one test pool; joins all; asserts the
+collected error vec is empty (printing it with `{:?}` on failure) and that exactly one
+`task_created` row exists in `event_journal` (filtered by `event_type`, per the task's
+no-`is_empty()` rule). `rt-multi-thread` was confirmed present in `crates/db/Cargo.toml:39`
+dev-dependencies before writing the test — had it been absent, the fix would have been a
+`Cargo.toml` edit outside the allowed file set, i.e. a STOP.
+
+### Verification (attempt 2)
+
+- `cargo fmt --all -- --check` -> EXIT=0 (the nightly-only `imports_granularity` /`group_imports`
+  warnings are pre-existing noise; the exit code is what was checked)
+- `cargo check --workspace` -> EXIT=0, `Finished dev profile [unoptimized + debuginfo] target(s)`
+- `cargo test -p db` -> EXIT=0. `--lib`: `test result: ok. 274 passed; 0 failed; 7 ignored;
+  0 measured; 0 filtered out; finished in 17.61s`. All 6 sync_event_tests green:
+  `upsert_insert_emits_task_created`, `upsert_status_change_emits_task_status_changed`,
+  `upsert_without_status_change_emits_nothing`, `version_stale_upsert_emits_nothing`,
+  `dirty_guard_skip_emits_nothing`, `concurrent_upserts_serialize_without_errors`.
+  Remaining `-p db` binaries: 8/8, 6/6, 8/8, 8/8, 5/5, 11/11 (+2 ignored, +3 ignored).
+- `cargo clippy -p db --all-targets -- -D warnings` -> EXIT=0
+- `cargo test -p services --test electric_task_sync` -> EXIT=0,
+  `test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s`
+  (existing upsert callers unaffected by the probe change)
+
+### Mutation evidence (attempt 2)
+
+Both mutations applied to a `cp`-backed copy of `sync.rs` and restored with `cp`, each restore
+verified by `diff` printing nothing and by md5 (`5c091991f6792f8aa5cb2e4acb00c243` before and
+after each). No `git checkout`/`restore`/`stash` was used at any point.
+
+**Mutation 1 — panel B's mutation A re-run against the NEW probe.** Replaced the SELECT probe with
+`let probe: Option<(Uuid, TaskStatus)> = None;`. `cargo test -p db sync_event_tests` -> EXIT=101,
+`test result: FAILED. 3 passed; 3 failed; 0 ignored; 0 measured; 275 filtered out`:
+
+```
+upsert_status_change_emits_task_status_changed ... FAILED
+  assertion `left == right` failed: exactly one task_status_changed event
+    left: 0 / right: 1
+upsert_without_status_change_emits_nothing ... FAILED
+  assertion `left == right` failed: only the initial task_created event, no new one
+    left: 2 / right: 1
+concurrent_upserts_serialize_without_errors ... FAILED
+  assertion `left == right` failed: exactly one task_created across 16 concurrent upserts
+    left: 2 / right: 1
+```
+
+Tests 2 and 3 fail as dictated. Test 6 ALSO fails on this mutation (every applying upsert emits
+`task_created`), which is extra coverage, not a mismatch with the dictated expectation.
+
+**Mutation 2 — regression direction: the forbidden deferred SELECT-first shape.** Changed
+`begin_with("BEGIN IMMEDIATE")` back to `begin()` while KEEPING the SELECT probe. Ran
+`for i in $(seq 10); do cargo test -p db concurrent_upserts -- --test-threads=1; done`:
+
+```
+run 1..10: error: test failed, to rerun pass `-p db --lib`     (10 of 10 FAILED)
+```
+
+**10 of 10 runs failed** — the test has hard teeth on this defect class, not probabilistic ones.
+Representative failure:
+
+```
+all concurrent upserts must succeed, got 7 error(s):
+["Database(SqliteError { code: 5, message: \"database is locked\" })", ... x7]
+```
+
+One honest deviation from the predicted signature: the errors are SQLite code **5**
+(`SQLITE_BUSY`), not 517 (`SQLITE_BUSY_SNAPSHOT`) — `grep -c "code: 517"` over the run log returns
+0. Same root cause and same non-retryable behaviour: a deferred transaction that has taken a read
+snapshot and then attempts a write upgrade gets SQLITE_BUSY returned IMMEDIATELY without the busy
+handler being invoked, which is why the pool's `busy_timeout` cannot absorb it. The task file
+described this family as "the SQLITE_BUSY_SNAPSHOT (517) class"; the observed member of that class
+here is plain 5-on-upgrade. Recorded so a future reader greps for the right code.
+
+**Control (not requested, run to pre-empt a flake objection):** the SAME 10-run loop against the
+restored IMMEDIATE code passed 10 of 10 —
+`test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 280 filtered out` on every run. So
+the 10/10 failure above is attributable to the mutation, not to an inherently flaky test.
+
+### Surprises / notes for the next rung
+
+- The task file's STOP-trigger line anchors (`:271-279`, `:283`) were stale on arrival, exactly as
+  correction (c)(3) predicted for attempt 1's entry. Treated as a shape check, not a STOP.
+- `cargo fmt` accepted the new code with no reformatting, so no fmt-fixup commit was needed.
+- Mutation 2's failure code (5, not 517) is the only factual divergence from the task file's own
+  prediction; it strengthens rather than weakens the case for IMMEDIATE.

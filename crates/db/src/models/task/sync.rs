@@ -297,13 +297,20 @@ impl Task {
             return Ok(existing);
         }
 
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
-        // Probe: self-assignment UPDATE to detect existence and read old status in a write transaction.
-        // SQLite's single-writer rule makes this race-free with concurrent writers.
-        // See task 022 for why a SELECT before the transaction upgrade would cause SQLITE_BUSY_SNAPSHOT.
+        // Probe: read existence and old status inside the write transaction (task 022).
+        // BEGIN IMMEDIATE takes SQLite's RESERVED (write) lock at BEGIN, so this transaction never
+        // holds a read snapshot it must later upgrade — the SQLITE_BUSY_SNAPSHOT (517) class that a
+        // deferred SELECT-first transaction earns is structurally gone, and contention surfaces at
+        // BEGIN as plain SQLITE_BUSY, which busy_timeout retries.
+        // The probe must be a READ: a write probe (attempt 1 used a self-assignment UPDATE) fires the
+        // SQLite update hook installed on every production pool connection
+        // (`crates/services/src/services/events.rs:153`, `HookTables` includes `tasks` at
+        // `crates/services/src/services/events/types.rs:26`), producing false SSE record-patches and
+        // leaving a committed row-write on paths that must write nothing.
         let probe: Option<(Uuid, TaskStatus)> = sqlx::query_as::<_, (Uuid, TaskStatus)>(
-            "UPDATE tasks SET remote_version = remote_version WHERE shared_task_id = ? RETURNING id, status",
+            "SELECT id, status FROM tasks WHERE shared_task_id = ?",
         )
         .bind(shared_task_id)
         .fetch_optional(&mut *tx)
@@ -2400,5 +2407,82 @@ mod sync_event_tests {
             .await
             .unwrap();
         assert_eq!(all_events.len(), 0, "dirty-guard skip emits no events");
+    }
+
+    /// Regression guard for the SQLITE_BUSY_SNAPSHOT (517) class: if the transaction is ever
+    /// reverted to a deferred `begin()` with a read as its first statement, concurrent upserts on
+    /// the same row take a read snapshot and fail to upgrade. Only concurrency surfaces that.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_upserts_serialize_without_errors() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
+
+        let local_id = Uuid::new_v4();
+        let shared_task_id = Uuid::new_v4();
+
+        // 16 concurrent upserts of the SAME shared_task_id: distinct remote_versions and titles,
+        // identical status (so no task_status_changed is expected regardless of interleaving).
+        let mut handles = Vec::new();
+        for version in 1..=16i64 {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                Task::upsert_remote_task(
+                    &pool,
+                    local_id,
+                    project_id,
+                    shared_task_id,
+                    format!("Task v{}", version),
+                    None,
+                    TaskStatus::Todo,
+                    None,
+                    None,
+                    None,
+                    version,
+                    None,
+                    None,
+                )
+                .await
+            }));
+        }
+
+        let mut errors: Vec<String> = Vec::new();
+        for handle in handles {
+            match handle.await.expect("upsert task panicked") {
+                Ok(_) => {}
+                Err(e) => errors.push(format!("{:?}", e)),
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "all concurrent upserts must succeed, got {} error(s): {:?}",
+            errors.len(),
+            errors
+        );
+
+        // Exactly one row was inserted, so exactly one task_created event.
+        let created_events: Vec<(String,)> = sqlx::query_as(
+            "SELECT event_type FROM event_journal WHERE event_type = 'task_created'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            created_events.len(),
+            1,
+            "exactly one task_created across 16 concurrent upserts"
+        );
     }
 }
