@@ -6837,3 +6837,22 @@ stale — they were accurate pre-020 and drifted as the file grew; the mechanism
 unchanged and the reasoning built on it still holds. Noted here rather than editing the earlier
 section, per the append-only rule. General lesson: line coordinates in a ledger are a snapshot,
 so cite the symbol or predicate alongside the line number, since only the former survives.
+
+## Task 020 PASSED (2026-08-16, orchestrator)
+
+Final chain: e80ebab3 (feature) → 79770f5e (fmt sweep + amendments) → cae9a357 (test corrections)
+→ b74bf809 (fmt fixup + independent verification) → 81e43ac0 (panel remediation: project_id
+pinned). Gates: CONFORMS on b74bf809 and 81e43ac0; cae9a357 file-set verified mechanically.
+Panel-020: PASS (0 blocking, 1 minor remediated same-session with before/after mutation evidence,
+1 benign stale-coordinate note recorded).
+
+What this task cost beyond the code: one fmt false claim, one commit through a freeze, THREE
+write-race incidents (index sweep, ledger clobber, files:-amendment clobber — filed upstream as
+ExpansionX/agent-plugins#132), and two defects in my own correction dictate (the load-bearing
+DELETE resets I ordered removed; a mutation falsifier that could not go red) — both caught by the
+escalated implementer's STOP, which is the system working. Standing process rule now absolute:
+zero orchestrator writes in the worktree between dispatch and report; ledger/task-file
+coordinates should cite symbol or predicate alongside line numbers (third coordinate drift this
+task).
+
+Board: 13/22 passed. Next ready in phase 3: 022, then 021, then 015.

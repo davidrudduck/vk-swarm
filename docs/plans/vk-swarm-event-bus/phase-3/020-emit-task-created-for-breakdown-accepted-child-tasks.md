@@ -2,7 +2,7 @@
 id: "020"
 phase: 3
 title: "Emit TaskCreated for the child tasks a breakdown acceptance creates"
-status: ready
+status: passed
 depends_on: ["004","006"]
 parallel: false
 conflicts_with: []
