@@ -819,12 +819,11 @@ mod tests {
 
         // Assert BOTH:
         // (1) Journal is empty: no task_created rows (rollback took the appended events)
-        let journal_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM event_journal WHERE event_type = 'task_created'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("query journal count");
+        let journal_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM event_journal WHERE event_type = 'task_created'")
+                .fetch_one(&pool)
+                .await
+                .expect("query journal count");
         assert_eq!(
             journal_count.0, 0,
             "journal must be empty after failed acceptance (rollback took events)"

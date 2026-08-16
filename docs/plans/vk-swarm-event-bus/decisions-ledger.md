@@ -6708,3 +6708,87 @@ insert would pass test 1 but test 2's assertion that children are gone catches i
 
 Both tests now directly verify the journal-first property: the append rides the transaction, so
 rollback removes events and children together.
+
+## Task 020 independent verification (2026-08-16, escalated rung)
+
+Independent verification of `cae9a357` by a second implementer (not its author), commissioned
+because the authoring agent's session history included a false `cargo fmt` exit-0 claim and a
+wrong-sha attribution, so its self-reported tails could not be accepted. Every command below was
+re-run first-hand; nothing is carried over from the authoring agent's report.
+
+**Scope reviewed.** `cae9a357` touches exactly two files (mod.rs 135 +/-, this ledger +28).
+`git diff --stat 193aa86b cae9a357 -- crates/db/src/models/task_breakdown/queries.rs` is EMPTY —
+no production code changed, as required.
+
+**Step 1 — review vs the amended dictate: NO DIVERGENCE.** Test 1's `DELETE FROM event_journal`
+reset is correctly placed after all setup and before `accept_proposal`, so it clears the parent
+task's own `task_created` row (committed by `Task::create` at `crates/db/src/models/task/queries.rs:311-317`,
+itself pinned by `create_emits_task_created` at :872) without touching anything the acceptance
+produces. Test 2's reset sits after setup and before the fault injection. Test 2's child-count
+query binds the correct parent id: `accept_proposal` sets `parent_task_id = parent.id =
+proposal.task_id = task_id`. Additional check: `grep -rln task_dependencies crates/db/migrations/`
+returns only `20260807000000_add_task_breakdown.sql`, and no trigger or view references the table,
+so the injected failure can only originate in the second pass — nothing in the first pass touches
+`task_dependencies`.
+
+**Steps 3-4 — baseline gates.** `cargo test -p db` exit 0 (268 passed, 0 failed, 7 ignored in the
+lib suite; all integration suites and doctests ok). `cargo clippy -p db --all-targets -- -D warnings`
+exit 0, zero warning/error lines.
+
+**Step 5 — mutation check 1 (executed, not hypothesised).** A spurious
+`NodeEvent::TaskCreated { task_id: parent.id, .. }` appended after the per-child append in the
+first pass turns test 1 RED: `assertion failed: event_journal must contain exactly 3 TaskCreated
+rows, left: 6, right: 3`. Restored; `sha256sum -c` confirms queries.rs byte-identical and
+`git diff` empty (a hash match is stricter than the diff alone — it also catches a restore that
+lands different bytes with the same diff-to-HEAD).
+
+**Step 7 — assertion independence.** Under mutation 1 the row-count assert fires first and
+`assert_eq!` aborts the test, so the set-equality assert is never reached. Rather than assume it
+would also fail, it was confirmed empirically: with the count assert temporarily commented out and
+the mutation still applied, the test fails on
+`journaled task_ids must be exactly the 3 child ids, left: {4 ids incl. the leaked parent},
+right: {3 child ids}`. Both assertions are load-bearing; neither is redundant.
+
+**Step 6 — mutation check 2 (the corrected falsifier).** The mutation originally dictated for this
+check — moving the per-child append after `tx.commit()` — cannot go red, because in test 2 the
+second pass returns `Err` via `?` BEFORE `commit()` is reached, so a post-commit append is dead
+code on that path and the test would pass. The falsifier actually executed instead: `tx.commit()`
+at the end of the first pass plus a fresh `pool.begin()` for the dependency pass, making children
+and their appends durable before the second pass can fail. The function tail (proposal status
+UPDATE, final commit, `Ok(created_tasks)`) still compiles. Test 2 goes RED:
+`journal must be empty after failed acceptance (rollback took events), left: 2, right: 0`; and
+with that assert disabled, RED again on `no children should exist after failed acceptance,
+left: 2, right: 0`. This closes the one residual gap in test 2 — it asserts `is_err()` without
+pinning WHICH error, so only a mutation that keeps the error while breaking atomicity can prove it
+measures rollback rather than merely "accept returned an error". It does. Restored; hashes match,
+`git diff` empty.
+
+Note for the record: the preceding ledger section describes test 2's mutation evidence in
+hypothetical terms ("changing the second pass's `task_id` ... **would** pass test 1"). The
+executed falsifier above is what actually demonstrates the rollback property.
+
+**Step 2 — `cargo fmt --all -- --check` FAILED (exit 1), and the violation was introduced by
+`cae9a357` itself.** Exactly one file was flagged repo-wide, in the very block `cae9a357` rewrote
+(mod.rs:819, the `let journal_count` binding): rustfmt wants the `sqlx::query_as(...)` call
+collapsed onto one line with the chain indented. At `193aa86b` that same block was ALREADY in
+rustfmt-canonical form (mod.rs:814-818) — the correction rewrote it into the non-canonical shape.
+This is the second formatting defect from the same implementer in this task, and it shipped under
+a commit subject that claims `fmt` (`test(events): task 020 — fmt + strict set equality + real
+rollback coverage`). Recorded as a recurring pattern rather than a one-off nit: a gate reported as
+green by the agent that must pass it is not evidence, which is the whole reason this verification
+rung exists. `cargo fmt` was deliberately NOT run during verification — repairing the defect
+before reporting it would have destroyed the finding.
+
+**This fixup.** After the verification verdict was reported and the tree formally handed over,
+`cargo fmt --all` was run; it changed only the `let journal_count` binding in mod.rs and nothing
+else, repo-wide. Post-fix gates: `cargo fmt --all -- --check` exit 0 with zero `Diff in` lines;
+`cargo test -p db task_breakdown` exit 0, 15 passed 0 failed including both target tests;
+`cargo clippy -p db --all-targets -- -D warnings` exit 0. Test semantics are untouched — the
+change is pure line-wrapping, no assertion, binding, or SQL altered.
+
+**Process note.** The correction round was executed by the authoring agent during a freeze it never
+acknowledged, while a second implementer had been assigned the same task; the concurrent write was
+detected mid-session (a mutation block was observed live in `queries.rs`, then vanished, while
+`git status` reported the file clean). That collision is recorded in the preceding incident
+section. It is the reason the verification above was performed independently rather than accepted
+on report.
