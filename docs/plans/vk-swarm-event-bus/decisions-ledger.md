@@ -7439,3 +7439,21 @@ errors, the task-020 gap, and 022-attempt-1's probe would each have tripped it m
 
 Board: 16/23 passed. Phase 3 emission COMPLETE except 015 (cross-site suite). Then phase 4
 (009, 010), phase 5 (011, 014, 012), and the 001 human gate.
+
+## Task 015 pre-dispatch amendment (2026-08-16, orchestrator)
+
+Amended before first dispatch — the task predates tasks 022/023 and 008's final shape:
+
+1. **Test 1c added** (`remote_upsert_emits_exactly_one_event_each`): the suite's cross-site
+   completeness claim must include the remote write path task 022 instrumented, for the same
+   reason test 1b was added with task 020.
+2. **Test 3 (connectivity) replaced with an explicit delegation.** As written it was structurally
+   impossible: `ConnectivityJournal` is deliberately private to `node_runner.rs`, unreachable from
+   an integration test, and the task's own fallback ("whatever seam node_runner's own tests use")
+   points at colocated-only access. Connectivity single-emission is pinned by node_runner's eight
+   colocated tests; the `hive_client.rs` clean-close send is provable only live and that
+   obligation is explicitly re-anchored on task 012's SC3 check (008's ledger had named "the seam
+   by task 015" — this amendment corrects that expectation: 015 cannot prove an upstream send that
+   requires a real WS session).
+3. **Typecheck override brought to current convention** (fmt exit-code check + --all-targets;
+   the test command pinned to `--test event_emission`).

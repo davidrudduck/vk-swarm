@@ -31,10 +31,25 @@ connectivity bug and a cross-site assertion bug blocked each other's revert.
    report full coverage while a routed, user-initiated creation path emits nothing — the exact gap
    that forced task 020 into existence. If task 020 has not landed, this test is blocked on 020, not
    on this task; say so rather than dropping it.
+1c. `remote_upsert_emits_exactly_one_event_each` — **added 2026-08-16 with task 022.** Drive
+   `Task::upsert_remote_task` three ways: fresh `shared_task_id` (assert exactly one
+   `task_created`), version-bumped upsert with a changed status (assert exactly one
+   `task_status_changed` with correct old/new), and a version-stale upsert (assert zero new rows).
+   The remote write path is a first-class lifecycle site (user-driven status changes on
+   remote-project tasks flow through it); a cross-site completeness suite without it repeats the
+   exact omission that forced task 022 into existence.
 2. `attempt_lifecycle_emits_exactly_one_event_each` — start and terminate an attempt; assert one
    `attempt_started` and one terminal event.
-3. `connectivity_transitions_emit_exactly_one_event_each` — one row per genuine transition, none for
-   repeated failed retries from an already-disconnected state.
+3. CONNECTIVITY — DELEGATED, not tested here (amended 2026-08-16; supersedes the earlier
+   `connectivity_transitions_emit_exactly_one_event_each`). The connectivity gate
+   (`ConnectivityJournal`) is intentionally PRIVATE to `node_runner.rs`; an integration test in
+   `crates/services/tests/` cannot reach it, and exposing it publicly for a test would invert the
+   design. Single-emission-per-transition is already pinned by node_runner's EIGHT colocated
+   `connectivity_event_tests` (edge gating both directions, ordering, fault-injected append,
+   clean-close), and the upstream `hive_client.rs` clean-close send is provable ONLY live — that
+   obligation sits with task 012's SC3 check, NOT this suite. State exactly this delegation in the
+   suite's module doc comment so a reader of the "cross-site" claim knows where connectivity is
+   proven, and record it in the ledger.
 4. `no_duplicate_events_for_a_single_state_change` — the regression guard against double-emission if
    a site is ever instrumented at two layers at once.
 5. `every_emitted_event_type_round_trips_from_the_journal` — read each journaled payload back into
@@ -80,10 +95,11 @@ broadcast delivery; that is task 013's and task 005's territory.
   test to pass; this suite inherits 008's risk and must not disguise it.
 
 ## Manual verification (record in decisions-ledger)
-Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
-WAI_TEST_CMD="cargo test -p services event_emission"
+Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo fmt --all -- --check && cargo check --workspace --all-targets" with the WAI_TEST_CMD given below (fmt is checked by EXIT CODE — the nightly-config warnings are noise; two attempts this run shipped fmt-red claiming green).
+WAI_TEST_CMD="cargo test -p services --test event_emission"
 
-All five tests green. Record in the ledger the `electric_task_sync.rs` sibling comparison.
+All tests green (1, 1b, 1c, 2, 4, 5 — connectivity delegated per item 3). Record in the ledger the
+`electric_task_sync.rs` sibling comparison AND the connectivity delegation.
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 015` exits 0
