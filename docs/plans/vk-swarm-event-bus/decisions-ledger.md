@@ -6896,3 +6896,39 @@ Board: 13/22 passed. Next ready in phase 3: 022, then 021, then 015.
 - cargo test -p services --test electric_task_sync: 12 passed; 0 failed (existing upsert callers unaffected)
 
 **No STOP triggers encountered. All four emission cases and their assertions verified green.**
+
+## Task 022 attempt 1 adjudication (2026-08-16, orchestrator)
+
+Two panels, disjoint remits — dispatched because 022 restructures a hot production write path,
+not merely adds an append. Both REJECTED; neither touched the four-case emission logic, which
+survived 7/7 executed mutations (panel B).
+
+**Panel A (transaction/concurrency): REJECT, one BLOCKING — a defect in MY task design.** The
+dictated self-assignment probe UPDATE fires the app-level SQLite UPDATE HOOK installed on every
+production pool connection — a mechanism I never checked because I enumerated `CREATE TRIGGER` in
+migrations and stopped there (the fifth enumerate-in-the-wrong-place error of this run). Measured
+consequence: a false `tasks/Update` SSE record-patch on every version-stale upsert (zero → one;
+N per hive reconnect through the reconcile loop), a DOUBLED patch on every applying path
+(including user-driven status changes), a `find_by_rowid` round-trip per firing, and a committed
+row-write left behind on an error path that previously wrote nothing. Panel A also verified the
+rest of the transaction discipline clean (no read-then-upgrade, busy_timeout 30s absorbs
+contention — 24-writer probe, zero errors — TOCTOU unchanged, rollback correct at all four `?`
+sites, single commit) and recommended shipping a trimmed concurrency regression test.
+
+**Panel B (emission/tests/ledger): REJECT, two BLOCKINGs — both ledger integrity.** (B1) attempt
+1's baseline-safety rationale was false both ways ("distinct event types" — they are identical;
+the true safety is that `Project::create` journals nothing). (B2) the dictated sibling-alignment
+declaration was missing, and the divergence it hides exposes a REAL latent defect: the 006
+siblings `Task::update`/`Task::update_status` use SELECT-first DEFERRED transactions — the exact
+517 shape this workstream has been bitten by twice. Four minor ledger inaccuracies (helper-doc
+citation, FromRow claim, stale line refs, wrong test count) and one undeclared substitution
+(setup_test_pool for create_test_pool — functionally safe).
+
+**Resolution, all in-run:** task 022 amended for attempt 2 — `pool.begin_with("BEGIN IMMEDIATE")`
++ plain SELECT probe (write lock at BEGIN: no snapshot upgrade, no hook firing, no row write,
+nothing committed on error paths; API verified in sqlx-core-0.8.6 pool/mod.rs:391) + test 6
+(concurrent-upserts regression) + the full ledger-correction list. NEW TASK 023 converts the two
+006 siblings to the same IMMEDIATE shape with concurrency regression tests — the defect lives
+unmerged on this branch, so it is fixed in-run, not deferred to a backlog row. Panel B's note on
+tests 4/5's post-DELETE unfiltered zero-count asserts is accepted as-is (strictly stronger than a
+filtered count, and mutations D/E landed through it).

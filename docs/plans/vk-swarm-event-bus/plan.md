@@ -60,6 +60,7 @@ UI is explicitly out of scope — the board already streams live over /api/tasks
 | 020 | 3 | Emit TaskCreated for the child tasks a breakdown acceptance creates | dep: 004 006 | conflicts: none |
 | 022 | 3 | Emit task_created / task_status_changed from Task::upsert_remote_task | dep: 006 | conflicts: none |
 | 021 | 3 | Add the emission conformance guard (architecture fitness test) | dep: 006 007 020 022 | conflicts: none |
+| 023 | 3 | Convert Task::update and Task::update_status to BEGIN IMMEDIATE (latent 517 fix) | dep: 022 | conflicts: none |
 | 015 | 3 | Add the cross-site emission integration suite | dep: 006 007 008 020 022 | conflicts: none |
 | 009 | 4 | Add the TriggerHook seam with persisted per-hook cursors and one real hook | dep: 005 | conflicts: none |
 | 010 | 4 | Add the GET /api/events SSE endpoint with cursor resume on the freed path | dep: 001 005 | conflicts: none |

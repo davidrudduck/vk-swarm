@@ -106,12 +106,67 @@ convention this task mirrors. Any divergence goes in the ledger.
 three append sites in `queries.rs` — read one of them and copy the idiom; if 006 used a From/map
 that does not compose here, STOP rather than inventing a new conversion.
 
+## Attempt 2 corrections (2026-08-16 — both panels REJECT; all dictated)
+Attempt 1 (commit `feba43c4`) got the four-case emission table, the tests, and the transaction
+ordering right — panel B killed 7/7 executed mutations against them. Two things change:
+
+**1. THE PROBE MECHANISM IS REPLACED (panel A BLOCKING — a defect in this task file's own
+design, not the implementer's).** The self-assignment `UPDATE ... SET remote_version =
+remote_version` premise was "a self-assignment write is invisible". FALSE in this codebase: change
+notification is not a SQL trigger, it is a SQLite UPDATE HOOK installed on every production pool
+connection (`crates/services/src/services/events.rs:153`, wired at
+`crates/local-deployment/src/lib.rs:158-166`), and `HookTables` includes `tasks`
+(`events/types.rs:26-28`). Panel A measured it: the probe fires `tasks/Update` → a false SSE
+record-patch on the version-stale path (zero → one per stale upsert; N per hive reconnect via the
+reconcile loop) and a doubled patch on every applying path, each with a `find_by_rowid` pool
+round-trip. It also left a committed row-write behind on an error path that previously wrote
+nothing.
+
+Replace the probe as follows, exactly:
+- `let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;` — `Pool::begin_with` exists in this
+  workspace's sqlx (sqlx-core-0.8.6 `src/pool/mod.rs:391`) and takes the BEGIN statement verbatim.
+  `BEGIN IMMEDIATE` acquires SQLite's RESERVED (write) lock AT BEGIN, so the transaction never
+  holds a read snapshot it must upgrade — the SQLITE_BUSY_SNAPSHOT (517) class this task guards
+  against is structurally gone, and contention at BEGIN surfaces as plain SQLITE_BUSY, which the
+  pool's 30s busy_timeout (`crates/db/src/lib.rs:49`) retries.
+- First statement: a plain read probe,
+  `sqlx::query_as::<_, (Uuid, TaskStatus)>("SELECT id, status FROM tasks WHERE shared_task_id = ?")`
+  on `&mut *tx`. Under IMMEDIATE this is safe where a deferred SELECT-first was not. No row write,
+  no hook firing, no journal noise, nothing committed on error paths.
+- Everything downstream (upsert on `&mut *tx`, four-case emission, commit, fallback) is unchanged
+  from attempt 1.
+
+**2. TEST 6 IS ADDED (panel A's shippable recommendation):**
+`concurrent_upserts_serialize_without_errors` — spawn N=16 concurrent tasks (multi-thread
+runtime) all upserting the SAME `shared_task_id` with distinct `remote_version`s 1..=16 through
+the test pool; join all; assert ZERO errors and exactly ONE `task_created` row. This is the only
+test that catches a future regression reintroducing a read-first deferred transaction — the
+defect class that has now bitten this workstream three times.
+
+**3. LEDGER CORRECTIONS (panel B BLOCKINGs + minors — append-only, never edit old lines).**
+Append a correction section stating: (a) attempt 1's item-2 rationale ("distinct event types")
+was FALSE both ways — `Task::create` and upsert-insert both emit `task_created`; the true reason
+tests 1-3 are baseline-safe is that their setup calls only `Project::create`, which journals
+nothing (`grep -rn "NodeEvent::" crates/db/src/models/project/` → 0 matches) — and that invariant
+is what a future author must preserve; (b) the sibling-alignment divergence the task ordered
+declared: the 006 siblings (`task/queries.rs:341-347`, `hierarchy.rs:43-47`) use SELECT-first
+DEFERRED transactions — the exact latent-517 shape — while this task now uses
+IMMEDIATE+SELECT; sibling alignment is restored by new task 023, which converts both siblings to
+the same IMMEDIATE shape; (c) the four factual corrections from panel B: the helper doc comment
+cites node_outbox/task_breakdown/task::queries — not hierarchy; `TaskStatus` derives `sqlx::Type`,
+not `FromRow`, and the honest macro-avoidance reason is not regenerating the offline cache; the
+line refs in attempt 1's entry were stale on arrival; the test count was 319 (all -p db binaries)
+/ 280 (--lib), not 273; (d) the `setup_test_pool` substitution for the dictated
+`create_test_pool()` — functionally safe (it runs `sqlx::migrate!`, consistent with sync.rs's 18
+prior uses) but undeclared until now.
+
 ## Allowed moves
-ONLY: the transaction + probe restructure of `upsert_remote_task`'s body after the dirty-guard;
-the two append calls; moving the existing statements onto the transaction; the
-`sync_event_tests` module. Do NOT change the function's signature, the dirty-guard, the SQL text of
-the existing `INSERT ... ON CONFLICT` statement, or any other function in the file. Do NOT touch
-the three dead lifecycle writes. Nothing broadcasts here (the tailer publishes).
+ONLY: the transaction + probe restructure of `upsert_remote_task`'s body after the dirty-guard
+(attempt 2: `begin_with("BEGIN IMMEDIATE")` + SELECT probe); the two append calls; moving the
+existing statements onto the transaction; the `sync_event_tests` module including test 6. Do NOT
+change the function's signature, the dirty-guard, the SQL text of the existing
+`INSERT ... ON CONFLICT` statement, or any other function in the file. Do NOT touch the three dead
+lifecycle writes. Nothing broadcasts here (the tailer publishes).
 
 ## STOP triggers
 - The dirty-guard at `:271-279` or the upsert statement at `:283` differs from the shape cited
