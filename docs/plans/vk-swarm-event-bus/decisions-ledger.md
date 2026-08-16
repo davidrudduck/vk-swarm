@@ -6803,3 +6803,37 @@ Consequence: the Stage-1 gate on `b74bf809` REJECTED file-set ("changed file not
 crates/db/src/models/task_breakdown/mod.rs"). Re-applied now with the tree quiet and verified in
 the same command. Cross-reference: this incident class is filed upstream as
 ExpansionX/agent-plugins#132 (orchestrator/implementer write race in the shared worktree).
+
+## Task 020 panel remediation (2026-08-16)
+
+Stage-2 panel returned PASS with one minor finding, remediated here.
+
+**Finding — the emission payload was only half-falsified.** Test 1 asserted the journaled
+`task_id` set but never the `project_id` the payload carries, so the second field of every
+`TaskCreated` event was unverified. The panel demonstrated this by executed mutation, not by
+inspection: replacing `project_id: parent.project_id` with `project_id: Uuid::new_v4()` in the
+per-child append (queries.rs:470, inside the `NodeEvent::TaskCreated` block starting :468) left
+the suite fully GREEN. The production value was never wrong — `parent.project_id` is correct, and
+matches what `Task::create` sources — but correctness that no test can distinguish from
+incorrectness is not covered.
+
+**Remediation.** Test 1's payload-extraction closure now asserts, for EVERY journaled row, that
+`event_value["project_id"]` equals the test's `project_id`, alongside the existing `task_id`
+collection. Placing it inside the closure means the check runs per row rather than on a sample.
+
+**Mutation evidence (executed, before and after).** With the assertion in place and the
+production value restored, test 1 passes (exit 0). Re-applying the panel's mutation
+(`project_id: Uuid::new_v4()`) now turns test 1 RED:
+`assertion failed: every TaskCreated payload must carry the parent's project_id, left:
+"e7c0c84b-…" right: "aeecd6fb-…"`. The same mutation shipped green before this change, which is
+precisely the gap. Mutation reverted; `git diff` on queries.rs EMPTY and `sha256sum -c` confirms
+the file byte-identical. Post-fix gates: fmt --check exit 0 with zero `Diff in` lines,
+`cargo test -p db task_breakdown` exit 0 (15 passed, 0 failed), clippy exit 0.
+
+**Benign note recorded for the record (no code change).** The `Task 020 test corrections` section
+above cites `queries.rs:371-375` for the Draft-status precheck. At HEAD the precheck sits at
+:385-389 (`if proposal.status != BreakdownStatus::Draft`), verified by grep. The coordinates are
+stale — they were accurate pre-020 and drifted as the file grew; the mechanism described is
+unchanged and the reasoning built on it still holds. Noted here rather than editing the earlier
+section, per the append-only rule. General lesson: line coordinates in a ledger are a snapshot,
+so cite the symbol or predicate alongside the line number, since only the former survives.

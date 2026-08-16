@@ -759,6 +759,15 @@ mod tests {
             .map(|(_seq, payload)| {
                 let event_value: serde_json::Value =
                     serde_json::from_str(payload).expect("event payload should parse as JSON");
+                // Pin the payload's project_id too: asserting only task_id leaves the rest of
+                // the emitted payload unfalsified, so a wrong project_id would ship green.
+                assert_eq!(
+                    event_value["project_id"]
+                        .as_str()
+                        .expect("project_id should be present in payload"),
+                    project_id.to_string(),
+                    "every TaskCreated payload must carry the parent's project_id"
+                );
                 event_value["task_id"]
                     .as_str()
                     .expect("task_id should be present in payload")
