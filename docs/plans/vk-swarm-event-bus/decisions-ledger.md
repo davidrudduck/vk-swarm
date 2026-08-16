@@ -7414,3 +7414,28 @@ git diff --cached --name-only
 ```
 
 All verification steps pass. Two files created (new test, baseline commit marker); no production code modified.
+
+## Task 021 PASSED (2026-08-16, orchestrator)
+
+Commit `9025bb62` (amended from `9c3af8ad`, which the gate rejected for committing the untracked
+`.wai-task-base` coordination marker — a brief-compliance slip, fixed by `git rm --cached` +
+amend). Gate CONFORMS: file-set 2 paths, create recorded, typecheck --all-targets exit 0, guard
+green. Passed WITHOUT a panel, justification: a read-only architecture test with no production
+code; the 16-entry EXPECTED table verified by the orchestrator against the caller-verified
+classification line by line (exact match); scanner behavior evidenced by four executed probes —
+empty-table red printing the full inventory, mutation red (archive.rs x4→x5 on a temporary
+production UPDATE, restored diff-empty), comment-strip no-count, and the item-level-`#[cfg(test)]`
+edge (container.rs:108 does not trigger truncation).
+
+DOCUMENTED LIMITATION (design, not defect): the dictated stripping rule truncates from the first
+terminal `#[cfg(test)]`+`mod` to EOF, so production code placed AFTER a test module would be
+invisible to the guard. The repo convention (test modules terminal) holds everywhere today; the
+threat model is accidental new write sites in normal production regions, not adversarial
+placement. If the convention ever breaks, the guard's inventory will drift visibly the next time
+that file's counted sites change.
+
+The guard closes the loop on this run's recurring failure class: four orchestrator enumeration
+errors, the task-020 gap, and 022-attempt-1's probe would each have tripped it mechanically.
+
+Board: 16/23 passed. Phase 3 emission COMPLETE except 015 (cross-site suite). Then phase 4
+(009, 010), phase 5 (011, 014, 012), and the 001 human gate.

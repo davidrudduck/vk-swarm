@@ -2,7 +2,7 @@
 id: "021"
 phase: 3
 title: "Add the emission conformance guard (architecture fitness test)"
-status: ready
+status: passed
 depends_on: ["006", "007", "020", "022"]
 parallel: false
 conflicts_with: []
