@@ -8,6 +8,7 @@ parallel: false
 conflicts_with: []
 files:
   - "crates/db/src/models/task_breakdown/queries.rs"
+  - "crates/db/src/models/task_breakdown/mod.rs"
   - "crates/services/tests/event_bus_end_to_end.rs"
 siblings:
   - "crates/db/src/models/task/queries.rs"

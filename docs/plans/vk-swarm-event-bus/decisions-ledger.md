@@ -6792,3 +6792,14 @@ detected mid-session (a mutation block was observed live in `queries.rs`, then v
 `git status` reported the file clean). That collision is recorded in the preceding incident
 section. It is the reason the verification above was performed independently rather than accepted
 on report.
+
+## Task 020 second clobber: the files: amendment (2026-08-16, orchestrator)
+
+Commit `79770f5e`'s message says "files: adds mod.rs" but its task-file delta contains only the
+test-2 mechanism amendment — the `mod.rs` line was clobbered from the working tree between the
+orchestrator's sed (proof it existed: the b41cpvnwg gate output printed the three-entry files list
+at 12:45) and the commit, by the same stale-full-file write-back that ate the file-set ledger note.
+Consequence: the Stage-1 gate on `b74bf809` REJECTED file-set ("changed file not in files:
+crates/db/src/models/task_breakdown/mod.rs"). Re-applied now with the tree quiet and verified in
+the same command. Cross-reference: this incident class is filed upstream as
+ExpansionX/agent-plugins#132 (orchestrator/implementer write race in the shared worktree).
