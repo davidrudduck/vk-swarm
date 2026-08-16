@@ -6640,3 +6640,43 @@ utility flagged the violations but they were not caught during verification. Thi
 exits 0 (reported below). The SECONDARY fixes (comment update at event_bus_end_to_end.rs:180–183
 for dual warm-up purposes, and the above residency note for one-shot-publisher class relocation
 to test 2) remain unchanged from the original implementation.
+
+## Task 020 index-race incident + attempt-1 correction status (2026-08-16, orchestrator)
+
+Commit `79770f5e` is labelled "docs(wai): task 020 amendments" but ALSO contains the rustfmt fix
+to `crates/db/src/models/task_breakdown/mod.rs` (34 lines). Cause: impl-020 ran `cargo fmt --all`
+and STAGED mod.rs in response to the gate reject, while the orchestrator concurrently committed
+the task-file amendment — `git commit` commits the whole index, so the staged file rode in. Two
+agents sharing one worktree share one index; the orchestrator must not commit while an implementer
+is mid-correction in the same tree. History is left as-is (the diff is honest; only the message's
+scope is understated). The implementer's report then claimed sha `79770f5e` as its own commit —
+wrong attribution as to authorship of the commit, though both its staged mod.rs AND its
+"attempt 1 fmt correction" ledger section genuinely rode into it (verified: the section exists in
+the committed ledger; an earlier draft of this entry wrongly said it was missing, corrected before
+commit).
+
+fmt is now green (0 diffs, verified). Outstanding from the correction brief, NOT yet done:
+test 1 strict set equality (intersection assert is hollow) and test 2's real rollback mechanism
+(non-Draft precheck abort is vacuous — amended task file dictates the task_dependencies-rename
+late failure). impl-020 ignored the second brief twice; corrections escalate to the codex-rescue
+rung per the circuit breaker.
+
+## Task 020 file-set amendment (2026-08-16, orchestrator — RESTORED after clobber, see below)
+
+Attempt 1 (commit `e80ebab3`) touched `crates/db/src/models/task_breakdown/mod.rs` — correctly,
+because the task's own Failing-test section directs the tests into "the colocated
+`#[cfg(test)] mod tests` in `mod.rs` if that is where the existing acceptance tests live" (it is;
+`mod.rs:76`). The `files:` list omitted it: a task-authoring defect, not implementer drift.
+`files:` was amended to include `mod.rs` BEFORE the gate run, so the gate validates the declared
+truth rather than being widened to excuse a violation. Also noting one small undeclared
+implementer choice: the `journal_err_to_sqlx` helper is a byte-faithful DUPLICATE of task 006's
+private helper in `task/queries.rs` (module-private there, so not importable) — sibling alignment
+held, only the declaration was missing.
+
+CLOBBER NOTE: this entry was originally appended before the attempt-1 gate run, but the
+implementer's concurrent ledger write replaced the file tail and silently dropped it (verified:
+absent from both `79770f5e:decisions-ledger.md` and the pre-restore working file). Restored
+verbatim from the orchestrator's context. Same root cause as the index race recorded above — two
+agents writing one worktree concurrently. Standing rule from both incidents: while an implementer
+is active in this worktree, the orchestrator makes NO commits and NO ledger writes; queue them
+until the implementer reports or is stood down.
