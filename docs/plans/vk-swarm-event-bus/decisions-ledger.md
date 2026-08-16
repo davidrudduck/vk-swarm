@@ -7312,3 +7312,23 @@ git diff --name-only
   crates/db/src/models/task/queries.rs
 ```
 All verification steps pass. Two source files changed, no others.
+
+## Task 023 PASSED (2026-08-16, orchestrator)
+
+Commit `73c48002` gated CONFORMS (file-set 3 paths, fmt+check --all-targets exit 0, crates/db
+green — 276 tests). Passed WITHOUT a panel, justification: two one-line dictated conversions of a
+pattern already adversarially validated twice within task 022 (panel A's reject→fix→re-measure
+cycle plus red proofs from two independent hands); the implementer executed the dictated
+pre/post-conversion protocol — 0/4 green on BOTH shipped 006 sites before the change, with literal
+SQLITE_BUSY_SNAPSHOT (517) errors captured alongside code-5s, 4/4 green after; and the
+orchestrator verified the diff is hunk-exact (two comment+begin_with conversions, two mirrored
+concurrency tests, one import hunk, ledger).
+
+The pre-conversion runs are the important record: the latent defect panel 022B flagged from a
+contradiction in the paperwork was EMPIRICALLY REAL in the 006 code this branch would have
+shipped — 10-12 errors per 16-writer run, every run. The event-bus emission work is what surfaced
+it: wrapping the old autocommit writes in transactions created the read-then-upgrade window, and
+only the 022 panel cycle forced the concurrency tests that exposed it. Three sites now share one
+transaction discipline: IMMEDIATE begin → read probe → write → append → commit.
+
+Board: 15/23 passed. Next: 021 (conformance guard), then 015, then phases 4-5.

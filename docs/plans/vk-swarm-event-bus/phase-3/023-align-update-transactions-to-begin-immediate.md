@@ -2,7 +2,7 @@
 id: "023"
 phase: 3
 title: "Convert Task::update and Task::update_status to BEGIN IMMEDIATE (latent 517 fix)"
-status: ready
+status: passed
 depends_on: ["022"]
 parallel: false
 conflicts_with: []
