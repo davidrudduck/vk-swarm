@@ -7528,3 +7528,27 @@ All six tests green (1, 1b, 1c, 2, 4, 5). Connectivity delegation documented in 
 1. Test 2 (~:564): Added `else { panic!("failed to parse payload JSON") }` — silent skip replaced with hard fail
 2. Test 1 phase labels: Relabeled "Test 1a/1b/1c" → "phase 1/2/3: create/status/delete" to avoid collision with task's 1b/1c test names
 3. Ledger: Recorded panel's scope boundaries and corrections above
+
+## Task 015 PASSED — PHASE 3 COMPLETE (2026-08-16, orchestrator)
+
+Chain: 68141651 (suite, gated CONFORMS) → a1d19636 (panel remediation, gated CONFORMS over the
+creation-inclusive range 4255b87b..a1d19636 — the intermediate single-commit gate run tripped the
+create-check on an edit-only follow-up, a gate-semantics artifact, not a defect). Panel-015: PASS,
+0 blocking; mutation sweep caught every dictated target (duplicate append, per-child breakdown
+emission, upsert old/new payload); the three survivals (update_status gate/payload, forced
+AttemptFinished) are scope boundaries each verified pinned by colocated tests the panel ran RED
+under live mutations. Panel's required ledger correction (attempt_failed is NOT integration-
+covered here — only by 007's colocated tests) applied in a1d19636 along with the unskippable
+parse assert and phase-label fixes. Sibling W: from plan-lint (filesystem_repo_discovery.rs
+neighbour) acknowledged — a repo-discovery test is not a pattern sibling of an emission suite.
+Full-suite `cargo test -p services` shows only the tracked normalize_sync_test concurrency flake
+(F-2026-08-04-02, own workstream); green in isolation (5/5), verified this session.
+
+**PHASE 3 (EMISSION) IS COMPLETE.** Sites instrumented: task CRUD (006), attempt lifecycle incl.
+orphan recovery (007), hive connectivity (008), breakdown acceptance (020), remote upsert (022).
+Discipline unified (023: IMMEDIATE transactions, latent 517 empirically confirmed and fixed).
+Enforced by the conformance guard (021, 16-entry reviewed table). Proven cross-site (015).
+
+Board: 17/23 passed. Remaining: phase 4 — 009 (TriggerHook seam), 010 (SSE endpoint, dep 001
+🚧 HUMAN GATE); phase 5 — 011 (compaction), 014 (startup wiring), 012 (live acceptance). Then the
+run-level reachability gate, deploy verification, and push at close.

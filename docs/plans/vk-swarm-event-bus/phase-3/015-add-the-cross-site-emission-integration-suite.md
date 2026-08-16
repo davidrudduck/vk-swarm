@@ -2,7 +2,7 @@
 id: "015"
 phase: 3
 title: "Add the cross-site emission integration suite"
-status: ready
+status: passed
 depends_on: ["006","007","008","020","022"]
 parallel: false
 conflicts_with: []
