@@ -2,7 +2,7 @@
 id: "010"
 phase: 4
 title: "Add the GET /api/events SSE endpoint with cursor resume on the freed path"
-status: ready
+status: passed
 depends_on: ["001","005","014"]
 parallel: false
 conflicts_with: ["001"]

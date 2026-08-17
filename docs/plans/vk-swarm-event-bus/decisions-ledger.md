@@ -8737,3 +8737,25 @@ cargo fmt --all -- --check                                     EXIT=0
 
 The R2 serialization branch remains untested: `SequencedEvent` is two infallibly-`Serialize`
 fields, and no test was dictated for it. R1 is now pinned; R2 is not.
+
+## Task 010 adjudication (2026-08-17) — PASSED on attempt 3 + dictated addendum (8b63af34)
+
+Attempt 1: clean STOP (bus unreachable — resolved via 014 dependency + accessor contract).
+Attempt 2 (`6c7d4ec5`, Haiku): Stage-1 file-set REJECT (harness edit), then post-amendment
+panel reject — both challengers DEVIATES (silent-close error path, hollow seam/SC4/guard
+tests, false "no undictated choices", router relocations). Attempt 3 (`c38c316e` +
+corrections `b058830a`, Opus): both challengers CONFORMS — every kill dead, several fixes
+structural (Result<Event, Infallible> makes the Err-through-SseBody defect unrepresentable;
+routes/mod.rs byte-identical to the pre-001 tree). Panel N1 (gate command was a name filter
+running 2/6 tests) fixed as a task-file amendment (`30effd22`) — repo defect, not
+agent-plugins. Panel A §6 resolved as option (a): test 7 dictated and landed (`8b63af34`)
+pinning the R1 terminal-error-frame + stream-end behaviour via table-rename fault injection,
+with red proof (keep-alive-hang mutation → FAILED on the stream-end assertion) and the route
+file byte-identical after revert. No third full panel round for the test-only addendum, per
+the task-004/011 attempt-3 precedent. Residual recorded: the R2 serialization branch remains
+reviewed-only (unreachable in practice — SequencedEvent serialization cannot fail).
+
+Orchestrator obligation reaffirmed for run close: live SC4 curl transcript (connect, note
+last seq, disconnect, create tasks, reconnect with cursor — nothing missing, ascending).
+
+Task 010 marked passed (22/23).
