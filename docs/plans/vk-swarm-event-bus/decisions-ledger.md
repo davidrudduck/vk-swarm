@@ -8640,3 +8640,100 @@ code or test behaviour changes, and commit `c38c316e` is unaffected.
    (`Ok(Box::pin(unfold(initial_state, |mut state| async move {`). The related cites are accurate
    as written: `subscribe_from` at :193, subscribe-before-mark at :212-219 (the `sender.subscribe()`
    at :213, the fresh `high_water_mark` read at :217).
+
+## Task 010 test 7 (dictated addendum)
+
+Test-only follow-up to `c38c316e`, dictated by the task file's REQUIRED section added in
+`30effd22` (panel attempt-3 re-review, panel A §6 option a). It closes the uncovered dictate that
+ledger §6 and its correction both flagged: the R1 mid-stream error path is now test-pinned.
+`crates/server/src/routes/events.rs` is UNCHANGED by this commit — verified byte-identical after
+the red-proof revert (`git diff -- crates/server/src/routes/events.rs` is empty).
+
+### 1. The test
+
+`mid_stream_error_emits_terminal_error_frame_then_ends` — journal 3 events, then
+`ALTER TABLE event_journal RENAME TO event_journal_poisoned` via `h.deployment().db().pool`, then
+`GET /api/events?cursor=0`. Asserts, in this order: the response head was already 200 (the failure
+cannot become a status code); the body ended CLEANLY rather than aborting (no `Err` through
+`SseBody`); the stream ENDED before the 10s deadline; exactly ONE data frame arrived; that frame
+is `event: error`; and it carries a non-empty diagnostic payload.
+
+Why `cursor=0` is load-bearing: the handler only reads the journal itself on the NO-cursor path,
+where a failure is an HTTP error (R3), not a frame. With a cursor present the handler calls
+`subscribe_from(cursor)` — which returns `Ok` immediately and defers all journal I/O into the
+stream — so the poisoned-table failure surfaces on the stream's FIRST poll, inside the stream.
+That is precisely the R1 path.
+
+Fault injection is this run's established table-rename technique
+(`crates/services/src/services/event_bus/tailer.rs:581`; task 014's ledger). Note this REFUTES the
+infeasibility claim in this file's §6 for attempt 3, exactly as that section's append-only
+correction stated: the technique is expressible from `crates/server/tests/events.rs` and needed no
+file-set change. The gap was contractual (no test was dictated then), never technical.
+
+The assertion ORDER is deliberate: `stream_ended` is asserted before the frame-count assertion, so
+the dictated red proof trips the assertion the `Done` transition actually owns rather than dying
+on a symptom.
+
+### 2. Teardown
+
+The table is renamed BACK (`ALTER TABLE event_journal_poisoned RENAME TO event_journal`) before
+any assertion runs, so a failing assertion cannot leave a poisoned schema behind. The harness
+gives every test its own temp-dir database (`VK_DATABASE_PATH` under a fresh `TempDir`, and these
+tests are `#[serial]`), so this is belt-and-braces rather than strictly required: it keeps the
+schema coherent for the deployment's own shutdown path (WAL checkpoint, pool close) and for the
+journal tailer, which keeps polling the renamed-away table for the life of the test.
+
+### 3. Red proof (authorized temporary mutation, NOT committed)
+
+Mutation: in `crates/server/src/routes/events.rs`, the bus-error branch yields the terminal frame
+but stays alive — `Some((Ok(frame), StreamStage::Done))` becomes
+`Some((Ok(frame), StreamStage::Running(inner)))`.
+
+```text
+running 1 test
+test mid_stream_error_emits_terminal_error_frame_then_ends ... FAILED
+
+---- mid_stream_error_emits_terminal_error_frame_then_ends stdout ----
+thread 'mid_stream_error_emits_terminal_error_frame_then_ends' (529706) panicked at
+crates/server/tests/events.rs:725:5:
+the stream must END after the terminal error frame; it was still open at the deadline (a
+keep-alive-only hang is a failure). collected: "event: error\ndata: event stream error: error
+returned from database: (code: 1) no such table: event_journal\n\n" (x9)
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.36s
+```
+
+(The repeated frame is elided as `(x9)` for width; the raw panic message repeats that exact frame
+nine times, one per re-poll of the failing journal read up to the test's frame budget.) The
+mutation was reverted with a targeted edit — no `git checkout/restore/stash` — and the revert is
+proven by `git diff -- crates/server/src/routes/events.rs` returning empty against HEAD.
+
+### 4. UNDICTATED choices
+
+- **`FRAME_BUDGET` (8) bounds the read loop.** Without it the mutated route re-polls the failing
+  journal read with no delay and spews frames for the whole 10s deadline, growing the accumulated
+  buffer without bound. It is a guard, not an expectation: the passing path emits one frame and
+  ends, and exceeding the budget leaves `stream_ended == false`, which is the assertion that
+  fires.
+- **`body_error` is captured rather than panicked on inside the read loop**, so the teardown
+  rename always runs before assertions.
+- **Three assertions beyond the literal dictate**: status 200 (the failure is a frame, not a
+  status), clean body end vs abort (this is the R1 `Err`-through-`SseBody` kill, asserted
+  directly), and a non-empty payload on the error frame (an empty `data:` would be the R2 `"{}"`
+  swallow in another guise).
+
+### 5. Verification (this commit, verbatim)
+
+```text
+cargo test -p server --test events                             EXIT=0
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.19s
+cargo test -p server                                           EXIT=0
+  test result: ok. 87 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.26s
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.20s
+  (+14 further suites in this crate, all ok; 3 ignored in one suite, pre-existing)
+cargo clippy --all --all-targets --all-features -- -D warnings EXIT=0
+cargo fmt --all -- --check                                     EXIT=0
+```
+
+The R2 serialization branch remains untested: `SequencedEvent` is two infallibly-`Serialize`
+fields, and no test was dictated for it. R1 is now pinned; R2 is not.

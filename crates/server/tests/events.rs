@@ -633,3 +633,116 @@ async fn sse_delivers_an_event_from_a_real_task_write() {
          (full-path proof: model write → journal → tailer → bus → SSE); collected: {collected:?}"
     );
 }
+
+/// Test 7: mid_stream_error_emits_terminal_error_frame_then_ends
+///
+/// Pins the R1 dictate: a failure that happens INSIDE the stream must reach the client as a
+/// terminal `event: error` frame, after which the stream ENDS. An `Err` yielded into `SseBody`
+/// would instead make hyper abort the chunked body (axum-0.8.8 `response/sse.rs:130`) — a silent
+/// close; and a stream that emits the frame but stays alive would hang on keep-alives forever.
+///
+/// Fault injection uses this run's established table-rename technique
+/// (`crates/services/src/services/event_bus/tailer.rs:581`): with `event_journal` renamed away,
+/// the subscription's own `high_water_mark` read fails on its FIRST poll, inside the stream. The
+/// `cursor=0` leg is what forces that read into the stream — the handler itself only reads the
+/// journal on the no-cursor path, and its failure there is an HTTP error, not a frame.
+#[tokio::test]
+#[serial_test::serial]
+async fn mid_stream_error_emits_terminal_error_frame_then_ends() {
+    let h = common::HiveHarness::hive_absent().await;
+    let pool = h.deployment().db().pool.clone();
+
+    let seeded = journal_events(&pool, 3).await;
+    assert_eq!(seeded, vec![1, 2, 3], "unexpected seeded seqs: {seeded:?}");
+
+    // Poison the journal: the table the subscription reads no longer exists under that name.
+    sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_poisoned")
+        .execute(&pool)
+        .await
+        .expect("failed to rename event_journal");
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{}/api/events?cursor=0", h.addr());
+    let res = client.get(&url).send().await.unwrap();
+
+    // The response head is already on the wire before the stream is first polled, so the failure
+    // cannot become a status code — it has to arrive as a frame.
+    let status = res.status().as_u16();
+
+    let mut event_stream = res.bytes_stream();
+    let mut collected = String::new();
+    let mut stream_ended = false;
+    let mut body_error: Option<String> = None;
+
+    // Bounded read. The frame budget is a guard, not an expectation: a route that emits the error
+    // frame without terminating re-polls the failing journal read immediately and would otherwise
+    // spin out frames for the whole deadline.
+    const FRAME_BUDGET: usize = 8;
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(tokio::time::Duration::from_millis(100), event_stream.next())
+            .await
+        {
+            Ok(Some(Ok(bytes))) => {
+                collected.push_str(&String::from_utf8_lossy(&bytes));
+                if data_frames(&collected).len() > FRAME_BUDGET {
+                    break;
+                }
+            }
+            Ok(Some(Err(e))) => {
+                body_error = Some(e.to_string());
+                break;
+            }
+            Ok(None) => {
+                stream_ended = true;
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+
+    // Teardown BEFORE the assertions so a failing assertion cannot leave the DB poisoned. The
+    // harness gives every test its own temp-dir database, so this is belt-and-braces: it keeps
+    // the schema coherent for the deployment's own shutdown path (WAL checkpoint, pool close).
+    sqlx::query("ALTER TABLE event_journal_poisoned RENAME TO event_journal")
+        .execute(&pool)
+        .await
+        .expect("failed to restore event_journal");
+
+    assert_eq!(
+        status, 200,
+        "the failure must arrive as a frame, not a status"
+    );
+    assert_eq!(
+        body_error, None,
+        "the SSE body must END cleanly, not abort — an Err through SseBody is the silent close \
+         R1 forbids"
+    );
+
+    // The stream-end assertion is FIRST on purpose: it is the one the R1 `Done` transition owns,
+    // and the one the dictated red proof must trip.
+    assert!(
+        stream_ended,
+        "the stream must END after the terminal error frame; it was still open at the deadline \
+         (a keep-alive-only hang is a failure). collected: {collected:?}"
+    );
+
+    let frames = data_frames(&collected);
+    assert_eq!(
+        frames.len(),
+        1,
+        "expected exactly one frame — the terminal error frame — and nothing after it; \
+         collected: {collected:?}"
+    );
+    assert!(
+        frames[0].lines().any(|l| l.trim_end() == "event: error"),
+        "the terminal frame must be an `error` event; frame: {:?}",
+        frames[0]
+    );
+    assert!(
+        !frame_data(frames[0]).is_empty(),
+        "the terminal error frame must carry a diagnostic payload; frame: {:?}",
+        frames[0]
+    );
+}
