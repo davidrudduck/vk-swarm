@@ -110,3 +110,17 @@ No `Deployment`-trait change is needed or permitted: `crates/server/src/lib.rs:1
 type. The route handler obtains the bus as `deployment.event_bus()` from
 `State(deployment): State<DeploymentImpl>`. Do not add trait methods; do not construct a bus in
 the route.
+
+## REQUIRED — added 2026-08-17 (orchestrator): real-write HTTP-seam test (reachability gate b)
+
+Task 014 deferred the run-level reachability-gate (b) test here (its ledger names
+`crates/server/tests/events.rs`). Therefore, IN ADDITION to tests 1-5:
+
+6. `sse_delivers_an_event_from_a_real_task_write` — drive the REAL production write path, not
+   `event_journal::append`: create a project and a task through the model functions the
+   production routes call (`Project::create` / `Task::create` — the same write sites task 006
+   instrumented), and assert the resulting `task_created` event arrives on a `GET /api/events`
+   subscription taken BEFORE the write. This is the full-path proof: model write → journal →
+   tailer → bus → SSE frame. If the test harness cannot construct the prerequisites for a task
+   write, STOP and report what is missing — do not fall back to `event_journal::append` for
+   this test (tests 1-5 may journal directly; this one exists precisely to avoid that seam).
