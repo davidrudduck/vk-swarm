@@ -7853,3 +7853,71 @@ source; filed upstream as **ExpansionX/agent-plugins#135** (related but distinct
 Remaining `!` SQL-literals line is a warning (no live schema access configured), not a failure.
 With the mechanical fixes committed in `6b7c8cb6` and these two overridden, the plan-lint
 preflight is treated as PASS for resuming the run.
+
+## Task 011 implementation (attempt 2, panel remediation)
+
+- **Attempt 1 rejected** by a two-challenger adversarial panel (6 + 6 cited findings; the
+  overlapping ones consolidated). This commit remediates all of them: the stage-3 clamp warn now
+  reports the operator-set value rather than stage 2's already-clamped intermediate; the clamp is
+  applied on EVERY `compact` call path, not only the parse path; `run_compaction` returns the
+  deleted-row count so tests can assert evidence; test 4 gained real assertions; the D6 defaults
+  are pinned literally so a mutated constant fails; and the warns are asserted, not assumed.
+- **Pure parse-function config parsing** (`parse_event_compaction_config`, no env mutation in
+  tests) — justified: Rust 2024 makes `std::env::set_var` `unsafe`, and cargo's parallel test
+  threads race on process-wide env. The env-reading seam itself is covered instead by a
+  `EventCompactionConfig::default()` test, which is what would catch a typo in a variable NAME.
+- **`sanitise_rows` applied in `run_compaction` as well as at parse time** — `EventCompactionConfig`
+  has public fields, so a caller-constructed config (e.g. from task 014) can otherwise reach
+  `compact` without ever passing the parser and hand stage 2 a raw `0`. The parser is not a
+  trustworthy chokepoint; the call site is.
+- **`supervised_run` duplicated verbatim from `wal_monitor.rs`** — forced: the sibling's copy is
+  private in `crates/db`, and exporting it would require editing a file outside this task's
+  `files:` list, which is a STOP trigger.
+- **`VK_EVENT_COMPACTION_INTERVAL_SECS` added** beyond the three dictated variables — justified by
+  the sibling convention (`VK_WAL_CHECK_INTERVAL_SECS`); now documented in `.env.example` in the
+  same commented-default style.
+- **First tick deferred** (a `compaction_interval.tick().await` before the loop) — a deliberate
+  divergence from the sibling's primary timer, which fires immediately. Compaction is not urgent at
+  startup and the deferral avoids competing with startup I/O. The sibling applies the same idiom to
+  its secondary (TRUNCATE) timer only.
+- **Manual verification item 2** (`VK_EVENT_RETENTION_HOURS=0` against a scratch DB holding
+  backdated journal rows and a `trigger_cursors` row, recording before/after row counts) is an
+  ORCHESTRATOR obligation, recorded at run close per this run's parked-obligations note.
+- **Stale untracked `docs/plans/.wai-task-base`** was deleted during attempt 1. It was never
+  tracked, and the gate reads `docs/plans/vk-swarm-event-bus/.wai-task-base` — a different path —
+  so the deletion has zero impact.
+- **UNDICTATED (recorded per the implementer contract):** test 6
+  (`max_rows_of_zero_is_clamped_to_at_least_one`) gained `#[traced_test]` plus a
+  `logs_contain("configured=0")` / `!logs_contain("configured=1")` pair. This is the ONLY case where
+  both stage 2 and stage 3 fire, so it is the only case that can observe the stage-3 warn reporting
+  the operator's value instead of stage 2's intermediate — i.e. the only test that makes the first
+  panel finding regression-proof. No such assertion was dictated; without it that fix is untested.
+- **Test count:** 8 colocated tests (the 6 from the task file + the min_rows-floor test + the
+  `Default::default()` env-seam test), not the 9 the remediation brief predicted — 6 + 1 + 1 = 8.
+  No test was dropped; the brief's arithmetic was off by one.
+- **Manual verification item 1 — DONE.** `grep -n VK_EVENT_ .env.example`:
+  ```
+  145:# cap overrides that floor: above VK_EVENT_MAX_ROWS, older rows are deleted regardless and any
+  148:# VK_EVENT_RETENTION_HOURS=168
+  149:# VK_EVENT_MIN_ROWS=10000
+  150:# VK_EVENT_MAX_ROWS=100000
+  153:# VK_EVENT_COMPACTION_INTERVAL_SECS=60
+  ```
+  All variables documented and commented out, as required.
+- **Env-seam test proved order-independent, not just filter-green.** The
+  `EventCompactionConfig::default()` test reads process-global env, which a filtered
+  `cargo test -p services event_compaction` run cannot vet. Checked: the only `env::set_var` in
+  `crates/services/src` is `worktree_manager.rs:760,770` (`VK_WORKTREE_DIR`, under `#[serial]`),
+  there is no `dotenvy` call in the crate, and the worktree has no `.env`. Unfiltered
+  `cargo test -p services` is green (302 lib tests + every integration suite, 0 failed). Residual:
+  the test would fail for a developer who exports `VK_EVENT_*` into their shell — inherent to the
+  sibling's `WalMonitorConfig::default()` pattern, which this deliberately mirrors.
+- **UNDICTATED (minor, recorded for completeness):**
+  - `run_compaction`'s success `info!` now reports the SANITISED `min_rows`/`max_rows` rather than
+    `self.config.*`, so the log states the values actually passed to `compact`. Instruction 3 did
+    not ask for this log-content change.
+  - Test 3 asserts all four variable names appear in the fallback warns; the brief said "the
+    offending variable name". A strict superset.
+  - Consequence of dictated fix 2, reasoned about rather than missed: a caller-constructed bad
+    config now re-emits its clamp warns on EVERY tick (60s by default), not once at parse time.
+    That is the intended cost of making the call site — not the parser — the chokepoint.

@@ -15,6 +15,7 @@
 use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
+use db::models::event_journal::EventJournalError;
 use futures::FutureExt;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
@@ -52,10 +53,14 @@ impl Default for EventCompactionConfig {
     }
 }
 
-/// Parse event compaction configuration from raw environment strings.
+/// Sanitize the row thresholds so `compact` can never be handed a value that
+/// would silently empty the journal.
 ///
-/// This is a pure function to avoid environment variable mutation in tests.
-/// It sanitizes all values and logs warnings for any clamping that occurs.
+/// `EventCompactionConfig`'s fields are public, so a caller-constructed config
+/// can reach `compact` without ever passing through
+/// [`parse_event_compaction_config`]. This function is therefore applied on
+/// BOTH paths: at parse time, and again immediately before every `compact`
+/// call.
 ///
 /// # Sanitization Order
 ///
@@ -63,32 +68,15 @@ impl Default for EventCompactionConfig {
 /// 2. Clamp `max_rows` to >= 1
 /// 3. Clamp `max_rows` up to >= `min_rows` if below
 ///
-/// Each clamp emits a `tracing::warn!` with the variable name and both
-/// configured and effective values.
-fn parse_event_compaction_config(
-    retention_hours_str: Option<String>,
-    min_rows_str: Option<String>,
-    max_rows_str: Option<String>,
-    interval_secs_str: Option<String>,
-) -> EventCompactionConfig {
-    let retention_hours = parse_i64_or_default(
-        &retention_hours_str,
-        DEFAULT_RETENTION_HOURS,
-        "VK_EVENT_RETENTION_HOURS",
-    );
-
-    let mut min_rows = parse_i64_or_default(&min_rows_str, DEFAULT_MIN_ROWS, "VK_EVENT_MIN_ROWS");
-
-    let mut max_rows = parse_i64_or_default(&max_rows_str, DEFAULT_MAX_ROWS, "VK_EVENT_MAX_ROWS");
-
-    let interval_secs = parse_u64_or_default(
-        &interval_secs_str,
-        60, // Compact every 60 seconds by default
-        "VK_EVENT_COMPACTION_INTERVAL_SECS",
-    );
+/// Each clamp emits a `tracing::warn!` with the variable name and both the
+/// configured (operator-set, pre-clamp) and effective values.
+fn sanitise_rows(mut min_rows: i64, mut max_rows: i64) -> (i64, i64) {
+    // Captured before ANY clamp fires, so the warns always report the value the
+    // operator actually configured rather than an intermediate clamped value.
+    let min_rows_configured = min_rows;
+    let max_rows_configured = max_rows;
 
     // Sanitization stage 1: clamp min_rows to >= 1
-    let min_rows_configured = min_rows;
     if min_rows < 1 {
         tracing::warn!(
             variable = "VK_EVENT_MIN_ROWS",
@@ -100,7 +88,6 @@ fn parse_event_compaction_config(
     }
 
     // Sanitization stage 2: clamp max_rows to >= 1
-    let max_rows_configured = max_rows;
     if max_rows < 1 {
         tracing::warn!(
             variable = "VK_EVENT_MAX_ROWS",
@@ -113,16 +100,47 @@ fn parse_event_compaction_config(
 
     // Sanitization stage 3: clamp max_rows UP to min_rows if below
     if max_rows < min_rows {
-        let max_rows_before = max_rows;
         max_rows = min_rows;
         tracing::warn!(
             variable = "VK_EVENT_MAX_ROWS",
-            configured = max_rows_before,
+            configured = max_rows_configured,
             min_rows = min_rows,
             effective = max_rows,
             "Clamping VK_EVENT_MAX_ROWS up to VK_EVENT_MIN_ROWS (hard cap cannot be less than minimum)"
         );
     }
+
+    (min_rows, max_rows)
+}
+
+/// Parse event compaction configuration from raw environment strings.
+///
+/// This is a pure function to avoid environment variable mutation in tests.
+/// It sanitizes all values via [`sanitise_rows`] and logs warnings for any
+/// clamping that occurs.
+fn parse_event_compaction_config(
+    retention_hours_str: Option<String>,
+    min_rows_str: Option<String>,
+    max_rows_str: Option<String>,
+    interval_secs_str: Option<String>,
+) -> EventCompactionConfig {
+    let retention_hours = parse_i64_or_default(
+        &retention_hours_str,
+        DEFAULT_RETENTION_HOURS,
+        "VK_EVENT_RETENTION_HOURS",
+    );
+
+    let min_rows_raw = parse_i64_or_default(&min_rows_str, DEFAULT_MIN_ROWS, "VK_EVENT_MIN_ROWS");
+
+    let max_rows_raw = parse_i64_or_default(&max_rows_str, DEFAULT_MAX_ROWS, "VK_EVENT_MAX_ROWS");
+
+    let interval_secs = parse_u64_or_default(
+        &interval_secs_str,
+        60, // Compact every 60 seconds by default
+        "VK_EVENT_COMPACTION_INTERVAL_SECS",
+    );
+
+    let (min_rows, max_rows) = sanitise_rows(min_rows_raw, max_rows_raw);
 
     EventCompactionConfig {
         retention_hours,
@@ -233,7 +251,9 @@ impl EventCompaction {
                 Some(cmd) = rx.recv() => {
                     match cmd {
                         EventCompactionCommand::CompactNow => {
-                            self.run_compaction().await;
+                            // Errors are already logged inside run_compaction; the
+                            // loop must never crash on a failed compaction pass.
+                            let _ = self.run_compaction().await;
                         }
                         EventCompactionCommand::Shutdown => {
                             tracing::info!("Event compaction service shutting down");
@@ -242,20 +262,30 @@ impl EventCompaction {
                     }
                 }
                 _ = compaction_interval.tick() => {
-                    self.run_compaction().await;
+                    // Errors are already logged inside run_compaction; the loop
+                    // must never crash on a failed compaction pass.
+                    let _ = self.run_compaction().await;
                 }
             }
         }
     }
 
-    async fn run_compaction(&self) {
+    /// Run one compaction pass, returning the number of rows deleted.
+    ///
+    /// The row thresholds are re-sanitised here rather than trusted from
+    /// `self.config`: `EventCompactionConfig`'s fields are public, so a
+    /// caller-constructed config could otherwise hand `compact` a raw `0` and
+    /// let stage 2 empty the journal while flagging nobody.
+    async fn run_compaction(&self) -> Result<u64, EventJournalError> {
         let start = std::time::Instant::now();
+
+        let (min_rows, max_rows) = sanitise_rows(self.config.min_rows, self.config.max_rows);
 
         match db::models::event_journal::compact(
             &self.pool,
             self.config.retention_hours,
-            self.config.min_rows,
-            self.config.max_rows,
+            min_rows,
+            max_rows,
         )
         .await
         {
@@ -266,8 +296,8 @@ impl EventCompaction {
                         deleted_rows = deleted_count,
                         duration_ms = duration.as_millis() as u64,
                         retention_hours = self.config.retention_hours,
-                        min_rows = self.config.min_rows,
-                        max_rows = self.config.max_rows,
+                        min_rows = min_rows,
+                        max_rows = max_rows,
                         "Event journal compaction completed"
                     );
                 } else {
@@ -276,6 +306,7 @@ impl EventCompaction {
                         "Event journal compaction completed (no rows deleted)"
                     );
                 }
+                Ok(deleted_count)
             }
             Err(e) => {
                 let duration = start.elapsed();
@@ -284,6 +315,7 @@ impl EventCompaction {
                     duration_ms = duration.as_millis() as u64,
                     "Event journal compaction failed"
                 );
+                Err(e)
             }
         }
     }
@@ -315,14 +347,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
 
     // Test 1: reads_retention_defaults_when_env_absent
+    //
+    // The D6 defaults are pinned LITERALLY, not against the constants: a
+    // mutated constant must fail this test rather than move the goalposts.
     #[test]
     fn reads_retention_defaults_when_env_absent() {
         let config = parse_event_compaction_config(None, None, None, None);
-        assert_eq!(config.retention_hours, DEFAULT_RETENTION_HOURS);
-        assert_eq!(config.min_rows, DEFAULT_MIN_ROWS);
-        assert_eq!(config.max_rows, DEFAULT_MAX_ROWS);
+        assert_eq!(config.retention_hours, 168);
+        assert_eq!(config.min_rows, 10000);
+        assert_eq!(config.max_rows, 100000);
         assert_eq!(config.compaction_interval_secs, 60);
     }
 
@@ -342,7 +378,11 @@ mod tests {
     }
 
     // Test 3: invalid_env_falls_back_to_default_and_warns
+    //
+    // Defaults pinned literally (see test 1). The warn is asserted, not merely
+    // assumed: a silent fallback gives the operator no signal at startup.
     #[test]
+    #[traced_test]
     fn invalid_env_falls_back_to_default_and_warns() {
         let config = parse_event_compaction_config(
             Some("not_a_number".to_string()),
@@ -350,10 +390,27 @@ mod tests {
             Some("definitely_invalid".to_string()),
             Some("nope".to_string()),
         );
-        assert_eq!(config.retention_hours, DEFAULT_RETENTION_HOURS);
-        assert_eq!(config.min_rows, DEFAULT_MIN_ROWS);
-        assert_eq!(config.max_rows, DEFAULT_MAX_ROWS);
+        assert_eq!(config.retention_hours, 168);
+        assert_eq!(config.min_rows, 10000);
+        assert_eq!(config.max_rows, 100000);
         assert_eq!(config.compaction_interval_secs, 60);
+
+        assert!(
+            logs_contain("VK_EVENT_RETENTION_HOURS"),
+            "the fallback warn must name the offending variable"
+        );
+        assert!(
+            logs_contain("VK_EVENT_MIN_ROWS"),
+            "the fallback warn must name the offending variable"
+        );
+        assert!(
+            logs_contain("VK_EVENT_MAX_ROWS"),
+            "the fallback warn must name the offending variable"
+        );
+        assert!(
+            logs_contain("VK_EVENT_COMPACTION_INTERVAL_SECS"),
+            "the fallback warn must name the offending variable"
+        );
     }
 
     // Test 4: compaction_run_is_a_no_op_on_an_empty_journal
@@ -366,13 +423,30 @@ mod tests {
             max_rows: 100000,
             compaction_interval_secs: 60,
         };
-        let service = EventCompaction { pool, config };
-        // run_compaction should succeed and log no deletions
-        service.run_compaction().await;
+        let service = EventCompaction {
+            pool: pool.clone(),
+            config,
+        };
+
+        let deleted = service
+            .run_compaction()
+            .await
+            .expect("compaction on an empty journal must succeed");
+        assert_eq!(deleted, 0, "an empty journal has nothing to delete");
+
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM event_journal")
+            .fetch_one(&pool)
+            .await
+            .expect("failed to count events");
+        assert_eq!(
+            count, 0,
+            "the journal must still be empty after a no-op run"
+        );
     }
 
     // Test 5: max_rows_below_min_rows_is_clamped_with_a_warning
     #[test]
+    #[traced_test]
     fn max_rows_below_min_rows_is_clamped_with_a_warning() {
         let config = parse_event_compaction_config(
             Some("168".to_string()),
@@ -383,10 +457,24 @@ mod tests {
         // max_rows should be clamped UP to min_rows
         assert_eq!(config.min_rows, 50000);
         assert_eq!(config.max_rows, 50000);
+
+        assert!(
+            logs_contain("VK_EVENT_MAX_ROWS"),
+            "the clamp warn must name the offending variable"
+        );
+        assert!(
+            logs_contain("configured=5000"),
+            "the clamp warn must report the operator-configured value"
+        );
+        assert!(
+            logs_contain("effective=50000"),
+            "the clamp warn must report the effective value"
+        );
     }
 
     // Test 6: max_rows_of_zero_is_clamped_to_at_least_one
     #[tokio::test]
+    #[traced_test]
     async fn max_rows_of_zero_is_clamped_to_at_least_one() {
         let config = parse_event_compaction_config(
             Some("168".to_string()),
@@ -397,6 +485,22 @@ mod tests {
         // max_rows should be clamped to min_rows (which is 10000)
         assert!(config.max_rows >= 1);
         assert_eq!(config.max_rows, config.min_rows);
+
+        // Both stage 2 and stage 3 fire here, so this is the only case that can
+        // observe stage 3 reporting the OPERATOR-set value rather than stage 2's
+        // already-clamped intermediate. A regression reports `configured=1`.
+        assert!(
+            logs_contain("configured=0"),
+            "the clamp warns must report the operator-configured 0"
+        );
+        // NOTE: substring match — this would also fire on `configured=10000`. It
+        // is sound here only because stage 1 does not warn in this test (min_rows
+        // is 10000). Changing this test's min_rows input to trip stage 1 would
+        // make the failure look like a regression when it is not.
+        assert!(
+            !logs_contain("configured=1"),
+            "no warn may report stage 2's intermediate clamp as the configured value"
+        );
 
         // Verify that a compaction run doesn't actually delete everything
         let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
@@ -414,7 +518,10 @@ mod tests {
             .expect("failed to insert test event");
 
         // Run compaction
-        service.run_compaction().await;
+        service
+            .run_compaction()
+            .await
+            .expect("compaction must succeed");
 
         // Verify the event is still there (journal is not empty)
         let count: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM event_journal")
@@ -425,5 +532,33 @@ mod tests {
             count > 0,
             "journal should not be empty after compaction with max_rows=0"
         );
+    }
+
+    // Test 7: min_rows_of_zero_is_clamped_to_at_least_one
+    //
+    // Covers sanitisation stage 1, which the max_rows tests never reach.
+    #[test]
+    #[traced_test]
+    fn min_rows_of_zero_is_clamped_to_at_least_one() {
+        let config = parse_event_compaction_config(None, Some("0".to_string()), None, None);
+        assert_eq!(config.min_rows, 1, "min_rows must be floored at 1");
+
+        assert!(
+            logs_contain("VK_EVENT_MIN_ROWS"),
+            "the clamp warn must name the offending variable"
+        );
+    }
+
+    // Test 8: the env-reading seam itself.
+    //
+    // Every other config test drives the pure parse function, so a typo in an
+    // env var NAME would pass green. Mirrors wal_monitor.rs's
+    // `test_default_config`, but pins the D6 values literally.
+    #[test]
+    fn default_config_uses_d6_defaults_when_env_absent() {
+        let config = EventCompactionConfig::default();
+        assert_eq!(config.retention_hours, 168);
+        assert_eq!(config.min_rows, 10000);
+        assert_eq!(config.max_rows, 100000);
     }
 }
