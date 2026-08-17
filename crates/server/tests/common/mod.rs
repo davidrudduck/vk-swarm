@@ -21,10 +21,10 @@ pub struct HiveHarness {
     addr: SocketAddr,
 }
 
+#[allow(dead_code)]
 pub struct Resp {
     pub status: u16,
     pub body: String,
-    #[allow(dead_code)]
     pub content_type: Option<String>,
 }
 
@@ -33,6 +33,7 @@ impl Resp {
     /// (crates/server/src/routes/mod.rs:76 -> frontend.rs:40-43) serves with 200 OK
     /// for ANY unmatched GET. A response that is the SPA fallback did NOT reach a
     /// registered API route, whatever its status code says.
+    #[allow(dead_code)]
     pub fn is_spa_fallback(&self) -> bool {
         self.content_type
             .as_deref()
@@ -42,6 +43,7 @@ impl Resp {
 
     /// Assert the request reached a REGISTERED API route rather than the SPA fallback.
     /// This — NOT a 404 check — is what proves route registration in this codebase.
+    #[allow(dead_code)]
     pub fn assert_registered(&self) {
         assert!(
             !self.is_spa_fallback(),
@@ -334,6 +336,16 @@ impl HiveHarness {
         }
 
         project_id
+    }
+
+    /// Get the HTTP listener address for making requests
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// Get the deployment for direct access to services (e.g., event bus, database)
+    pub fn deployment(&self) -> &DeploymentImpl {
+        &self.deployment
     }
 }
 

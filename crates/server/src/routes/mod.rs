@@ -14,6 +14,7 @@ pub mod containers;
 pub mod dashboard;
 pub mod database;
 pub mod diagnostics;
+pub mod events;
 pub mod filesystem;
 // pub mod github;
 pub mod drafts;
@@ -50,6 +51,8 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(config::router())
         .merge(containers::router(&deployment))
         .merge(dashboard::router(&deployment))
+        .merge(database::router())
+        .merge(events::router(&deployment))
         .merge(projects::router(&deployment))
         .merge(drafts::router(&deployment))
         .merge(tasks::router(&deployment))
@@ -70,7 +73,6 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(filesystem::router())
         .merge(approvals::router())
         .merge(backups::router())
-        .merge(database::router())
         .merge(diagnostics::router(&deployment))
         .merge(logs::router(&deployment))
         .merge(message_queue::router(&deployment))
