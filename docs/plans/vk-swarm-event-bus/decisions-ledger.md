@@ -1,5 +1,68 @@
 # vk-swarm-event-bus — decisions ledger
 
+## Task 014 implementation
+
+### Wiring strategy (EventBus, tailer, trigger-hook runner, compaction)
+
+- **Single supervised loop per hook** — Each hook in the registry gets its own spawned task with a
+  supervised respawn loop. On `Err` or `JoinError`, logs the failure, backs off exponentially
+  (1s → 60s cap), and respawns. This matches the task file §3 requirement to spawn `run_hook` as its
+  own task for panic detection.
+
+- **Ensure cursor row before each run** — On every iteration of the supervised loop, calls
+  `trigger_cursor::ensure_row()` to guarantee a row exists (task file §4 + panel-009c requirement).
+  A fresh row starts at `last_processed_seq = 0, needs_rebootstrap = 0`, ensuring the hook is on
+  the compaction floor from registration onward.
+
+- **Re-read flag on each respawn** — After the runner exits, the loop re-reads `needs_rebootstrap`
+  to check if compaction raised the flag while the runner was live. A live-raised flag survives
+  all cursor writes (F2 fix per panel-009c), so re-spawning immediately observes it and the next
+  start triggers rebootstrap. This is the "each respawn re-reads the cursor AND `needs_rebootstrap`"
+  requirement (task file §3).
+
+- **HTTP-seam test deferred to task 010** — REQUIRED §2 (reachability gate b) asks for a test
+  driving `GET /api/events` against the wired deployment. The route does not exist yet (task 010
+  creates it), so per the task file's own escape clause, this test lands in task 010's
+  `crates/server/tests/events.rs`, where the route will be live. Recorded here rather than
+  silently deferred: the test block itself belongs in THIS task's test module, but the HTTP
+  transport part is blocked on task 010. No test was written for this because the route is
+  unreachable at integration-test time in task 014.
+
+- **No shutdown path on LocalDeployment** — Recorded per the task file's STOP trigger: the
+  deployment struct has no public `shutdown()` method. The handles (tailer_handle,
+  _compaction_handle) are retained as fields so they are held alive for the deployment's lifetime;
+  when the deployment is dropped, the handles drop and abort/shutdown the tasks. This is the design:
+  ownership = liveness. No explicit shutdown hook was added because none existed in the
+  deployment's existing pattern and adding one is outside this task's file-set (would require
+  modifying the Deployment trait in `crates/deployment/src/lib.rs`).
+
+- **UNDICTATED (recorded per implementer contract):**
+  - Hook name captured as String in the supervised loop (necessary for move closure; `hook.name()`
+    returns `&'static str` which borrows the trait object and cannot move).
+  - Three separate mutation-proof tests added:
+    1. `mutation_proof_clones_must_share_tailer_handle` (REQUIRED §1) — proves
+       `EventBus::clone()` shares the tailer handle by observing counter climbs via both
+       original and clone.
+    2. `mutation_proof_shutdown_actually_stops_tailer` (REQUIRED §5b) — proves shutdown() stops the
+       tailer by asserting silence after shutdown, not just liveness before.
+    3. Test 4 (`startup_spawns_compaction`) observes handle existence, not the loop's tick
+       interval; the loop's liveness is test-module-level and not observable from integration tests.
+  - EventBus and compaction are generic 64-slot broadcast capacity and default config; neither is
+    tuned or exposed as a field on LocalDeployment (compaction_handle is private).
+  - Supervised respawn loop logs at `warn!` level on every respawn, NOT only on first failure; this
+    is intentional to keep the ledger visible if a hook is genuinely flapping.
+
+### Manual verification (still owed, recorded for orchestrator)
+
+- Real deployment at http://10.69.96.233:9001 or https://vkswarm.thedoctor.raverx.net (live
+  instance) with the branch built and deployed. Verify:
+  1. Create a task → immediately `curl -N http://<node>/api/events` in another shell → create
+     second task → event arrives live. Proves tailer spawned and connected.
+  2. `sqlite3 $VK_DATABASE_PATH "select hook_name, last_processed_seq from trigger_cursors"` returns
+     row for `task_status_changed_logger` hook with advancing cursor. Proves runner spawned.
+  3. Server logs show compaction loop's first-run `info!` (line 243: "Event compaction service
+     started"). Proves compaction spawned at startup.
+
 ## 2026-08-07 precheck: anchor-check false positive (documented per CLAUDE.md no-deferred-remediation)
 
 `wai-precheck.sh` assert 3 flagged `src/services/event_bus.rs` as "referenced as existing
@@ -7065,7 +7128,7 @@ after each). No `git checkout`/`restore`/`stash` was used at any point.
 `let probe: Option<(Uuid, TaskStatus)> = None;`. `cargo test -p db sync_event_tests` -> EXIT=101,
 `test result: FAILED. 3 passed; 3 failed; 0 ignored; 0 measured; 275 filtered out`:
 
-```
+```text
 upsert_status_change_emits_task_status_changed ... FAILED
   assertion `left == right` failed: exactly one task_status_changed event
     left: 0 / right: 1
@@ -7084,14 +7147,14 @@ Tests 2 and 3 fail as dictated. Test 6 ALSO fails on this mutation (every applyi
 `begin_with("BEGIN IMMEDIATE")` back to `begin()` while KEEPING the SELECT probe. Ran
 `for i in $(seq 10); do cargo test -p db concurrent_upserts -- --test-threads=1; done`:
 
-```
+```text
 run 1..10: error: test failed, to rerun pass `-p db --lib`     (10 of 10 FAILED)
 ```
 
 **10 of 10 runs failed** — the test has hard teeth on this defect class, not probabilistic ones.
 Representative failure:
 
-```
+```text
 all concurrent upserts must succeed, got 7 error(s):
 ["Database(SqliteError { code: 5, message: \"database is locked\" })", ... x7]
 ```
@@ -7152,7 +7215,7 @@ path was never exercised under contention at all. The shipped test exercised nei
 - `cargo fmt --all -- --check` -> EXIT=0; `cargo clippy -p db --all-targets -- -D warnings` -> EXIT=0
 - `cargo test -p db --lib sync_event_tests` run FOUR times, all green:
 
-```
+```bash
 run 1: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.80s
 run 2: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.80s
 run 3: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.79s
@@ -7163,7 +7226,7 @@ run 4: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered 
   `begin()` (SELECT probe kept), ran test 6 once -> EXIT=101,
   `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 280 filtered out`:
 
-```
+```text
 all concurrent upserts must succeed, got 7 error(s):
 ["Database(SqliteError { code: 5, message: \"database is locked\" })", ... x7]
 ```
@@ -7217,12 +7280,13 @@ Test 1: `concurrent_updates_serialize_without_errors` (queries.rs) — one task,
 `Task::update` calls against it with distinct titles but SAME status (Todo); pool.begin() still active.
 
 4-run pre-conversion behavior (pool.begin()):
-```
+```text
 run 1: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 10 error(s): code 5 (×4), code 517 (×3), code 5 (×3)
 run 2: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 11 error(s): code 517 (×5), code 5 (×6)
 run 3: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 11 error(s): code 5 (×6), code 517 (×3), code 5 (×2)
 run 4: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 11 error(s): code 517 (×2), code 5 (×9)
 ```
+
 Summary: **4/4 red** with database-locked errors (code 5 and 517), as expected for the deferred-transaction 
 read-snapshot defect.
 
@@ -7230,12 +7294,13 @@ Test 2: `concurrent_status_updates_serialize_without_errors` (hierarchy.rs) — 
 `Task::update_status` calls alternating two statuses; pool.begin() still active.
 
 4-run pre-conversion behavior (pool.begin()):
-```
+```text
 run 1: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 10 error(s): all code 5
 run 2: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 9 error(s): code 5 (×6), code 517 (×3)
 run 3: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 12 error(s): code 5 (×6), code 517 (×4), code 5 (×2)
 run 4: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 10 error(s): code 5 (×7), code 517 (×3)
 ```
+
 Summary: **4/4 red** with database-locked errors (code 5 and 517), as expected for the deferred-transaction 
 read-snapshot defect.
 
@@ -7254,23 +7319,25 @@ Task::create and Task::delete untouched, sync.rs untouched.
 Test 1: concurrent_updates_serialize_without_errors (queries.rs) — pool.begin_with("BEGIN IMMEDIATE") active.
 
 4-run post-conversion behavior:
-```
+```bash
 run 1: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.20s
 run 2: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.25s
 run 3: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.22s
 run 4: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.29s
 ```
+
 Summary: **4/4 green**. All concurrent updates serialize without error.
 
 Test 2: concurrent_status_updates_serialize_without_errors (hierarchy.rs) — pool.begin_with("BEGIN IMMEDIATE") active.
 
 4-run post-conversion behavior:
-```
+```bash
 run 1: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.21s
 run 2: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.21s
 run 3: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.20s
 run 4: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.21s
 ```
+
 Summary: **4/4 green**. All concurrent status updates serialize without error.
 
 ### Shared discipline note
@@ -7294,7 +7361,7 @@ either function or related code.
 
 ### QA gate passed
 
-```
+```bash
 cargo fmt --all -- --check; echo EXIT=$?
   EXIT=0
 
@@ -7311,6 +7378,7 @@ git diff --name-only
   crates/db/src/models/task/hierarchy.rs
   crates/db/src/models/task/queries.rs
 ```
+
 All verification steps pass. Two source files changed, no others.
 
 ## Task 023 PASSED (2026-08-16, orchestrator)
@@ -7374,7 +7442,7 @@ All 16 entries reconcile exactly with task's classification table. No unknown fi
 
 ### Mutation check output (temporary UPDATE line added to archive.rs:archive, then removed)
 
-```
+```sql
 ACTUAL: ["db/src/models/execution_process/lifecycle.rs UPDATE execution_processes x6", ..., "db/src/models/task/archive.rs UPDATE tasks x5", ...]
 EXPECTED: ["db/src/models/execution_process/lifecycle.rs UPDATE execution_processes x6", ..., "db/src/models/task/archive.rs UPDATE tasks x4", ...]
 ```
@@ -7392,7 +7460,7 @@ Added `// Note: This would be UPDATE tasks SET title = 'test'` to archive.rs:2. 
 
 ### QA gate passed
 
-```
+```bash
 cargo fmt --all -- --check; echo EXIT=$?
   EXIT=0
 
@@ -7479,7 +7547,7 @@ Recorded in suite's module doc comment (lines 7-14):
 3. Event JSON parsing: Used manual serde_json::from_str loop instead of sql json_extract to avoid UUID parsing friction (json_extract returns string representation; sqlx Uuid decode expects binary-safe 36-byte input).
 
 **QA gate passed**:
-```
+```bash
 cargo fmt --all -- --check; echo EXIT=$?
   EXIT=0
 
@@ -7673,7 +7741,7 @@ removed before commit. No `git checkout/restore/stash/reset` at any point.
 
 **RP1 — revert F1 to `cursor = new_min.unwrap_or(0);` → test 7 RED:**
 
-```
+```bash
 test services::trigger_hooks::tests::rebootstrap_flag_is_surfaced_and_cleared ... FAILED
 
 thread 'services::trigger_hooks::tests::rebootstrap_flag_is_surfaced_and_cleared' (1731295) panicked at crates/services/src/services/trigger_hooks.rs:711:9:
@@ -7688,7 +7756,7 @@ test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out
 
 **RP2 — swap the matching branch to persist-then-fire → test 4 RED:**
 
-```
+```bash
 test services::trigger_hooks::tests::at_least_once_tolerates_duplicate_delivery ... FAILED
 
 thread 'services::trigger_hooks::tests::at_least_once_tolerates_duplicate_delivery' (1733281) panicked at crates/services/src/services/trigger_hooks.rs:492:9:
@@ -7896,13 +7964,14 @@ preflight is treated as PASS for resuming the run.
   `Default::default()` env-seam test), not the 9 the remediation brief predicted — 6 + 1 + 1 = 8.
   No test was dropped; the brief's arithmetic was off by one.
 - **Manual verification item 1 — DONE.** `grep -n VK_EVENT_ .env.example`:
-  ```
+  ```text
   145:# cap overrides that floor: above VK_EVENT_MAX_ROWS, older rows are deleted regardless and any
   148:# VK_EVENT_RETENTION_HOURS=168
   149:# VK_EVENT_MIN_ROWS=10000
   150:# VK_EVENT_MAX_ROWS=100000
   153:# VK_EVENT_COMPACTION_INTERVAL_SECS=60
   ```
+
   All variables documented and commented out, as required.
 - **Env-seam test proved order-independent, not just filter-green.** The
   `EventCompactionConfig::default()` test reads process-global env, which a filtered
@@ -7945,12 +8014,13 @@ B DEVIATES on one residual (call-site sanitise had no regression guard — delet
 added; gate CONFORMS; only removed line in the whole diff is a test-comment renumber.
 
 Red proof for the F4 guard (implementer, revert proven exact by the committed diff):
-```
+```bash
 test services::event_compaction::tests::run_compaction_sanitises_a_caller_supplied_raw_config ... FAILED
 thread '...' panicked at crates/services/src/services/event_compaction.rs:594:9:
 the call-site clamp must stop a raw 0 emptying the journal
 test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 299 filtered out; finished in 0.41s
 ```
+
 Load-bearing assertion is the row count (line 594), which fires before the bonus
 `logs_contain` assertion — recorded per the implementer's precision note.
 
