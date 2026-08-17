@@ -8259,6 +8259,13 @@ That relocation is the dictated remediation of attempt 1's illegal insertion. Ve
   on this machine (`/var/tmp/vibe-kanban/worktrees` does not exist). A fix in `container.rs` is
   outside this task's file-set and is left as a finding.
 - **`EVENT_BUS_BROADCAST_CAPACITY` const** extracted for the previously inline `64`.
+- **Node-runner env hazard, recorded not guarded.** `from_parts` also calls
+  `NodeRunnerConfig::from_env()`, so a shell exporting `VK_HIVE_URL` + `VK_NODE_API_KEY` makes
+  `cargo test -p local-deployment` connect a throwaway test database to the live hive. It is inert
+  without those variables (the vars are unset on this machine, and every deployment test passed).
+  Not guarded: unsetting them in the test would carry the same `set_var` unsoundness as the
+  worktree guard, without that guard's justification — nothing is destroyed, only a connection is
+  attempted. Recorded as a known constraint on running these tests.
 - **Test-module helpers** `wait_for`, `journal_event`, `journal_row_count`, `cursor_row`
   (the last distinguishes "no row" from "row at 0", which `trigger_cursor::get` cannot).
 - **`ensure_row_creates_cursor_row_at_zero` kept** (panel-009c obligation 1) and strengthened to

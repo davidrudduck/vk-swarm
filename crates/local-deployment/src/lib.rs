@@ -520,8 +520,14 @@ impl LocalDeployment {
         // routine, so disable the sweep for the whole test binary before any deployment is built.
         static DISABLE_ORPHAN_CLEANUP: std::sync::Once = std::sync::Once::new();
         DISABLE_ORPHAN_CLEANUP.call_once(|| {
-            // SAFETY: set once, before any deployment (and therefore any sweep task) exists, and
-            // never unset. Nothing in this test binary reads this variable except the sweep.
+            // SAFETY (partial, and stated honestly): this write is ordered before THIS call's
+            // own container construction, so the sweep it spawns always observes it. It is NOT
+            // race-free against sibling tests: `set_var` is unsound against any concurrent
+            // `getenv`, and tests on other threads may be inside `from_parts` calling
+            // `ShareConfig::from_env`, `NodeRunnerConfig::from_env` or `database_path()` at this
+            // moment. Accepted deliberately: the value is written once, never unset, never read
+            // for an assertion, and the alternative is a test run that deletes a developer's
+            // worktrees.
             unsafe {
                 std::env::set_var("DISABLE_WORKTREE_ORPHAN_CLEANUP", "1");
             }
@@ -1020,6 +1026,13 @@ mod tests {
             cursor_row(&pool, REAL_HOOK).await,
             Some((0, false)),
             "registration must leave a cursor row for the real hook at seq 0, unflagged"
+        );
+
+        // Retention, not just behaviour: one handle per registered hook, none discarded.
+        assert_eq!(
+            deployment.trigger_hook_runner_handles.len(),
+            1,
+            "every registered hook's runner handle must be retained"
         );
 
         deployment.event_bus().shutdown().await;
