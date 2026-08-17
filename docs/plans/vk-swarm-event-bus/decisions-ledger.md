@@ -7610,3 +7610,125 @@ REJECT, adjudicated VALID after orchestrator verification of every load-bearing 
 Remediation dictated in the 009 task file ("REQUIRED — panel remediation (attempt 2, 2026-08-17)");
 implementer ladder rung 2 (`codex:codex-rescue`) is unavailable in this harness — ⚠ agent type
 'codex:codex-rescue' unavailable, degraded to the Opus rung per the documented ladder degradation.
+
+## Task 009 remediation (attempt 2, 2026-08-17)
+
+Executed the dictated "REQUIRED — panel remediation (attempt 2, 2026-08-17)" section of the 009 task
+file against the attempt-1 tree (60cf4dd6 + dd115c03), amended never reverted. Files touched:
+`crates/services/src/services/trigger_hooks.rs`, `crates/db/src/models/trigger_cursor.rs`, and this
+ledger. No new modules, so `mod.rs` in either crate needed no change.
+
+### Undictated choices (everything the dictate did not settle)
+
+- **Test 4 JoinHandle output type.** The dictate requires awaiting `run_hook`'s handle and asserting
+  `Err`, but `run_hook` returns `Result<(), Box<dyn std::error::Error>>`, which is NOT `Send` and so
+  cannot be a `tokio::spawn` output. Chose `.map_err(|e| e.to_string())` inside the spawned block
+  rather than widening `run_hook`'s signature to `Box<dyn Error + Send + Sync>` — the signature is
+  attempt-1 code the panel did not fault, and task 014 owns the supervision/exit path where an error
+  type change actually matters. The assertion is on `is_err()`, so no error detail is lost.
+- **Poison/drop DDL issued as four separate `sqlx::query()` calls** (loop over a 2-element array per
+  phase). sqlx prepares ONE statement per call; a multi-statement string would run only the first
+  trigger, and a lone `poison_cursor_insert` still makes phase 1 pass — a failure mode that hides
+  itself. Split so both triggers are provably installed.
+- **`fired_seqs(&hook)` test helper** added: `SequencedEvent` does not implement `PartialEq`, and the
+  dictate phrases both restored expectations as ordered seq lists (`[seq1, seq2]`, `[seq1, seq1]`).
+  Asserting the seq vector rather than `len()` is what makes them ordering-sensitive; attempt 1's
+  `len()`-only assertions are what let the persist-then-fire mutation pass.
+- **`resumed_from_seq` renamed to `resumed_from_exclusive_seq`** in the rebootstrap `info!`. The
+  dictate says to make the exclusivity understood; a rename is unambiguous at the log-grep site,
+  where a comment is invisible.
+- **`clear_rebootstrap` also touches `updated_at`** (dictate specified only `needs_rebootstrap = 0`).
+  Every other write to this table maintains `updated_at`; leaving it stale would make the column lie
+  about when the row last changed. No consumer reads it for logic.
+- **`test_ensure_row_is_noop_on_existing` asserts only that the cursor survives**, per the dictate's
+  wording ("existing cursor value survives `ensure_row`"). It does not also assert the flag, which
+  would be untested scope creep.
+- **`ensure_row` is added but not yet called.** Task 014 owns hook registration; calling it from
+  `run_hook` would be a policy decision outside this task and would change the compaction floor at a
+  point the plan did not choose. Dead-code warnings do not arise (it is `pub`).
+- **Doc comments corrected to match the new behaviour** at `trigger_cursor.rs` `set()` ("flag is
+  cleared on every update" was now false) and `trigger_hooks.rs` `run_hook` step 5 ("Clears the
+  rebootstrap flag on the first update" — clearing is now the rebootstrap branch only). A doc
+  comment asserting the opposite of the code is exactly what Stage 2 flags.
+- **Blast-radius check before changing `set()` semantics.** `grep -rn --include='*.rs'
+  'trigger_cursor::|needs_rebootstrap|trigger_cursors' crates/` shows the only callers of `set()` are
+  `trigger_hooks.rs` and this module's own tests; `event_journal/mod.rs:233,342,389,397` inserts
+  cursor rows with raw SQL, not via `set()`. So no test outside the two edited files depends on the
+  inverted semantics. Confirmed empirically: `cargo test -p db --lib event_journal` 11/11 green,
+  including `hard_cap_overrides_cursor_floor_and_flags_rebootstrap` and
+  `compact_never_crosses_min_trigger_cursor`.
+
+### Two consequences that look like regressions and are not
+
+- `new_min.map(|m| m - 1)` cannot go negative: `event_journal.seq` is `INTEGER PRIMARY KEY
+  AUTOINCREMENT` (`migrations/20260812000000_add_event_journal.sql:10`), so `MIN(seq) >= 1`.
+- F1 lowers a rebootstrapped hook's `min_cursor()` by one seq, dropping the compaction floor by one.
+  That is intended: the event at `MIN(seq)` is unprocessed and MUST stay protected from the next
+  compaction pass. The old value protected nothing and let that event be dropped unseen.
+
+### Red proofs (mandatory — verbatim)
+
+Backups via `cp` into `.wai-scratch/`, restores verified byte-identical with `diff`, scratch dir
+removed before commit. No `git checkout/restore/stash/reset` at any point.
+
+**RP1 — revert F1 to `cursor = new_min.unwrap_or(0);` → test 7 RED:**
+
+```
+test services::trigger_hooks::tests::rebootstrap_flag_is_surfaced_and_cleared ... FAILED
+
+thread 'services::trigger_hooks::tests::rebootstrap_flag_is_surfaced_and_cleared' (1731295) panicked at crates/services/src/services/trigger_hooks.rs:711:9:
+assertion `left == right` failed: Hook must fire for the surviving low-water event AND the newer one, in order
+  left: [2]
+ right: [1, 2]
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.03s
+```
+
+`left: [2]` is the bug itself: the event at the journal's low-water mark (seq 1) silently skipped.
+
+**RP2 — swap the matching branch to persist-then-fire → test 4 RED:**
+
+```
+test services::trigger_hooks::tests::at_least_once_tolerates_duplicate_delivery ... FAILED
+
+thread 'services::trigger_hooks::tests::at_least_once_tolerates_duplicate_delivery' (1733281) panicked at crates/services/src/services/trigger_hooks.rs:492:9:
+assertion `left == right` failed: fire must happen before the cursor persist (at-least-once, never at-most-once)
+  left: []
+ right: [1]
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 1.97s
+```
+
+`left: []` is at-most-once: the persist aborted before the hook ever fired, so the event was lost.
+This is the mutation that left ALL SEVEN attempt-1 tests green — D11's ordering half now has real
+coverage.
+
+### Verification (exit statuses)
+
+- `cargo test -p services --lib trigger_hooks` → **7 passed; 0 failed**, exit 0
+- `cargo test -p db --lib trigger_cursor` → **10 passed; 0 failed**, exit 0 (8 pre-existing minus the
+  inverted one, plus `test_clear_rebootstrap_clears_flag` and `test_ensure_row_is_noop_on_existing`;
+  the filter also catches `compact_never_crosses_min_trigger_cursor` by name)
+- `cargo test -p db --lib event_journal` → **11 passed; 0 failed**, exit 0 (blast-radius check above)
+- `cargo fmt --all -- --check` → exit 0
+- `cargo check --workspace --all-targets` → exit 0
+
+### Correction to the attempt-1 entry (append-only)
+
+Attempt 1 recorded "futures::stream::StreamExt used for streaming subscription consumption"
+(ledger:7578). The code uses `futures_util::stream::StreamExt`
+(`trigger_hooks.rs:151`, line moved by this remediation). The panel already noted this at
+ledger:7601-7602; recording it here as dictated. The attempt-1 entry itself is left untouched.
+
+### Orchestrator correction — commit race (2026-08-17, appended before amend)
+
+The original 8aba3ce1 was committed while an RP2-style persist-then-fire mutation was live in the
+shared worktree: the ORCHESTRATOR was independently re-running the red proofs in the same index at
+commit time (implementer and orchestrator both mutated `trigger_hooks.rs` concurrently; the
+implementer's own restore discipline was sound, but the stage captured the orchestrator's live
+mutant). Caught by `git diff` against the restored working tree showing exactly the 3-line
+fire/persist swap; both red proofs were independently reproduced by the orchestrator (RP1: test 7
+RED `left: [2]`; RP2: test 4 RED `left: []`) before the corrected file was verified green
+(services 7/7, db trigger_cursor 10/10, fmt exit 0) and the commit amended. Lesson re-confirmed:
+one worktree = one writer — the orchestrator must not run red proofs while an implementer is
+active, even one presumed dead.

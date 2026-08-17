@@ -93,12 +93,12 @@ impl TriggerHook for TaskStatusChangedHook {
 ///
 /// This function:
 /// 1. Loads the hook's cursor from persistent storage (0 if absent)
-/// 2. Checks for the rebootstrap flag (set if journal compaction deleted unprocessed events)
+/// 2. Checks for the rebootstrap flag (set if journal compaction deleted unprocessed events);
+///    if set, resumes from the journal's low-water mark and clears the flag
 /// 3. Subscribes to the event stream starting from the cursor
 /// 4. For each event:
 ///    - If the hook matches the event: calls fire(), then persists the cursor
 ///    - If the hook doesn't match: immediately persists the cursor (for compaction floor)
-/// 5. Clears the rebootstrap flag on the first update (hook has recovered)
 ///
 /// Note: This is designed to be spawned as a long-lived background task.
 pub async fn run_hook(
@@ -124,15 +124,24 @@ pub async fn run_hook(
             .fetch_one(&pool)
             .await?;
 
-        cursor = new_min.unwrap_or(0);
+        // Compaction flags cursors STRICTLY BELOW the new minimum, so the event at MIN(seq)
+        // survived and is unprocessed. `subscribe_from` replays `seq > cursor` exclusively, so
+        // the cursor must sit one BELOW the low-water mark for that event to be delivered.
+        // `seq` is INTEGER PRIMARY KEY AUTOINCREMENT, so MIN(seq) >= 1 and this cannot go
+        // negative.
+        cursor = new_min.map(|m| m - 1).unwrap_or(0);
         info!(
             hook_name = %hook_name,
-            resumed_from_seq = cursor,
+            // Exclusive cursor: replay begins at the next seq, i.e. the journal's low-water mark.
+            resumed_from_exclusive_seq = cursor,
             "resuming from journal low-water mark after rebootstrap"
         );
 
-        // Clear the flag by updating the cursor
         trigger_cursor::set(&pool, hook_name, cursor).await?;
+        // Clearing is a separate write: `set` deliberately leaves the flag alone. A crash
+        // between the two is safe — the flag survives and the next start re-runs the
+        // (idempotent) rebootstrap.
+        trigger_cursor::clear_rebootstrap(&pool, hook_name).await?;
     }
 
     // Subscribe to events starting from the cursor
@@ -199,6 +208,12 @@ mod tests {
         async fn fire(&self, event: SequencedEvent) {
             self.fired_events.lock().unwrap().push(event);
         }
+    }
+
+    /// The seqs a hook has fired on, in order. `SequencedEvent` is not `PartialEq`, and the
+    /// ordered seq list is what the delivery contract is actually about.
+    fn fired_seqs(hook: &RecordingHook) -> Vec<i64> {
+        hook.get_fired().iter().map(|e| e.seq).collect()
     }
 
     async fn commit_event(pool: &SqlitePool, event: NodeEvent) -> i64 {
@@ -433,8 +448,64 @@ mod tests {
             "task_status_changed",
         ));
 
-        let _seqs = create_events(&pool).await;
+        // Exactly ONE matching event.
+        let task_id = Uuid::new_v4();
+        let seq1 = commit_event(
+            &pool,
+            NodeEvent::TaskStatusChanged {
+                task_id,
+                old_status: db::models::task::TaskStatus::Todo,
+                new_status: db::models::task::TaskStatus::InProgress,
+            },
+        )
+        .await;
 
+        // Fault-inject the cursor persist deterministically. `get_with_flag` is a SELECT, so the
+        // runner still reaches the replay; only the write fails. One DDL statement per call —
+        // sqlx prepares a single statement, and a half-applied pair would hide the failure.
+        for ddl in [
+            "CREATE TRIGGER poison_cursor_insert BEFORE INSERT ON trigger_cursors \
+             BEGIN SELECT RAISE(ABORT, 'injected cursor-write failure'); END",
+            "CREATE TRIGGER poison_cursor_update BEFORE UPDATE ON trigger_cursors \
+             BEGIN SELECT RAISE(ABORT, 'injected cursor-write failure'); END",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+
+        // Phase 1: the runner fires, then fails to persist, and dies. `run_hook`'s error is not
+        // `Send`, so map it to a String to make the JoinHandle output awaitable.
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            run_hook(pool_clone, hook_clone, event_bus_clone)
+                .await
+                .map_err(|e| e.to_string())
+        });
+
+        let outcome = handle.await.unwrap();
+        assert!(
+            outcome.is_err(),
+            "runner must surface the injected cursor-write failure, got {outcome:?}"
+        );
+        // The D11 ordering pin: the hook fired BEFORE the persist failed. Under a
+        // persist-then-fire ordering the write aborts first and this list is empty.
+        assert_eq!(
+            fired_seqs(&hook),
+            vec![seq1],
+            "fire must happen before the cursor persist (at-least-once, never at-most-once)"
+        );
+
+        for ddl in [
+            "DROP TRIGGER poison_cursor_insert",
+            "DROP TRIGGER poison_cursor_update",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+
+        // Phase 2: restart. The poisoned INSERT never landed, so the cursor is still 0 and the
+        // same event is delivered a second time. NOTE: the fired list is deliberately NOT
+        // cleared — the duplicate is the whole point.
         let hook_clone = hook.clone();
         let event_bus_clone = event_bus.clone();
         let pool_clone = pool.clone();
@@ -444,25 +515,17 @@ mod tests {
 
         sleep(Duration::from_millis(300)).await;
 
-        // Simulate a crash by aborting the task without letting it persist
-        // (In this test, we trust the implementation persists immediately, so we just
-        // verify the hook is idempotent — calling fire twice produces the same result)
-
-        let fired = hook.get_fired();
-        assert_eq!(fired.len(), 2);
-
-        // Clear and replay the events manually to simulate crash-before-persist
-        hook.fired_events.lock().unwrap().clear();
-        for event in fired.clone() {
-            hook.fire(event).await;
-        }
-
-        // Verify idempotency: firing twice produces the same record
-        let fired_again = hook.get_fired();
         assert_eq!(
-            fired_again.len(),
-            2,
-            "Recording hook is idempotent: same events, same records"
+            fired_seqs(&hook),
+            vec![seq1, seq1],
+            "the same event must be re-delivered after a crash between fire and persist"
+        );
+        let persisted_cursor = trigger_cursor::get(&pool, "test_hook_at_least_once")
+            .await
+            .unwrap();
+        assert_eq!(
+            persisted_cursor, seq1,
+            "cursor persists once the injected failure is removed"
         );
 
         handle.abort();
@@ -611,7 +674,7 @@ mod tests {
             old_status: db::models::task::TaskStatus::Todo,
             new_status: db::models::task::TaskStatus::InProgress,
         };
-        let _seq1 = commit_event(&pool, event1).await;
+        let seq1 = commit_event(&pool, event1).await;
 
         // Simulate the hard cap: set needs_rebootstrap = 1 at an old cursor
         sqlx::query(
@@ -642,19 +705,20 @@ mod tests {
 
         sleep(Duration::from_millis(300)).await;
 
-        // The hook should have fired for event2 only (event1 was before the min seq after rebootstrap)
-        // subscribe_from(min_seq=1) reads events with seq > 1, which is only event2 at seq2
-        let fired = hook.get_fired();
+        // Nothing was deleted, so BOTH events survive. The rebootstrap resume is EXCLUSIVE:
+        // the cursor lands one below MIN(seq), so the event at the low-water mark is delivered
+        // rather than skipped.
         assert_eq!(
-            fired.len(),
-            1,
-            "Hook should fire for new events after resuming from journal minimum (event1 lost)"
+            fired_seqs(&hook),
+            vec![seq1, seq2],
+            "Hook must fire for the surviving low-water event AND the newer one, in order"
         );
 
-        // The flag should be CLEARED after the first update
         let (cursor, flag) = trigger_cursor::get_with_flag(&pool, "test_hook_rebootstrap")
             .await
             .unwrap();
+        // Load-bearing: `set` no longer clears the flag, so this passes only if
+        // `clear_rebootstrap` actually ran.
         assert!(!flag, "Rebootstrap flag should be cleared after recovery");
         assert_eq!(
             cursor, seq2,
