@@ -8607,3 +8607,36 @@ Task 010's live SC4 curl transcript against a running node (task file "Manual ve
 `curl -N http://<node>/api/events`, disconnect, create tasks, `curl -N
 "http://<node>/api/events?cursor=<last-seen-seq>"` — every event created while disconnected
 arrives in ascending seq order, none missing. Not satisfiable from this file-set.
+
+## Task 010 attempt 3 corrections (append-only)
+
+Three accuracy corrections to the `## Task 010 implementation (attempt 3, panel remediation)`
+section above. This file is append-only, so the original text stands and is superseded here; no
+code or test behaviour changes, and commit `c38c316e` is unaffected.
+
+1. **§6's justification was wrong; its DECISION stands.** §6 said the fault-injection seams "live
+   in `crates/db` / `crates/services`, outside this task's file-set". That is false. Fault
+   injection IS expressible from this task's file-set: a table rename is a SQL statement, runnable
+   from `crates/server/tests/events.rs` against `h.deployment().db().pool` — the technique this run
+   has already established (`crates/services/src/services/event_bus/tailer.rs:581`: "`event_journal
+   ::append` targets the original table name, so it cannot be used while the table is renamed"; and
+   task 014's ledger, "Hide the table BEFORE constructing the bus"). The correct reason no such
+   test exists is the contract, not feasibility: **no mid-stream-error test was dictated, tests 1-6
+   are dictated verbatim, and adding an undictated test is itself a deviation.** The R1 bus-error
+   branch and the R2 serialization branch therefore remain reviewed-only and not test-pinned — an
+   uncovered dictate for the orchestrator, exactly as §6 flagged.
+
+2. **§5's closing paragraph was garbled.** It claimed attempt 2's `contains("id: ")` "survives
+   mutation A's `id`-less variant only because that mutation also removed the id". That is
+   self-contradictory: mutation A removed the `id`, so `contains("id: ")` is false and attempt 2's
+   T6 assertion DIES under it too. Restated accurately: **mutation A does not discriminate between
+   attempt 2's T6 and this attempt's — it kills both.** The mutation that discriminates was not
+   run: correct frame shape, correct `id:` line, WRONG `task_id`. Attempt 2's `contains("id: ")`
+   survives that; this attempt's parsed-`SequencedEvent`-plus-exact-uuid assertion kills it. That
+   is the claim §5 should have made about T6fix.
+
+3. **Off-by-one cite.** §1 R1 cites the in-repo `unfold` precedent as
+   `crates/services/src/services/event_bus/mod.rs:207`; it is at **:208**
+   (`Ok(Box::pin(unfold(initial_state, |mut state| async move {`). The related cites are accurate
+   as written: `subscribe_from` at :193, subscribe-before-mark at :212-219 (the `sender.subscribe()`
+   at :213, the fresh `high_water_mark` read at :217).
