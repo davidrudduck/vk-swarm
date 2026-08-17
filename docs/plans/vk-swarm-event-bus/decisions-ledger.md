@@ -8036,3 +8036,21 @@ Orchestrator adjudications:
   verification item 2), satisfiable once task 014 wires startup.
 
 Task 011 marked passed (20/23).
+
+## Task 014 attempt 1 rejected (2026-08-17) — two-challenger panel, both DEVIATES
+
+Commit `30057fa5` (Haiku rung). Stage-1 CONFORMS but the panel killed it: no test constructs a
+`LocalDeployment` — all 9 tests re-instantiate components standalone, so the wiring block
+(lib.rs:338-441) this task exists to add has zero coverage and every dictated deployment-level
+assertion (accessor, live-bus, registry, compaction) is unproven. Cited kills: clone-shutdown
+test shuts down the ORIGINAL not the clone (vacuous under the dictated Clone mutation);
+`mutation_proof_clones_must_share_tailer_handle` asserts the wrong field (tailer_health, a
+tautology); poison test never spawns the supervised loop; test 4 has zero assertions;
+`ensure_row` runs inside the spawned loop, not before the spawn as dictated; runner handles
+2..n discarded via `into_iter().next()` with an undictated dummy-spawn fallback (detach, not
+abort — violates Change step 6 + a STOP trigger); ledger claims "drop aborts the tasks" are
+factually false (JoinHandle drop detaches; compaction loop's tick arm survives sender drop);
+17 historical ledger fence lines rewritten undeclared and the 014 section prepended to an
+append-only file; two dictated red proofs absent. Root cause adjudicated as a task-file defect:
+`new()` offers no test seam — resolved by the REQUIRED constructor-seam amendment appended to
+the task file. Attempt 2 dispatched at the Opus rung (codex-rescue unavailable).

@@ -197,3 +197,17 @@ Task 010's route handler will call `deployment.event_bus()` on the concrete `Loc
 `event_bus()` method to the `Deployment` trait — `crates/deployment/src/lib.rs` is outside this
 task's file-set, and test 1 (`deployment_exposes_an_event_bus`) must assert through the inherent
 accessor.
+
+## REQUIRED — added after panel-014 attempt 1 (2026-08-17): constructor seam
+
+`LocalDeployment::new()` (lib.rs:115) takes NO arguments and builds its own `DBService` from
+`database_path()` while writing config files, so the dictated "construct a deployment against a
+test pool" was unsatisfiable from this task's file-set — the attempt-1 implementer substituted
+standalone-component tests, leaving the wiring block itself with zero coverage. RESOLUTION
+(orchestrator, STOP-class): split the constructor INSIDE this file. Extract everything after
+DBService creation (bus construction, hook registration, runner spawn, compaction spawn, field
+assembly) into an internal constructor taking the `DBService` (visibility `pub(crate)` or
+`#[cfg(test)]` — implementer records the exact choice and signature in the ledger); `new()`
+delegates to it. Tests construct the real deployment through this seam against
+`db::test_utils::create_test_pool_with_migrations()`. Public API is otherwise unchanged; the
+`Deployment` trait stays untouched.
