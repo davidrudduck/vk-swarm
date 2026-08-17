@@ -87,7 +87,7 @@ in this spec. Do NOT re-introduce anything resembling the deleted record-patch s
 
 ## Manual verification (record in decisions-ledger)
 Gate invocation (the Done-when placeholders): this is a Rust crate, so the runner MUST be overridden — the auto-detected runner would try vitest. Use WAI_TYPECHECK_CMD="cargo check --workspace" with the WAI_TEST_CMD given below.
-WAI_TEST_CMD="cargo test -p server events"
+WAI_TEST_CMD="cargo test -p server --test events"
 
 Live SC4 check (record the transcript in the ledger), against a running node:
 1. `curl -N http://<node>/api/events` — receives live events only; note the highest seq seen.
@@ -133,3 +133,23 @@ listener address or the deployment (needed for a raw SSE client and bus/journal 
 is the inadequacy the STOP trigger anticipated. `files:` now includes it, LIMITED to additive
 accessor methods (e.g. `addr()`, `deployment()`) and attribute adjustments they force — no
 behavioural change to the harness, no edits to existing method bodies.
+
+## REQUIRED — added 2026-08-17 (orchestrator, after panel attempt-3 re-review)
+
+### Gate-command correction (panel N1)
+The Manual-verification/Done-when `WAI_TEST_CMD` previously read `cargo test -p server events`
+— a test-NAME filter matching only 2 of the 6 tests (T3-T6 filtered out, including the SC4 and
+reachability-gate tests). Corrected above to `cargo test -p server --test events` (target
+selector, all tests). Task-file defect, this repo's; not an agent-plugins issue.
+
+### Test 7 — pin the mid-stream error terminal frame (panel A §6, option a)
+7. `mid_stream_error_emits_terminal_error_frame_then_ends` — pin the R1 dictate with fault
+   injection via the run's established table-rename technique (tailer.rs:581 precedent):
+   journal several events; then `ALTER TABLE event_journal RENAME TO event_journal_poisoned`
+   via `h.deployment().db().pool`; connect `GET /api/events?cursor=0` (the replay path must
+   read the journal and now errors); assert the client receives exactly one `event: error`
+   SSE frame and the stream then ENDS (bounded read observes EOF, no further frames — a
+   keep-alive-only hang is a failure). Restore the table name afterwards if the harness
+   requires it for teardown (record either way). Red proof: revert the unfold Done transition
+   (yield the error frame but keep the stream alive) → this test must FAIL on the
+   stream-end assertion.
