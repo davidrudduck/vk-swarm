@@ -2,7 +2,7 @@
 id: "014"
 phase: 5
 title: "Wire the EventBus, tailer, trigger-hook runner and compaction loop into deployment startup"
-status: ready
+status: passed
 depends_on: ["009","011","013"]
 parallel: false
 conflicts_with: []

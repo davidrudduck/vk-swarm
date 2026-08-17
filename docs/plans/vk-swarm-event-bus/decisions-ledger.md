@@ -8325,3 +8325,29 @@ Consequences recorded here:
   plugins, so per CLAUDE.md it is NOT an `ExpansionX/agent-plugins` issue. It is reported to the
   orchestrator for a user-level decision (exclude `docs/plans/**/decisions-ledger.md`, or scope the
   hook to files the session actually authored).
+
+## Task 014 adjudication (2026-08-17) — PASSED on attempt 2 (659c870f + 71bf8e8a)
+
+Both challengers re-reviewed: all 14 attempt-1 kills DEAD with byte-exact evidence; full
+mutation matrix now killing (clone-mutation, no-op shutdown, deleted supervised loop, wrong
+pool, neutered compact_now, dropped accessor → 7 call sites); new surface (from_parts seam,
+StartupTuning, set_var guard, disclosed second commit) adjudicated clean. F6's fence rewrite
+half-exonerated: root cause is the user-level markdown_formatter PostToolUse hook (surfaced to
+the user for a config decision). VERDICTS: CONFORMS + CONFORMS.
+
+Append-only corrections to the attempt-2 sections (panel residuals, citation accuracy only):
+- Red-proof asserts sit at lib.rs:1139 (§3 clone proof) and lib.rs:1101 (§8 shutdown proof) at
+  HEAD 71bf8e8a (the §3 note's "1125/1087" was off by one at 659c870f and stale after 71bf8e8a).
+- §10's quoted hunk header should read `@@ -7966,3 +7966,362 @@`.
+- §2's first-tick-skip citation is event_compaction.rs:247 (not :236).
+- §6 overstates test 3's uniqueness: the in-loop ensure_row also exists; the pre-spawn call is
+  pinned in practice by current-thread runtime ordering (panel-verified), not uniquely by the row
+  assertion.
+
+Orchestrator obligations at run close (consolidated): 014 manual verification items 1-3 (live
+SSE curl, trigger_cursors advance, compaction startup log), 011 scratch-DB retention-0 counts,
+010 live SC4 curl transcript, REQUIRED §2 HTTP-seam test (lands in task 010). Backlog findings
+to file at close: container orphan-sweep reachable from test deployments; NodeRunnerConfig::
+from_env can point tests at the live hive; user markdown hook vs append-only ledgers.
+
+Task 014 marked passed (21/23).
