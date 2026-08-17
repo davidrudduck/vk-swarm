@@ -7786,3 +7786,30 @@ Gate-equivalent checks run manually (the gate aborted before them); all green:
 - `cargo test --workspace` → 61 test-result lines, zero with a nonzero failed count.
 - `git grep -n "stream/ws" b9db085b -- crates/server/src/routes/tasks/mod.rs` → route intact at
   :66; commit touches no `services/events` path (EventService untouched).
+
+## Task 001 Stage-2 adjudication (panel-001, 2026-08-17) — PASS
+
+Commit `b9db085b`. Panel-001 (Opus) could not break the deletion: forbid term absent from all
+code (exit 1); handler/path-string hunts clean (the one `pub mod events;` hit is EventService,
+required to stay); zero-insertion diff exactly matching the dictate; removed imports proven
+unused by a warning-free `cargo check` AND a clean `clippy --all-targets --all-features -D
+warnings` (structural proof — any surviving reference would be a compile error); EventService
+byte-identical to base; exactly two `stream_events` hits at base (definition + the deleted
+route's call — one-caller assumption NOT stale); `LocalDeployment` never overrode the method;
+board `stream/ws` intact at :66; server tests 87+ passed, 0 failed; frontend/remote-frontend
+have zero `/events`/`EventSource` consumers (the only EventSource hits are the hive
+no-push-invariant guard test); route builder chain well-formed; approval token untouched, its
+repo-side condition discharged by the panel's sweep. Implementer win: empty ledger (no
+undictated choices).
+
+Append-only correction to the Stage-1 adjudication above (panel INFORMATIONAL, verified): the
+false-positive hit list is larger than the three spec lines cited — the full `stream_events`
+grep at b9db085b also hits the 001 task file itself (6×, incl. its own `forbid_after:`
+frontmatter at L16), decisions-ledger.md, phase-4/010 task file, and reviews/001.approved. All
+prose, zero code; verdict unchanged, but a self-describing deletion task can NEVER pass this
+check by construction — that is the substance of ExpansionX/agent-plugins#134 (comment added
+value: cite the full list upstream).
+
+Panel non-finding recorded for task 010: `MsgStore::sse_stream` (crates/utils/src/msg_store.rs:192)
+was ALREADY caller-less at base — this commit orphaned nothing; it is plausibly 010's
+implementation seam. Do not remove it as cleanup. Task 001 marked passed (19/23).

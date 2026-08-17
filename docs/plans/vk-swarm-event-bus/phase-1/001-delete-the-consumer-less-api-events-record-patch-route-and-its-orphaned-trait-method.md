@@ -2,7 +2,7 @@
 id: "001"
 phase: 1
 title: "Delete the consumer-less /api/events record-patch route and its orphaned trait method"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
