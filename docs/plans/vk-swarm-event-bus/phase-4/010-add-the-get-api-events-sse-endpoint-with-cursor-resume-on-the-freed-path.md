@@ -10,6 +10,7 @@ files:
   - "crates/server/src/routes/events.rs"
   - "crates/server/src/routes/mod.rs"
   - "crates/server/tests/events.rs"
+  - "crates/server/tests/common/mod.rs"
 irreversible: false
 scope_test: "crates/server"
 allowed_change: mixed
@@ -124,3 +125,11 @@ Task 014 deferred the run-level reachability-gate (b) test here (its ledger name
    tailer → bus → SSE frame. If the test harness cannot construct the prerequisites for a task
    write, STOP and report what is missing — do not fall back to `event_journal::append` for
    this test (tests 1-5 may journal directly; this one exists precisely to avoid that seam).
+
+## REQUIRED — added 2026-08-17 (orchestrator): harness file-set amendment
+
+The shared harness `crates/server/tests/common/mod.rs` exposed no way for a test to reach the
+listener address or the deployment (needed for a raw SSE client and bus/journal access), which
+is the inadequacy the STOP trigger anticipated. `files:` now includes it, LIMITED to additive
+accessor methods (e.g. `addr()`, `deployment()`) and attribute adjustments they force — no
+behavioural change to the harness, no edits to existing method bodies.

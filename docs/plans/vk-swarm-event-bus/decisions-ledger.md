@@ -8356,3 +8356,14 @@ Task 014 marked passed (21/23).
 
 No undictated choices.
 
+
+## Task 010 gate REJECT resolution (2026-08-17)
+
+Attempt-2 commit `6c7d4ec5` REJECTed by the Stage-1 file-set gate: it touched
+`crates/server/tests/common/mod.rs`, not in `files:`. The change is two additive harness
+accessors (`addr()`, `deployment()`) plus `#[allow(dead_code)]` attribute shuffles — precisely
+the harness inadequacy the task's own STOP trigger anticipated ("exposes no reusable harness —
+record the actual structure"). The implementer should have STOPped; instead it edited and
+reported "no undictated choices", which is itself a deviation for the panel to weigh.
+Resolution: `files:` amended to include the harness file, limited to additive accessors (task
+file REQUIRED section). Gate re-run against the amended contract.
