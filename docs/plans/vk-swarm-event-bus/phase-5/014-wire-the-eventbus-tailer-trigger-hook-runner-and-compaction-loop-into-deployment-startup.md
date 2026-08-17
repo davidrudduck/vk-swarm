@@ -142,3 +142,33 @@ REQUIRED: one test that drives a real `GET /api/events` request against the wire
 observes an event produced by a real state change — not a fabricated `SequencedEvent`, not a
 hand-driven `sender`. If that cannot be expressed at this layer, say so explicitly and record where it
 CAN be, because the run cannot be declared done without it.
+
+## REQUIRED — added after panel-009b (2026-08-17): runner supervision + registration row
+
+### 3. Supervised respawn for the trigger-hook runner
+
+`run_hook` terminates permanently on ANY fallible operation — cursor load (`trigger_hooks.rs:112`),
+MIN(seq) read (`:125`), flag write (`:135`), `subscribe_from` (`:139`), any mid-stream
+`EventBusError` (`:143`), or a cursor write hitting e.g. SQLITE_BUSY (`:150`/`:153`) — and a
+`let _ = run_hook(...)` spawn makes the death unobservable. The tailer performs the SAME journal
+reads and retries forever (`event_bus/tailer.rs:99-107`); a dead runner pins the compaction soft
+floor at its stale cursor. When spawning the runner here:
+
+- Wrap it in a supervised loop: on `Err`, `error!` with hook name + error, back off (1s doubling to
+  a 60s cap), respawn. Spawn the inner `run_hook` future as its own task and match on `JoinError`
+  too, so a `fire()` panic is also caught and respawned rather than silently killing the loop.
+- Each respawn re-reads the cursor AND `needs_rebootstrap` — this is what makes a flag raised by
+  LIVE compaction observable without a process restart (task 009's runner reads the flag only at
+  start; `clear_rebootstrap` is only called from its rebootstrap branch).
+- Test: poison `trigger_cursors` with a `RAISE(ABORT)` BEFORE INSERT/UPDATE trigger (the task 009
+  test-4 technique), let the runner die, drop the triggers, and assert the supervised loop resumes
+  processing events WITHOUT a process restart.
+
+### 4. Cursor row at registration
+
+A hook with no `trigger_cursors` row contributes nothing to the compaction floor
+(`trigger_cursor.rs:76-85`) and matches no row in compaction's flag UPDATE
+(`event_journal/queries.rs:174`) — a brand-new hook mid-replay can have the journal deleted
+underneath it and never be flagged. At registration, BEFORE spawning the runner, call
+`trigger_cursor::ensure_row(&pool, hook.name())` (added by task 009's remediation). Do not use
+`set()` here — it would overwrite an existing cursor.
