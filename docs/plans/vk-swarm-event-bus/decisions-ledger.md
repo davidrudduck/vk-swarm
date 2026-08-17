@@ -7835,3 +7835,21 @@ live SC4 curl transcript remains an orchestrator obligation, satisfiable once 01
   and plan.md's `conflicts:` column was mirrored to match. No dictates (task bodies, files,
   depends_on, status) were changed — all 19 executed tasks had already passed under the old
   0.28.25 contract.
+
+## Plan-lint symbol-grounding adjudication (2026-08-17) — two ✗ overridden as FALSE POSITIVE
+
+After the 0.28.25→0.29.0 plugin bump, `wai-plan-lint.sh` (symbol-grounding block :326-382)
+emitted two residual ✗ findings. Both adjudicated FALSE POSITIVE against the installed 0.29.0
+source; filed upstream as **ExpansionX/agent-plugins#135** (related but distinct from #134):
+
+- `task 001 dictates a call to 'stream_events'` — 001 is a DELETION task
+  (`forbid_after: ["stream_events"]`, Change quotes `async fn stream_events(` as the removed
+  code); it executed at `b9db085b`, so the grounding grep — which runs against the CURRENT tree
+  (`:376`), not the plan base — finds nothing by construction.
+- `task 006 dictates a call to 'objection'` — prose noun + parenthetical citation at
+  phase-3/006 task file line 74 ("the node_outbox precedent's objection (`…queries.rs:337`…)")
+  matched the `word(` extraction regex (`:359-360`). Not a call.
+
+Remaining `!` SQL-literals line is a warning (no live schema access configured), not a failure.
+With the mechanical fixes committed in `6b7c8cb6` and these two overridden, the plan-lint
+preflight is treated as PASS for resuming the run.
