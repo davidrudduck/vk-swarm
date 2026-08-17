@@ -20,6 +20,7 @@ pub mod container;
 pub mod diff_stream;
 pub mod drafts;
 pub mod event_bus;
+pub mod event_compaction;
 pub mod events;
 pub mod file_ranker;
 pub mod file_search_cache;
