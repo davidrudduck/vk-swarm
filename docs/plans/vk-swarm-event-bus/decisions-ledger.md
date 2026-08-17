@@ -7813,3 +7813,13 @@ value: cite the full list upstream).
 Panel non-finding recorded for task 010: `MsgStore::sse_stream` (crates/utils/src/msg_store.rs:192)
 was ALREADY caller-less at base — this commit orphaned nothing; it is plausibly 010's
 implementation seam. Do not remove it as cleanup. Task 001 marked passed (19/23).
+
+## Task 010 STOP resolution (2026-08-17)
+
+impl-010 attempt 1 STOPped per the dictated trigger: EventBus unreachable from deployment state
+(no field, no accessor, no import in local-deployment — evidence verified by orchestrator via
+`crates/server/src/lib.rs:12` showing the concrete `DeploymentImpl = LocalDeployment` alias).
+Clean STOP: no commit, no worktree changes. Resolution: 010 `depends_on` now includes 014;
+execution reordered 011 → 014 → 010 → 012. Accessor contract pinned in both task files
+(inherent `pub fn event_bus(&self) -> Arc<EventBus>` on LocalDeployment; no trait change). The
+live SC4 curl transcript remains an orchestrator obligation, satisfiable once 014 wires startup.

@@ -3,7 +3,7 @@ id: "010"
 phase: 4
 title: "Add the GET /api/events SSE endpoint with cursor resume on the freed path"
 status: ready
-depends_on: ["001","005"]
+depends_on: ["001","005","014"]
 parallel: false
 conflicts_with: []
 files:
@@ -97,3 +97,16 @@ Live SC4 check (record the transcript in the ledger), against a running node:
 
 ## Done when
 `WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 010` exits 0
+
+## REQUIRED — STOP resolution (2026-08-17): how the handler reaches the bus
+
+impl-010 (attempt 1) hit the dictated STOP: no `EventBus` is reachable from deployment state
+(verified: `LocalDeployment` has no `event_bus` field/accessor; the `Deployment` trait has no
+`event_bus()` method; `EventBus` is not imported by `local-deployment`). Resolution — this task
+now `depends_on` 014, which wires the bus into startup and exposes it as an INHERENT accessor
+`pub fn event_bus(&self) -> Arc<services::services::event_bus::EventBus>` on `LocalDeployment`.
+No `Deployment`-trait change is needed or permitted: `crates/server/src/lib.rs:12` fixes
+`pub type DeploymentImpl = local_deployment::LocalDeployment;`, so handlers see the concrete
+type. The route handler obtains the bus as `deployment.event_bus()` from
+`State(deployment): State<DeploymentImpl>`. Do not add trait methods; do not construct a bus in
+the route.

@@ -188,3 +188,12 @@ underneath it and never be flagged. At registration, BEFORE spawning the runner,
    runs on that first start, so a supervised crash-loop does not replay repeatedly, and the
    momentary `MIN(seq)-1` floor deletes nothing. Hooks registered here must therefore be
    idempotent under full-journal redelivery; do not "fix" the rewind.
+
+## REQUIRED — added with the 010 STOP resolution (2026-08-17): accessor contract
+
+Task 010's route handler will call `deployment.event_bus()` on the concrete `LocalDeployment`
+(`DeploymentImpl` alias, `crates/server/src/lib.rs:12`). Expose the bus as an INHERENT method:
+`pub fn event_bus(&self) -> Arc<EventBus>` (clone of the startup-created handle). Do NOT add an
+`event_bus()` method to the `Deployment` trait — `crates/deployment/src/lib.rs` is outside this
+task's file-set, and test 1 (`deployment_exposes_an_event_bus`) must assert through the inherent
+accessor.
