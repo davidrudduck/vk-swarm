@@ -172,3 +172,19 @@ A hook with no `trigger_cursors` row contributes nothing to the compaction floor
 underneath it and never be flagged. At registration, BEFORE spawning the runner, call
 `trigger_cursor::ensure_row(&pool, hook.name())` (added by task 009's remediation). Do not use
 `set()` here — it would overwrite an existing cursor.
+
+## REQUIRED — added after panel-009c (2026-08-17): two 009-inherited obligations
+
+1. **Cover `ensure_row`'s fresh-row insert path.** Task 009 added
+   `trigger_cursor::ensure_row` but only its no-op-on-existing branch is tested, and nothing
+   calls it yet. When this task wires `ensure_row` into registration, add a test asserting that
+   registering a hook with NO existing cursor row creates the row at `last_processed_seq = 0`,
+   `needs_rebootstrap = 0` — the untested half panel-009c flagged.
+2. **Expect a FULL journal replay after a live-raised flag.** Because `set()` no longer clears
+   `needs_rebootstrap` (F2 fix), a flag raised by compaction while a runner is live survives all
+   of that runner's cursor writes; the NEXT start rewinds to `MIN(seq) - 1` and re-delivers every
+   surviving event (panel-009c probe: journal `[1,2,3]`, cursor 3, flag 1 → refired `[1,2,3]`).
+   This is the D11 at-least-once contract working as dictated, NOT a bug: `clear_rebootstrap`
+   runs on that first start, so a supervised crash-loop does not replay repeatedly, and the
+   momentary `MIN(seq)-1` floor deletes nothing. Hooks registered here must therefore be
+   idempotent under full-journal redelivery; do not "fix" the rewind.

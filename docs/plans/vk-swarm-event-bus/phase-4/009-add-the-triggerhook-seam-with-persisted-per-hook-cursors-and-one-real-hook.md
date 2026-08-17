@@ -2,7 +2,7 @@
 id: "009"
 phase: 4
 title: "Add the TriggerHook seam with persisted per-hook cursors and one real hook"
-status: ready
+status: passed
 depends_on: ["005"]
 parallel: false
 conflicts_with: []

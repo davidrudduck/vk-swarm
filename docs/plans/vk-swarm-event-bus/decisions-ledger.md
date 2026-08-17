@@ -7732,3 +7732,34 @@ RED `left: [2]`; RP2: test 4 RED `left: []`) before the corrected file was verif
 (services 7/7, db trigger_cursor 10/10, fmt exit 0) and the commit amended. Lesson re-confirmed:
 one worktree = one writer — the orchestrator must not run red proofs while an implementer is
 active, even one presumed dead.
+
+## Task 009 Stage-2 adjudication (panel-009c, 2026-08-17) — PASS
+
+Commit `fa96d329` (attempt 2, amended after the commit race recorded above). Panel-009c (Opus)
+verified with cited command output: RP1 red (`left: [2]` vs `[1, 2]`), RP2 red (`left: []` vs
+`[1]`), a load-bearing check on test 7's flag assertion (deleting the `clear_rebootstrap` call →
+RED at `trigger_hooks.rs:721`), and a panel-added fourth mutation re-inserting
+`needs_rebootstrap = 0` into `set()`'s DO UPDATE → `test_cursor_set_preserves_rebootstrap_flag`
+RED in `crates/db` (F2's primary fix is guarded, but ONLY by the db-side test — Stage-1's
+`crates/services` scope never runs it; the orchestrator ran `cargo test -p db --lib
+trigger_cursor` out-of-band as the contract requires, 10/10). Baselines: services 7/7 ×3 +
+single-threaded, db --lib 285/285, event_journal 11/11, clippy -D warnings clean, fmt/check
+exit 0. Worktree restored byte-identical (md5-matched, scratch removed).
+
+Append-only corrections to the attempt-2 entry above, per panel LOW findings (both verified by
+the orchestrator; neither invalidates a conclusion):
+- **LOW-1**: the quoted blast-radius grep uses BRE alternation and matches NOTHING as written
+  (orchestrator re-ran it: exit 1, zero output; it needed `-E`). The CONCLUSION stands —
+  panel-009c's own grep confirms `set()`'s only callers are `trigger_hooks.rs:140,159,162` plus
+  the module's own tests, and `event_journal/mod.rs:233,342,389,397` use raw SQL.
+- **LOW-2**: the trigger_cursor test-count parenthetical mis-derives 10 ("8 pre-existing minus
+  the inverted one, plus 2 new" = 9, then double-counts `compact_never_crosses_min_trigger_cursor`
+  which was already inside the 8). Correct derivation: 8 pre-existing under the filter (the
+  inverted test was RENAMED, not removed) + 2 new = 10. The headline `10 passed` was empirically
+  correct.
+
+Panel observation (recorded, routed): a flag raised while a runner is live now survives until the
+next start, which rewinds to `MIN(seq) - 1` and re-delivers the entire surviving journal — the
+D11 at-least-once contract as dictated, bounded by `clear_rebootstrap` on first start. Routed to
+task 014 (REQUIRED section "added after panel-009c") together with `ensure_row`'s untested
+fresh-row insert path. Task 009 marked passed (18/23).
