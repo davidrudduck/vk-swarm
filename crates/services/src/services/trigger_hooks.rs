@@ -203,21 +203,27 @@ mod tests {
 
     async fn commit_event(pool: &SqlitePool, event: NodeEvent) -> i64 {
         let mut tx = pool.begin().await.unwrap();
-        let seq = db::models::event_journal::append(&mut *tx, &event).await.unwrap();
+        let seq = db::models::event_journal::append(&mut *tx, &event)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         seq
     }
 
     async fn create_events(pool: &SqlitePool) -> Vec<i64> {
-
         let mut seqs = Vec::new();
 
         // Event 1: task_created
         let task_id = Uuid::new_v4();
         let project_id = Uuid::new_v4();
-        let event1 = NodeEvent::TaskCreated { task_id, project_id };
+        let event1 = NodeEvent::TaskCreated {
+            task_id,
+            project_id,
+        };
         let mut tx = pool.begin().await.unwrap();
-        let seq = db::models::event_journal::append(&mut *tx, &event1).await.unwrap();
+        let seq = db::models::event_journal::append(&mut *tx, &event1)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         seqs.push(seq);
 
@@ -228,7 +234,9 @@ mod tests {
             new_status: db::models::task::TaskStatus::InProgress,
         };
         let mut tx = pool.begin().await.unwrap();
-        let seq = db::models::event_journal::append(&mut *tx, &event2).await.unwrap();
+        let seq = db::models::event_journal::append(&mut *tx, &event2)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         seqs.push(seq);
 
@@ -239,7 +247,9 @@ mod tests {
             new_status: db::models::task::TaskStatus::InReview,
         };
         let mut tx = pool.begin().await.unwrap();
-        let seq = db::models::event_journal::append(&mut *tx, &event3).await.unwrap();
+        let seq = db::models::event_journal::append(&mut *tx, &event3)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         seqs.push(seq);
 
@@ -249,7 +259,8 @@ mod tests {
     #[tokio::test]
     async fn hook_fires_only_on_matching_events() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let event_bus = Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
 
         // Create a hook that only matches task_status_changed
         let hook = Arc::new(RecordingHook::new(
@@ -287,7 +298,8 @@ mod tests {
     #[tokio::test]
     async fn cursor_is_persisted_after_each_fire() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let event_bus = Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
 
         let hook = Arc::new(RecordingHook::new(
             "test_hook_cursor",
@@ -323,7 +335,8 @@ mod tests {
     #[tokio::test]
     async fn restart_resumes_from_persisted_cursor_without_loss() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let event_bus = Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
 
         let hook = Arc::new(RecordingHook::new(
             "test_hook_restart",
@@ -358,7 +371,9 @@ mod tests {
             new_status: db::models::task::TaskStatus::Done,
         };
         let mut tx = pool.begin().await.unwrap();
-        let _ = db::models::event_journal::append(&mut *tx, &event4).await.unwrap();
+        let _ = db::models::event_journal::append(&mut *tx, &event4)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
 
         let event5 = NodeEvent::TaskStatusChanged {
@@ -367,7 +382,9 @@ mod tests {
             new_status: db::models::task::TaskStatus::Todo,
         };
         let mut tx = pool.begin().await.unwrap();
-        let _ = db::models::event_journal::append(&mut *tx, &event5).await.unwrap();
+        let _ = db::models::event_journal::append(&mut *tx, &event5)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
 
         let event6 = NodeEvent::TaskStatusChanged {
@@ -376,7 +393,9 @@ mod tests {
             new_status: db::models::task::TaskStatus::InProgress,
         };
         let mut tx = pool.begin().await.unwrap();
-        let _ = db::models::event_journal::append(&mut *tx, &event6).await.unwrap();
+        let _ = db::models::event_journal::append(&mut *tx, &event6)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
 
         // Clear the fired events list to track only new firings
@@ -406,7 +425,8 @@ mod tests {
     #[tokio::test]
     async fn at_least_once_tolerates_duplicate_delivery() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let event_bus = Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
 
         let hook = Arc::new(RecordingHook::new(
             "test_hook_at_least_once",
@@ -451,7 +471,8 @@ mod tests {
     #[tokio::test]
     async fn unknown_hook_starts_at_cursor_zero() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let event_bus = Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
 
         // Create some events
         let task_id = Uuid::new_v4();
@@ -495,7 +516,8 @@ mod tests {
     #[tokio::test]
     async fn cursor_advances_past_non_matching_events() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let event_bus = Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
 
         let hook = Arc::new(RecordingHook::new(
             "test_hook_non_matching",
@@ -574,7 +596,8 @@ mod tests {
     #[tokio::test]
     async fn rebootstrap_flag_is_surfaced_and_cleared() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let event_bus = Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
 
         let hook = Arc::new(RecordingHook::new(
             "test_hook_rebootstrap",
