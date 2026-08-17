@@ -6,9 +6,18 @@
 //!
 //! Each SSE frame carries the event's sequence number in the `id` field,
 //! allowing clients to resume from `cursor=last_seen_seq`.
+//!
+//! Error handling: a failure BEFORE the stream starts is a 500-class HTTP response; a failure
+//! MID-stream is emitted as a terminal `error` frame and the stream then ends. An `Err` item is
+//! never yielded into the SSE body — axum surfaces a stream `Err` as an http_body error, which
+//! makes hyper abort the chunked body so the client sees a silent close with no diagnostic
+//! (axum-0.8.8 `sse.rs:130`). The item type is therefore [`Infallible`], which makes that
+//! impossible by construction.
+
+use std::convert::Infallible;
 
 use axum::{
-    BoxError, Router,
+    Router,
     extract::{Query, State},
     response::{
         Sse,
@@ -16,9 +25,14 @@ use axum::{
     },
     routing::get,
 };
-use deployment::Deployment;
-use futures_util::StreamExt;
+use db::models::{event::SequencedEvent, event_journal};
+use deployment::{Deployment, DeploymentError};
+use futures_util::{
+    StreamExt,
+    stream::{BoxStream, unfold},
+};
 use serde::Deserialize;
+use services::services::event_bus::EventBusError;
 use tracing::error;
 
 use crate::DeploymentImpl;
@@ -33,6 +47,81 @@ pub struct EventsQuery {
     pub cursor: Option<i64>,
 }
 
+/// Map a failure that happens BEFORE the stream starts onto a 500-class `ApiError`.
+///
+/// `ApiError::Deployment(_)` maps unconditionally to `INTERNAL_SERVER_ERROR`
+/// (`crates/server/src/error.rs`, `IntoResponse for ApiError`). `ApiError::Database` is
+/// deliberately NOT used: it sub-matches `sqlx::Error::RowNotFound` onto 404, which is not
+/// 500-class. `ApiError::BadRequest` would be wrong for the same reason in the other direction —
+/// a journal or bus failure is a server fault, not a malformed request. A malformed `cursor` is
+/// still a 400: it is rejected by axum's `Query` extractor before this handler runs.
+fn internal_error<E>(e: E) -> ApiError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    ApiError::Deployment(DeploymentError::Other(anyhow::Error::new(e)))
+}
+
+/// State machine backing [`sse_stream`]: once a terminal error frame has been emitted the stream
+/// is `Done` and yields nothing further.
+enum StreamStage {
+    Running(BoxStream<'static, Result<SequencedEvent, EventBusError>>),
+    Done,
+}
+
+/// The terminal SSE frame emitted for a mid-stream failure.
+fn terminal_error_frame(message: String) -> Event {
+    Event::default().event("error").data(message)
+}
+
+/// Adapt the bus subscription onto SSE frames, emitting a terminal `error` frame and STOPPING on
+/// the first failure (bus error or serialization failure).
+///
+/// `unfold` — the same construction `EventBus::subscribe_from` itself uses
+/// (`crates/services/src/services/event_bus/mod.rs:207`) — is required here rather than
+/// `scan`/`take_while`: those adapters only run their closure when the INNER stream yields, so a
+/// transient fault would leave the stream alive and blocked in `rx.recv()` forever after the error
+/// frame. `unfold` decides on the next POLL, so the body ends immediately.
+fn sse_stream(
+    inner: BoxStream<'static, Result<SequencedEvent, EventBusError>>,
+) -> impl futures_util::Stream<Item = Result<Event, Infallible>> {
+    unfold(StreamStage::Running(inner), |stage| async move {
+        let mut inner = match stage {
+            StreamStage::Running(inner) => inner,
+            StreamStage::Done => return None,
+        };
+
+        match inner.next().await {
+            None => None,
+            Some(Ok(seq_event)) => match serde_json::to_string(&seq_event) {
+                Ok(data) => {
+                    let frame = Event::default().id(seq_event.seq.to_string()).data(data);
+                    Some((Ok(frame), StreamStage::Running(inner)))
+                }
+                Err(e) => {
+                    // A serialization failure is NOT swallowed to an empty payload: the client
+                    // would silently receive a frame carrying nothing.
+                    error!(
+                        seq = seq_event.seq,
+                        error = ?e,
+                        "failed to serialize event for SSE; terminating stream"
+                    );
+                    let frame = terminal_error_frame(format!(
+                        "event serialization failed at seq {}: {}",
+                        seq_event.seq, e
+                    ));
+                    Some((Ok(frame), StreamStage::Done))
+                }
+            },
+            Some(Err(e)) => {
+                error!(error = ?e, "event bus stream error; terminating stream");
+                let frame = terminal_error_frame(format!("event stream error: {}", e));
+                Some((Ok(frame), StreamStage::Done))
+            }
+        }
+    })
+}
+
 /// GET /api/events
 ///
 /// Stream events as Server-Sent Events (SSE).
@@ -44,61 +133,33 @@ pub struct EventsQuery {
 /// # Response
 /// SSE stream with one event per journaled/live SequencedEvent. Each frame carries:
 /// - `id`: The event's sequence number
-/// - `data`: JSON-serialized SequencedEvent
+/// - `data`: JSON-serialized SequencedEvent (`{"seq":N,"event":{"type":"...",...}}`)
 pub async fn events(
     State(deployment): State<DeploymentImpl>,
     Query(query): Query<EventsQuery>,
-) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, BoxError>>>, ApiError> {
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let bus = deployment.event_bus();
 
-    // Determine starting cursor:
-    // - None means live-only (subscribe without replay)
-    // - Some(n) means replay from n, then go live
-    let stream = match query.cursor {
-        None => {
-            // Live-only: subscribe without any replay
-            // We use cursor = high_water_mark to skip all history
-            let mark = db::models::event_journal::high_water_mark(&deployment.db().pool)
-                .await
-                .map_err(|e| {
-                    error!("Failed to get high water mark: {}", e);
-                    ApiError::BadRequest(format!(
-                        "Failed to get event journal high water mark: {}",
-                        e
-                    ))
-                })?;
-            bus.subscribe_from(mark).map_err(|e| {
-                error!("Failed to subscribe to event bus: {}", e);
-                ApiError::BadRequest(format!("Failed to subscribe to events: {}", e))
-            })?
-        }
-        Some(cursor) => {
-            // Replay + live: subscribe from the given cursor
-            bus.subscribe_from(cursor).map_err(|e| {
-                error!("Failed to subscribe to event bus: {}", e);
-                ApiError::BadRequest(format!("Failed to subscribe to events: {}", e))
-            })?
-        }
+    // Determine the starting cursor:
+    // - None means live-only: start at the journal's current high-water mark so nothing already
+    //   journaled is replayed. This is NOT cursor=0, which replays the whole journal.
+    // - Some(n) means replay everything with seq > n, then go live.
+    let cursor = match query.cursor {
+        None => event_journal::high_water_mark(&deployment.db().pool)
+            .await
+            .map_err(|e| {
+                error!(error = ?e, "failed to read event journal high-water mark");
+                internal_error(e)
+            })?,
+        Some(cursor) => cursor,
     };
 
-    // Map SequencedEvent to SSE Event
-    let sse_stream = stream.map(|result| {
-        match result {
-            Ok(seq_event) => {
-                let seq_str = seq_event.seq.to_string();
-                // Serialize event to JSON
-                let data = serde_json::to_string(&seq_event).unwrap_or_else(|_| "{}".to_string());
-                Ok(Event::default().id(seq_str).data(data))
-            }
-            Err(e) => {
-                // Terminal error frame
-                error!("Event bus stream error: {}", e);
-                Err::<Event, BoxError>(format!("Event bus error: {}", e).into())
-            }
-        }
-    });
+    let stream = bus.subscribe_from(cursor).map_err(|e| {
+        error!(error = ?e, "failed to subscribe to the event bus");
+        internal_error(e)
+    })?;
 
-    Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
+    Ok(Sse::new(sse_stream(stream)).keep_alive(KeepAlive::default()))
 }
 
 pub fn router(_: &DeploymentImpl) -> Router<DeploymentImpl> {

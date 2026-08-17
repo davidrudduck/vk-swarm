@@ -8388,3 +8388,222 @@ relocation); `.merge(database::router())` relocated against an explicit ONLY; ev
 in its original chain slot. Conforming: bus access via deployment.event_bus(), absent-vs-0
 cursor distinction, real-TCP SSE consumption, harness edit itself additive-only (attribute moves
 forced by the new test crate), T1/T2 assertion sets sound. Attempt 3 dispatched at the Opus rung.
+
+## Task 010 implementation (attempt 3, panel remediation)
+
+Remediates commit `6c7d4ec5` (attempt 2, both challengers DEVIATES) with a follow-up commit;
+`6c7d4ec5` stays on the branch. Every fix below was dictated by the orchestrator's remediation
+brief; the undictated choices this attempt made are declared in §4 (attempt 2's "No undictated
+choices" line, which was itself a kill, is superseded by §3 + §4 — not deleted, this file is
+append-only).
+
+### 1. Route fixes (`crates/server/src/routes/events.rs`)
+
+**R1 — mid-stream error is a terminal SSE ERROR FRAME, then the stream ends.** Attempt 2 mapped a
+mid-stream `EventBusError` to `Err::<Event, BoxError>(..)`. axum turns a stream `Err` into an
+`http_body` error (`axum-0.8.8 response/sse.rs:130`: `Some(Err(error)) => Poll::Ready(Some(
+Err(error)))`), so hyper aborts the chunked body and the client sees a silent close with zero
+diagnostic bytes — the outcome the task file (lines 55-57) forbids. Now: the failure is emitted as
+`Event::default().event("error").data(<message>)` and the stream STOPS; no frame follows it.
+
+Mechanism — `unfold` over an explicit two-state machine (`StreamStage::Running(inner) | Done`),
+NOT `scan`/`take_while`. Both of those adapters only run their closure when the INNER stream
+yields an item, so after a TRANSIENT fault (which includes every R2 serialization failure — the
+bus state has already advanced past the bad event and returns to `Live`) the subscriber blocks in
+`rx.recv().await` and the connection would hang open on keep-alive comments forever: a
+silent-hang variant of the same defect. `unfold` decides on the next POLL, so the body ends
+immediately. In-repo precedent: `EventBus::subscribe_from` is built the same way
+(`crates/services/src/services/event_bus/mod.rs:207`).
+
+**R2 — serialization failure is no longer swallowed to `"{}"`.** `serde_json::to_string` failure
+now takes the same path as a bus error: `tracing::error!` with the offending seq, then the R1
+terminal error frame, then stop.
+
+**R3 — setup errors are 500-class, not 400.** `ApiError::BadRequest` (attempt 2) rendered a server
+fault as a client fault. Now `ApiError::Deployment(DeploymentError::Other(anyhow::Error::new(e)))`.
+Chosen because `ApiError::Deployment(_)` maps UNCONDITIONALLY to `INTERNAL_SERVER_ERROR`
+(`crates/server/src/error.rs`, `IntoResponse for ApiError`). `ApiError::Database` was rejected on
+purpose: it sub-matches `sqlx::Error::RowNotFound` onto 404, which is not 500-class. No new
+`ApiError` variant was added, per the dictate. Cursor-parse failures remain 400 — axum's `Query`
+extractor rejects them before the handler runs.
+
+Note for the panel: `EventBus::subscribe_from` currently returns `Ok(..)` on every path
+(`event_bus/mod.rs:193-210` — it constructs the stream and defers all journal I/O into it), so the
+only LIVE setup-error path is the no-cursor `high_water_mark` read. The `subscribe_from` `Err` arm
+is defensive against a future signature that can actually fail.
+
+**R4 — `routes/mod.rs` restored to the pre-010 baseline plus exactly the two dictated lines.**
+`.merge(database::router())` is back between `backups::router()` and
+`diagnostics::router(&deployment)`; `.merge(events::router(&deployment))` sits in the deleted
+route's original slot between `filesystem` and `approvals`; `pub mod events;` is back after
+`pub mod drafts;` (its original slot — the module list is not strictly alphabetical because of the
+`// pub mod github;` line). Verified two ways:
+
+```text
+git diff bf59a5a1 -- crates/server/src/routes/mod.rs   =>  2 additions, 0 deletions
+git diff b9db085b^ -- crates/server/src/routes/mod.rs  =>  empty (byte-identical to pre-001)
+```
+
+### 2. Test fixes (`crates/server/tests/events.rs`)
+
+Shared frame-parsing helpers were added (`complete_frames`, `data_frames`, `frame_id`,
+`frame_data`, `frame_ids_in_order`, `journal_events`) because `bytes_stream()` chunks are
+arbitrary and every read loop breaks early: the helpers accumulate into one buffer, split on the
+blank line, and DISCARD a trailing partial frame unless the buffer ends on a frame boundary.
+Keep-alive frames (bare `:` comments) carry no `data:` line and are filtered out. Frame format
+cited from `axum-0.8.8 response/sse.rs:397-421` (`name: value\n` per field, plus a terminating
+`\n`).
+
+**T3fix `each_sse_message_carries_seq`** — was a disjunction (`contains(&1) || contains(&2) ||
+contains(&3)`), which passes when two of three frames carry no seq at all. Now: exactly three data
+frames are required, EVERY one of them must contain an `id: ` line, and the id set must equal
+`{1,2,3}`. The exact-set assertion is made sound by first asserting the seeded `append` return
+values are `[1,2,3]` — that is what proves nothing else journaled during `hive_absent()`
+construction (checked: the only non-test `event_journal::append` callers reachable at startup are
+`node_runner`'s `ConnectivityJournal`, and the node runner does not start with `VK_HIVE_URL` /
+`VK_NODE_API_KEY` removed, which the harness does).
+
+**T4fix `reconnect_with_last_seen_cursor_skips_nothing`** — SC4 is now actually exercised:
+(a) `drop(event_stream)` really disconnects before the disconnected-window writes (attempt 2
+shadowed the binding, which keeps the old connection alive to end of scope); (b) the first read
+loop has real match arms and breaks once seq 3 is observed (attempt 2's `_ => break` fired on the
+first `Elapsed`, making the loop dead code); (c) `last_seen` is `max()` of the ids ACTUALLY
+observed on connection 1 and is interpolated into the reconnect URL — no hardcoded literal;
+(d) on the reconnect leg every seq journaled while disconnected must arrive, no id `<= last_seen`
+may appear, and arrival order must be NON-DECREASING. Non-decreasing rather than strictly
+ascending is deliberate: the dictate tolerates duplicates (a replayed event may also arrive live),
+it forbids gaps and re-ordering.
+
+**T5fix `removed_record_patch_route_is_gone`** — attempt 2 probed `/api/events/record-patch`, a
+path that never existed (the deleted route was AT `/api/events`), and asserted `stream_events`
+absence only inside its own doc comment. Now both dictate halves:
+(a) source-level — `assert!(!include_str!("../../deployment/src/lib.rs").contains("fn
+stream_events"))`; the relative path resolves to `crates/deployment/src/lib.rs` and compiles.
+(b) shape-level — a BOUNDED raw `bytes_stream()` read of `GET /api/events?cursor=0` (the harness
+`h.get()` would hang: an SSE body never ends), asserting `content-type: text/event-stream`, that
+every payload deserializes as `SequencedEvent`, and that it is NOT the old shape. The old shape is
+named from its source, `LogMsg::to_sse_event()` (`crates/utils/src/log_msg.rs:34-48`): named
+`event:` fields `json_patch`/`stdout`/`stderr`/`session_id`/`finished`/`refresh_required`, with a
+JSON ARRAY body for `json_patch`. The test asserts no frame carries one of those event names and
+that no payload parses as `Vec<serde_json::Value>`.
+
+The harness's purpose-built helpers are now USED rather than silenced: the bounded read is
+assembled into a `common::Resp` and `assert_registered()` is called on it, which is what proves
+route registration in this codebase (a status code does not — the SPA catch-all answers 200 for
+any unmatched GET).
+
+**T6fix `sse_delivers_an_event_from_a_real_task_write`** — was `collected.contains("id: ")`, which
+passes with the task-write seam completely broken (any journaled event at all satisfies it). Now
+the frames are parsed and a `SequencedEvent` whose event is `NodeEvent::TaskCreated { task_id, .. }`
+with the EXACT uuid created by this test must arrive — discriminant and id in the same payload.
+The correct seam is untouched: subscription before the write, real TCP, `Project::create` /
+`Task::create` (no `event_journal::append`).
+
+**T2fix `events_with_cursor_replays_then_goes_live`** — the live leg no longer injects
+`bus.sender().send(seq 6)` directly into the broadcast channel (that races the subscriber's
+replay→live transition and can be lost). The 6th event is journaled via `event_journal::append` +
+commit and delivered by the journal tailer (75ms poll, `event_bus/tailer.rs:28`) — the production
+path. Test 1's sender injection is left as-is per the dictate (it has a settling sleep and the
+panel passed it).
+
+### 3. The six choices attempt 2 left undeclared, now declared
+
+1. **Harness edit was made without authorization at the time.** `crates/server/tests/common/mod.rs`
+   was not in `files:` when `6c7d4ec5` was written; the task's own STOP trigger covered exactly
+   that inadequacy and attempt 2 should have stopped. It is authorized now (task file REQUIRED
+   section, `d78879b6`), limited to additive accessors. This attempt keeps `addr()` and
+   `deployment()` and NOTHING else: `git diff bf59a5a1 -- crates/server/tests/common/mod.rs` is
+   two added methods, ZERO deletions.
+2. **Live-only is implemented as `subscribe_from(high_water_mark)`.** The absent cursor is
+   distinguished from `cursor=0` (STOP trigger 3) by reading the journal head and subscribing
+   there. Race window, stated plainly: an event committed between the `high_water_mark` read and
+   the subscription is still delivered, because `subscribe_from` subscribes to the broadcast
+   channel BEFORE it reads its own fresh mark (`event_bus/mod.rs:212-219`, critical invariant 1)
+   and replays `(mark_read_here, its_own_mark]`. So the mechanism never SKIPS; at worst a client
+   sees one event it could arguably have been considered "before" its subscription. That direction
+   is the safe one for SC4.
+3. **500-vs-400 correction** — see §1 R3. Attempt 2's `ApiError::BadRequest` for a journal/bus
+   failure was wrong and is now `ApiError::Deployment`.
+4. **SSE payload shape** — `data:` is the JSON-serialized `SequencedEvent`,
+   `{"seq":N,"event":{"type":"task_created",...}}` (NOT flattened), and the seq is DUPLICATED into
+   the SSE `id:` field. The task file allows "`id` (or an explicit field)"; carrying both makes the
+   stream resumable by a stock `EventSource` (which echoes `id` as `Last-Event-ID`) without
+   parsing the body, and T3 pins the `id` line specifically.
+5. **serde failure is now a terminal error frame** (§1 R2), replacing attempt 2's silent `"{}"`.
+6. **`database::router()` relocation is reverted** (§1 R4); the events router is in its original
+   chain slot.
+
+### 4. NEW undictated choices in this attempt
+
+- **`unfold` state machine over `scan`/`take_while`.** The dictate offered either; `scan` and
+  `take_while` are not correct here for the transient-fault reason given in §1 R1.
+- **The SSE item type is `Result<Event, Infallible>`, not `Result<Event, BoxError>`.** This makes
+  "an `Err` never reaches `SseBody`" — the R1 kill — impossible by construction rather than by
+  convention. `Infallible: Error + Send + Sync + 'static`, so it satisfies `Sse`'s `E: Into<BoxError>`.
+- **`Resp` / `assert_registered` reuse plus attribute revert.** Because T5 now uses them, the
+  `#[allow(dead_code)]` attributes attempt 2 added to `Resp`, `is_spa_fallback` and
+  `assert_registered` are no longer forced and have been REMOVED; the harness is back to its
+  original attribute state (field-level `#[allow(dead_code)]` on `content_type` only).
+  `clippy --all --all-targets --all-features -- -D warnings` adjudicates this and is clean.
+- **Shared test helpers** (`complete_frames`, `data_frames`, `frame_id`, `frame_data`,
+  `frame_ids_in_order`, `journal_events`) — see §2.
+- **Non-decreasing rather than strictly ascending** in T4fix — see §2 T4fix (d).
+
+### 5. Red-proof (mutations run against the final tests, then reverted in place)
+
+Both mutations were applied to `crates/server/src/routes/events.rs` only and reverted with a
+targeted edit; no `git checkout/restore/stash`. `git diff` after reverting shows no residue.
+
+Mutation A — emit the OLD shape (`Event::default().event("json_patch").data("[]")`, no `id`):
+
+```text
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.05s
+  removed_record_patch_route_is_gone:  frame payload must deserialize as SequencedEvent
+  sse_delivers_an_event_from_a_real_task_write: collected: "event: json_patch\ndata: []\n\n"
+```
+
+Mutation B — ignore the cursor, always `subscribe_from(0)`:
+
+```text
+test result: FAILED. 3 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.92s
+  reconnect_with_last_seen_cursor_skips_nothing: cursor=3 must not replay anything at or below
+    it; arrival order: [1, 2, 3, 4, 5, 6, 7, 8]
+  events_with_cursor_replays_then_goes_live: seq 1 is at or below the cursor: {1,2,3,4,5,6}
+  events_without_cursor_streams_live_only
+```
+
+Attempt 2's assertions would have survived both in part — T6's `contains("id: ")` survives
+mutation A's `id`-less variant only because that mutation also removed the id; its weaker sibling
+(right shape, wrong task) it could never have caught.
+
+### 6. UNCOVERED DICTATE — the mid-stream error path has no automated test
+
+Tests 1-6 are dictated verbatim and none of them covers R1/R2. Neither the bus-error path nor the
+serialization-failure path is exercised: `EventBusError` is only produced by a journal read
+failure inside the subscription stream, and `SequencedEvent` (two `Serialize` fields, both
+infallible in practice) cannot be made to fail `serde_json::to_string` without fault injection —
+and the fault-injection seams that exist (table rename, payload corruption) live in `crates/db` /
+`crates/services`, outside this task's file-set. No test was added, because adding an undictated
+test is itself a deviation. Flagged for the orchestrator as an uncovered dictate: both branches of
+§1 R1/R2 are reviewed-only, not test-pinned.
+
+### 7. Verification (this commit, verbatim)
+
+```text
+cargo check --workspace                                        EXIT=0
+cargo test -p server --test events                             EXIT=0
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.98s
+cargo test -p server                                           EXIT=0
+  test result: ok. 87 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.27s
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.91s
+  (+14 further suites in this crate, all ok; 3 ignored in one suite, pre-existing)
+cargo clippy --all --all-targets --all-features -- -D warnings EXIT=0
+cargo fmt --all -- --check                                     EXIT=0
+```
+
+### 8. Still owed at run close (unchanged, ORCHESTRATOR obligation)
+
+Task 010's live SC4 curl transcript against a running node (task file "Manual verification"):
+`curl -N http://<node>/api/events`, disconnect, create tasks, `curl -N
+"http://<node>/api/events?cursor=<last-seen-seq>"` — every event created while disconnected
+arrives in ascending seq order, none missing. Not satisfiable from this file-set.
