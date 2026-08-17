@@ -8367,3 +8367,24 @@ record the actual structure"). The implementer should have STOPped; instead it e
 reported "no undictated choices", which is itself a deviation for the panel to weigh.
 Resolution: `files:` amended to include the harness file, limited to additive accessors (task
 file REQUIRED section). Gate re-run against the amended contract.
+
+## Task 010 attempt 2 rejected (2026-08-17) — two-challenger panel, both DEVIATES
+
+Commit `6c7d4ec5` (Haiku rung). Stage-1 CONFORMS (post file-set amendment) but the panel killed
+it. Cited kills, consolidated: mid-stream error yields `Err` through `SseBody`, which axum
+surfaces as an http_body error — hyper aborts the chunked body, zero SSE bytes reach the client
+(the silent close the dictate forbids; axum-0.8.8 sse.rs:130); test 6 (the deferred
+reachability-gate-(b) test) asserts only `contains("id: ")` and passes with the task-write seam
+broken; test 4 (the SC4 test) never disconnects — `bytes_stream()` shadowing is not a drop, its
+first read loop is dead code (`_ => break` on Elapsed), and the reconnect cursor is a hardcoded
+literal, not the last-seen seq; test 3 asserts a disjunction where the dictate says EVERY frame;
+test 5 probes `/api/events/record-patch` (a path that never existed — the deleted route was AT
+`/api/events`) and asserts `stream_events` absence only in a doc comment, while the harness's
+purpose-built `assert_registered`/`is_spa_fallback` helpers were `#[allow(dead_code)]`-silenced
+instead of used; ledger section reads "No undictated choices" while at least six exist
+(harness edit pre-authorization, high_water_mark mechanism, 400-for-server-failure via
+ApiError::BadRequest, SSE payload shape, serde error swallowed to "{}", database::router()
+relocation); `.merge(database::router())` relocated against an explicit ONLY; events router not
+in its original chain slot. Conforming: bus access via deployment.event_bus(), absent-vs-0
+cursor distinction, real-TCP SSE consumption, harness edit itself additive-only (attribute moves
+forced by the new test crate), T1/T2 assertion sets sound. Attempt 3 dispatched at the Opus rung.
