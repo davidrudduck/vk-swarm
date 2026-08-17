@@ -5,7 +5,7 @@ title: "Make the tailer give-up defect unrepresentable, and the tailer observabl
 status: passed
 depends_on: ["013"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["005","013","018","019"]
 files:
   - "crates/services/src/services/event_bus/tailer.rs"
   - "crates/services/src/services/event_bus/mod.rs"

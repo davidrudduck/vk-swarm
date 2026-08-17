@@ -5,7 +5,7 @@ title: "Add the event_journal model with append, cursor range-read, and compacti
 status: passed
 depends_on: ["002","003"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["003","009"]
 files:
   - "crates/db/src/models/event_journal/mod.rs"
   - "crates/db/src/models/event_journal/queries.rs"

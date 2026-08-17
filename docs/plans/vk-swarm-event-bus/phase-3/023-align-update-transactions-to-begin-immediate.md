@@ -5,7 +5,7 @@ title: "Convert Task::update and Task::update_status to BEGIN IMMEDIATE (latent 
 status: passed
 depends_on: ["022"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["006"]
 files:
   - "crates/db/src/models/task/queries.rs"
   - "crates/db/src/models/task/hierarchy.rs"

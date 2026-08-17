@@ -5,7 +5,7 @@ title: "Add the EventBus with the broadcast channel and the subscribe_from repla
 status: passed
 depends_on: ["004"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["009","011","013","016","018"]
 files:
   - "crates/services/src/services/event_bus/mod.rs"
   - "crates/services/src/services/mod.rs"

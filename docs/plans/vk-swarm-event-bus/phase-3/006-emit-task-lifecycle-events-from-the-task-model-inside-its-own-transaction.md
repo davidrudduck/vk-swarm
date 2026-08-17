@@ -5,7 +5,7 @@ title: "Emit task lifecycle events from the task model inside its own transactio
 status: passed
 depends_on: ["005"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["023"]
 files:
   - "crates/db/src/models/task/queries.rs"
   - "crates/db/src/models/task/hierarchy.rs"

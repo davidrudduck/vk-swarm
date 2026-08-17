@@ -5,7 +5,7 @@ title: "Make the seam suite catch tailer cursor defects by giving the tailer a n
 status: passed
 depends_on: ["017","018"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["013","016","017","018","020"]
 files:
   - "crates/services/tests/event_bus_end_to_end.rs"
   - "crates/services/src/services/event_bus/tailer.rs"

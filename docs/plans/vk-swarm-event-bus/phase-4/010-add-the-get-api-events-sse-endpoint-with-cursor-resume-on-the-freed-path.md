@@ -5,7 +5,7 @@ title: "Add the GET /api/events SSE endpoint with cursor resume on the freed pat
 status: ready
 depends_on: ["001","005","014"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["001"]
 files:
   - "crates/server/src/routes/events.rs"
   - "crates/server/src/routes/mod.rs"

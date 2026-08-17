@@ -5,7 +5,7 @@ title: "Emit TaskCreated for the child tasks a breakdown acceptance creates"
 status: passed
 depends_on: ["004","006"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["017","018","019"]
 files:
   - "crates/db/src/models/task_breakdown/queries.rs"
   - "crates/db/src/models/task_breakdown/mod.rs"

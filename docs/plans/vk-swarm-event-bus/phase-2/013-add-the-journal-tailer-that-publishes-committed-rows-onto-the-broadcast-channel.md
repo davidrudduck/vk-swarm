@@ -5,7 +5,7 @@ title: "Add the journal tailer that publishes committed rows onto the broadcast 
 status: passed
 depends_on: ["005"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["005","016","018","019"]
 files:
   - "crates/services/src/services/event_bus/tailer.rs"
   - "crates/services/src/services/event_bus/mod.rs"

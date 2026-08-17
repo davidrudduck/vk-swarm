@@ -5,7 +5,7 @@ title: "Bound the journal with an env-tunable periodic compaction task"
 status: ready
 depends_on: ["004","009"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["005","009"]
 files:
   - "crates/services/src/services/event_compaction.rs"
   - "crates/services/src/services/mod.rs"

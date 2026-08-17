@@ -5,7 +5,7 @@ title: "Define the NodeEvent and SequencedEvent typed contract and export it via
 status: passed
 depends_on: []
 parallel: false
-conflicts_with: []
+conflicts_with: ["004","009"]
 files:
   - "crates/db/src/models/event.rs"
   - "crates/db/src/models/mod.rs"

@@ -5,7 +5,7 @@ title: "Add the end-to-end bus seam suite that hand-drives nothing"
 status: passed
 depends_on: ["013","016"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["018","019","020"]
 files:
   - "crates/services/tests/event_bus_end_to_end.rs"
 siblings:

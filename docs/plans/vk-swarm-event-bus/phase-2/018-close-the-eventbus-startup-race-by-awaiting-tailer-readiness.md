@@ -5,7 +5,7 @@ title: "Close the EventBus startup race by awaiting tailer readiness"
 status: passed
 depends_on: ["013","016","017"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["005","013","016","017","019","020"]
 files:
   - "crates/services/src/services/event_bus/mod.rs"
   - "crates/services/src/services/event_bus/tailer.rs"

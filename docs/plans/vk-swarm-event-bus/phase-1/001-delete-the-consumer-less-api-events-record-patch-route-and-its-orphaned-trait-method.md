@@ -5,7 +5,7 @@ title: "Delete the consumer-less /api/events record-patch route and its orphaned
 status: passed
 depends_on: []
 parallel: false
-conflicts_with: []
+conflicts_with: ["010"]
 files:
   - "crates/server/src/routes/events.rs"
   - "crates/server/src/routes/mod.rs"

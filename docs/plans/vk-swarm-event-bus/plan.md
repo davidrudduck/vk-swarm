@@ -44,26 +44,26 @@ UI is explicitly out of scope — the board already streams live over /api/tasks
 
 | id | phase | title | deps | conflicts |
 |---|---:|---|---|---|
-| 001 | 1 | Delete the consumer-less /api/events record-patch route and its orphaned trait method | dep: none | conflicts: none |
+| 001 | 1 | Delete the consumer-less /api/events record-patch route and its orphaned trait method | dep: none | conflicts: 010 |
 | 002 | 1 | Add the event_journal and trigger_cursors migration | dep: none | conflicts: none |
-| 003 | 1 | Define the NodeEvent and SequencedEvent typed contract and export it via ts-rs | dep: none | conflicts: none |
-| 004 | 1 | Add the event_journal model with append, cursor range-read, and compaction | dep: 002 003 | conflicts: none |
-| 005 | 2 | Add the EventBus with the broadcast channel and the subscribe_from replay-to-live contract | dep: 004 | conflicts: none |
-| 013 | 2 | Add the journal tailer that publishes committed rows onto the broadcast channel | dep: 005 | conflicts: none |
-| 016 | 2 | Make the tailer give-up defect unrepresentable, and the tailer observable | dep: 013 | conflicts: none |
-| 017 | 2 | Add the end-to-end bus seam suite that hand-drives nothing | dep: 013 016 | conflicts: none |
-| 018 | 2 | Close the EventBus startup race by awaiting tailer readiness | dep: 013 016 017 | conflicts: none |
-| 019 | 2 | Make the seam suite catch tailer cursor defects by giving the tailer a non-zero start mark | dep: 017 018 | conflicts: none |
-| 006 | 3 | Emit task lifecycle events from the task model inside its own transaction | dep: 005 | conflicts: none |
+| 003 | 1 | Define the NodeEvent and SequencedEvent typed contract and export it via ts-rs | dep: none | conflicts: 004 009 |
+| 004 | 1 | Add the event_journal model with append, cursor range-read, and compaction | dep: 002 003 | conflicts: 003 009 |
+| 005 | 2 | Add the EventBus with the broadcast channel and the subscribe_from replay-to-live contract | dep: 004 | conflicts: 009 011 013 016 018 |
+| 013 | 2 | Add the journal tailer that publishes committed rows onto the broadcast channel | dep: 005 | conflicts: 005 016 018 019 |
+| 016 | 2 | Make the tailer give-up defect unrepresentable, and the tailer observable | dep: 013 | conflicts: 005 013 018 019 |
+| 017 | 2 | Add the end-to-end bus seam suite that hand-drives nothing | dep: 013 016 | conflicts: 018 019 020 |
+| 018 | 2 | Close the EventBus startup race by awaiting tailer readiness | dep: 013 016 017 | conflicts: 005 013 016 017 019 020 |
+| 019 | 2 | Make the seam suite catch tailer cursor defects by giving the tailer a non-zero start mark | dep: 017 018 | conflicts: 013 016 017 018 020 |
+| 006 | 3 | Emit task lifecycle events from the task model inside its own transaction | dep: 005 | conflicts: 023 |
 | 007 | 3 | Emit attempt lifecycle events from the execution-process create and completion writes | dep: 006 | conflicts: none |
 | 008 | 3 | Emit hive connectivity events from the node_runner event loop | dep: 007 | conflicts: none |
-| 020 | 3 | Emit TaskCreated for the child tasks a breakdown acceptance creates | dep: 004 006 | conflicts: none |
+| 020 | 3 | Emit TaskCreated for the child tasks a breakdown acceptance creates | dep: 004 006 | conflicts: 017 018 019 |
 | 022 | 3 | Emit task_created / task_status_changed from Task::upsert_remote_task | dep: 006 | conflicts: none |
 | 021 | 3 | Add the emission conformance guard (architecture fitness test) | dep: 006 007 020 022 | conflicts: none |
-| 023 | 3 | Convert Task::update and Task::update_status to BEGIN IMMEDIATE (latent 517 fix) | dep: 022 | conflicts: none |
+| 023 | 3 | Convert Task::update and Task::update_status to BEGIN IMMEDIATE (latent 517 fix) | dep: 022 | conflicts: 006 |
 | 015 | 3 | Add the cross-site emission integration suite | dep: 006 007 008 020 022 | conflicts: none |
-| 009 | 4 | Add the TriggerHook seam with persisted per-hook cursors and one real hook | dep: 005 | conflicts: none |
-| 010 | 4 | Add the GET /api/events SSE endpoint with cursor resume on the freed path | dep: 001 005 | conflicts: none |
-| 011 | 5 | Bound the journal with an env-tunable periodic compaction task | dep: 004 009 | conflicts: none |
+| 009 | 4 | Add the TriggerHook seam with persisted per-hook cursors and one real hook | dep: 005 | conflicts: 003 004 005 011 |
+| 010 | 4 | Add the GET /api/events SSE endpoint with cursor resume on the freed path | dep: 001 005 014 | conflicts: 001 |
+| 011 | 5 | Bound the journal with an env-tunable periodic compaction task | dep: 004 009 | conflicts: 005 009 |
 | 014 | 5 | Wire the EventBus, tailer, trigger-hook runner and compaction loop into deployment startup | dep: 009 011 013 | conflicts: none |
 | 012 | 5 | Record live acceptance for task-lifecycle observability, restart durability and full offline coverage | dep: 010 014 015 | conflicts: none |

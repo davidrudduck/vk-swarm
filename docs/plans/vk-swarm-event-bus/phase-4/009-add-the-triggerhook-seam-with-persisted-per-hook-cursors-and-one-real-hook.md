@@ -5,7 +5,7 @@ title: "Add the TriggerHook seam with persisted per-hook cursors and one real ho
 status: passed
 depends_on: ["005"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["003","004","005","011"]
 files:
   - "crates/services/src/services/trigger_hooks.rs"
   - "crates/services/src/services/mod.rs"

@@ -7823,3 +7823,15 @@ Clean STOP: no commit, no worktree changes. Resolution: 010 `depends_on` now inc
 execution reordered 011 → 014 → 010 → 012. Accessor contract pinned in both task files
 (inherent `pub fn event_bus(&self) -> Arc<EventBus>` on LocalDeployment; no trait change). The
 live SC4 curl transcript remains an orchestrator obligation, satisfiable once 014 wires startup.
+
+## Plan-lint remediation after plugin 0.28.25→0.29.0 (2026-08-17)
+
+- **010 dep line mirrored into plan.md**: the STOP-resolution frontmatter change adding `014` to
+  task 010's `depends_on` (phase-4/010) had not been mirrored into plan.md's task table; the row
+  now reads `dep: 001 005 014`.
+- **conflicts_with symmetric pairs added**: the 0.29.0 lint fails closed on any two tasks sharing
+  a `files:` entry that do not name each other in `conflicts_with`. Metadata-only frontmatter edits
+  added the symmetric pairs across tasks 001/003/004/005/006/009/010/011/013/016/017/018/019/020/023,
+  and plan.md's `conflicts:` column was mirrored to match. No dictates (task bodies, files,
+  depends_on, status) were changed — all 19 executed tasks had already passed under the old
+  0.28.25 contract.
