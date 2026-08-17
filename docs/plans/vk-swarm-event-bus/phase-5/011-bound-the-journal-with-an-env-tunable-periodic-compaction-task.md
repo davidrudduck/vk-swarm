@@ -2,7 +2,7 @@
 id: "011"
 phase: 5
 title: "Bound the journal with an env-tunable periodic compaction task"
-status: ready
+status: passed
 depends_on: ["004","009"]
 parallel: false
 conflicts_with: ["005","009"]

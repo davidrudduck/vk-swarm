@@ -7932,3 +7932,37 @@ preflight is treated as PASS for resuming the run.
   manual `VK_EVENT_RETENTION_HOURS=0` scratch-DB before/after row-count verification (task 011
   Manual verification item 2) remains an ORCHESTRATOR obligation, satisfiable once task 014 wires
   the loop into startup; it must be recorded in this ledger before the run closes.
+
+## Task 011 adjudication (2026-08-17) — PASSED on attempt 3 (fc60d32e)
+
+Attempt 1 (`77813f8d`) rejected: two-challenger panel, both DEVIATES (A: no ledger record,
+undocumented 4th env var, env seam untested, stage-3 warn mislabels `configured`, first-tick
+divergence unrecorded, warns unasserted; B: test 4 vacuous, defaults tautological, warns
+unasserted, sanitise not at the compact call site, undocumented env var, ledger absent).
+Attempt 2 (`7aa53357`, Opus rung — codex-rescue unavailable, ladder degraded): A CONFORMS,
+B DEVIATES on one residual (call-site sanitise had no regression guard — deleting the
+`sanitise_rows` call left all 8 tests green). Attempt 3 (`fc60d32e`, test-only): guard test
+added; gate CONFORMS; only removed line in the whole diff is a test-comment renumber.
+
+Red proof for the F4 guard (implementer, revert proven exact by the committed diff):
+```
+test services::event_compaction::tests::run_compaction_sanitises_a_caller_supplied_raw_config ... FAILED
+thread '...' panicked at crates/services/src/services/event_compaction.rs:594:9:
+the call-site clamp must stop a raw 0 emptying the journal
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 299 filtered out; finished in 0.41s
+```
+Load-bearing assertion is the row count (line 594), which fires before the bonus
+`logs_contain` assertion — recorded per the implementer's precision note.
+
+Orchestrator adjudications:
+- Attempt-3 implementer temporarily edited production line 282 (against the TEST-MODULE-ONLY
+  fence) to obtain the red proof, then reverted; revert exactness proven — the committed diff's
+  only removed line is `// Test 8: the env-reading seam itself.` Accepted: the edit produced
+  exactly the verification the orchestrator had queued, and the tree carries no trace.
+- No third panel round: test-only diff carrying its own mutation proof, per the task-004
+  attempt-3 precedent recorded earlier in this ledger.
+- Outstanding, carried to run close (recorded, not deferred silently): manual
+  `VK_EVENT_RETENTION_HOURS=0` scratch-DB before/after row counts (task 011 Manual
+  verification item 2), satisfiable once task 014 wires startup.
+
+Task 011 marked passed (20/23).
