@@ -7763,3 +7763,26 @@ next start, which rewinds to `MIN(seq) - 1` and re-delivers the entire surviving
 D11 at-least-once contract as dictated, bounded by `clear_rebootstrap` on first start. Routed to
 task 014 (REQUIRED section "added after panel-009c") together with `ensure_row`'s untested
 fresh-row insert path. Task 009 marked passed (18/23).
+
+## Task 001 Stage-1 adjudication (2026-08-17) — gate REJECT overridden as FALSE POSITIVE
+
+Commit `b9db085b` (impl-001, Haiku rung 1). The gate's forbid_after check REJECTed on three
+`stream_events` hits — ALL in the frozen spec's prose
+(`docs/superpowers/specs/2026-08-07-vk-swarm-event-bus.md:99,118,135`), which *describes* the
+deletion. The spec is frozen at precheck (ADR-0001) and may not be edited to clear the term.
+Verified against installed plugin source: `wai/0.28.25` `task-gate.sh:666` excludes only
+`docs/plans/<topic>/*`; its own comment concedes doc prose "legitimately quote[s] old
+paths/symbols". Filed upstream as ExpansionX/agent-plugins#134 (per the findings-routing rule),
+not carried as repo debt.
+
+Counter-evidence the code tree is clean:
+- `git grep -nF stream_events b9db085b -- . ':(exclude)docs/plans/*' ':(exclude)docs/superpowers/specs/*'` → exit 1, zero hits.
+- `git grep -n "api/events" b9db085b -- '*.rs' '*.ts' '*.tsx'` → exit 1, zero hits.
+
+Gate-equivalent checks run manually (the gate aborted before them); all green:
+- file-set: only the 3 declared files, 42 deletions, 0 insertions (gate verified before failing).
+- irreversible approval token present (gate verified).
+- `cargo check --workspace` → Finished, clean. `cargo fmt --all -- --check` → exit 0.
+- `cargo test --workspace` → 61 test-result lines, zero with a nonzero failed count.
+- `git grep -n "stream/ws" b9db085b -- crates/server/src/routes/tasks/mod.rs` → route intact at
+  :66; commit touches no `services/events` path (EventService untouched).
