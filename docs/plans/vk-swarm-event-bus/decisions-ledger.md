@@ -7921,3 +7921,14 @@ preflight is treated as PASS for resuming the run.
   - Consequence of dictated fix 2, reasoned about rather than missed: a caller-constructed bad
     config now re-emits its clamp warns on EVERY tick (60s by default), not once at parse time.
     That is the intended cost of making the call site — not the parser — the chokepoint.
+
+## Task 011 attempt 3 (panel residuals)
+
+- Panel B residual F4-guard closed: new test `run_compaction_sanitises_a_caller_supplied_raw_config`
+  drives a raw max_rows=0 config through run_compaction against a populated journal; without the
+  call-site sanitise_rows the journal empties and the test fails.
+- Panel A R1 closed: `(default: 60)` suffix added to the VK_EVENT_COMPACTION_INTERVAL_SECS comment.
+- Panel A R2 closed — restating the deferred obligation explicitly, in the task-010 style: the
+  manual `VK_EVENT_RETENTION_HOURS=0` scratch-DB before/after row-count verification (task 011
+  Manual verification item 2) remains an ORCHESTRATOR obligation, satisfiable once task 014 wires
+  the loop into startup; it must be recorded in this ledger before the run closes.

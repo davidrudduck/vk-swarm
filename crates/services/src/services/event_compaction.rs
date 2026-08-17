@@ -549,7 +549,60 @@ mod tests {
         );
     }
 
-    // Test 8: the env-reading seam itself.
+    // Test 8: run_compaction_sanitises_a_caller_supplied_raw_config
+    //
+    // Every other clamp test drives `parse_event_compaction_config`, so all of
+    // them would still pass if the call-site `sanitise_rows` in `run_compaction`
+    // were deleted. This one builds the raw, unsanitised config a caller (e.g.
+    // task 014) can construct directly — `EventCompactionConfig`'s fields are
+    // public — and drives it through `run_compaction` against a populated
+    // journal. Without the call-site clamp, `compact` receives `max_rows = 0`
+    // and empties the journal.
+    #[tokio::test]
+    #[traced_test]
+    async fn run_compaction_sanitises_a_caller_supplied_raw_config() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
+
+        // Constructed WITHOUT the parser, exactly as a caller can.
+        let config = EventCompactionConfig {
+            retention_hours: 168,
+            min_rows: 10000,
+            max_rows: 0,
+            compaction_interval_secs: 60,
+        };
+        let service = EventCompaction {
+            pool: pool.clone(),
+            config,
+        };
+
+        sqlx::query("INSERT INTO event_journal (event_type, payload) VALUES (?, ?)")
+            .bind("TestEvent")
+            .bind("{}")
+            .execute(&pool)
+            .await
+            .expect("failed to insert test event");
+
+        service
+            .run_compaction()
+            .await
+            .expect("compaction must succeed");
+
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM event_journal")
+            .fetch_one(&pool)
+            .await
+            .expect("failed to count events");
+        assert!(
+            count > 0,
+            "the call-site clamp must stop a raw 0 emptying the journal"
+        );
+
+        assert!(
+            logs_contain("VK_EVENT_MAX_ROWS"),
+            "the call-site clamp warn must name the offending variable"
+        );
+    }
+
+    // Test 9: the env-reading seam itself.
     //
     // Every other config test drives the pure parse function, so a typo in an
     // env var NAME would pass green. Mirrors wal_monitor.rs's
