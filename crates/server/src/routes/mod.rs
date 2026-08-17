@@ -17,7 +17,6 @@ pub mod diagnostics;
 pub mod filesystem;
 // pub mod github;
 pub mod drafts;
-pub mod events;
 pub mod execution_processes;
 pub mod frontend;
 pub mod health;
@@ -69,7 +68,6 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(swarm_labels::router())
         .merge(swarm_templates::router())
         .merge(filesystem::router())
-        .merge(events::router(&deployment))
         .merge(approvals::router())
         .merge(backups::router())
         .merge(database::router())
