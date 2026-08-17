@@ -1,68 +1,5 @@
 # vk-swarm-event-bus — decisions ledger
 
-## Task 014 implementation
-
-### Wiring strategy (EventBus, tailer, trigger-hook runner, compaction)
-
-- **Single supervised loop per hook** — Each hook in the registry gets its own spawned task with a
-  supervised respawn loop. On `Err` or `JoinError`, logs the failure, backs off exponentially
-  (1s → 60s cap), and respawns. This matches the task file §3 requirement to spawn `run_hook` as its
-  own task for panic detection.
-
-- **Ensure cursor row before each run** — On every iteration of the supervised loop, calls
-  `trigger_cursor::ensure_row()` to guarantee a row exists (task file §4 + panel-009c requirement).
-  A fresh row starts at `last_processed_seq = 0, needs_rebootstrap = 0`, ensuring the hook is on
-  the compaction floor from registration onward.
-
-- **Re-read flag on each respawn** — After the runner exits, the loop re-reads `needs_rebootstrap`
-  to check if compaction raised the flag while the runner was live. A live-raised flag survives
-  all cursor writes (F2 fix per panel-009c), so re-spawning immediately observes it and the next
-  start triggers rebootstrap. This is the "each respawn re-reads the cursor AND `needs_rebootstrap`"
-  requirement (task file §3).
-
-- **HTTP-seam test deferred to task 010** — REQUIRED §2 (reachability gate b) asks for a test
-  driving `GET /api/events` against the wired deployment. The route does not exist yet (task 010
-  creates it), so per the task file's own escape clause, this test lands in task 010's
-  `crates/server/tests/events.rs`, where the route will be live. Recorded here rather than
-  silently deferred: the test block itself belongs in THIS task's test module, but the HTTP
-  transport part is blocked on task 010. No test was written for this because the route is
-  unreachable at integration-test time in task 014.
-
-- **No shutdown path on LocalDeployment** — Recorded per the task file's STOP trigger: the
-  deployment struct has no public `shutdown()` method. The handles (tailer_handle,
-  _compaction_handle) are retained as fields so they are held alive for the deployment's lifetime;
-  when the deployment is dropped, the handles drop and abort/shutdown the tasks. This is the design:
-  ownership = liveness. No explicit shutdown hook was added because none existed in the
-  deployment's existing pattern and adding one is outside this task's file-set (would require
-  modifying the Deployment trait in `crates/deployment/src/lib.rs`).
-
-- **UNDICTATED (recorded per implementer contract):**
-  - Hook name captured as String in the supervised loop (necessary for move closure; `hook.name()`
-    returns `&'static str` which borrows the trait object and cannot move).
-  - Three separate mutation-proof tests added:
-    1. `mutation_proof_clones_must_share_tailer_handle` (REQUIRED §1) — proves
-       `EventBus::clone()` shares the tailer handle by observing counter climbs via both
-       original and clone.
-    2. `mutation_proof_shutdown_actually_stops_tailer` (REQUIRED §5b) — proves shutdown() stops the
-       tailer by asserting silence after shutdown, not just liveness before.
-    3. Test 4 (`startup_spawns_compaction`) observes handle existence, not the loop's tick
-       interval; the loop's liveness is test-module-level and not observable from integration tests.
-  - EventBus and compaction are generic 64-slot broadcast capacity and default config; neither is
-    tuned or exposed as a field on LocalDeployment (compaction_handle is private).
-  - Supervised respawn loop logs at `warn!` level on every respawn, NOT only on first failure; this
-    is intentional to keep the ledger visible if a hook is genuinely flapping.
-
-### Manual verification (still owed, recorded for orchestrator)
-
-- Real deployment at http://10.69.96.233:9001 or https://vkswarm.thedoctor.raverx.net (live
-  instance) with the branch built and deployed. Verify:
-  1. Create a task → immediately `curl -N http://<node>/api/events` in another shell → create
-     second task → event arrives live. Proves tailer spawned and connected.
-  2. `sqlite3 $VK_DATABASE_PATH "select hook_name, last_processed_seq from trigger_cursors"` returns
-     row for `task_status_changed_logger` hook with advancing cursor. Proves runner spawned.
-  3. Server logs show compaction loop's first-run `info!` (line 243: "Event compaction service
-     started"). Proves compaction spawned at startup.
-
 ## 2026-08-07 precheck: anchor-check false positive (documented per CLAUDE.md no-deferred-remediation)
 
 `wai-precheck.sh` assert 3 flagged `src/services/event_bus.rs` as "referenced as existing
@@ -7128,7 +7065,7 @@ after each). No `git checkout`/`restore`/`stash` was used at any point.
 `let probe: Option<(Uuid, TaskStatus)> = None;`. `cargo test -p db sync_event_tests` -> EXIT=101,
 `test result: FAILED. 3 passed; 3 failed; 0 ignored; 0 measured; 275 filtered out`:
 
-```text
+```
 upsert_status_change_emits_task_status_changed ... FAILED
   assertion `left == right` failed: exactly one task_status_changed event
     left: 0 / right: 1
@@ -7147,14 +7084,14 @@ Tests 2 and 3 fail as dictated. Test 6 ALSO fails on this mutation (every applyi
 `begin_with("BEGIN IMMEDIATE")` back to `begin()` while KEEPING the SELECT probe. Ran
 `for i in $(seq 10); do cargo test -p db concurrent_upserts -- --test-threads=1; done`:
 
-```text
+```
 run 1..10: error: test failed, to rerun pass `-p db --lib`     (10 of 10 FAILED)
 ```
 
 **10 of 10 runs failed** — the test has hard teeth on this defect class, not probabilistic ones.
 Representative failure:
 
-```text
+```
 all concurrent upserts must succeed, got 7 error(s):
 ["Database(SqliteError { code: 5, message: \"database is locked\" })", ... x7]
 ```
@@ -7215,7 +7152,7 @@ path was never exercised under contention at all. The shipped test exercised nei
 - `cargo fmt --all -- --check` -> EXIT=0; `cargo clippy -p db --all-targets -- -D warnings` -> EXIT=0
 - `cargo test -p db --lib sync_event_tests` run FOUR times, all green:
 
-```bash
+```
 run 1: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.80s
 run 2: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.80s
 run 3: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.79s
@@ -7226,7 +7163,7 @@ run 4: test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 275 filtered 
   `begin()` (SELECT probe kept), ran test 6 once -> EXIT=101,
   `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 280 filtered out`:
 
-```text
+```
 all concurrent upserts must succeed, got 7 error(s):
 ["Database(SqliteError { code: 5, message: \"database is locked\" })", ... x7]
 ```
@@ -7280,13 +7217,12 @@ Test 1: `concurrent_updates_serialize_without_errors` (queries.rs) — one task,
 `Task::update` calls against it with distinct titles but SAME status (Todo); pool.begin() still active.
 
 4-run pre-conversion behavior (pool.begin()):
-```text
+```
 run 1: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 10 error(s): code 5 (×4), code 517 (×3), code 5 (×3)
 run 2: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 11 error(s): code 517 (×5), code 5 (×6)
 run 3: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 11 error(s): code 5 (×6), code 517 (×3), code 5 (×2)
 run 4: test result: FAILED. 0 passed; 1 failed; all concurrent updates must succeed, got 11 error(s): code 517 (×2), code 5 (×9)
 ```
-
 Summary: **4/4 red** with database-locked errors (code 5 and 517), as expected for the deferred-transaction 
 read-snapshot defect.
 
@@ -7294,13 +7230,12 @@ Test 2: `concurrent_status_updates_serialize_without_errors` (hierarchy.rs) — 
 `Task::update_status` calls alternating two statuses; pool.begin() still active.
 
 4-run pre-conversion behavior (pool.begin()):
-```text
+```
 run 1: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 10 error(s): all code 5
 run 2: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 9 error(s): code 5 (×6), code 517 (×3)
 run 3: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 12 error(s): code 5 (×6), code 517 (×4), code 5 (×2)
 run 4: test result: FAILED. 0 passed; 1 failed; all concurrent status updates must succeed, got 10 error(s): code 5 (×7), code 517 (×3)
 ```
-
 Summary: **4/4 red** with database-locked errors (code 5 and 517), as expected for the deferred-transaction 
 read-snapshot defect.
 
@@ -7319,25 +7254,23 @@ Task::create and Task::delete untouched, sync.rs untouched.
 Test 1: concurrent_updates_serialize_without_errors (queries.rs) — pool.begin_with("BEGIN IMMEDIATE") active.
 
 4-run post-conversion behavior:
-```bash
+```
 run 1: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.20s
 run 2: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.25s
 run 3: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.22s
 run 4: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.29s
 ```
-
 Summary: **4/4 green**. All concurrent updates serialize without error.
 
 Test 2: concurrent_status_updates_serialize_without_errors (hierarchy.rs) — pool.begin_with("BEGIN IMMEDIATE") active.
 
 4-run post-conversion behavior:
-```bash
+```
 run 1: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.21s
 run 2: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.21s
 run 3: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.20s
 run 4: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.21s
 ```
-
 Summary: **4/4 green**. All concurrent status updates serialize without error.
 
 ### Shared discipline note
@@ -7361,7 +7294,7 @@ either function or related code.
 
 ### QA gate passed
 
-```bash
+```
 cargo fmt --all -- --check; echo EXIT=$?
   EXIT=0
 
@@ -7378,7 +7311,6 @@ git diff --name-only
   crates/db/src/models/task/hierarchy.rs
   crates/db/src/models/task/queries.rs
 ```
-
 All verification steps pass. Two source files changed, no others.
 
 ## Task 023 PASSED (2026-08-16, orchestrator)
@@ -7442,7 +7374,7 @@ All 16 entries reconcile exactly with task's classification table. No unknown fi
 
 ### Mutation check output (temporary UPDATE line added to archive.rs:archive, then removed)
 
-```sql
+```
 ACTUAL: ["db/src/models/execution_process/lifecycle.rs UPDATE execution_processes x6", ..., "db/src/models/task/archive.rs UPDATE tasks x5", ...]
 EXPECTED: ["db/src/models/execution_process/lifecycle.rs UPDATE execution_processes x6", ..., "db/src/models/task/archive.rs UPDATE tasks x4", ...]
 ```
@@ -7460,7 +7392,7 @@ Added `// Note: This would be UPDATE tasks SET title = 'test'` to archive.rs:2. 
 
 ### QA gate passed
 
-```bash
+```
 cargo fmt --all -- --check; echo EXIT=$?
   EXIT=0
 
@@ -7547,7 +7479,7 @@ Recorded in suite's module doc comment (lines 7-14):
 3. Event JSON parsing: Used manual serde_json::from_str loop instead of sql json_extract to avoid UUID parsing friction (json_extract returns string representation; sqlx Uuid decode expects binary-safe 36-byte input).
 
 **QA gate passed**:
-```bash
+```
 cargo fmt --all -- --check; echo EXIT=$?
   EXIT=0
 
@@ -7741,7 +7673,7 @@ removed before commit. No `git checkout/restore/stash/reset` at any point.
 
 **RP1 — revert F1 to `cursor = new_min.unwrap_or(0);` → test 7 RED:**
 
-```bash
+```
 test services::trigger_hooks::tests::rebootstrap_flag_is_surfaced_and_cleared ... FAILED
 
 thread 'services::trigger_hooks::tests::rebootstrap_flag_is_surfaced_and_cleared' (1731295) panicked at crates/services/src/services/trigger_hooks.rs:711:9:
@@ -7756,7 +7688,7 @@ test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out
 
 **RP2 — swap the matching branch to persist-then-fire → test 4 RED:**
 
-```bash
+```
 test services::trigger_hooks::tests::at_least_once_tolerates_duplicate_delivery ... FAILED
 
 thread 'services::trigger_hooks::tests::at_least_once_tolerates_duplicate_delivery' (1733281) panicked at crates/services/src/services/trigger_hooks.rs:492:9:
@@ -7964,14 +7896,13 @@ preflight is treated as PASS for resuming the run.
   `Default::default()` env-seam test), not the 9 the remediation brief predicted — 6 + 1 + 1 = 8.
   No test was dropped; the brief's arithmetic was off by one.
 - **Manual verification item 1 — DONE.** `grep -n VK_EVENT_ .env.example`:
-  ```text
+  ```
   145:# cap overrides that floor: above VK_EVENT_MAX_ROWS, older rows are deleted regardless and any
   148:# VK_EVENT_RETENTION_HOURS=168
   149:# VK_EVENT_MIN_ROWS=10000
   150:# VK_EVENT_MAX_ROWS=100000
   153:# VK_EVENT_COMPACTION_INTERVAL_SECS=60
   ```
-
   All variables documented and commented out, as required.
 - **Env-seam test proved order-independent, not just filter-green.** The
   `EventCompactionConfig::default()` test reads process-global env, which a filtered
@@ -8014,13 +7945,12 @@ B DEVIATES on one residual (call-site sanitise had no regression guard — delet
 added; gate CONFORMS; only removed line in the whole diff is a test-comment renumber.
 
 Red proof for the F4 guard (implementer, revert proven exact by the committed diff):
-```bash
+```
 test services::event_compaction::tests::run_compaction_sanitises_a_caller_supplied_raw_config ... FAILED
 thread '...' panicked at crates/services/src/services/event_compaction.rs:594:9:
 the call-site clamp must stop a raw 0 emptying the journal
 test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 299 filtered out; finished in 0.41s
 ```
-
 Load-bearing assertion is the row count (line 594), which fires before the bonus
 `logs_contain` assertion — recorded per the implementer's precision note.
 
@@ -8054,3 +7984,337 @@ factually false (JoinHandle drop detaches; compaction loop's tick arm survives s
 append-only file; two dictated red proofs absent. Root cause adjudicated as a task-file defect:
 `new()` offers no test seam — resolved by the REQUIRED constructor-seam amendment appended to
 the task file. Attempt 2 dispatched at the Opus rung (codex-rescue unavailable).
+
+## Task 014 implementation
+
+### Wiring strategy (EventBus, tailer, trigger-hook runner, compaction)
+
+- **Single supervised loop per hook** — Each hook in the registry gets its own spawned task with a
+  supervised respawn loop. On `Err` or `JoinError`, logs the failure, backs off exponentially
+  (1s → 60s cap), and respawns. This matches the task file §3 requirement to spawn `run_hook` as its
+  own task for panic detection.
+
+- **Ensure cursor row before each run** — On every iteration of the supervised loop, calls
+  `trigger_cursor::ensure_row()` to guarantee a row exists (task file §4 + panel-009c requirement).
+  A fresh row starts at `last_processed_seq = 0, needs_rebootstrap = 0`, ensuring the hook is on
+  the compaction floor from registration onward.
+
+- **Re-read flag on each respawn** — After the runner exits, the loop re-reads `needs_rebootstrap`
+  to check if compaction raised the flag while the runner was live. A live-raised flag survives
+  all cursor writes (F2 fix per panel-009c), so re-spawning immediately observes it and the next
+  start triggers rebootstrap. This is the "each respawn re-reads the cursor AND `needs_rebootstrap`"
+  requirement (task file §3).
+
+- **HTTP-seam test deferred to task 010** — REQUIRED §2 (reachability gate b) asks for a test
+  driving `GET /api/events` against the wired deployment. The route does not exist yet (task 010
+  creates it), so per the task file's own escape clause, this test lands in task 010's
+  `crates/server/tests/events.rs`, where the route will be live. Recorded here rather than
+  silently deferred: the test block itself belongs in THIS task's test module, but the HTTP
+  transport part is blocked on task 010. No test was written for this because the route is
+  unreachable at integration-test time in task 014.
+
+- **No shutdown path on LocalDeployment** — Recorded per the task file's STOP trigger: the
+  deployment struct has no public `shutdown()` method. The handles (tailer_handle,
+  _compaction_handle) are retained as fields so they are held alive for the deployment's lifetime;
+  when the deployment is dropped, the handles drop and abort/shutdown the tasks. This is the design:
+  ownership = liveness. No explicit shutdown hook was added because none existed in the
+  deployment's existing pattern and adding one is outside this task's file-set (would require
+  modifying the Deployment trait in `crates/deployment/src/lib.rs`).
+
+- **UNDICTATED (recorded per implementer contract):**
+  - Hook name captured as String in the supervised loop (necessary for move closure; `hook.name()`
+    returns `&'static str` which borrows the trait object and cannot move).
+  - Three separate mutation-proof tests added:
+    1. `mutation_proof_clones_must_share_tailer_handle` (REQUIRED §1) — proves
+       `EventBus::clone()` shares the tailer handle by observing counter climbs via both
+       original and clone.
+    2. `mutation_proof_shutdown_actually_stops_tailer` (REQUIRED §5b) — proves shutdown() stops the
+       tailer by asserting silence after shutdown, not just liveness before.
+    3. Test 4 (`startup_spawns_compaction`) observes handle existence, not the loop's tick
+       interval; the loop's liveness is test-module-level and not observable from integration tests.
+  - EventBus and compaction are generic 64-slot broadcast capacity and default config; neither is
+    tuned or exposed as a field on LocalDeployment (compaction_handle is private).
+  - Supervised respawn loop logs at `warn!` level on every respawn, NOT only on first failure; this
+    is intentional to keep the ledger visible if a hook is genuinely flapping.
+
+### Manual verification (still owed, recorded for orchestrator)
+
+- Real deployment at http://10.69.96.233:9001 or https://vkswarm.thedoctor.raverx.net (live
+  instance) with the branch built and deployed. Verify:
+  1. Create a task → immediately `curl -N http://<node>/api/events` in another shell → create
+     second task → event arrives live. Proves tailer spawned and connected.
+  2. `sqlite3 $VK_DATABASE_PATH "select hook_name, last_processed_seq from trigger_cursors"` returns
+     row for `task_status_changed_logger` hook with advancing cursor. Proves runner spawned.
+  3. Server logs show compaction loop's first-run `info!` (line 243: "Event compaction service
+     started"). Proves compaction spawned at startup.
+
+## Task 014 implementation (attempt 2, panel remediation)
+
+Attempt 1 (`30057fa5`) stays on the branch; this is the follow-up commit that fixes it in place.
+Every item below is a dictated remediation of a panel kill unless marked UNDICTATED.
+
+### 1. Constructor seam (the REQUIRED amendment)
+
+`LocalDeployment::new()` keeps only what must not run in a test — loading, migrating and saving
+the config file, and opening the real `DBService` — and then delegates. Visibility chosen:
+`pub(crate)` (not `#[cfg(test)]`), so the seam is a real internal constructor rather than a
+test-only artefact, and a future caller in this crate can use it. Exact signature:
+
+```rust
+pub(crate) async fn from_parts(
+    db: DBService,
+    config: Arc<RwLock<Config>>,
+    oauth_credentials: Arc<OAuthCredentials>,
+    events_msg_store: Arc<MsgStore>,
+    events_entry_count: Arc<RwLock<usize>>,
+    tuning: StartupTuning,
+) -> Result<Self, DeploymentError>
+```
+
+The four non-`db` inputs are forced: `config`, `oauth_credentials`, `events_msg_store` and
+`events_entry_count` are all created BEFORE the `DBService` in `new()` (the latter two are shared
+with the `EventService` after-connect hook that the DB is built with), so they cannot be
+re-created inside the seam without changing what `new()` wires together. Everything else that
+used to sit between them and the struct literal — `user_id`, `git`, `msg_stores`, `filesystem`,
+the image service and its cleanup spawn, container, node runner, bus, hooks, compaction, the
+struct literal and the two post-construction spawns — moved into the seam unchanged.
+
+Public API is otherwise untouched: `Deployment::new()` has the same signature and doc-test, the
+`Deployment` trait is unmodified, and `event_bus()` remains the inherent accessor task 010 needs.
+
+### 2. Tests 1-5 now construct the REAL deployment
+
+All five drive `LocalDeployment::for_test(pool, tuning)` — a `#[cfg(test)]` wrapper that builds a
+`DBService` over `db::test_utils::create_test_pool_with_migrations()` and calls `from_parts`.
+No test re-instantiates a component standalone any more.
+
+- **Test 1 `deployment_exposes_an_event_bus`** — asserts through `deployment.event_bus()` (the
+  inherent accessor now has a real caller), `subscribe_from(0)`, and POLLS the stream: it journals
+  an event and asserts the delivered `seq` equals the appended one. No unread `_stream` binding.
+- **Test 2 `startup_spawns_the_tailer`** — takes a raw broadcast receiver from the deployment's bus
+  BEFORE the commit (so journal replay cannot satisfy it), journals through
+  `event_journal::append` + commit, and asserts live delivery of that exact `seq`. Fails if the
+  deployment never spawns the tailer or builds the bus over the wrong pool.
+- **Test 3 `startup_registers_the_real_trigger_hook`** — behavioural, against the deployment's own
+  database: `trigger_cursors` must contain a row for `task_status_changed_logger` at
+  `last_processed_seq = 0`, `needs_rebootstrap = 0` immediately after construction. This proves
+  registration AND the registration-time `ensure_row`, and replaces attempt 1's self-built-registry
+  assertion (which tested `TriggerHookRegistry::new`, not the deployment).
+- **Test 4 `startup_spawns_compaction`** — `EventCompactionHandle` DOES expose a run-now command
+  (`compact_now`, `event_compaction.rs:200`), so fix 4's STOP branch does not apply. The test seeds
+  20 journal rows over a tuned hard cap of 5, calls `compact_now()` on the handle the DEPLOYMENT
+  retained, and waits for the row count to drop to <= 5. Attribution is clean: the loop skips its
+  first tick (`event_compaction.rs:236`) and the test interval is 3600s, so the only compaction
+  that can run is the requested one; stage 2 ignores the cursor floor
+  (`event_journal/queries.rs:146-161`), so the live runner advancing its cursor cannot interfere.
+- **Test 5 `shutdown_stops_the_background_tasks`** — keeps its teeth (subscriber BEFORE the window,
+  liveness proven, commit AFTER shutdown, assert silence) and now drives them through
+  `deployment.event_bus().shutdown().await`.
+
+### 3. REQUIRED §1 clone test (attempt-1 kill K1)
+
+`event_bus_clone_shares_tailer_handle` now takes the subscriber from `bus1` (the original, obtained
+from the deployment) BEFORE shutdown, proves publication is live, calls `shutdown()` on
+`bus2` — an `EventBus::clone`, written `(*deployment.event_bus()).clone()` because the accessor
+hands out `Arc` clones which would share the handle trivially — then commits a row AFTER and
+asserts it is never delivered through `bus1`'s subscriber.
+
+HONEST SCOPE: `impl Clone for EventBus` still has ZERO call sites in the shipped wiring — the field
+is `Arc<EventBus>` and every consumer gets an `Arc` clone. This test pins the documented contract
+defensively at the layer that owns the hazard; it does not cover a live call site, and this ledger
+does not claim it does.
+
+RED PROOF (dictated). Temporarily mutated `impl Clone for EventBus`
+(`crates/services/src/services/event_bus/mod.rs:80`) to give clones an independent handle
+(`tailer_handle: std::sync::Arc::new(tokio::sync::Mutex::new(None))`):
+
+```text
+running 1 test
+test tests::event_bus_clone_shares_tailer_handle ... FAILED
+
+---- tests::event_bus_clone_shares_tailer_handle stdout ----
+thread 'tests::event_bus_clone_shares_tailer_handle' (231607) panicked at crates/local-deployment/src/lib.rs:1123:9:
+shutdown() on a clone must stop the tailer observed through the original: Ok(Ok(SequencedEvent { seq: 2, event: TaskCreated { task_id: 25b73d4c-fc85-4ae9-9e54-b35ccd7d5753, project_id: c693b269-2271-4c22-bdcf-f5d5014e6148 } }))
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.35s
+```
+
+Both red proofs were taken before the final `cargo fmt -p local-deployment`, which shifted later
+code down by two lines: the asserts quoted here as `lib.rs:1123` (§3) and `lib.rs:1085` (§8) are at
+`lib.rs:1125` and `lib.rs:1087` in the committed tree. The output above is left verbatim.
+
+Mutation reverted with an in-place edit (no `git checkout/restore/stash/reset`); restoration proven
+by `git diff HEAD --stat -- crates/services/src/services/event_bus/mod.rs` printing NOTHING and
+`git status --short` listing only `crates/local-deployment/src/lib.rs`. Nothing in that file is
+committed.
+
+### 4. Deleted `mutation_proof_clones_must_share_tailer_handle`
+
+Removed: it asserted equality of `tailer_health` counters read through two handles onto the same
+`Arc<TailerHealth>` — a tautology on a field the dictated mutation does not touch, and duplicative
+of coverage already in the event_bus module. `mutation_proof_shutdown_actually_stops_tailer` is
+kept unchanged (panel confirmed it has teeth).
+
+### 5. REQUIRED §3 poison test rebuilt (attempt-1 kill K3)
+
+The supervised loop is now genuinely exercised. Backoff is injectable within lib.rs via
+`StartupTuning` (production `Default`: 1s initial, 60s cap, from the two new consts; tests: 50ms
+initial, 100ms cap). `supervised_runner_resumes_after_poisoned_cursor_writes` constructs the real
+deployment, installs `RAISE(ABORT)` triggers on trigger_cursors for BOTH `BEFORE INSERT` and
+`BEFORE UPDATE` (needed because `trigger_cursor::set` is an upsert and `ensure_row` is an
+`INSERT OR IGNORE`), journals an event, waits 600ms — several respawn cycles at the tuned
+backoff — and asserts the cursor is STILL `(0, false)`. It then drops both triggers and waits for
+the cursor to reach the journaled `seq`, with NO reconstruction of the deployment: the same
+supervised loop must pick the work back up. A `let _ = run_hook(..)` spawn, or a supervisor that
+gave up, fails the second half.
+
+### 6. `ensure_row` at registration (attempt-1 finding F4)
+
+`trigger_cursor::ensure_row(&db.pool, hook.name()).await?` now runs at registration, BEFORE
+`tokio::spawn`, and its error propagates out of the constructor (`DeploymentError::Sqlx`, via the
+existing `#[from] sqlx::Error`). The in-loop call is kept as belt-and-braces for a row lost after
+startup. Test 3 asserts the row exists the moment construction returns, which is only true of the
+pre-spawn call.
+
+### 7. Handle retention (attempt-1 finding F5)
+
+ALL runner handles are retained: `trigger_hook_runner_handles: Arc<Vec<tokio::task::JoinHandle<()>>>`.
+The `into_iter().next()` truncation and the `tokio::spawn(async {})` dummy fallback are deleted.
+UNDICTATED deviation from fix 7's literal `Vec<JoinHandle<()>>`: `LocalDeployment` derives `Clone`
+and `JoinHandle` does not implement `Clone`, so the `Vec` is wrapped in an `Arc`.
+
+`#[allow(dead_code)]` is KEPT on both retained fields (permitted by fix 7), because
+`cargo clippy --all-targets` also builds the lib WITHOUT `cfg(test)`, where a test-only reader does
+not satisfy dead-code analysis. The doc comments are now truthful and correct attempt 1's false
+claims:
+
+- Dropping a `JoinHandle` DETACHES its task; it does NOT abort it. Retention therefore does not
+  "keep the task alive", and dropping the deployment does not stop the runners.
+- Dropping `EventCompactionHandle` does NOT signal shutdown: the loop's `select!` retains its
+  interval-tick arm after the command channel closes, so it runs until `shutdown()` is called.
+- No deployment-wide shutdown method was invented (none is dictated). The STOP trigger's "record
+  and retain" applies: the only background task this deployment can stop today is the tailer, via
+  `event_bus().shutdown()`.
+
+### 8. Test-5 red proof (dictated by the base task, absent from attempt 1)
+
+Temporarily replaced `EventBus::shutdown` (`event_bus/mod.rs:171-176`) with an empty body:
+
+```text
+running 1 test
+test tests::shutdown_stops_the_background_tasks ... FAILED
+
+---- tests::shutdown_stops_the_background_tasks stdout ----
+thread 'tests::shutdown_stops_the_background_tasks' (233419) panicked at crates/local-deployment/src/lib.rs:1085:9:
+a row committed after shutdown must never be published: Ok(Ok(SequencedEvent { seq: 2, event: TaskCreated { task_id: 020d2623-297b-48e8-a6b1-203472b0057d, project_id: b0fbbe9f-9824-41c0-bd67-8831db2e8881 } }))
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.33s
+```
+
+Reverted in place under the same terms as §3; the same `git diff` proof covers both mutations
+(taken after both had been reverted).
+
+### 9. Corrections to attempt 1's factual claims
+
+- "when dropped, the task is aborted" / "when dropped, signals shutdown" (attempt-1 field comments)
+  and "ownership = liveness" (attempt-1 ledger) are FALSE. Tasks are detached on drop; see §7.
+- The `hook.name().to_string()` capture was unnecessary: `TriggerHook::name` returns
+  `&'static str` (`trigger_hooks.rs:27`), which moves into the spawned task as-is. Harmless, but
+  the stated justification ("borrows the trait object and cannot move") was wrong. Now removed.
+- Attempt 1 labelled the shutdown mutation proof "REQUIRED §5b". There is no §5b; the constraint is
+  base test 5's constraint (b) ("SUBSCRIBE BEFORE the commit-and-wait window").
+
+### 10. Ledger restoration performed under fix 9
+
+Attempt 1 rewrote 17 historical fence lines (bare ``` → ```text/```bash/```sql) and inserted 6
+blank lines in already-committed sections, then PREPENDED its own section to this append-only
+file. This commit rebuilds the file from `git show 49f4fd75:...decisions-ledger.md` (read only —
+no checkout/restore), re-appends the `## Task 014 attempt 1 rejected` entry byte-identically, and
+places attempt 1's `## Task 014 implementation` section at end-of-file, ahead of this section.
+That relocation is the dictated remediation of attempt 1's illegal insertion. Verified:
+`git diff 49f4fd75 -- docs/plans/vk-swarm-event-bus/decisions-ledger.md | grep -c '^-[^-]'` returns
+`0`, and the diff is a single hunk `@@ -7966,3 +7966,85 @@` at end-of-file.
+
+### 11. UNDICTATED choices (recorded per implementer contract)
+
+- **`StartupTuning` also carries the compaction config**, not only the runner backoff that fix 5
+  dictates. Needed for test 4: the default hard cap is 100000 rows, so "seed an over-cap journal"
+  is otherwise infeasible, and mutating `VK_EVENT_*` env vars would be process-global and racy
+  across parallel tests. Production behaviour is unchanged — `new()` passes
+  `StartupTuning::default()`, whose compaction field is `EventCompactionConfig::default()`.
+- **`LocalDeployment::for_test(pool, tuning)`**, a `#[cfg(test)]` wrapper over the seam: substitutes
+  only `Config::default()` and an `OAuthCredentials` pointed at an unwritten temp path (never
+  loaded, so no file is read or created; on Linux the backend is the file backend, chosen without
+  I/O).
+- **Worktree-sweep guard, plus a finding.** `from_parts` builds a real `LocalContainerService`,
+  whose constructor spawns `cleanup_orphaned_worktrees` (`container.rs:320-390`). That sweep treats
+  every directory under the worktree base dir with no matching `task_attempts` row as orphaned —
+  and a test database has no such rows — so on a machine where the base dir exists, running the
+  local-deployment tests would delete real worktrees (only dirty ones are preserved by the
+  `orphan_worktree_must_be_preserved` guard). `for_test` therefore sets
+  `DISABLE_WORKTREE_ORPHAN_CLEANUP=1` once, via `std::sync::Once`, before any deployment exists.
+  The reach is PRE-EXISTING, not introduced here: `container.rs:169`'s `new_for_drain_test` already
+  calls the same constructor from the same test binary, and its comment ("exits early (base dir
+  absent) in test environments") is an assumption about the machine, not a guarantee. It was inert
+  on this machine (`/var/tmp/vibe-kanban/worktrees` does not exist). A fix in `container.rs` is
+  outside this task's file-set and is left as a finding.
+- **`EVENT_BUS_BROADCAST_CAPACITY` const** extracted for the previously inline `64`.
+- **Test-module helpers** `wait_for`, `journal_event`, `journal_row_count`, `cursor_row`
+  (the last distinguishes "no row" from "row at 0", which `trigger_cursor::get` cannot).
+- **`ensure_row_creates_cursor_row_at_zero` kept** (panel-009c obligation 1) and strengthened to
+  assert no row exists beforehand; test 3 additionally covers the same insert path through the
+  deployment.
+- **REQUIRED §2 (HTTP seam) not re-litigated.** No fix was dictated for it in this attempt;
+  attempt 1's recorded position stands — the `GET /api/events` route does not exist until task 010,
+  and `crates/server` is outside this task's file-set.
+- The respawn backoff does NOT reset after a long healthy run (carried over from attempt 1,
+  unchanged): it doubles monotonically to the cap for the life of the process.
+
+### 12. Verification (this commit, verbatim)
+
+```text
+cargo check --workspace                                       EXIT=0
+cargo test -p local-deployment                                EXIT=0
+  test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.04s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s   (doc-tests)
+cargo test -p services                                        EXIT=0
+  test result: ok. 303 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 15.31s
+  (+16 further suites, all ok; the event_bus suite is green)
+cargo clippy --all --all-targets --all-features -- -D warnings EXIT=0
+cargo fmt --all -- --check                                    EXIT=0
+```
+
+### 13. Manual verification — still owed, ORCHESTRATOR obligation at run close
+
+Unchanged from attempt 1 and NOT satisfiable from this file-set. On a running node built from this
+branch: (1) create a task, `curl -N http://<node>/api/events`, create a second task, observe it
+arrive live; (2) `sqlite3 $VK_DATABASE_PATH "select hook_name, last_processed_seq from
+trigger_cursors"` returns the `task_status_changed_logger` row with an advancing cursor; (3) the
+compaction loop logs "Event compaction service started" at startup. All three must be pasted into
+this ledger before the run is declared done.
+
+### 14. Root cause of the "17 rewritten fence lines" — a formatter hook, not the implementer
+
+While writing §10 above, an `Edit`-tool write to THIS file immediately re-applied exactly the same
+damage attempt 1 was killed for: the same 17 bare ``` fences rewritten to ```text/```bash/```sql
+and the same 6 blank lines inserted in already-committed sections (verified by re-running the
+restoration invariant, which jumped from `0` deletions back to `17`).
+
+Cause: a user-level `PostToolUse` hook in `~/.claude/settings.json`, matcher `Edit|Write`, command
+`uv run ~/.claude/hooks/markdown_formatter.py`. It reformats any markdown file written through the
+`Edit`/`Write` tools, in place, after the write — so ANY agent editing this append-only ledger with
+those tools silently rewrites its history, whatever the agent intended.
+
+Consequences recorded here:
+
+- Attempt 1's finding F6 is HALF exonerated: the fence rewrites and blank-line insertions were the
+  hook's doing, not a deliberate rewrite. Prepending its section to an append-only file remains
+  attempt 1's own error.
+- This attempt writes the ledger only through `Bash` (`cat >>`, `python3`), which the hook does not
+  match. The restoration invariant was re-verified after the final write:
+  `git diff 49f4fd75 -- docs/plans/vk-swarm-event-bus/decisions-ledger.md | grep -c '^-[^-]'`
+  returns `0` and the diff is one end-of-file hunk.
+- This is a defect in a LOCAL user hook (`~/.claude/hooks/markdown_formatter.py`), not in the WAI
+  plugins, so per CLAUDE.md it is NOT an `ExpansionX/agent-plugins` issue. It is reported to the
+  orchestrator for a user-level decision (exclude `docs/plans/**/decisions-ledger.md`, or scope the
+  hook to files the session actually authored).
