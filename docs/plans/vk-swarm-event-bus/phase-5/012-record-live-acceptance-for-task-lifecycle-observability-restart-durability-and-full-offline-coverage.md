@@ -2,7 +2,7 @@
 id: "012"
 phase: 5
 title: "Record live acceptance for task-lifecycle observability, restart durability and full offline coverage"
-status: ready
+status: passed
 depends_on: ["010","014","015"]
 parallel: false
 conflicts_with: []

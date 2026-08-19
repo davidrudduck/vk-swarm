@@ -9338,3 +9338,205 @@ RESULT F: PASS — rows below the cursor floor were removed (16 -> 0),
 2. **Process discipline held throughout:** node and SSE clients started/stopped by exact
    captured PID only; port 19345 verified free before and after; production node, DB, hive and
    the shared worktree dir never touched (isolation table above).
+
+---
+
+## Task 012 — Stage-2 panel record and adjudication (orchestrator, 2026-08-19)
+
+**Panel substitution, declared.** Six consecutive background challenger subagents (three
+dispatch rounds of two Opus seats each, 2026-08-18/19) terminated with their sessions before
+delivering verdicts; no output was recoverable from any of them. Rather than a seventh
+dispatch, the orchestrator executed BOTH challenger checklists deterministically in main
+context. Every item below is a command that was actually run, with its decisive output
+quoted; raw outputs are preserved in the run scratchpad (`panel-main/mechanics-{1,2,3}.txt`).
+This substitutes execution mechanics only — the checklist content is the same two-seat
+mandate (A: mechanics, B: semantics) the dead challengers carried.
+
+### Seat A — mechanics
+
+1. **Gate scope** — `git show d6ad858e --stat --format=`:
+
+```text
+ docs/plans/vk-swarm-event-bus/decisions-ledger.md | 579 ++++++++++++++++++++++
+ 1 file changed, 579 insertions(+)
+```
+   Only the ledger. PASS.
+
+2. **Transcript-vs-artifact drift** — every non-empty line of each ANSI-stripped artifact
+   checked verbatim against the committed 012 section
+   (`grep -Fxvf <ledger-section> <stripped-artifact>`):
+
+```text
+check A: 0 of 41 non-empty lines missing
+check B: 0 of 72 non-empty lines missing
+check C: 0 of 105 non-empty lines missing
+check C2: 0 of 33 non-empty lines missing
+check D: 0 of 22 non-empty lines missing
+check D-probe: 0 of 7 non-empty lines missing
+check E: 0 of 51 non-empty lines missing
+check F: 0 of 65 non-empty lines missing
+```
+   Zero drift, zero undeclared truncation across all 396 artifact lines. PASS.
+
+3. **Hollow-check audit** — decisive RESULT lines present with real evidence for every check:
+   A `PASS — 4 task_% journal rows, 3 LIVE SSE frames above the high-water mark`;
+   B `PASS — seq strictly increased (10 -> 11) with no reuse and no regression` (all 10
+   pre-kill events replayed post-restart, `duplicate seq groups = 0`);
+   C `RESULT SC4: PASS — every missed event replayed, in ascending seq order, nothing
+   skipped` + `RESULT SC6: PASS — cursor ADVANCED across the restart (not reset to 0)`;
+   C2 `RESULT SC2: PASS — attempt_started then a terminal event, journaled with the hive
+   unreachable`; E `RESULT 014-1/2/3: PASS`; F `PASS — rows below the cursor floor were
+   removed (16 -> 0)` with a genuinely mid-journal floor (`cursor floor =
+   MIN(last_processed_seq) = 17`); D honestly records its STOP
+   (`RESULT TS6: STOP — verify_cmd=0 wai-verify=1`). PASS.
+
+4. **Isolation** — grep of all transcripts for `9001`, the live hive hostname/IP, the
+   production DB path, or a real `VK_HIVE_URL`: `NONE FOUND`; the only endpoint observed is
+   `port=19345` (6 occurrences). PASS.
+
+5. **Check-D adjudication legs** — (a) defect present in installed plugin source
+   (`wai-doc-lib.sh:10`, `gsub(/^"|"$/,"")` with no unescape); (b) direct `verify_cmd`
+   `exit=0`; (c) D-probe against the plain-scalar spec copy: `VERIFY PASS … wai-verify
+   EXIT=0`, repo untouched; (d) frozen spec modified in `d6ad858e..HEAD`: `0` commits.
+   Adjudication sound. PASS.
+
+### Seat B — semantics
+
+1. **SC-clause mapping** — SC1 (create/move/delete each journaled with monotonic seq,
+   observable via subscription AND queryable afterwards): check A shows all three event
+   types as live SSE frames (seq 2/3/4) and the same rows via read-only journal query.
+   SC5 (pre-kill events replayable after restart; seq continues without reuse or
+   regression): check B replays seqs 1–10 after a `kill -9` of the exact node PID, then
+   journals seq 11. SC8 (SC1, SC2, SC4, SC6 hold with the hive unreachable): the harness env
+   unsets all hive variables (`VK_HIVE_URL=<unset>` in every transcript header); A covers
+   SC1 offline, C2 covers SC2 offline, C covers SC4 (replay 16–20, ascending, none skipped)
+   and SC6 (cursor 22 persisted and advanced across restart) offline. TS6: check D runs the
+   spec's `verify_cmd` (exit 0) and `wai-verify.sh` (exit 1, adjudicated tooling defect —
+   agent-plugins#107). Parked obligations: 014 items 1–3 = check E; 011 retention-0 = check
+   F; 010 live SC4 transcript = check C. No unmapped clause found. PASS.
+
+2. **fm() independent reproduction** — sourcing the installed `wai-doc-lib.sh` and running
+   `fm verify_cmd <frozen spec>` emits:
+
+```text
+sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} \"select 1 from event_journal where event_type like 'task_%' limit 1\" | grep -q 1
+```
+   — escaped inner quotes survive, which is not valid shell. Defect reproduces. PASS.
+
+3. **Provenance** — assembly note present at the top of the 012 section (dated 2026-08-19,
+   names impl-012c, capture window 2026-08-18 11:55–12:04, supersedes the 00:38 partial
+   attempt); every fenced transcript corresponds to a named scratchpad artifact. PASS.
+
+4. **Append-only** — `git diff d6ad858e~1 d6ad858e -- <ledger> | grep -c '^-[^-]'` → `0`.
+   Pure append. PASS.
+
+**Verdict: CONFORMS (both seats, all items).** Task 012 marked passed — board 23/23.
+
+## Reachability gate
+
+Run-level close gate (change_kind: behaviour — mandatory). Recorded by the orchestrator
+2026-08-19 against merged branch state d6ad858e (all citations verified by grep/read of the
+actual worktree code, not the plan).
+
+### (a) Call-path trace — production entry point to changed code
+
+Entry point: `POST /api/tasks` → `create_task`
+(`crates/server/src/routes/tasks/handlers/core.rs:192`; the start-variant
+`create_task_and_start` at `:365` shares the same write path).
+
+1. Handler calls `Task::create`, whose transaction constructs
+   `NodeEvent::TaskCreated { task_id, project_id }` and calls
+   `event_journal::append(&mut *tx, &event)` BEFORE commit — same-transaction emission
+   (`crates/db/src/models/task/queries.rs:311-318`; the update and delete paths append at
+   `:388` and `:499`).
+2. The journal tailer polls committed rows and publishes them to the broadcast channel
+   (`crates/services/src/services/event_bus/tailer.rs`).
+3. The bus is constructed at deployment startup:
+   `Arc::new(EventBus::new(db.pool.clone(), EVENT_BUS_BROADCAST_CAPACITY).await)` inside
+   `LocalDeployment::from_parts` (`crates/local-deployment/src/lib.rs:323`, constructor at
+   `:150`), exposed via the inherent `event_bus()` accessor.
+4. The SSE route consumes it: `events` handler (`crates/server/src/routes/events.rs:137`)
+   obtains `deployment.event_bus()` (`:141`) and calls `bus.subscribe_from(cursor)` (`:157`);
+   the router is merged into the app in `events::router` (`:165`) via `routes/mod.rs`.
+
+The changed code (journal append, tailer, bus, SSE endpoint) therefore executes on the real
+production write path: HTTP task write → same-tx journal row → tailer → bus → SSE frame.
+No step is hypothetical; every hop is cited to the merged code above.
+
+### (b) Real-seam test
+
+`sse_delivers_an_event_from_a_real_task_write` (`crates/server/tests/events.rs:551`) drives
+the REAL seam end to end: it creates a project and task through the production model
+functions (`Project::create` / `Task::create`) — not `event_journal::append` — with an SSE
+subscription taken over HTTP before the write, and asserts the `task_created` frame arrives.
+Supporting seam tests in the same file: no-cursor live-only (`:98`), replay-then-live
+(`:183`), per-frame seq (`:254`), SC4 reconnect (`:327`), removed-route guard (`:445`),
+mid-stream terminal error frame (`:651`). Deployment-level wiring is separately proven by
+task 014's `from_parts` deployment tests.
+
+### (c) Incident-symptom assertion
+
+change_kind is `behaviour`; no documented production incident exists, so (c) maps the spec's
+behavioural symptoms rather than an incident report:
+- SC4 symptom "N events emitted while disconnected → all N delivered on reconnect, ascending
+  seq, none skipped" is asserted by `reconnect_with_last_seen_cursor_skips_nothing`
+  (`crates/server/tests/events.rs:327`) and observed live in the task-012 check C transcript
+  (offline replay: every missed event replayed, ascending seq, nothing skipped).
+- SC1 symptom "a real task write produces a journaled event and a live SSE frame" is
+  asserted by the `:551` test and observed live in the task-012 check A transcript
+  (4 task_% journal rows, 3 live frames above the pre-seeded high-water mark).
+- SC5 symptom "seq survives process death without reuse or regression" is observed live in
+  the task-012 check B transcript (seq 10→11 across a kill of the exact node PID).
+
+VERDICT: PASS
+(a) call-path trace, (b) real-seam test, (c) incident-symptom assertion all hold.
+
+## Deploy verification
+
+Feature-branch build (commit 95a8b0c6, binary `vks-node-server` built from this branch)
+deployed as an isolated local staging node on `127.0.0.1:19345` with a scratch
+`VK_DATABASE_PATH` (deployment-note rationale and full isolation table are in the task-012
+section above; the production node on this host was never touched). Evidence below is
+verbatim command output captured from that running deployment on 2026-08-18 (check A
+transcript; full transcripts for B/C/C2/D/E/F are in the task-012 section).
+
+Live SSE observation — task write on the deployed node produces journal rows and live
+frames above the pre-seeded high-water mark:
+
+```text
+node up: pid=1043053 port=19345 (waited 200ms)
+high-water mark before subscribing = 1   [read via roq: file:...?mode=ro]
+SSE subscribed (headers received): HTTP/1.1 200 OK
+task_id=914260c6-0003-45c0-bb59-264f5f97b500
+moved -> inprogress
+deleted
+id: 2
+data: {"seq":2,"event":{"type":"task_created","task_id":"914260c6-0003-45c0-bb59-264f5f97b500","project_id":"c0b1403f-9047-44bd-a8cb-0749302be6e0"}}
+id: 3
+data: {"seq":3,"event":{"type":"task_status_changed","task_id":"914260c6-0003-45c0-bb59-264f5f97b500","old_status":"todo","new_status":"inprogress"}}
+id: 4
+data: {"seq":4,"event":{"type":"task_deleted","task_id":"914260c6-0003-45c0-bb59-264f5f97b500","project_id":"c0b1403f-9047-44bd-a8cb-0749302be6e0"}}
+seq      event_type
+---  -------------------
+  1  task_created
+  2  task_created
+  3  task_status_changed
+  4  task_deleted
+task_% row count = 4  (expected 4: pre-seed created + probe created/status_changed/deleted)
+RESULT: PASS — 4 task_% journal rows, 3 LIVE SSE frames above the high-water mark
+```
+
+The spec's `verify_cmd` observation, run directly against the same deployed DB:
+
+```text
+### the spec's verify_cmd, run directly:
+### sqlite3 "$VK_DATABASE_PATH" "select 1 from event_journal where event_type like 'task_%' limit 1" | grep -q 1
+exit=0  (0 = the live journal holds at least one task_% row)
+```
+
+Note for `/wai:ship`'s post-merge `wai-verify.sh` run: the wrapper currently exits 1 on a
+tooling defect (fm() quote-unescaping, agent-plugins#107 — adjudicated in the task-012
+check-D section above). Before post-merge verify, either the plugin fix must land or the
+spec's `verify_cmd` must be re-serialized as a plain scalar via a reviewed change +
+deliberate re-freeze (`/wai:precheck`). The underlying observation passes on the deployed
+system as shown.
