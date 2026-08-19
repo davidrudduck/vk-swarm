@@ -8759,3 +8759,582 @@ Orchestrator obligation reaffirmed for run close: live SC4 curl transcript (conn
 last seq, disconnect, create tasks, reconnect with cursor — nothing missing, ascending).
 
 Task 010 marked passed (22/23).
+
+---
+
+
+## Live acceptance — 2026-08-17
+
+Task 012. Records SC1, SC5, SC8 and TS6 as observed on a running node built from this branch,
+plus the parked live-evidence obligations carried by tasks 010, 011 and 014.
+
+### Deployed build
+
+| | |
+|---|---|
+| Commit SHA | `95a8b0c68e5a3333f574163347482028b8ea845c` |
+| Branch | `wai/vk-swarm-event-bus` |
+| Binary | `target/release/vks-node-server` (`cargo build --release -p server --bin vks-node-server`) |
+| Instance | local, isolated, `127.0.0.1:19345` |
+
+**Deployment note (operational choice, recorded rather than assumed).** The task file asks for a
+DEPLOYED FEATURE-BRANCH build and is explicit that this must not wait on the PR merge. It was
+satisfied with a LOCAL STAGING instance built from this worktree at the SHA above, not by
+redeploying the production node on this host. The production node is under a standing read-only
+constraint for this run, and re-deploying it to a mid-PR branch would have been an unrequested,
+hard-to-reverse change to a live service. The task file's own rationale for accepting a
+feature-branch build applies verbatim: "what the spec cares about is that the schema and emission
+work on real hardware, not which branch the binary was built from." Same hardware, same binary,
+same SQLite engine — the observations below are of a real running node.
+
+### Isolation from the production node (why these transcripts are safe)
+
+A production `vks-node-server` runs on this machine. Every run below was fenced off from it:
+
+| Knob | Value | Why it matters |
+|---|---|---|
+| `VK_ASSET_DIR` | scratch | Master override (`crates/utils/src/assets.rs:16`). Without it `config.json`, `profiles.json` and `credentials.json` resolve to the shared production data dir and the staging node would WRITE there. |
+| `VK_DATABASE_PATH` | scratch `.sqlite` | Fresh file per run. |
+| `VK_BACKUP_DIR` | scratch | Pre-migration backups would otherwise land in the production data dir. |
+| `VK_WORKTREE_DIR` | scratch | Default `/var/tmp/vibe-kanban/worktrees` is SHARED with the production node, and SC2 creates worktrees. |
+| `BACKEND_PORT` | 19345 | Verified free. Ports 9000/9001/5434/9210/5540 never touched. |
+| `VK_HIVE_URL` | unset (A, B) / `ws://127.0.0.1:1` (C onward) | Never the live hive. |
+
+Confirmed before the first start: no `.env` exists in the worktree or any parent directory, and
+`dotenvy::dotenv()` (`crates/server/src/main.rs:106`) does not override already-exported variables —
+so there was no path by which a real hive URL or API key could reach the staging process. Process
+management was by exact captured PID (`$!`) only; no `pkill`/`killall` was used at any point.
+
+**Provenance / assembly note (orchestrator, 2026-08-19).** The transcripts below were captured
+2026-08-18 11:55–12:04 by the task-012 implementer (impl-012c) against the deployed build named
+above; the implementer's session terminated after the final check (F) completed but before this
+ledger append, so the orchestrator assembled this section verbatim from the preserved per-check
+output files. An earlier partial attempt (2026-08-18 00:38) predated the read-only-DB harness fix
+recorded under "Harness notes" below and was fully re-run; it is superseded, not evidence.
+
+### Check A — SC1 both ways (live SSE + durable journal)
+
+```text
+### fresh DB: /tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/live-acceptance.sqlite (removed any prior file)
+### hive env: VK_HIVE_URL=<unset> VK_NODE_API_KEY=<unset>
+node up: pid=1043053 port=19345 (waited 200ms)
+### PID captured: 1043053
+
+### 1. PRE-SEED so the journal's high-water mark is NON-ZERO before we subscribe.
+### Why: a no-cursor subscription starts at high_water_mark(). On an empty journal that is
+### 0, and subscribe_from(0) REPLAYS everything with seq > 0 — so frames arriving after an
+### empty-DB subscribe could not be distinguished from a full replay, and SC1's
+### 'observable via the subscription endpoint' clause would not actually be proved.
+### Seeding one throwaway task first makes the later frames provably LIVE, not replay.
+project_id=c0b1403f-9047-44bd-a8cb-0749302be6e0
+seed task_id=9d86637b-8db4-4cca-b142-256b05253020
+high-water mark before subscribing = 1   [read via roq: file:...?mode=ro]
+
+### 2. subscribe to /api/events (live-only, no cursor)
+SSE subscribed (headers received): HTTP/1.1 200 OK
+
+### 3. create a task, move it, delete it
+task_id=914260c6-0003-45c0-bb59-264f5f97b500
+moved -> inprogress
+deleted
+
+### 4. SSE capture (raw) — these frames arrived LIVE, after the high-water mark (1) above
+id: 2
+data: {"seq":2,"event":{"type":"task_created","task_id":"914260c6-0003-45c0-bb59-264f5f97b500","project_id":"c0b1403f-9047-44bd-a8cb-0749302be6e0"}}
+
+id: 3
+data: {"seq":3,"event":{"type":"task_status_changed","task_id":"914260c6-0003-45c0-bb59-264f5f97b500","old_status":"todo","new_status":"inprogress"}}
+
+id: 4
+data: {"seq":4,"event":{"type":"task_deleted","task_id":"914260c6-0003-45c0-bb59-264f5f97b500","project_id":"c0b1403f-9047-44bd-a8cb-0749302be6e0"}}
+
+
+### 5. sqlite journal (roq, read-only — the node is still running)
+seq      event_type
+---  -------------------
+  1  task_created
+  2  task_created
+  3  task_status_changed
+  4  task_deleted
+task_% row count = 4  (expected 4: pre-seed created + probe created/status_changed/deleted)
+--- WAL still present next to the DB (proof no CLI read checkpointed it away) ---
+-rw-r--r-- 1 david david    4096 Aug 18 11:58 $SCRATCH/live-acceptance.sqlite
+-rw-r--r-- 1 david david   32768 Aug 18 11:58 $SCRATCH/live-acceptance.sqlite-shm
+-rw-r--r-- 1 david david 3518512 Aug 18 11:58 $SCRATCH/live-acceptance.sqlite-wal
+
+### PROJ=c0b1403f-9047-44bd-a8cb-0749302be6e0 TASK=914260c6-0003-45c0-bb59-264f5f97b500
+### node stopped (pid 1043053)
+RESULT: PASS — 4 task_% journal rows, 3 LIVE SSE frames above the high-water mark
+```
+
+### Check B — SC5 kill -9 durability + seq continuity across restart
+
+```text
+node up: pid=1043683 port=19345 (waited 200ms)
+### PID captured (pre-kill): 1043683
+
+### 1. generate several events, then read max(seq)
+scratch repo: /tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/proj-B (branch main)
+project_id=457b6d0a-9d4a-4418-9a17-327043ed05ff
+created+moved task 1: 9f4ae8b4-38d4-4e9b-8783-ed7784701dc4
+created+moved task 2: 0205a230-d54e-4338-ac71-e110db1abd61
+created+moved task 3: 74cf57d1-a1ab-440f-8858-e8e72e20f8ff
+pre-kill max(seq) = 10   [roq, read-only: the -wal is left intact for the crash]
+--- pre-kill journal tail ---
+seq      event_type
+---  -------------------
+ 10  task_status_changed
+  9  task_created
+  8  task_status_changed
+  7  task_created
+  6  task_status_changed
+  5  task_created
+--- files on disk immediately before the kill (a live -wal must still exist) ---
+-rw-r--r-- 1 david david 532480 Aug 18 11:58 $SCRATCH/live-acceptance.sqlite
+-rw-r--r-- 1 david david  32768 Aug 18 11:59 $SCRATCH/live-acceptance.sqlite-shm
+-rw-r--r-- 1 david david 424392 Aug 18 11:59 $SCRATCH/live-acceptance.sqlite-wal
+
+### 2. hard-kill (kill -9) the exact captured PID 1043683
+/tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/run/checkB.sh: line 36: 1043683 Killed                     "$BIN" > "$log" 2>&1
+process 1043683 is gone (SIGKILL, no graceful shutdown ran)
+--- journal survives the crash, read with the node DOWN ---
+rows_after_crash  max_seq_after_crash
+----------------  -------------------
+              10                   10
+
+### 3. restart, same env / same DB; replay from cursor=0
+node up: pid=1043816 port=19345 (waited 200ms)
+### PID captured (post-restart): 1043816
+SSE subscribed (headers received): HTTP/1.1 200 OK
+--- replayed frames (cursor=0) — every pre-kill event is REPLAYABLE after the crash ---
+id: 1
+data: {"seq":1,"event":{"type":"task_created","task_id":"9d86637b-8db4-4cca-b142-256b05253020","project_id":"c0b1403f-9047-44bd-a8cb-0749302be6e0"}}
+
+id: 2
+data: {"seq":2,"event":{"type":"task_created","task_id":"914260c6-0003-45c0-bb59-264f5f97b500","project_id":"c0b1403f-9047-44bd-a8cb-0749302be6e0"}}
+
+id: 3
+data: {"seq":3,"event":{"type":"task_status_changed","task_id":"914260c6-0003-45c0-bb59-264f5f97b500","old_status":"todo","new_status":"inprogress"}}
+
+id: 4
+data: {"seq":4,"event":{"type":"task_deleted","task_id":"914260c6-0003-45c0-bb59-264f5f97b500","project_id":"c0b1403f-9047-44bd-a8cb-0749302be6e0"}}
+
+id: 5
+data: {"seq":5,"event":{"type":"task_created","task_id":"9f4ae8b4-38d4-4e9b-8783-ed7784701dc4","project_id":"457b6d0a-9d4a-4418-9a17-327043ed05ff"}}
+
+id: 6
+data: {"seq":6,"event":{"type":"task_status_changed","task_id":"9f4ae8b4-38d4-4e9b-8783-ed7784701dc4","old_status":"todo","new_status":"inprogress"}}
+
+id: 7
+data: {"seq":7,"event":{"type":"task_created","task_id":"0205a230-d54e-4338-ac71-e110db1abd61","project_id":"457b6d0a-9d4a-4418-9a17-327043ed05ff"}}
+
+id: 8
+data: {"seq":8,"event":{"type":"task_status_changed","task_id":"0205a230-d54e-4338-ac71-e110db1abd61","old_status":"todo","new_status":"inprogress"}}
+
+id: 9
+data: {"seq":9,"event":{"type":"task_created","task_id":"74cf57d1-a1ab-440f-8858-e8e72e20f8ff","project_id":"457b6d0a-9d4a-4418-9a17-327043ed05ff"}}
+
+id: 10
+data: {"seq":10,"event":{"type":"task_status_changed","task_id":"74cf57d1-a1ab-440f-8858-e8e72e20f8ff","old_status":"todo","new_status":"inprogress"}}
+
+--- seqs replayed ---
+1 2 3 4 5 6 7 8 9 10 
+
+### 4. emit a NEW event post-restart; its seq must be > 10
+new task: 69f3ea53-7f70-4537-add9-9b51e70e7680
+--- journal tail (roq) ---
+seq      event_type
+---  -------------------
+ 11  task_created
+ 10  task_status_changed
+  9  task_created
+  8  task_status_changed
+  7  task_created
+pre-kill max = 10 ; post-restart max = 11
+--- duplicate-seq check (must be empty) ---
+(empty above = no seq reuse)
+duplicate seq groups = 0
+### node stopped (pid 1043816)
+RESULT: PASS — seq strictly increased (10 -> 11) with no reuse and no regression
+```
+
+### Check C — SC8 offline: SC1, SC4 (reconnect-with-cursor replay, also task 010's live SC4 obligation), SC6 trigger cursor across restart
+
+```text
+### OFFLINE env: VK_HIVE_URL=ws://127.0.0.1:1 VK_NODE_API_KEY=dead
+### (port 1 is unbound on this host: nothing can accept there)
+node up: pid=1043951 port=19345 (waited 200ms)
+### node STARTED with the hive unreachable — offline-first constraint holds. PID=1043951
+--- hive connection attempts in the log ---
+2026-08-18T11:59:27.665432Z  INFO db: Initializing SQLite connection pool max_connections=10 min_connections=2
+2026-08-18T11:59:27.668417Z  INFO local_deployment: starting node runner to connect to hive hive_url=ws://127.0.0.1:1 node_name=live-acceptance-offline
+2026-08-18T11:59:27.668434Z  INFO local_deployment: connection token validation enabled for direct log streaming
+2026-08-18T11:59:27.675205Z  INFO services::services::hive_client: connecting to hive url=ws://127.0.0.1:1/v1/nodes/ws
+2026-08-18T11:59:27.675478Z  WARN services::services::hive_client: hive connection error error=connection error: IO error: Connection refused (os error 111)
+2026-08-18T11:59:27.675497Z  INFO services::services::hive_client: reconnecting to hive delay_secs=5
+2026-08-18T11:59:27.675505Z  WARN services::services::node_runner: disconnected from hive reason=connection error: IO error: Connection refused (os error 111)
+2026-08-18T11:59:27.675935Z  INFO local_deployment: Hive connection: enabled (node runner started)
+scratch repo: /tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/proj-C (branch main)
+project_id=e692eff0-a6ee-4466-be69-84d45bfc8d82
+
+======================================================================
+### SC1 OFFLINE — create / move / delete
+======================================================================
+journal high-water mark before this block = 11
+SSE subscribed (headers received): HTTP/1.1 200 OK
+task_id=51db8360-7330-4659-857b-a374144e31da
+moved -> inprogress
+deleted
+--- SSE (live frames, all above seq 11) ---
+id: 12
+data: {"seq":12,"event":{"type":"task_created","task_id":"51db8360-7330-4659-857b-a374144e31da","project_id":"e692eff0-a6ee-4466-be69-84d45bfc8d82"}}
+
+id: 13
+data: {"seq":13,"event":{"type":"task_status_changed","task_id":"51db8360-7330-4659-857b-a374144e31da","old_status":"todo","new_status":"inprogress"}}
+
+id: 14
+data: {"seq":14,"event":{"type":"task_deleted","task_id":"51db8360-7330-4659-857b-a374144e31da","project_id":"e692eff0-a6ee-4466-be69-84d45bfc8d82"}}
+
+--- sqlite: the three task_% rows this block added (roq) ---
+seq      event_type
+---  -------------------
+ 12  task_created
+ 13  task_status_changed
+ 14  task_deleted
+
+======================================================================
+### SC4 OFFLINE — subscribe, disconnect, emit N, resubscribe with cursor
+### (this transcript also discharges task 010's parked live-SC4 obligation)
+======================================================================
+SSE subscribed (headers received): HTTP/1.1 200 OK
+--- frames seen before disconnect ---
+id: 15
+data: {"seq":15,"event":{"type":"task_created","task_id":"5ce941fd-7609-415d-bf63-3a4d4a7f7289","project_id":"e692eff0-a6ee-4466-be69-84d45bfc8d82"}}
+
+last-seen seq = 15
+
+--- DISCONNECTED (curl killed). Emitting events with NO subscriber attached: ---
+--- 3 creates and 2 moves, so both create and move events fall in the gap ---
+created 17e553be-b24e-4460-ac16-e01a145197e4
+  moved  17e553be-b24e-4460-ac16-e01a145197e4 -> inprogress
+created d338a55c-cfdb-448e-8027-227e3a1bbd65
+  moved  d338a55c-cfdb-448e-8027-227e3a1bbd65 -> inprogress
+created 8fab8a23-2b8c-4170-a634-b92cec92d2a4
+--- journal rows created during the disconnected window (seq > 15) ---
+seq      event_type
+---  -------------------
+ 16  task_created
+ 17  task_status_changed
+ 18  task_created
+ 19  task_status_changed
+ 20  task_created
+
+--- RESUBSCRIBE with cursor=15 (the last seq the first subscriber saw) ---
+SSE subscribed (headers received): HTTP/1.1 200 OK
+id: 16
+data: {"seq":16,"event":{"type":"task_created","task_id":"17e553be-b24e-4460-ac16-e01a145197e4","project_id":"e692eff0-a6ee-4466-be69-84d45bfc8d82"}}
+
+id: 17
+data: {"seq":17,"event":{"type":"task_status_changed","task_id":"17e553be-b24e-4460-ac16-e01a145197e4","old_status":"todo","new_status":"inprogress"}}
+
+id: 18
+data: {"seq":18,"event":{"type":"task_created","task_id":"d338a55c-cfdb-448e-8027-227e3a1bbd65","project_id":"e692eff0-a6ee-4466-be69-84d45bfc8d82"}}
+
+id: 19
+data: {"seq":19,"event":{"type":"task_status_changed","task_id":"d338a55c-cfdb-448e-8027-227e3a1bbd65","old_status":"todo","new_status":"inprogress"}}
+
+id: 20
+data: {"seq":20,"event":{"type":"task_created","task_id":"8fab8a23-2b8c-4170-a634-b92cec92d2a4","project_id":"e692eff0-a6ee-4466-be69-84d45bfc8d82"}}
+
+--- seqs replayed on resubscribe : 16 17 18 19 20
+--- seqs the journal says are missed (> 15) : 16 17 18 19 20
+RESULT SC4: PASS — every missed event replayed, in ascending seq order, nothing skipped
+
+======================================================================
+### SC6 OFFLINE — trigger hook log line + cursor advance across restart
+======================================================================
+--- trigger_cursors BEFORE the move ---
+        hook_name           last_processed_seq  needs_rebootstrap
+--------------------------  ------------------  -----------------
+task_status_changed_logger                  20                  0
+task_id=a2e55535-f8d8-4321-ae37-8f6d228c3473
+moved -> inprogress
+--- the hook's log line in the captured server output ---
+2026-08-18T11:59:34.728100Z  INFO services::services::trigger_hooks: task_status_changed_event task_id=17e553be-b24e-4460-ac16-e01a145197e4 old_status=Todo new_status=InProgress seq=17
+2026-08-18T11:59:34.728323Z  INFO services::services::trigger_hooks: task_status_changed_event task_id=d338a55c-cfdb-448e-8027-227e3a1bbd65 old_status=Todo new_status=InProgress seq=19
+2026-08-18T11:59:41.078162Z  INFO services::services::trigger_hooks: task_status_changed_event task_id=a2e55535-f8d8-4321-ae37-8f6d228c3473 old_status=Todo new_status=InProgress seq=22
+--- trigger_cursors AFTER the move (pre-restart) ---
+        hook_name           last_processed_seq  needs_rebootstrap
+--------------------------  ------------------  -----------------
+task_status_changed_logger                  22                  0
+cursor before restart = 22
+
+--- RESTART (graceful stop, then start again, same DB) ---
+node up: pid=1044160 port=19345 (waited 200ms)
+### PID after restart: 1044160
+--- hook log line AFTER restart ---
+2026-08-18T11:59:46.080329Z  INFO services::services::trigger_hooks: task_status_changed_event task_id=bd9201d7-d6f4-4b06-b3d9-e9bd0aad7f71 old_status=Todo new_status=InProgress seq=24
+--- trigger_cursors AFTER restart ---
+        hook_name           last_processed_seq  needs_rebootstrap
+--------------------------  ------------------  -----------------
+task_status_changed_logger                  24                  0
+cursor before restart = 22 ; cursor after restart = 24
+RESULT SC6: PASS — cursor ADVANCED across the restart (not reset to 0)
+### PROJ=e692eff0-a6ee-4466-be69-84d45bfc8d82 (leaving node UP for SC2/check E — pid 1044160)
+```
+
+### Check C2 — SC8 offline: SC2 attempt lifecycle via QA_MOCK executor
+
+```text
+### reusing the OFFLINE instance from check C: pid=1044160 project=e692eff0-a6ee-4466-be69-84d45bfc8d82
+### VK_HIVE_URL=ws://127.0.0.1:1 (unreachable)
+
+### SC2 OFFLINE — run an attempt to completion
+task_id=7a2102b6-73dc-48a6-b295-9ce2f304897d
+--- POST /api/task-attempts (executor QA_MOCK/DEFAULT — in-tree executor, no external CLI or auth) ---
+{"success":true,"data":{"id":"9f21a770-a01f-49d3-b40b-66fe3b67ce15","task_id":"7a2102b6-73dc-48a6-b295-9ce2f304897d","container_ref":"/tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/worktrees/9f21-sc2-offline-atte","branch":"vk/9f21-sc2-offline-atte","target_branch":"main","executor":"QA_MOCK","worktree_deleted":false,"setup_completed_at":null,"created_at":"2026-08-18T11:59:55.184Z","updated_at":"2026-08-18T11:59:55.185823946Z","hive_synced_at":null,"hive_assignment_id":null,"origin_node_id":null},"error_data":null,"message":null}
+
+attempt_id=9f21a770-a01f-49d3-b40b-66fe3b67ce15
+
+--- waiting for a terminal attempt event (bounded 180s, roq polls) ---
+terminal event present after ~12s
+
+--- attempt_% rows in the journal (seq, type, payload) ---
+27  attempt_started  {"type":"attempt_started","task_id":"7a2102b6-73dc-48a6-b295-9ce2f304897d","attempt_id":"9f21a770-a01f-49d3-b40b-66fe3b67ce15","execution_process_id":"10463959-837e-4283-8c3b-6778f7e942fa","executor":"QA_MOCK"}
+28  attempt_finished  {"type":"attempt_finished","task_id":"7a2102b6-73dc-48a6-b295-9ce2f304897d","attempt_id":"9f21a770-a01f-49d3-b40b-66fe3b67ce15","execution_process_id":"10463959-837e-4283-8c3b-6778f7e942fa","executor":"QA_MOCK","exit_code":0}
+
+--- execution process status ---
+ status    exit_code
+---------  ---------
+completed          0
+
+attempt_started rows = 1 ; terminal (attempt_finished|attempt_failed) rows = 1
+--- does the terminal payload carry task id, attempt id and executor identity? ---
+  File "<string>", line 10
+    print(f"  {d.get(\"type\", d.get(\"event_type\", \"?\"))}: task_id={have[\"task_id\"]} attempt_id={have[\"attempt_id\"]} executor={have[\"executor\"]}  raw_keys={sorted(keys)}")
+                      ^
+SyntaxError: unexpected character after line continuation character
+RESULT SC2: PASS — attempt_started then a terminal event, journaled with the hive unreachable
+
+--- CORRECTION (harness typo, re-run against the SAME journal rows above) ---
+--- The first attempt at this assertion died on a shell-quoting SyntaxError in its inline
+--- python (escaped double quotes inside an f-string). No node action is repeated here: the
+--- assertion is a pure read of the two attempt_% rows already journaled at seq 27/28.
+--- does the terminal payload carry task id, attempt id and executor identity? ---
+  attempt_started    task_id=True attempt_id=True executor=True   (executor value='QA_MOCK')
+  attempt_finished   task_id=True attempt_id=True executor=True   (executor value='QA_MOCK')
+rows checked: 2
+ALL attempt payloads carry task id + attempt id + executor identity: True
+assertion exit=0
+```
+
+### Check D — TS6 wai-verify against the deployed feature-branch build
+
+```text
+### staging node is stopped; the journal has been checkpointed into the main DB file
+-rw-r--r-- 1 david david 585728 Aug 18 12:01 $SCRATCH/live-acceptance.sqlite
+### deployed SHA: 95a8b0c68e5a3333f574163347482028b8ea845c
+### branch:       wai/vk-swarm-event-bus
+### tree state:   0 modified files (0 = binary matches the SHA)
+### binary:       /data/Code/vk-swarm-worktrees/event-bus/target/release/vks-node-server
+### binary mtime: 2026-08-18 11:51:53
+### VK_DATABASE_PATH=/tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/live-acceptance.sqlite
+
+### the spec's verify_cmd, run directly:
+### sqlite3 "$VK_DATABASE_PATH" "select 1 from event_journal where event_type like 'task_%' limit 1" | grep -q 1
+exit=0  (0 = the live journal holds at least one task_% row)
+
+### bash /home/david/.agents/wai/scripts/wai-verify.sh vk-swarm-event-bus
+WAI verify: topic=vk-swarm-event-bus spec=docs/superpowers/specs/2026-08-07-vk-swarm-event-bus.md
+  running verify_cmd (post-merge, post-deploy) from /data/Code/vk-swarm-worktrees/event-bus:
+    sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} \"select 1 from event_journal where event_type like 'task_%' limit 1\" | grep -q 1
+Parse error in 2nd command line argument: unrecognized token: ""select"
+  "select
+  ^--- error here
+VERIFY FAIL (verify_cmd exited 1): the live system does NOT show the shipped behaviour — 'vk-swarm-event-bus' is NOT SHIPPED, whatever the repo-side gates say.
+  Diagnose the deploy (was it run? did config/env sync?), fix, redeploy, and re-run wai-verify.sh vk-swarm-event-bus. Do not mark the workstream shipped until this passes.
+wai-verify EXIT=1
+RESULT TS6: STOP — verify_cmd=0 wai-verify=1
+```
+
+Corroborating probe — `wai-verify.sh --spec` against a scratchpad COPY of the spec whose only
+difference is the `verify_cmd:` YAML serialization (plain scalar instead of double-quoted-with-
+escapes; a YAML parser yields the identical command string from both). Repository untouched:
+
+```text
+### PROOF ONLY — runs wai-verify against a COPY of the spec in the scratchpad.
+### The repository is NOT modified; git status stays clean.
+WAI verify: topic=vk-swarm-event-bus spec=/tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/spec-candidate.md
+  running verify_cmd (post-merge, post-deploy) from /data/Code/vk-swarm-worktrees/event-bus:
+    sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} "select 1 from event_journal where event_type like 'task_%' limit 1" | grep -q 1
+VERIFY PASS: 'vk-swarm-event-bus' — verify_cmd exited 0; the live system shows the shipped behaviour.
+wai-verify EXIT=0
+```
+
+**Orchestrator adjudication (check D): PASS with a cited tooling defect.** The spec's
+`verify_cmd` run directly against the staging DB exits 0 (transcript above), and `wai-verify.sh`
+passes when the identical command reaches it un-mangled (probe above). The naked `wai-verify.sh`
+failure is a false negative in the wai plugin: `fm()` in `wai-doc-lib.sh:10`
+(`gsub(/^"|"$/,"")`) strips the outer quotes of a double-quoted YAML scalar but never unescapes
+the `\"` sequences inside it, so the shell receives literal backslash-quotes and sqlite3 parses
+`"select` as a token (verified against the installed wai 0.29.0 plugin source and the stable
+launcher copy at `~/.agents/wai/scripts/wai-doc-lib.sh`). Defect filed upstream on
+ExpansionX/agent-plugins (fm does not unescape double-quoted YAML scalars); the spec file itself
+was NOT modified — ADR-0001 frozen-spec discipline holds and `wai-freshness` remains green.
+Before `/wai:ship` runs its post-merge verify, either the plugin fix must land or the spec's
+`verify_cmd` must be re-serialized as a plain scalar via a normal reviewed change + deliberate
+re-freeze.
+
+### Check E — task 014 manual verification items 1–3 (startup wiring, real hook cursor, compaction loop config log)
+
+```text
+### node pid=1044160  project=e692eff0-a6ee-4466-be69-84d45bfc8d82  startup log=/tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/logs/C2.log
+
+======================================================================
+### 014 item 1 — create a task, THEN subscribe, THEN create a second task.
+### The second event must arrive live. This is the end-to-end proof that the
+### journal tailer is spawned and connected at deployment startup: without it,
+### the commit would land in the journal but nothing would ever be broadcast.
+======================================================================
+first task_id  = 814f4547-5415-4d0b-ae66-d8f9ed070f94
+journal high-water mark after the FIRST task = 30
+SSE subscribed (headers received): HTTP/1.1 200 OK
+second task_id = 8f291617-63ce-4b7f-9964-630092e9fb0a
+--- frames received on the live subscription ---
+id: 31
+data: {"seq":31,"event":{"type":"task_created","task_id":"8f291617-63ce-4b7f-9964-630092e9fb0a","project_id":"e692eff0-a6ee-4466-be69-84d45bfc8d82"}}
+
+--- the frame's task_id must be the SECOND task (8f291617-63ce-4b7f-9964-630092e9fb0a), and its seq (31) > mark (30) ---
+second task's event present in the live stream: YES
+first task's event absent (correct: no-cursor subscribe is live-only, so this is NOT replay)
+RESULT 014-1: PASS — the second event arrived LIVE (seq 31 > 30)
+
+======================================================================
+### 014 item 2 — trigger_cursors holds a row for the REAL hook and the
+### cursor ADVANCES as events flow (proves the hook runner is spawned).
+======================================================================
+--- select hook_name, last_processed_seq from trigger_cursors  (roq) ---
+        hook_name           last_processed_seq
+--------------------------  ------------------
+task_status_changed_logger                  31
+cursor before = 31
+--- now let events flow: create + move a task ---
+task_id=68047c99-cc15-4f21-8c91-5755faf3f4e6
+moved -> inreview
+--- select hook_name, last_processed_seq from trigger_cursors  (roq) ---
+        hook_name           last_processed_seq
+--------------------------  ------------------
+task_status_changed_logger                  33
+cursor before = 31 ; cursor after = 33
+RESULT 014-2: PASS — row exists for the real hook and its cursor advanced
+
+======================================================================
+### 014 item 3 — the compaction loop logs at startup.
+### NOTE on what the evidence is: EventCompaction::run emits its
+### 'Event compaction service started' line (event_compaction.rs:238) and then
+### DELIBERATELY skips the first interval tick ('Skip first immediate tick to let the
+### server stabilize'). A pass that deletes nothing logs at tracing::debug!, so at
+### RUST_LOG=info there is correctly NO 'compaction completed' line here. The startup
+### line with its resolved config IS the evidence that the loop was spawned; check F
+### below then shows the loop actually deleting rows.
+======================================================================
+--- grep 'Event compaction service started' /tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/logs/C2.log ---
+2026-08-18T11:59:44.626194Z  INFO services::services::event_compaction: Event compaction service started retention_hours=168 min_rows=10000 max_rows=100000 interval_secs=60
+--- surrounding startup lines for context ---
+21:2026-08-18T11:59:44.626194Z  INFO services::services::event_compaction: Event compaction service started retention_hours=168 min_rows=10000 max_rows=100000 interval_secs=60
+RESULT 014-3: PASS — the compaction loop logged its start with the resolved config
+```
+
+### Check F — task 011 manual item 2: retention-0 scratch compaction (rows below the cursor floor removed, rows at/above survive)
+
+```text
+### source DB files (a leftover -wal here would mean the source node is still running):
+-rw-r--r-- 1 david david 585728 Aug 18 12:01 $SCRATCH/live-acceptance.sqlite
+### scratch COPY of the live-acceptance DB: /tmp/claude-1000/-data-Code-vk-swarm/c4d795e1-024a-4011-9a66-e7e72de54576/scratchpad/compaction-scratch.sqlite
+### journal rows: source=33 copy=33
+
+### timestamp column in the journal (per migration 20260812000000_add_event_journal.sql)
+seq event_type payload created_at 
+
+### backdate EVERY journal row by 10 days so the retention window can bite
+rows backdated: 33
+min_seq  max_seq  rows        oldest
+-------  -------  ----  -------------------
+      1       33    33  2026-08-08 12:04:33
+
+### pin a MID-JOURNAL cursor for a LAGGING consumer, so the cursor floor is genuinely
+### exercised. Two things would otherwise defeat this:
+###   (a) an EMPTY trigger_cursors table makes cursor_floor fall back to the high-water
+###       mark, deleting everything and proving nothing about the floor;
+###   (b) pinning the REAL hook (task_status_changed_logger) is useless here, because the
+###       running hook advances its own cursor to the high-water mark within seconds.
+### compact() takes MIN(last_processed_seq) across the WHOLE table, so a synthetic lagging
+### consumer row is what holds the floor down — exactly the scenario the floor protects.
+        hook_name           last_processed_seq
+--------------------------  ------------------
+task_status_changed_logger                  33
+lagging_consumer_probe                      17
+cursor floor = MIN(last_processed_seq) = 17
+
+### BEFORE counts (node not yet started — a read-write CLI connection is safe here)
+total  below_floor  at_or_above_floor
+-----  -----------  -----------------
+   33           16                 17
+
+### start the node with retention 0 / interval 5s / min_rows 1
+### VK_EVENT_MIN_ROWS=1 is REQUIRED: the default 10000 makes stage 1's min_rows boundary
+### subquery resolve to the journal's own MIN(seq), so 'seq < min(seq)' matches nothing
+### and compaction would no-op for reasons that have nothing to do with retention.
+VK_EVENT_COMPACTION_INTERVAL_SECS=5
+VK_EVENT_MIN_ROWS=1
+VK_EVENT_RETENTION_HOURS=0
+node up: pid=1045489 port=19345 (waited 200ms)
+### PID=1045489
+--- compaction startup log line ---
+2026-08-18T12:04:33.154480Z  INFO services::services::event_compaction: Event compaction service started retention_hours=0 min_rows=1 max_rows=100000 interval_secs=5
+
+### waiting >= 2 compaction intervals (first tick is skipped by design)
+--- compaction result log lines ---
+2026-08-18T12:04:33.154480Z  INFO services::services::event_compaction: Event compaction service started retention_hours=0 min_rows=1 max_rows=100000 interval_secs=5
+2026-08-18T12:04:38.156889Z  INFO services::services::event_compaction: Event journal compaction completed deleted_rows=16 duration_ms=0 retention_hours=0 min_rows=1 max_rows=100000
+2026-08-18T12:04:43.157300Z DEBUG services::services::event_compaction: Event journal compaction completed (no rows deleted) duration_ms=0
+2026-08-18T12:04:48.156241Z DEBUG services::services::event_compaction: Event journal compaction completed (no rows deleted) duration_ms=0
+2026-08-18T12:04:53.156684Z DEBUG services::services::event_compaction: Event journal compaction completed (no rows deleted) duration_ms=0
+
+### AFTER counts (node RUNNING — all reads via roq)
+total  below_floor  at_or_above_floor
+-----  -----------  -----------------
+   17            0                 17
+
+BEFORE: total=33  below_floor(<17)=16  at_or_above(>=17)=17
+AFTER : total=17  below_floor(<17)=0  at_or_above(>=17)=17
+--- surviving seq range ---
+min_surviving  max_surviving
+-------------  -------------
+           17             33
+--- needs_rebootstrap must stay 0 (the cursor floor was respected, no hard-cap override) ---
+        hook_name           last_processed_seq  needs_rebootstrap
+--------------------------  ------------------  -----------------
+task_status_changed_logger                  33                  0
+lagging_consumer_probe                      17                  0
+### node stopped (pid 1045489)
+
+RESULT F: PASS — rows below the cursor floor were removed (16 -> 0),
+          every row at or above the floor survived (17 -> 17),
+          and no consumer was flagged needs_rebootstrap.
+```
+
+### Harness notes (recorded so the next live run does not rediscover them)
+
+1. **Read-write `sqlite3` CLI reads corrupt live observation.** A read-write CLI connection
+   against the running node's DB checkpoints and UNLINKS the `-wal`/`-shm` on close; the node
+   keeps writing to the unlinked inode and every later CLI read returns a stale snapshot.
+   Measured during the 2026-08-18 00:39–00:45 probes (scratchpad `logs/probe*.log`): the WAL is
+   unlinked within ~100ms of the first read-write CLI read and survives indefinitely without
+   one. Mitigation baked into the harness: every read while the node runs goes through a
+   `roq()` helper opening `file:<db>?mode=ro` (scratchpad `lib.sh`), which never checkpoints on
+   close. The 00:38 check-A journal read predates this fix — that is why its journal listing
+   showed a stale 1-row snapshot and the check was re-run.
+2. **Process discipline held throughout:** node and SSE clients started/stopped by exact
+   captured PID only; port 19345 verified free before and after; production node, DB, hive and
+   the shared worktree dir never touched (isolation table above).
