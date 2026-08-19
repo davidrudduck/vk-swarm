@@ -148,7 +148,10 @@ verified against the repo before the spec owner decided.
    `seq` inside a transaction that may roll back "can leak a value". A direct probe shows SQLite
    **reuses** it — `sqlite_sequence` is itself transactional, so the rollback reverts the allocation.
    The consumer-facing contract is unchanged and remains correct, because it is the conservative
-   direction: consumers must tolerate holes regardless of whether this mechanism creates them. Only
+   direction: consumers must tolerate holes regardless of whether this mechanism creates them.
+   To be precise about scope: the no-reuse guarantee applies to **committed, observable rows** —
+   a rolled-back allocation is never observable (no consumer, cursor, or dedup key can have seen
+   it), so SQLite reusing that value cannot violate any cursor or deduplication contract. Only
    the stated cause was wrong, and the behaviour is now asserted by a test rather than assumed.
 
 The irreversible core is still unchanged. What moved is the publication mechanism, which was never

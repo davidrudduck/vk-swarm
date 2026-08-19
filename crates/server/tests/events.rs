@@ -767,17 +767,20 @@ async fn no_cursor_with_unreadable_journal_returns_500() {
 
     let client = reqwest::Client::new();
     let url = format!("http://{}/api/events", h.addr());
-    let res = client.get(&url).send().await.unwrap();
+    let response = client.get(&url).send().await;
+
+    // Restore the table BEFORE any assertion can panic, so harness teardown
+    // always sees the schema it expects.
+    let restore_result = sqlx::query("ALTER TABLE event_journal_poisoned RENAME TO event_journal")
+        .execute(&pool)
+        .await;
+
+    let res = response.expect("failed to request /api/events");
+    restore_result.expect("failed to restore event_journal");
 
     assert_eq!(
         res.status().as_u16(),
         500,
         "an unreadable journal on the no-cursor path must be an HTTP error, not a stream"
     );
-
-    // Restore the table so harness teardown sees the schema it expects.
-    sqlx::query("ALTER TABLE event_journal_poisoned RENAME TO event_journal")
-        .execute(&pool)
-        .await
-        .expect("failed to restore event_journal");
 }

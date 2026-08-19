@@ -106,16 +106,18 @@ fn sse_stream(
                         error = ?e,
                         "failed to serialize event for SSE; terminating stream"
                     );
+                    // The full diagnostic is logged above; the client gets a stable, generic
+                    // message so sqlx error text (SQL, table/column names) never leaves the server.
                     let frame = terminal_error_frame(format!(
-                        "event serialization failed at seq {}: {}",
-                        seq_event.seq, e
+                        "event serialization failed at seq {}",
+                        seq_event.seq
                     ));
                     Some((Ok(frame), StreamStage::Done))
                 }
             },
             Some(Err(e)) => {
                 error!(error = ?e, "event bus stream error; terminating stream");
-                let frame = terminal_error_frame(format!("event stream error: {}", e));
+                let frame = terminal_error_frame("event stream error".to_string());
                 Some((Ok(frame), StreamStage::Done))
             }
         }

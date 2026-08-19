@@ -37,7 +37,8 @@ EventBus (tokio broadcast)
 
 The journal append happens **in the same transaction** as the model write — an event exists if and
 only if the state change committed. Everything downstream (tailer, bus, SSE, hooks) is a reader of
-that durable log, so a crash at any point loses no events: consumers resume from their cursor.
+that durable log, so a crash at any point loses no events that are still within retained history:
+consumers resume from their cursor, and compaction (below) bounds how far back that history goes.
 
 ## Event types
 
@@ -54,7 +55,10 @@ every consumer.
 - **`cursor=N`** → `EventBus::subscribe_from(N)` replays every journaled event with `seq > N`,
   then continues live on the same connection.
 - Every SSE frame carries its `seq` as the SSE `id`, so clients resume with
-  `?cursor=<last-seen-seq>` after a disconnect. Duplicates are tolerated; gaps are not possible.
+  `?cursor=<last-seen-seq>` after a disconnect. Duplicates are tolerated. Within retained
+  history, replay is gapless; a cursor older than the compaction window (see below) replays only
+  the retained rows — the stream does not signal that earlier rows were compacted away, so a
+  client that must not miss events should treat a very stale cursor as a full-refresh case.
 - A setup failure (journal unreachable) is an HTTP error; a **mid-stream** failure emits one
   terminal `event: error` frame and ends the stream — never a silent close.
 - A malformed `cursor` is a 400 from axum's `Query` extractor.

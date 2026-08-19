@@ -25,7 +25,9 @@ moments — you never need to refresh the page.
 - **No setup required.** Live updates are on by default for every project.
 - **Reconnection catches up.** If your browser loses its connection (laptop sleep, network blip),
   it automatically resumes from the last update it saw. Events that happened while you were
-  disconnected are replayed in order — nothing is skipped.
+  disconnected are replayed in order, as long as they are still within the node's retained event
+  history (old events are compacted away after a retention window — see the event journal
+  retention settings). After a very long disconnect, refresh the page to get the current state.
 - **Works offline from the hive.** Live updates are served by your local node. They keep working
   even when the node cannot reach the hive server.
 

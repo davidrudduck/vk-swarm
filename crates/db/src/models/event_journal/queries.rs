@@ -92,7 +92,10 @@ pub async fn compact(
     min_rows: i64,
     max_rows: i64,
 ) -> Result<u64, EventJournalError> {
-    let mut tx = pool.begin().await?;
+    // BEGIN IMMEDIATE takes the write lock at BEGIN, so the SELECTs below never open a read
+    // snapshot that the DELETE must later upgrade (the read-then-upgrade shape earns a
+    // non-retryable SQLITE_BUSY_SNAPSHOT under WAL contention). Matches Task::update_status.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     // Get high water mark for cursor floor calculation
     let high_water =
@@ -132,7 +135,10 @@ pub async fn compact(
     )
     .bind(cursor_floor)
     .bind(min_rows)
-    .bind(cutoff_time.to_rfc3339())
+    // Bind the cutoff in SQLite's own text format ("YYYY-MM-DD HH:MM:SS.SSS"): created_at is
+    // stored via datetime('now','subsec'), and RFC 3339's 'T' separator collates ABOVE the
+    // space, which would make every same-day row compare below the cutoff.
+    .bind(cutoff_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
     .execute(&mut *tx)
     .await?;
 

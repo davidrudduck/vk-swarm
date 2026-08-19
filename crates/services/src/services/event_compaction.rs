@@ -140,6 +140,20 @@ fn parse_event_compaction_config(
         "VK_EVENT_COMPACTION_INTERVAL_SECS",
     );
 
+    // tokio::time::interval panics on a zero period; the panic would be caught by
+    // supervised_run and silently stop compaction for the process lifetime. Clamp to 1.
+    let interval_secs = if interval_secs == 0 {
+        tracing::warn!(
+            variable = "VK_EVENT_COMPACTION_INTERVAL_SECS",
+            configured = 0,
+            effective = 1,
+            "Clamping VK_EVENT_COMPACTION_INTERVAL_SECS to minimum 1"
+        );
+        1
+    } else {
+        interval_secs
+    };
+
     let (min_rows, max_rows) = sanitise_rows(min_rows_raw, max_rows_raw);
 
     EventCompactionConfig {
@@ -232,8 +246,9 @@ impl EventCompaction {
     }
 
     async fn run(self, mut rx: mpsc::Receiver<EventCompactionCommand>) {
-        let mut compaction_interval =
-            tokio::time::interval(Duration::from_secs(self.config.compaction_interval_secs));
+        // Config fields are public, so re-clamp here too: a zero period panics tokio::time::interval.
+        let interval_secs = self.config.compaction_interval_secs.max(1);
+        let mut compaction_interval = tokio::time::interval(Duration::from_secs(interval_secs));
 
         tracing::info!(
             retention_hours = self.config.retention_hours,
@@ -785,6 +800,10 @@ mod tests {
         );
 
         let r = supervised_run("test_task", async { panic!("boom-{}", 42) }).await;
-        assert_eq!(r.unwrap_err(), "boom-42", "String panic payloads must round-trip too");
+        assert_eq!(
+            r.unwrap_err(),
+            "boom-42",
+            "String panic payloads must round-trip too"
+        );
     }
 }

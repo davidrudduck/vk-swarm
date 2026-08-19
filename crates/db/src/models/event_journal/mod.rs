@@ -194,7 +194,7 @@ mod tests {
         )
         .bind("task_created")
         .bind(r#"{"type":"task_created","task_id":"00000000-0000-0000-0000-000000000001","project_id":"00000000-0000-0000-0000-000000000002"}"#)
-        .bind(old_time.to_rfc3339())
+        .bind(old_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
         .execute(&pool)
         .await
         .unwrap();
@@ -204,7 +204,7 @@ mod tests {
         )
         .bind("task_created")
         .bind(r#"{"type":"task_created","task_id":"00000000-0000-0000-0000-000000000003","project_id":"00000000-0000-0000-0000-000000000004"}"#)
-        .bind(recent_time.to_rfc3339())
+        .bind(recent_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
         .execute(&pool)
         .await
         .unwrap();
@@ -223,6 +223,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, 1, "old row should be deleted by compaction");
+    }
+
+    /// Regression: the retention cutoff must be bound in SQLite's stored text format.
+    /// created_at defaults to datetime('now','subsec') ("YYYY-MM-DD HH:MM:SS.SSS"); an RFC 3339
+    /// cutoff ("YYYY-MM-DDTHH:MM:SS+00:00") collates ABOVE every same-day stored value ('T' > ' '),
+    /// which deleted rows that were still inside the retention window.
+    #[tokio::test]
+    async fn compact_keeps_same_day_rows_inside_the_retention_window() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        // Two rows written the production way (created_at = datetime('now','subsec')), then one
+        // backdated 30 minutes — still inside a 1-hour retention window, on the same calendar day.
+        let mut tx = pool.begin().await.unwrap();
+        for _ in 0..2 {
+            let event = NodeEvent::TaskCreated {
+                task_id: Uuid::new_v4(),
+                project_id: Uuid::new_v4(),
+            };
+            let _ = append(&mut *tx, &event).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        sqlx::query(
+            "UPDATE event_journal SET created_at = datetime('now', '-30 minutes', 'subsec')              WHERE seq = (SELECT MIN(seq) FROM event_journal)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // retention 1h, min_rows 1: the 30-minute-old row is deletable by every guard EXCEPT the
+        // retention window, so it survives only if the cutoff comparison is format-correct.
+        compact(&pool, 1, 1, 100).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM event_journal")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            count.0, 2,
+            "a same-day row inside the retention window must survive compaction"
+        );
     }
 
     #[tokio::test]
@@ -248,7 +289,7 @@ mod tests {
                 r#"{{"type":"task_created","task_id":"00000000-0000-0000-0000-00000000000{}","project_id":"00000000-0000-0000-0000-00000000000{}"}}"#,
                 i, i
             ))
-            .bind(old_time.to_rfc3339())
+            .bind(old_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
             .execute(&pool)
             .await
             .unwrap();
@@ -286,7 +327,7 @@ mod tests {
                 r#"{{"type":"task_created","task_id":"00000000-0000-0000-0000-00000000000{}","project_id":"00000000-0000-0000-0000-00000000000{}"}}"#,
                 i, i
             ))
-            .bind(old_time.to_rfc3339())
+            .bind(old_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
             .execute(&pool)
             .await
             .unwrap();
@@ -357,7 +398,7 @@ mod tests {
                 r#"{{"type":"task_created","task_id":"00000000-0000-0000-0000-00000000000{}","project_id":"00000000-0000-0000-0000-00000000000{}"}}"#,
                 i, i
             ))
-            .bind(old_time.to_rfc3339())
+            .bind(old_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
             .execute(&pool)
             .await
             .unwrap();
