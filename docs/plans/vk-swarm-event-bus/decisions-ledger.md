@@ -8039,7 +8039,7 @@ the task file. Attempt 2 dispatched at the Opus rung (codex-rescue unavailable).
 
 ### Manual verification (still owed, recorded for orchestrator)
 
-- Real deployment at http://10.69.96.233:9001 or https://vkswarm.thedoctor.raverx.net (live
+- Real deployment at the live node or live hive (endpoints in operator memory, not in-repo) (live
   instance) with the branch built and deployed. Verify:
   1. Create a task → immediately `curl -N http://<node>/api/events` in another shell → create
      second task → event arrives live. Proves tailer spawned and connected.
@@ -9540,3 +9540,10 @@ check-D section above). Before post-merge verify, either the plugin fix must lan
 spec's `verify_cmd` must be re-serialized as a plain scalar via a reviewed change +
 deliberate re-freeze (`/wai:precheck`). The underlying observation passes on the deployed
 system as shown.
+
+## Redaction note (orchestrator, 2026-08-19)
+
+Line 8042 originally named the live node/hive endpoints verbatim. Redacted to placeholders per the
+standing rule that deployment endpoints live in operator memory only, never in checked-in files
+(/dr:pr STEP 1 clean-commit audit). Semantics of the manual-verification obligation are unchanged.
+The endpoints remain in earlier commits of this branch; a squash-merge keeps them out of main.
