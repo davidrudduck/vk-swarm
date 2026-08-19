@@ -614,4 +614,177 @@ mod tests {
         assert_eq!(config.min_rows, 10000);
         assert_eq!(config.max_rows, 100000);
     }
+
+    /// Poll a condition for up to 2s; panic with `what` if it never holds. Used for asserting on
+    /// logs emitted by the spawned background loop, which lands them asynchronously.
+    async fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+        for _ in 0..200 {
+            if cond() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("condition not met within 2s: {what}");
+    }
+
+    // Lifecycle: spawn starts the loop (startup log with the configured values) and shutdown
+    // terminates it via the Shutdown command arm.
+    #[tokio::test]
+    #[traced_test]
+    async fn spawn_starts_the_loop_and_shutdown_terminates_it() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
+        let config = EventCompactionConfig {
+            retention_hours: 168,
+            min_rows: 10000,
+            max_rows: 100000,
+            compaction_interval_secs: 3600,
+        };
+        let handle = EventCompaction::spawn(pool, config);
+        wait_until("startup log", || {
+            logs_contain("Event compaction service started")
+        })
+        .await;
+
+        handle.shutdown().await;
+        wait_until("shutdown log", || {
+            logs_contain("Event compaction service shutting down")
+        })
+        .await;
+    }
+
+    // spawn_default must run with the D6 defaults — the startup log names them, so a default
+    // drifting away from the spec fails here.
+    #[tokio::test]
+    #[traced_test]
+    async fn spawn_default_starts_with_d6_defaults() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
+        let handle = EventCompaction::spawn_default(pool);
+        wait_until("startup log with defaults", || {
+            logs_contain("Event compaction service started")
+                && logs_contain("retention_hours=168")
+                && logs_contain("min_rows=10000")
+                && logs_contain("max_rows=100000")
+        })
+        .await;
+        handle.shutdown().await;
+        wait_until("shutdown log", || {
+            logs_contain("Event compaction service shutting down")
+        })
+        .await;
+    }
+
+    // compact_now must trigger an immediate pass through the CompactNow command arm: expired rows
+    // above the retention floor are deleted without waiting for the interval tick (set to 1h here
+    // so the tick cannot be what compacted).
+    #[tokio::test]
+    #[traced_test]
+    async fn compact_now_triggers_an_immediate_pass() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
+
+        // Seed three journal rows and backdate them beyond the retention window.
+        let mut tx = pool.begin().await.expect("begin");
+        for _ in 0..3 {
+            let event = db::models::event::NodeEvent::TaskCreated {
+                task_id: uuid::Uuid::new_v4(),
+                project_id: uuid::Uuid::new_v4(),
+            };
+            db::models::event_journal::append(&mut *tx, &event)
+                .await
+                .expect("append");
+        }
+        tx.commit().await.expect("commit");
+        sqlx::query("UPDATE event_journal SET created_at = datetime('now', '-2 day')")
+            .execute(&pool)
+            .await
+            .expect("backdate");
+
+        let config = EventCompactionConfig {
+            retention_hours: 1,
+            min_rows: 1,
+            max_rows: 100000,
+            compaction_interval_secs: 3600,
+        };
+        let handle = EventCompaction::spawn(pool.clone(), config);
+        handle.compact_now().await;
+
+        // The retention floor keeps the newest row; the two older expired rows go.
+        for _ in 0..200 {
+            let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM event_journal")
+                .fetch_one(&pool)
+                .await
+                .expect("count");
+            if count == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM event_journal")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(
+            count, 1,
+            "compact_now must delete expired rows down to the min_rows floor"
+        );
+        assert!(
+            logs_contain("Event journal compaction completed"),
+            "a pass that deleted rows must log completion with deleted_rows"
+        );
+
+        handle.shutdown().await;
+    }
+
+    // A failing pass must be logged at error level AND returned as Err — the loop swallows the
+    // Err deliberately (a failed pass must never crash the service), so the log is the only
+    // operator signal.
+    #[tokio::test]
+    #[traced_test]
+    async fn run_compaction_failure_is_logged_and_returned() {
+        let (pool, _temp_dir) = db::test_utils::create_test_pool_with_migrations().await;
+        sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_poisoned")
+            .execute(&pool)
+            .await
+            .expect("poison");
+
+        let service = EventCompaction {
+            pool: pool.clone(),
+            config: EventCompactionConfig {
+                retention_hours: 168,
+                min_rows: 10000,
+                max_rows: 100000,
+                compaction_interval_secs: 3600,
+            },
+        };
+        let result = service.run_compaction().await;
+        assert!(
+            result.is_err(),
+            "an unreadable journal must be an Err, not a silent Ok"
+        );
+        assert!(
+            logs_contain("Event journal compaction failed"),
+            "the failure must be logged for the operator"
+        );
+    }
+
+    // supervised_run: normal completion passes through as Ok.
+    #[tokio::test]
+    async fn supervised_run_passes_through_normal_completion() {
+        assert!(supervised_run("test_task", async {}).await.is_ok());
+    }
+
+    // supervised_run must catch a panic, log it naming the task, and return the panic message —
+    // both &'static str and String panic payloads (the two shapes panic! produces).
+    #[tokio::test]
+    #[traced_test]
+    async fn supervised_run_catches_and_logs_panics() {
+        let r = supervised_run("test_task", async { panic!("boom-static") }).await;
+        assert_eq!(r.unwrap_err(), "boom-static");
+        assert!(
+            logs_contain("background task panicked"),
+            "the panic must be logged at error level"
+        );
+
+        let r = supervised_run("test_task", async { panic!("boom-{}", 42) }).await;
+        assert_eq!(r.unwrap_err(), "boom-42", "String panic payloads must round-trip too");
+    }
 }

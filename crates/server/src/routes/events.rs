@@ -166,3 +166,65 @@ pub fn router(_: &DeploymentImpl) -> Router<DeploymentImpl> {
     let events_router = Router::new().route("/", get(events));
     Router::new().nest("/events", events_router)
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+    use db::models::event_journal::EventJournalError;
+    use futures_util::stream;
+
+    use super::*;
+
+    /// `internal_error` must land on the 500-class `ApiError::Deployment` arm: a journal or bus
+    /// failure is a server fault. `ApiError::Database` would sub-match `RowNotFound` onto 404 and
+    /// `BadRequest` would blame the client — both wrong (see the comment on `internal_error`).
+    #[test]
+    fn internal_error_maps_to_a_500_response() {
+        let err = internal_error(EventJournalError::Database(sqlx::Error::PoolClosed));
+        let resp = err.into_response();
+        assert_eq!(
+            resp.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "a journal/bus failure must surface as a 500, not a 404/400"
+        );
+    }
+
+    /// An inner stream that ends cleanly must end the SSE stream — no frame, no hang.
+    #[tokio::test]
+    async fn sse_stream_ends_when_the_inner_stream_ends() {
+        let inner = stream::empty::<Result<SequencedEvent, EventBusError>>().boxed();
+        let mut s = Box::pin(sse_stream(inner));
+        assert!(
+            s.next().await.is_none(),
+            "an exhausted inner stream must end the SSE stream"
+        );
+    }
+
+    /// A mid-stream error yields exactly one terminal `error` frame and then ends: the
+    /// `StreamStage::Done` arm must terminate the unfold on the very next poll (a stream that
+    /// stays alive after the frame hangs the client on keep-alives forever).
+    #[tokio::test]
+    async fn sse_stream_emits_one_error_frame_then_ends() {
+        let inner = stream::iter(vec![Err(EventBusError::Journal(
+            EventJournalError::Database(sqlx::Error::PoolClosed),
+        ))])
+        .boxed();
+        let mut s = Box::pin(sse_stream(inner));
+
+        let first = s
+            .next()
+            .await
+            .expect("the error must surface as a frame")
+            .expect("SSE frames are infallible");
+        let rendered = format!("{first:?}");
+        assert!(
+            rendered.contains("error"),
+            "expected a terminal error frame, got: {rendered}"
+        );
+
+        assert!(
+            s.next().await.is_none(),
+            "the stream must END after the terminal error frame"
+        );
+    }
+}

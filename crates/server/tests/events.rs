@@ -746,3 +746,38 @@ async fn mid_stream_error_emits_terminal_error_frame_then_ends() {
         frames[0]
     );
 }
+
+/// Test 8: no_cursor_with_unreadable_journal_returns_500
+///
+/// The no-cursor path reads the journal high-water mark EAGERLY in the handler, so an unreadable
+/// journal must surface as an HTTP 500 before any stream starts. This is the counterpart to
+/// test 7: there the `cursor=0` leg forces the journal read INSIDE the stream (terminal error
+/// frame); here the handler's own read fails and the client must get a status code, not a
+/// connection that dies on first poll.
+#[tokio::test]
+#[serial_test::serial]
+async fn no_cursor_with_unreadable_journal_returns_500() {
+    let h = common::HiveHarness::hive_absent().await;
+    let pool = h.deployment().db().pool.clone();
+
+    sqlx::query("ALTER TABLE event_journal RENAME TO event_journal_poisoned")
+        .execute(&pool)
+        .await
+        .expect("failed to rename event_journal");
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{}/api/events", h.addr());
+    let res = client.get(&url).send().await.unwrap();
+
+    assert_eq!(
+        res.status().as_u16(),
+        500,
+        "an unreadable journal on the no-cursor path must be an HTTP error, not a stream"
+    );
+
+    // Restore the table so harness teardown sees the schema it expects.
+    sqlx::query("ALTER TABLE event_journal_poisoned RENAME TO event_journal")
+        .execute(&pool)
+        .await
+        .expect("failed to restore event_journal");
+}
