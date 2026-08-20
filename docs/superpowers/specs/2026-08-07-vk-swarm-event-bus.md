@@ -3,7 +3,7 @@ doc_type: spec
 status: active
 workstream: vk-swarm-event-bus
 change_kind: behaviour
-verify_cmd: "sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} \"select 1 from event_journal where event_type like 'task_%' limit 1\" | grep -q 1"
+verify_cmd: sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} "select 1 from event_journal where event_type like 'task_%' limit 1" | grep -q 1
 ---
 
 # vk-swarm-event-bus — task-lifecycle event bus (P4 / SC4)
