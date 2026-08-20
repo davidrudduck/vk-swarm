@@ -1,0 +1,35 @@
+---
+title: "Live Task Updates"
+description: "The task board updates in real time as tasks are created, moved, and executed — no page refresh needed"
+audience: user
+component: event-bus
+sources:
+  - crates/server/src/routes/events.rs
+  - crates/db/src/models/event.rs
+generated: 2026-08-19
+---
+
+Vibe Kanban keeps the task board live. When a task is created, changes status, is deleted, or an
+execution attempt starts, finishes, or fails, every open board view reflects the change within
+moments — you never need to refresh the page.
+
+## What updates live
+
+- New tasks appearing on the board
+- Tasks moving between columns (To Do, In Progress, In Review, Done, Cancelled)
+- Task deletion
+- Execution attempts starting, finishing, or failing on a task card
+
+## How it behaves
+
+- **No setup required.** Live updates are on by default for every project.
+- **Reconnection catches up.** If your browser loses its connection (laptop sleep, network blip),
+  it automatically resumes from the last update it saw. Events that happened while you were
+  disconnected are replayed in order, as long as they are still within the node's retained event
+  history (old events are compacted away after a retention window — see the event journal
+  retention settings). After a very long disconnect, refresh the page to get the current state.
+- **Works offline from the hive.** Live updates are served by your local node. They keep working
+  even when the node cannot reach the hive server.
+
+If a board ever looks stale, a page refresh always restores the current state — the board's data
+is stored durably on the node, not only in the live stream.

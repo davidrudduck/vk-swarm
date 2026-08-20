@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{Executor, FromRow, Sqlite, SqlitePool};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -47,9 +47,24 @@ impl ActivityDismissal {
     }
 
     /// Clear dismissal for a task (used when task status changes).
-    /// This is an alias for undismiss, kept for semantic clarity in the task model.
-    pub async fn clear_for_task(pool: &SqlitePool, task_id: Uuid) -> Result<(), sqlx::Error> {
-        Self::undismiss(pool, task_id).await
+    ///
+    /// Generalized over `Executor` (task 006) so `Task::update_status` can call it INSIDE its own
+    /// transaction: a pool-taking call from inside a transaction would contend for SQLite's single
+    /// writer lock on a second connection and could self-block. Same query text as `undismiss`,
+    /// duplicated rather than delegated so this can run on any executor — `&SqlitePool` still
+    /// implements `Executor`, so `undismiss`'s existing caller (`routes/dashboard.rs`) compiles
+    /// unchanged.
+    pub async fn clear_for_task<'e, E>(executor: E, task_id: Uuid) -> Result<(), sqlx::Error>
+    where
+        E: Executor<'e, Database = Sqlite>,
+    {
+        sqlx::query!(
+            "DELETE FROM activity_dismissals WHERE task_id = $1",
+            task_id
+        )
+        .execute(executor)
+        .await?;
+        Ok(())
     }
 
     /// Check if a task is dismissed.

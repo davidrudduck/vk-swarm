@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anyhow::Error as AnyhowError;
 use async_trait::async_trait;
-use axum::response::sse::Event;
 use db::{
     DBService,
     models::{
@@ -11,7 +10,6 @@ use db::{
     },
 };
 use executors::executors::ExecutorError;
-use futures::{StreamExt, TryStreamExt};
 use git2::Error as Git2Error;
 use services::services::{
     approvals::Approvals,
@@ -192,15 +190,5 @@ pub trait Deployment: Clone + Send + Sync + 'static {
                 }
             }
         }
-    }
-
-    async fn stream_events(
-        &self,
-    ) -> futures::stream::BoxStream<'static, Result<Event, std::io::Error>> {
-        self.events()
-            .msg_store()
-            .history_plus_stream()
-            .map_ok(|m| m.to_sse_event())
-            .boxed()
     }
 }

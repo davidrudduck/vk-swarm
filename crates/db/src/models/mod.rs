@@ -19,6 +19,8 @@ pub mod activity_feed;
 pub mod all_tasks;
 pub mod dashboard;
 pub mod draft;
+pub mod event;
+pub mod event_journal;
 pub mod execution_process;
 pub mod execution_process_logs;
 pub mod executor_session;
@@ -32,6 +34,7 @@ pub mod task_attempt;
 pub mod task_breakdown;
 pub mod task_variable;
 pub mod template;
+pub mod trigger_cursor;
 pub mod webhook;
 pub mod workstream_state;
 

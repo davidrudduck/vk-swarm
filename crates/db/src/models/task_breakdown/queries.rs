@@ -8,6 +8,8 @@ use super::{
     BreakdownStatus, ProposalItemInput, TaskBreakdownProposal, TaskBreakdownProposalItem,
     TaskDependency,
 };
+use crate::models::event::NodeEvent;
+use crate::models::event_journal;
 use crate::models::task::{Task, TaskStatus};
 
 /// Insert a new draft proposal for a task.
@@ -446,6 +448,18 @@ pub async fn accept_proposal(
         )
         .execute(&mut *tx)
         .await?;
+
+        // Event journal append: one TaskCreated per child (errors propagated — aborts accept).
+        // This matches the same shape Task::create uses for directly-created tasks: same event
+        // construction, same field sourcing (task.id, parent.project_id). To a consumer, a task
+        // from breakdown acceptance is indistinguishable from one created via Task::create.
+        let event = NodeEvent::TaskCreated {
+            task_id: task.id,
+            project_id: parent.project_id,
+        };
+        event_journal::append(&mut *tx, &event)
+            .await
+            .map_err(sqlx::Error::from)?;
 
         item_to_task.insert(item.id, task.id);
         created_tasks.push(task);

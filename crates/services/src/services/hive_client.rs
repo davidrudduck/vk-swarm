@@ -810,6 +810,12 @@ impl HiveClient {
                 Ok(()) => {
                     // Clean disconnect
                     tracing::info!("hive connection closed cleanly");
+                    let _ = self
+                        .event_tx
+                        .send(HiveEvent::Disconnected {
+                            reason: "connection closed cleanly".to_string(),
+                        })
+                        .await;
                     reconnect_delay = RECONNECT_DELAY;
                 }
                 Err(e) => {

@@ -13,6 +13,8 @@ fn generate_types_content() -> String {
         services::services::filesystem::DirectoryEntry::decl(),
         services::services::filesystem::DirectoryListResponse::decl(),
         services::services::filesystem::FileContentResponse::decl(),
+        db::models::event::NodeEvent::decl(),
+        db::models::event::SequencedEvent::decl(),
         db::models::project::Project::decl(),
         db::models::project::CreateProject::decl(),
         db::models::project::UpdateProject::decl(),

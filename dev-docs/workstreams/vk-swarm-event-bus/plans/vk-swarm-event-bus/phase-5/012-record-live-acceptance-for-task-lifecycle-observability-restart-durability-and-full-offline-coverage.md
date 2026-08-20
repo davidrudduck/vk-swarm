@@ -1,0 +1,93 @@
+---
+id: "012"
+phase: 5
+title: "Record live acceptance for task-lifecycle observability, restart durability and full offline coverage"
+status: passed
+depends_on: ["010","014","015"]
+parallel: false
+conflicts_with: []
+files:
+  - "docs/plans/vk-swarm-event-bus/decisions-ledger.md"
+irreversible: false
+scope_test: "N/A"
+allowed_change: edit
+covers_criteria: ["SC1","SC5","SC8"]
+covers_tests: ["TS6"]
+---
+## Failing test (write first)
+N/A — this task records observations of a DEPLOYED node, which no unit test can assert.
+Verification is the `## Manual verification` protocol below, per schema/task.frontmatter.md's
+scope_test-OR-manual-verification rule. The underlying behaviour is already covered by the tests in
+tasks 004-011; what is proved HERE is that it holds on real hardware, which is the whole point of the
+two-phase live-evidence rule.
+
+
+## Change
+**File:** `docs/plans/vk-swarm-event-bus/decisions-ledger.md`
+**Anchor:** append a new section `## Live acceptance — <date>`
+**After:** the pasted, fenced transcripts of every check below, plus the exact commit SHA of the
+deployed build. Paste real output — a summary is not evidence. Deploy the FEATURE BRANCH build to the
+live node first; merging is not a prerequisite for deploying a branch, and this task's own commit is
+part of the PR, so it cannot wait on that PR's merge.
+
+
+## Allowed moves
+ONLY append to the decisions-ledger. Do NOT edit code to make a check pass — a failing
+check means an earlier task is wrong; STOP and fix it there, then re-run.
+
+
+## STOP triggers
+- Any check below fails — STOP and fix the responsible task; do NOT record a partial pass.
+- Seq REGRESSES or a value is REUSED after restart — that breaks the ADR-0017 cursor contract
+  outright; STOP and escalate.
+- The node cannot be started with the hive unreachable — that breaks the offline-first constraint;
+  STOP.
+
+
+## Manual verification (record in decisions-ledger)
+**SC1 — task lifecycle observable BOTH ways**
+SC1 has two clauses — journaled events AND observability via the subscription endpoint — and task 006
+proves only the first (it queries sqlite directly). This task owns SC1 outright so that both halves
+are proved together on a live node, which is also the only place the endpoint exists.
+1. `curl -N http://<node>/api/events` in one shell.
+2. In another: create a task, move it, delete it.
+3. Assert the SSE stream shows `task_created` → `task_status_changed` → `task_deleted`, each carrying
+   its seq, in ascending order.
+4. Then `sqlite3 $VK_DATABASE_PATH "select seq, event_type from event_journal where event_type like 'task_%' order by seq"`
+   shows the same three rows. Paste both transcripts — the SSE one and the sqlite one.
+
+**SC5 — restart durability**
+1. On the running node, generate several events; record the highest seq:
+   `sqlite3 $VK_DATABASE_PATH "select max(seq) from event_journal"`.
+2. Hard-kill the node process (`kill -9 <pid>` — not a graceful stop; the point is crash durability).
+3. Restart it. Confirm the journal still holds the pre-kill rows and that they are REPLAYABLE:
+   `curl -N "http://<node>/api/events?cursor=0"` returns them.
+4. Emit a new event and assert its seq is strictly greater than the pre-kill maximum — no reuse, no
+   regression. Paste all four outputs.
+
+**SC8 — offline coverage (the full matrix, with the hive unreachable)**
+Make the hive unreachable (stop it, or point `VK_HIVE_URL` at a dead address), then re-verify each of
+SC1, SC2, SC4, and SC6 exactly as their own tasks specify:
+- SC1: create / move / delete a task → three `task_%` rows in seq order.
+- SC2: run an attempt to completion → `attempt_started` then a terminal event, carrying task id,
+  attempt id, and executor identity.
+- SC4: subscribe, disconnect, emit N, resubscribe with the last-seen cursor → nothing skipped.
+- SC6: move a task → the trigger hook's log line appears; restart → the cursor advances rather than
+  resetting.
+Paste each transcript. SC8 passes only when all four hold offline.
+
+**TS6 — deployed verify_cmd**
+Run `wai-verify.sh vk-swarm-event-bus` against the deployed FEATURE-BRANCH build and paste the
+result, together with the exact commit SHA that was deployed. The spec's `verify_cmd` is:
+`sqlite3 ${VK_DATABASE_PATH:-$HOME/.local/share/vibe-kanban/db.sqlite} "select 1 from event_journal where event_type like 'task_%' limit 1" | grep -q 1`
+
+Deliberately NOT "after merge and deploy of `main`". This task's commit is part of the PR being
+merged, so it cannot contain evidence that only exists after that merge completes — an earlier draft
+asked for exactly that and was unsatisfiable. A deployed feature-branch build with its SHA recorded
+satisfies the spec's post-deploy intent: what the spec cares about is that the schema and emission
+work on real hardware, not which branch the binary was built from. Any main-only re-verification
+belongs on a post-merge operational checklist that does not gate this PR.
+
+
+## Done when
+`WAI_TYPECHECK_CMD="cd <dir> && <typecheck>" WAI_TEST_CMD="cd <dir> && <test>" bash ~/.claude/wai/scripts/task-gate.sh vk-swarm-event-bus 012` exits 0

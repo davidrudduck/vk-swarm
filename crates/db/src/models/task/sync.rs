@@ -13,6 +13,8 @@ use sqlx::{Executor, Sqlite, SqlitePool};
 use uuid::Uuid;
 
 use super::{SyncTask, Task, TaskStatus};
+use crate::models::event::NodeEvent;
+use crate::models::event_journal;
 
 impl Task {
     /// Sync a task from a shared task.
@@ -249,6 +251,7 @@ impl Task {
 
     /// Upsert a remote task from the Hive.
     /// Returns the updated task, or the existing task if the remote version is stale.
+    /// Emits `task_created` on insert, `task_status_changed` on status change (only), or nothing.
     #[allow(clippy::too_many_arguments)]
     pub async fn upsert_remote_task(
         pool: &SqlitePool,
@@ -277,6 +280,26 @@ impl Task {
         {
             return Ok(existing);
         }
+
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+        // Probe: read existence and old status inside the write transaction (task 022).
+        // BEGIN IMMEDIATE takes SQLite's RESERVED (write) lock at BEGIN, so this transaction never
+        // holds a read snapshot it must later upgrade — the SQLITE_BUSY_SNAPSHOT (517) class that a
+        // deferred SELECT-first transaction earns is structurally gone, and contention surfaces at
+        // BEGIN as plain SQLITE_BUSY, which busy_timeout retries.
+        // The probe must be a READ: a write probe (attempt 1 used a self-assignment UPDATE) fires the
+        // SQLite update hook installed on every production pool connection
+        // (`crates/services/src/services/events.rs:153`, `HookTables` includes `tasks` at
+        // `crates/services/src/services/events/types.rs:26`), producing false SSE record-patches and
+        // leaving a committed row-write on paths that must write nothing.
+        let probe: Option<(Uuid, TaskStatus)> = sqlx::query_as::<_, (Uuid, TaskStatus)>(
+            "SELECT id, status FROM tasks WHERE shared_task_id = ?",
+        )
+        .bind(shared_task_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
         let now = Utc::now();
         let result = sqlx::query_as!(
             Task,
@@ -334,10 +357,41 @@ impl Task {
             activity_at,
             archived_at
         )
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        // If update was skipped (stale version), return the existing task
+        // Emit events based on the four discriminated cases (task 022).
+        match (&probe, &result) {
+            // Case 1: probe None, upsert returned Some(task) → insert, emit TaskCreated
+            (None, Some(task)) => {
+                let event = NodeEvent::TaskCreated {
+                    task_id: task.id,
+                    project_id: task.project_id,
+                };
+                event_journal::append(&mut *tx, &event)
+                    .await
+                    .map_err(sqlx::Error::from)?;
+            }
+            // Case 2: probe Some, upsert returned Some, status changed → emit TaskStatusChanged
+            (Some((_, old_status)), Some(task)) if old_status != &task.status => {
+                let event = NodeEvent::TaskStatusChanged {
+                    task_id: task.id,
+                    old_status: old_status.clone(),
+                    new_status: task.status.clone(),
+                };
+                event_journal::append(&mut *tx, &event)
+                    .await
+                    .map_err(sqlx::Error::from)?;
+            }
+            // Case 3: probe Some, upsert returned Some, status equal → emit nothing
+            (Some(_), Some(_)) => {}
+            // Case 4: upsert returned None (version stale) → emit nothing
+            (_, None) => {}
+        }
+
+        tx.commit().await?;
+
+        // If update was skipped (stale version), return the existing task (stale-skip fallback)
         if let Some(task) = result {
             Ok(task)
         } else {
@@ -1922,5 +1976,528 @@ mod tests {
             .unwrap();
         assert_eq!(after.title, "v2", "clean path still applies");
         assert_eq!(after.remote_version, 2);
+    }
+}
+
+#[cfg(test)]
+mod sync_event_tests {
+    use super::*;
+    use crate::models::{
+        node_outbox::{NewOutboxOp, OutboxRepository},
+        project::{CreateProject, Project},
+        task::{TaskStatus, tests::setup_test_pool},
+    };
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn upsert_insert_emits_task_created() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
+
+        let local_id = Uuid::new_v4();
+        let shared_task_id = Uuid::new_v4();
+
+        // Upsert a fresh task (insert path)
+        let task = Task::upsert_remote_task(
+            &pool,
+            local_id,
+            project_id,
+            shared_task_id,
+            "New Task".to_string(),
+            None,
+            TaskStatus::Todo,
+            None,
+            None,
+            None,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Assert exactly one task_created event exists with matching ids
+        let events: Vec<(String, String)> = sqlx::query_as(
+            "SELECT event_type, payload FROM event_journal WHERE event_type = 'task_created'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(events.len(), 1, "exactly one task_created event");
+        let payload: serde_json::Value =
+            serde_json::from_str(&events[0].1).expect("valid JSON payload");
+        assert_eq!(
+            payload["task_id"],
+            serde_json::json!(task.id.to_string()),
+            "payload task_id matches"
+        );
+        assert_eq!(
+            payload["project_id"],
+            serde_json::json!(project_id.to_string()),
+            "payload project_id matches"
+        );
+    }
+
+    #[tokio::test]
+    async fn upsert_status_change_emits_task_status_changed() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
+
+        let local_id = Uuid::new_v4();
+        let shared_task_id = Uuid::new_v4();
+
+        // First upsert with status=todo
+        let _task1 = Task::upsert_remote_task(
+            &pool,
+            local_id,
+            project_id,
+            shared_task_id,
+            "Task".to_string(),
+            None,
+            TaskStatus::Todo,
+            None,
+            None,
+            None,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Second upsert with version+1 and status=inprogress
+        let task2 = Task::upsert_remote_task(
+            &pool,
+            local_id,
+            project_id,
+            shared_task_id,
+            "Task".to_string(),
+            None,
+            TaskStatus::InProgress,
+            None,
+            None,
+            None,
+            2,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Assert exactly one task_status_changed event with old=todo, new=inprogress
+        let events: Vec<(String, String)> = sqlx::query_as(
+            "SELECT event_type, payload FROM event_journal WHERE event_type = 'task_status_changed'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(events.len(), 1, "exactly one task_status_changed event");
+        let payload: serde_json::Value =
+            serde_json::from_str(&events[0].1).expect("valid JSON payload");
+        assert_eq!(payload["old_status"], "todo", "old_status is todo");
+        assert_eq!(
+            payload["new_status"], "inprogress",
+            "new_status is inprogress"
+        );
+        assert_eq!(
+            payload["task_id"],
+            serde_json::json!(task2.id.to_string()),
+            "task_id matches"
+        );
+    }
+
+    #[tokio::test]
+    async fn upsert_without_status_change_emits_nothing() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
+
+        let local_id = Uuid::new_v4();
+        let shared_task_id = Uuid::new_v4();
+
+        // First upsert
+        let _task1 = Task::upsert_remote_task(
+            &pool,
+            local_id,
+            project_id,
+            shared_task_id,
+            "Task v1".to_string(),
+            None,
+            TaskStatus::Todo,
+            None,
+            None,
+            None,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Second upsert with version+1, NEW title, SAME status
+        let task2 = Task::upsert_remote_task(
+            &pool,
+            local_id,
+            project_id,
+            shared_task_id,
+            "Task v2".to_string(),
+            None,
+            TaskStatus::Todo,
+            None,
+            None,
+            None,
+            2,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Assert title was updated
+        assert_eq!(task2.title, "Task v2", "title was updated");
+
+        // Assert no task_status_changed event was created
+        let status_change_events: Vec<(String,)> = sqlx::query_as(
+            "SELECT event_type FROM event_journal WHERE event_type = 'task_status_changed'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            status_change_events.len(),
+            0,
+            "no task_status_changed event for non-status changes"
+        );
+
+        // Assert no new task_created event was created
+        let task_created_events: Vec<(String,)> = sqlx::query_as(
+            "SELECT event_type FROM event_journal WHERE event_type = 'task_created'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            task_created_events.len(),
+            1,
+            "only the initial task_created event, no new one"
+        );
+    }
+
+    #[tokio::test]
+    async fn version_stale_upsert_emits_nothing() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
+
+        let local_id = Uuid::new_v4();
+        let shared_task_id = Uuid::new_v4();
+
+        // First upsert with remote_version=2
+        let task1 = Task::upsert_remote_task(
+            &pool,
+            local_id,
+            project_id,
+            shared_task_id,
+            "Task".to_string(),
+            None,
+            TaskStatus::Todo,
+            None,
+            None,
+            None,
+            2,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Clear event_journal to isolate this test from baseline
+        sqlx::query("DELETE FROM event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Second upsert with SAME remote_version (stale, should skip)
+        let task2 = Task::upsert_remote_task(
+            &pool,
+            local_id,
+            project_id,
+            shared_task_id,
+            "Task updated".to_string(),
+            None,
+            TaskStatus::InProgress,
+            None,
+            None,
+            None,
+            2, // Same version
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Assert returned task is the existing one
+        assert_eq!(task2.id, task1.id, "returned existing task");
+
+        // Assert no events were created
+        let all_events: Vec<(String,)> = sqlx::query_as("SELECT event_type FROM event_journal")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(all_events.len(), 0, "stale upsert emits no events");
+    }
+
+    #[tokio::test]
+    async fn dirty_guard_skip_emits_nothing() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
+
+        let local_id = Uuid::new_v4();
+        let shared_task_id = Uuid::new_v4();
+
+        // Create the linked task
+        let task1 = Task::upsert_remote_task(
+            &pool,
+            local_id,
+            project_id,
+            shared_task_id,
+            "Task".to_string(),
+            None,
+            TaskStatus::Todo,
+            None,
+            None,
+            None,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Enqueue an unacked outbox op for the task (dirty-guard trigger)
+        let op = NewOutboxOp {
+            op_type: "task.upsert".to_string(),
+            entity_type: "task".to_string(),
+            entity_id: task1.id,
+            payload: serde_json::json!({"title": task1.title}),
+            idempotency_key: format!("task:{}:test", task1.id),
+            fencing_token: None,
+        };
+        OutboxRepository::enqueue_op(&pool, op).await.unwrap();
+
+        // Clear event_journal to isolate this test from baseline
+        sqlx::query("DELETE FROM event_journal")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Upsert while dirty-guard is active (should skip)
+        let task2 = Task::upsert_remote_task(
+            &pool,
+            local_id,
+            project_id,
+            shared_task_id,
+            "Task updated".to_string(),
+            None,
+            TaskStatus::InProgress,
+            None,
+            None,
+            None,
+            2,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Assert returned task is the existing one (dirty-guard skipped the update)
+        assert_eq!(
+            task2.id, task1.id,
+            "returned existing task (dirty-guard early return)"
+        );
+        assert_eq!(
+            task2.title, "Task",
+            "title unchanged (dirty-guard skipped update)"
+        );
+
+        // Assert no events were created
+        let all_events: Vec<(String,)> = sqlx::query_as("SELECT event_type FROM event_journal")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(all_events.len(), 0, "dirty-guard skip emits no events");
+    }
+
+    /// Regression guard for the SQLITE_BUSY_SNAPSHOT (517) class: if the transaction is ever
+    /// reverted to a deferred `begin()` with a read as its first statement, concurrent upserts on
+    /// the same row take a read snapshot and fail to upgrade. Only concurrency surfaces that.
+    /// Shaped like production: a fresh `local_id` per writer and alternating statuses, so the
+    /// ON CONFLICT arm resolves against a row the losing writer does not own the PK of.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_upserts_serialize_without_errors() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
+
+        let shared_task_id = Uuid::new_v4();
+
+        // 16 concurrent upserts of the SAME shared_task_id, in PRODUCTION shape: every caller mints
+        // a FRESH `local_id` (the remote-task handlers, the share processor and the node_runner
+        // reconcile leg all pass `Uuid::new_v4()` per call), so a losing racer's INSERT resolves via
+        // ON CONFLICT(shared_task_id) against a row whose PRIMARY KEY it does not share. Statuses
+        // alternate by index so the status-changed path is exercised under contention too.
+        let mut handles = Vec::new();
+        for version in 1..=16i64 {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                let local_id = Uuid::new_v4();
+                let status = if version % 2 == 0 {
+                    TaskStatus::Todo
+                } else {
+                    TaskStatus::InProgress
+                };
+                Task::upsert_remote_task(
+                    &pool,
+                    local_id,
+                    project_id,
+                    shared_task_id,
+                    format!("Task v{}", version),
+                    None,
+                    status,
+                    None,
+                    None,
+                    None,
+                    version,
+                    None,
+                    None,
+                )
+                .await
+            }));
+        }
+
+        let mut errors: Vec<String> = Vec::new();
+        for handle in handles {
+            match handle.await.expect("upsert task panicked") {
+                Ok(_) => {}
+                Err(e) => errors.push(format!("{:?}", e)),
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "all concurrent upserts must succeed, got {} error(s): {:?}",
+            errors.len(),
+            errors
+        );
+
+        // Exactly one row was inserted, so exactly one task_created event.
+        let created_events: Vec<(String,)> = sqlx::query_as(
+            "SELECT event_type FROM event_journal WHERE event_type = 'task_created'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            created_events.len(),
+            1,
+            "exactly one task_created across 16 concurrent upserts"
+        );
+
+        // How MANY task_status_changed rows land is nondeterministic (it depends on the interleaving
+        // and on which versions win the version-monotonic guard), so the count is deliberately not
+        // asserted. What IS deterministic: every row that lands must record a REAL transition. An
+        // old_status equal to new_status would mean the probe read a status that was not the one the
+        // upsert overwrote — i.e. the probe escaped the write transaction.
+        let status_change_payloads: Vec<(String,)> = sqlx::query_as(
+            "SELECT payload FROM event_journal WHERE event_type = 'task_status_changed'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        for (payload,) in &status_change_payloads {
+            let parsed: serde_json::Value =
+                serde_json::from_str(payload).expect("valid JSON payload");
+            assert_ne!(
+                parsed["old_status"], parsed["new_status"],
+                "task_status_changed must record a real transition, got {}",
+                payload
+            );
+        }
     }
 }

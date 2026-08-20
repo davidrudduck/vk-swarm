@@ -1,0 +1,806 @@
+//! Trigger hooks for reactive processing of node events.
+//!
+//! Trigger hooks consume from the event journal and execute registered hooks on matching events.
+//! Each hook maintains a persisted cursor to support at-least-once delivery across restarts.
+//!
+//! The `needs_rebootstrap` flag is set by compaction when it deletes journal entries before a
+//! hook's cursor. On restart, the hook must observe the flag, resume from the journal's current
+//! low-water mark (instead of its stale cursor), log the loss, and clear the flag.
+
+use async_trait::async_trait;
+use db::models::event::{NodeEvent, SequencedEvent};
+use db::models::trigger_cursor;
+use sqlx::SqlitePool;
+use std::sync::Arc;
+use tracing::{info, warn};
+
+/// Trait for reactive event processing hooks.
+///
+/// A trigger hook matches specific event types and executes a side effect when an event matches.
+/// Implementations are responsible for idempotency — if the hook fires and then crashes before
+/// its cursor persists, the event will be replayed and must be handled gracefully.
+#[async_trait]
+pub trait TriggerHook: Send + Sync {
+    /// The stable name of this hook, used as the primary key in `trigger_cursors`.
+    ///
+    /// Hook names MUST be unique across the system and stable across restarts.
+    fn name(&self) -> &'static str;
+
+    /// Test whether a specific event matches this hook's filter criteria.
+    ///
+    /// Must return quickly (no I/O). Only matching events are passed to `fire`.
+    fn matches(&self, event: &NodeEvent) -> bool;
+
+    /// Execute the hook on a matching event.
+    ///
+    /// This is the side effect: logging, state mutations, triggering further operations, etc.
+    /// Must be idempotent — if it executes twice on the same event (due to crash-before-persist),
+    /// both executions must result in the same observable state.
+    async fn fire(&self, event: SequencedEvent);
+}
+
+/// Registry of active trigger hooks.
+pub struct TriggerHookRegistry {
+    hooks: Vec<Arc<dyn TriggerHook>>,
+}
+
+impl TriggerHookRegistry {
+    /// Create a new registry with the provided hooks.
+    pub fn new(hooks: Vec<Arc<dyn TriggerHook>>) -> Self {
+        Self { hooks }
+    }
+
+    /// Get all registered hooks.
+    pub fn all(&self) -> &[Arc<dyn TriggerHook>] {
+        &self.hooks
+    }
+}
+
+/// A trigger hook that logs when a task's status changes.
+///
+/// This hook is a proof-of-concept observable side effect for SC6.
+pub struct TaskStatusChangedHook;
+
+#[async_trait]
+impl TriggerHook for TaskStatusChangedHook {
+    fn name(&self) -> &'static str {
+        "task_status_changed_logger"
+    }
+
+    fn matches(&self, event: &NodeEvent) -> bool {
+        matches!(event, NodeEvent::TaskStatusChanged { .. })
+    }
+
+    async fn fire(&self, event: SequencedEvent) {
+        if let NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status,
+            new_status,
+        } = &event.event
+        {
+            info!(
+                task_id = %task_id,
+                old_status = ?old_status,
+                new_status = ?new_status,
+                seq = event.seq,
+                "task_status_changed_event"
+            );
+        }
+    }
+}
+
+/// Run a single trigger hook's processing loop.
+///
+/// This function:
+/// 1. Loads the hook's cursor from persistent storage (0 if absent)
+/// 2. Checks for the rebootstrap flag (set if journal compaction deleted unprocessed events);
+///    if set, resumes from the journal's low-water mark and clears the flag
+/// 3. Subscribes to the event stream starting from the cursor
+/// 4. For each event:
+///    - If the hook matches the event: calls fire(), then persists the cursor
+///    - If the hook doesn't match: immediately persists the cursor (for compaction floor)
+///
+/// Note: This is designed to be spawned as a long-lived background task.
+pub async fn run_hook(
+    pool: SqlitePool,
+    hook: Arc<dyn TriggerHook>,
+    event_bus: Arc<crate::services::event_bus::EventBus>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let hook_name = hook.name();
+
+    // Load the cursor and check the rebootstrap flag
+    let (mut cursor, needs_rebootstrap) = trigger_cursor::get_with_flag(&pool, hook_name).await?;
+
+    // If the flag is set, the hard cap deleted unprocessed events
+    if needs_rebootstrap {
+        warn!(
+            hook_name = %hook_name,
+            lost_cursor = cursor,
+            "hook needs rebootstrap: journal compaction deleted events before cursor"
+        );
+
+        // Find the journal's current low-water mark
+        let new_min = db::models::event_journal::low_water_mark(&pool).await?;
+
+        // Compaction flags only cursors that actually lost events (more than one below the
+        // new minimum; a cursor at MIN(seq) - 1 still resumes gaplessly and is not flagged).
+        // `subscribe_from` replays `seq > cursor` exclusively, so the reset cursor must sit
+        // one BELOW the low-water mark for the first retained event to be delivered.
+        // `seq` is INTEGER PRIMARY KEY AUTOINCREMENT, so MIN(seq) >= 1 and this cannot go
+        // negative.
+        //
+        // Never move the cursor BACKWARDS: `set()` deliberately preserves the flag and a live
+        // runner never re-reads it, so a runner that was flagged mid-run, caught up, and then
+        // respawned would otherwise reset an already-advanced cursor to the low-water mark and
+        // mass-redeliver events it has processed.
+        cursor = cursor.max(new_min.map(|m| m - 1).unwrap_or(0));
+        info!(
+            hook_name = %hook_name,
+            // Exclusive cursor: replay begins at the next seq, i.e. the journal's low-water mark.
+            resumed_from_exclusive_seq = cursor,
+            "resuming from journal low-water mark after rebootstrap"
+        );
+
+        trigger_cursor::set(&pool, hook_name, cursor).await?;
+        // Clearing is a separate write: `set` deliberately leaves the flag alone. A crash
+        // between the two is safe — the flag survives and the next start re-runs the
+        // (idempotent) rebootstrap.
+        trigger_cursor::clear_rebootstrap(&pool, hook_name).await?;
+    }
+
+    // Subscribe to events starting from the cursor
+    let mut stream = event_bus.subscribe_from(cursor)?;
+
+    // Process events as they arrive
+    while let Some(result) = futures_util::stream::StreamExt::next(&mut stream).await {
+        let event = result?;
+
+        // Fire on a match, then persist; non-matching events advance the cursor too (for the
+        // compaction floor). One persist site — the at-least-once fire-before-persist ordering
+        // (D11) is unchanged.
+        if hook.matches(&event.event) {
+            hook.fire(event.clone()).await;
+        }
+        trigger_cursor::set(&pool, hook_name, event.seq).await?;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use db::test_utils::create_test_pool_with_migrations;
+    use std::sync::Mutex;
+    use tokio::time::{Duration, sleep};
+    use uuid::Uuid;
+
+    /// A test hook that records every fired event in a Vec.
+    struct RecordingHook {
+        name: &'static str,
+        match_type: &'static str,
+        fired_events: Arc<Mutex<Vec<SequencedEvent>>>,
+    }
+
+    impl RecordingHook {
+        fn new(name: &'static str, match_type: &'static str) -> Self {
+            Self {
+                name,
+                match_type,
+                fired_events: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn get_fired(&self) -> Vec<SequencedEvent> {
+            self.fired_events.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl TriggerHook for RecordingHook {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn matches(&self, event: &NodeEvent) -> bool {
+            event.event_type() == self.match_type
+        }
+
+        async fn fire(&self, event: SequencedEvent) {
+            self.fired_events.lock().unwrap().push(event);
+        }
+    }
+
+    /// The seqs a hook has fired on, in order. `SequencedEvent` is not `PartialEq`, and the
+    /// ordered seq list is what the delivery contract is actually about.
+    fn fired_seqs(hook: &RecordingHook) -> Vec<i64> {
+        hook.get_fired().iter().map(|e| e.seq).collect()
+    }
+
+    async fn commit_event(pool: &SqlitePool, event: NodeEvent) -> i64 {
+        let mut tx = pool.begin().await.unwrap();
+        let seq = db::models::event_journal::append(&mut *tx, &event)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        seq
+    }
+
+    async fn create_events(pool: &SqlitePool) -> Vec<i64> {
+        let mut seqs = Vec::new();
+
+        // Event 1: task_created
+        let task_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let event1 = NodeEvent::TaskCreated {
+            task_id,
+            project_id,
+        };
+        let mut tx = pool.begin().await.unwrap();
+        let seq = db::models::event_journal::append(&mut *tx, &event1)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        seqs.push(seq);
+
+        // Event 2: task_status_changed (MATCHES)
+        let event2 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::Todo,
+            new_status: db::models::task::TaskStatus::InProgress,
+        };
+        let mut tx = pool.begin().await.unwrap();
+        let seq = db::models::event_journal::append(&mut *tx, &event2)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        seqs.push(seq);
+
+        // Event 3: task_status_changed (MATCHES)
+        let event3 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::InProgress,
+            new_status: db::models::task::TaskStatus::InReview,
+        };
+        let mut tx = pool.begin().await.unwrap();
+        let seq = db::models::event_journal::append(&mut *tx, &event3)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        seqs.push(seq);
+
+        seqs
+    }
+
+    #[tokio::test]
+    async fn hook_fires_only_on_matching_events() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+
+        // Create a hook that only matches task_status_changed
+        let hook = Arc::new(RecordingHook::new(
+            "test_hook_matching",
+            "task_status_changed",
+        ));
+
+        // Create test events
+        let _seqs = create_events(&pool).await;
+
+        // Run the hook from the start
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        // Give the hook time to process
+        sleep(Duration::from_millis(500)).await;
+
+        // Assert the hook only fired for task_status_changed events (not task_created)
+        let fired = hook.get_fired();
+        assert_eq!(fired.len(), 2, "Hook should fire twice (on seqs 2 and 3)");
+        assert!(
+            matches!(fired[0].event, NodeEvent::TaskStatusChanged { .. }),
+            "First fired event must be TaskStatusChanged"
+        );
+        assert!(
+            matches!(fired[1].event, NodeEvent::TaskStatusChanged { .. }),
+            "Second fired event must be TaskStatusChanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn cursor_is_persisted_after_each_fire() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+
+        let hook = Arc::new(RecordingHook::new(
+            "test_hook_cursor",
+            "task_status_changed",
+        ));
+
+        let seqs = create_events(&pool).await;
+
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(500)).await;
+
+        // The hook should have fired for events at seqs[1] and seqs[2]
+        // and persisted cursors at those seqs
+        let fired = hook.get_fired();
+        assert_eq!(fired.len(), 2);
+
+        // Check that the cursor was persisted past the last fired event
+        let persisted_cursor = trigger_cursor::get(&pool, "test_hook_cursor")
+            .await
+            .unwrap();
+        assert_eq!(
+            persisted_cursor, seqs[2],
+            "Cursor should be persisted at the seq of the last matched event"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_resumes_from_persisted_cursor_without_loss() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+
+        let hook = Arc::new(RecordingHook::new(
+            "test_hook_restart",
+            "task_status_changed",
+        ));
+
+        // Phase 1: Create events 1-3 and process them
+        let _seqs = create_events(&pool).await;
+
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(300)).await;
+
+        // Verify the hook fired for events 2 and 3
+        let fired_phase1 = hook.get_fired();
+        assert_eq!(fired_phase1.len(), 2);
+
+        // Kill the hook
+        handle.abort();
+        sleep(Duration::from_millis(100)).await;
+
+        // Phase 2: Create events 4-6 while hook is DOWN
+        let task_id = Uuid::new_v4();
+        let event4 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::InReview,
+            new_status: db::models::task::TaskStatus::Done,
+        };
+        let mut tx = pool.begin().await.unwrap();
+        let _ = db::models::event_journal::append(&mut *tx, &event4)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let event5 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::Done,
+            new_status: db::models::task::TaskStatus::Todo,
+        };
+        let mut tx = pool.begin().await.unwrap();
+        let _ = db::models::event_journal::append(&mut *tx, &event5)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let event6 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::Todo,
+            new_status: db::models::task::TaskStatus::InProgress,
+        };
+        let mut tx = pool.begin().await.unwrap();
+        let _ = db::models::event_journal::append(&mut *tx, &event6)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Clear the fired events list to track only new firings
+        hook.fired_events.lock().unwrap().clear();
+
+        // Phase 3: Start a NEW runner for the same hook
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(300)).await;
+
+        // Assert the hook sees events 4, 5, 6 (no loss)
+        let fired_phase2 = hook.get_fired();
+        assert_eq!(
+            fired_phase2.len(),
+            3,
+            "Hook should fire for the 3 events that were created while it was down"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn at_least_once_tolerates_duplicate_delivery() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+
+        let hook = Arc::new(RecordingHook::new(
+            "test_hook_at_least_once",
+            "task_status_changed",
+        ));
+
+        // Exactly ONE matching event.
+        let task_id = Uuid::new_v4();
+        let seq1 = commit_event(
+            &pool,
+            NodeEvent::TaskStatusChanged {
+                task_id,
+                old_status: db::models::task::TaskStatus::Todo,
+                new_status: db::models::task::TaskStatus::InProgress,
+            },
+        )
+        .await;
+
+        // Fault-inject the cursor persist deterministically. `get_with_flag` is a SELECT, so the
+        // runner still reaches the replay; only the write fails. One DDL statement per call —
+        // sqlx prepares a single statement, and a half-applied pair would hide the failure.
+        for ddl in [
+            "CREATE TRIGGER poison_cursor_insert BEFORE INSERT ON trigger_cursors \
+             BEGIN SELECT RAISE(ABORT, 'injected cursor-write failure'); END",
+            "CREATE TRIGGER poison_cursor_update BEFORE UPDATE ON trigger_cursors \
+             BEGIN SELECT RAISE(ABORT, 'injected cursor-write failure'); END",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+
+        // Phase 1: the runner fires, then fails to persist, and dies. `run_hook`'s error is not
+        // `Send`, so map it to a String to make the JoinHandle output awaitable.
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle =
+            tokio::spawn(async move { run_hook(pool_clone, hook_clone, event_bus_clone).await });
+
+        let outcome = handle.await.unwrap();
+        assert!(
+            outcome.is_err(),
+            "runner must surface the injected cursor-write failure, got {outcome:?}"
+        );
+        // The D11 ordering pin: the hook fired BEFORE the persist failed. Under a
+        // persist-then-fire ordering the write aborts first and this list is empty.
+        assert_eq!(
+            fired_seqs(&hook),
+            vec![seq1],
+            "fire must happen before the cursor persist (at-least-once, never at-most-once)"
+        );
+
+        for ddl in [
+            "DROP TRIGGER poison_cursor_insert",
+            "DROP TRIGGER poison_cursor_update",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+
+        // Phase 2: restart. The poisoned INSERT never landed, so the cursor is still 0 and the
+        // same event is delivered a second time. NOTE: the fired list is deliberately NOT
+        // cleared — the duplicate is the whole point.
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            fired_seqs(&hook),
+            vec![seq1, seq1],
+            "the same event must be re-delivered after a crash between fire and persist"
+        );
+        let persisted_cursor = trigger_cursor::get(&pool, "test_hook_at_least_once")
+            .await
+            .unwrap();
+        assert_eq!(
+            persisted_cursor, seq1,
+            "cursor persists once the injected failure is removed"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn unknown_hook_starts_at_cursor_zero() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+
+        // Create some events
+        let task_id = Uuid::new_v4();
+        let event1 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::Todo,
+            new_status: db::models::task::TaskStatus::InProgress,
+        };
+        let _ = commit_event(&pool, event1).await;
+
+        let event2 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::InProgress,
+            new_status: db::models::task::TaskStatus::InReview,
+        };
+        let _ = commit_event(&pool, event2).await;
+
+        // Now create a NEW hook that has never run before
+        let hook = Arc::new(RecordingHook::new("brand_new_hook", "task_status_changed"));
+
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(300)).await;
+
+        // The hook should replay both events (starting from cursor 0)
+        let fired = hook.get_fired();
+        assert_eq!(
+            fired.len(),
+            2,
+            "Unknown hook should replay from the beginning (cursor 0)"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn cursor_advances_past_non_matching_events() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+
+        let hook = Arc::new(RecordingHook::new(
+            "test_hook_non_matching",
+            "task_status_changed",
+        ));
+
+        let task_id = Uuid::new_v4();
+
+        // Event 1: MATCHING task_status_changed
+        let event1 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::Todo,
+            new_status: db::models::task::TaskStatus::InProgress,
+        };
+        let _seq1 = commit_event(&pool, event1).await;
+
+        // Events 2-6: NON-MATCHING task_created
+        let mut seq_last = _seq1;
+        for _ in 0..5 {
+            let non_matching = NodeEvent::TaskCreated {
+                task_id: Uuid::new_v4(),
+                project_id: Uuid::new_v4(),
+            };
+            seq_last = commit_event(&pool, non_matching).await;
+        }
+
+        // Run the hook
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(300)).await;
+
+        // The hook should have fired once (for event 1)
+        let fired = hook.get_fired();
+        assert_eq!(fired.len(), 1);
+
+        // But the cursor should have advanced PAST all 6 events
+        let persisted_cursor = trigger_cursor::get(&pool, "test_hook_non_matching")
+            .await
+            .unwrap();
+        assert_eq!(
+            persisted_cursor, seq_last,
+            "Cursor must advance past non-matching events"
+        );
+
+        // Now drop the hook and restart it
+        handle.abort();
+        sleep(Duration::from_millis(100)).await;
+        hook.fired_events.lock().unwrap().clear();
+
+        // Start a new runner for the same hook
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(300)).await;
+
+        // The hook should NOT replay those 6 events — it should start fresh
+        let fired_after_restart = hook.get_fired();
+        assert_eq!(
+            fired_after_restart.len(),
+            0,
+            "After restart, hook should not replay non-matching events"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn rebootstrap_flag_is_surfaced_and_cleared() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+
+        let hook = Arc::new(RecordingHook::new(
+            "test_hook_rebootstrap",
+            "task_status_changed",
+        ));
+
+        // Create some events
+        let task_id = Uuid::new_v4();
+        let event1 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::Todo,
+            new_status: db::models::task::TaskStatus::InProgress,
+        };
+        let seq1 = commit_event(&pool, event1).await;
+
+        // Simulate the hard cap: set needs_rebootstrap = 1 at an old cursor
+        sqlx::query(
+            r#"INSERT INTO trigger_cursors (hook_name, last_processed_seq, needs_rebootstrap, updated_at)
+               VALUES (?, ?, 1, datetime('now', 'subsec'))"#,
+        )
+        .bind("test_hook_rebootstrap")
+        .bind(0) // Stale cursor
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Create more events AFTER the hardcap occurred
+        let event2 = NodeEvent::TaskStatusChanged {
+            task_id,
+            old_status: db::models::task::TaskStatus::InProgress,
+            new_status: db::models::task::TaskStatus::InReview,
+        };
+        let seq2 = commit_event(&pool, event2).await;
+
+        // Now run the hook
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(300)).await;
+
+        // Nothing was deleted, so BOTH events survive. The rebootstrap resume is EXCLUSIVE:
+        // the cursor lands one below MIN(seq), so the event at the low-water mark is delivered
+        // rather than skipped.
+        assert_eq!(
+            fired_seqs(&hook),
+            vec![seq1, seq2],
+            "Hook must fire for the surviving low-water event AND the newer one, in order"
+        );
+
+        let (cursor, flag) = trigger_cursor::get_with_flag(&pool, "test_hook_rebootstrap")
+            .await
+            .unwrap();
+        // Load-bearing: `set` no longer clears the flag, so this passes only if
+        // `clear_rebootstrap` actually ran.
+        assert!(!flag, "Rebootstrap flag should be cleared after recovery");
+        assert_eq!(
+            cursor, seq2,
+            "Cursor should reflect the last processed event"
+        );
+
+        handle.abort();
+    }
+
+    /// Regression: a stale rebootstrap flag must never move an already-advanced cursor
+    /// BACKWARDS. `set` preserves the flag and a live runner never re-reads it, so a runner
+    /// flagged mid-run that caught up and then respawned would otherwise reset its cursor to
+    /// the low-water mark and mass-redeliver processed events.
+    #[tokio::test]
+    async fn rebootstrap_never_moves_an_advanced_cursor_backwards() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+
+        let hook = Arc::new(RecordingHook::new(
+            "test_hook_no_regress",
+            "task_status_changed",
+        ));
+
+        // Two journaled events; the journal's low-water mark is seq1.
+        let task_id = Uuid::new_v4();
+        let seq1 = commit_event(
+            &pool,
+            NodeEvent::TaskStatusChanged {
+                task_id,
+                old_status: db::models::task::TaskStatus::Todo,
+                new_status: db::models::task::TaskStatus::InProgress,
+            },
+        )
+        .await;
+        let seq2 = commit_event(
+            &pool,
+            NodeEvent::TaskStatusChanged {
+                task_id,
+                old_status: db::models::task::TaskStatus::InProgress,
+                new_status: db::models::task::TaskStatus::InReview,
+            },
+        )
+        .await;
+
+        // Stale flag scenario: the flag is set but the cursor has ALREADY advanced past the
+        // low-water mark (the runner caught up after the hard-cap pass that flagged it).
+        sqlx::query(
+            r#"INSERT INTO trigger_cursors (hook_name, last_processed_seq, needs_rebootstrap, updated_at)
+               VALUES (?, ?, 1, datetime('now', 'subsec'))"#,
+        )
+        .bind("test_hook_no_regress")
+        .bind(seq2)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(300)).await;
+
+        // The cursor stayed at seq2 (max of persisted vs low-water reset), so NEITHER event
+        // is redelivered.
+        assert_eq!(
+            fired_seqs(&hook),
+            Vec::<i64>::new(),
+            "an already-advanced cursor must not replay processed events (got redelivery of {:?}, low-water was {seq1})",
+            fired_seqs(&hook),
+        );
+
+        let (cursor, flag) = trigger_cursor::get_with_flag(&pool, "test_hook_no_regress")
+            .await
+            .unwrap();
+        assert!(
+            !flag,
+            "flag must still be cleared after the no-op rebootstrap"
+        );
+        assert_eq!(cursor, seq2, "cursor must not move backwards");
+
+        handle.abort();
+    }
+}

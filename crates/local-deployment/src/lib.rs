@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use db::DBService;
+use db::models::trigger_cursor;
 use deployment::{Deployment, DeploymentError, RemoteClientNotConfigured};
 use executors::profile::ExecutorConfigs;
 use services::services::{
@@ -11,6 +12,8 @@ use services::services::{
     connection_token::ConnectionTokenValidator,
     container::ContainerService,
     drafts::DraftsService,
+    event_bus::EventBus,
+    event_compaction::{EventCompaction, EventCompactionConfig},
     events::EventService,
     file_search_cache::FileSearchCache,
     filesystem::FilesystemService,
@@ -22,6 +25,7 @@ use services::services::{
     oauth_credentials::OAuthCredentials,
     remote_client::{RemoteClient, RemoteClientError},
     share::{RemoteSyncHandle, ShareConfig, SharePublisher},
+    trigger_hooks::{TaskStatusChangedHook, TriggerHookRegistry},
 };
 use tokio::sync::{Mutex, RwLock};
 use utils::{
@@ -67,6 +71,63 @@ pub struct LocalDeployment {
     node_cache_sync_started: Arc<Mutex<bool>>,
     /// Timestamp of the last VACUUM operation (for rate limiting)
     last_vacuum_time: Arc<RwLock<Option<std::time::Instant>>>,
+    /// The event bus for durable event streaming and replay-to-live subscriptions
+    event_bus: Arc<EventBus>,
+    /// Handles to the supervised trigger-hook runner tasks — one per registered hook.
+    ///
+    /// Retention does NOT keep the tasks alive: dropping a `JoinHandle` DETACHES the task, it does
+    /// not abort it. The handles are retained so a future shutdown path can `abort()` them and so
+    /// tests can observe that the runners were spawned at all. There is no deployment-wide
+    /// shutdown method today (see the STOP trigger recorded in the decisions-ledger); the only
+    /// background task this deployment can currently stop is the tailer, via
+    /// `event_bus().shutdown()`.
+    ///
+    /// `Arc<Vec<..>>` rather than `Vec<..>` because `LocalDeployment` derives `Clone` and
+    /// `JoinHandle` does not implement `Clone`.
+    #[allow(dead_code)]
+    trigger_hook_runner_handles: Arc<Vec<tokio::task::JoinHandle<()>>>,
+    /// Handle to the event compaction background service.
+    ///
+    /// Dropping this handle does NOT stop the compaction loop: the loop's `select!` keeps its
+    /// interval-tick arm after the command channel closes, so it runs until
+    /// `EventCompactionHandle::shutdown()` is called. Retained so that shutdown — and the
+    /// on-demand `compact_now()` used by this file's tests — remain reachable.
+    #[allow(dead_code)]
+    compaction_handle: services::services::event_compaction::EventCompactionHandle,
+}
+
+/// Default initial backoff before a dead trigger-hook runner is respawned.
+const TRIGGER_RUNNER_INITIAL_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Ceiling for the doubling trigger-hook runner respawn backoff.
+const TRIGGER_RUNNER_MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Broadcast channel capacity for the [`EventBus`] created at startup.
+const EVENT_BUS_BROADCAST_CAPACITY: usize = 64;
+
+/// Tunables for the background loops started by [`LocalDeployment::from_parts`].
+///
+/// Production always uses [`StartupTuning::default`]; the fields exist so this file's tests can
+/// drive the supervised respawn loop and the compaction loop on timescales a test can wait for,
+/// without touching process-global environment variables.
+#[derive(Clone, Debug)]
+pub(crate) struct StartupTuning {
+    /// First backoff after a trigger-hook runner dies, doubling up to `trigger_runner_max_backoff`.
+    trigger_runner_initial_backoff: std::time::Duration,
+    /// Ceiling for the doubling respawn backoff.
+    trigger_runner_max_backoff: std::time::Duration,
+    /// Configuration handed to the event compaction loop.
+    compaction: EventCompactionConfig,
+}
+
+impl Default for StartupTuning {
+    fn default() -> Self {
+        Self {
+            trigger_runner_initial_backoff: TRIGGER_RUNNER_INITIAL_BACKOFF,
+            trigger_runner_max_backoff: TRIGGER_RUNNER_MAX_BACKOFF,
+            compaction: EventCompactionConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -75,95 +136,30 @@ struct PendingHandoff {
     app_verifier: String,
 }
 
-#[async_trait]
-impl Deployment for LocalDeployment {
-    /// Creates and initializes a LocalDeployment with all core services, background tasks, and optional
-    /// remote/hive integrations configured from environment and persisted config.
+impl LocalDeployment {
+    /// Internal constructor seam: everything [`LocalDeployment::new`] does once the LIVE
+    /// `DBService` exists.
     ///
-    /// The function performs startup work such as loading and persisting configuration, initializing
-    /// the database (with event hooks), image and filesystem services, auth context, optional remote
-    /// clients (OAuth and API-key-based), node runner (when configured), and starts background tasks
-    /// like orphaned image cleanup and node cache synchronization when applicable.
+    /// `new()` owns the parts that must not run in a test — reading and rewriting the config file,
+    /// and opening the real database — and then delegates here. Tests construct the real
+    /// deployment through this seam against a migrated test pool, so the startup wiring itself
+    /// (event bus over the live pool, journal tailer, supervised trigger-hook runners, compaction
+    /// loop) is covered rather than re-implemented in the test module.
     ///
-    /// # Returns
-    ///
-    /// A fully initialized `LocalDeployment` on success.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # async fn run() {
-    /// use deployment::Deployment;
-    /// let deployment = local_deployment::LocalDeployment::new().await.unwrap();
-    /// assert!(!deployment.user_id().is_empty());
-    /// # }
-    /// ```
-    async fn new() -> Result<Self, DeploymentError> {
-        // Load config and OAuth credentials in parallel for faster startup
-        let config_path = config_path();
-        let creds_path = credentials_path();
-        let (mut raw_config, oauth_credentials) =
-            tokio::join!(load_config_from_file(&config_path), async {
-                let creds = Arc::new(OAuthCredentials::new(creds_path));
-                if let Err(e) = creds.load().await {
-                    tracing::warn!(?e, "failed to load OAuth credentials");
-                }
-                creds
-            });
-
-        let profiles = ExecutorConfigs::get_cached();
-        if !raw_config.onboarding_acknowledged
-            && let Ok(recommended_executor) = profiles.get_recommended_executor_profile().await
-        {
-            raw_config.executor_profile = recommended_executor;
-        }
-
-        // Check if app version has changed and set release notes flag
-        {
-            let current_version = utils::version::APP_VERSION;
-            let stored_version = raw_config.last_app_version.as_deref();
-
-            if stored_version != Some(current_version) {
-                // Show release notes only if this is an upgrade (not first install)
-                raw_config.show_release_notes = stored_version.is_some();
-                raw_config.last_app_version = Some(current_version.to_string());
-            }
-        }
-
-        // Always save config (may have been migrated or version updated)
-        save_config_to_file(&raw_config, &config_path).await?;
-
-        // Log storage locations at startup for debugging
-        tracing::info!(
-            database = %database_path().display(),
-            backups = %backup_dir().display(),
-            worktrees = %services::services::worktree_manager::WorktreeManager::get_worktree_base_dir().display(),
-            "Storage locations"
-        );
-
-        let config = Arc::new(RwLock::new(raw_config));
+    /// The public API is unchanged: this is `pub(crate)`, and the `Deployment` trait is untouched.
+    pub(crate) async fn from_parts(
+        db: DBService,
+        config: Arc<RwLock<Config>>,
+        oauth_credentials: Arc<OAuthCredentials>,
+        events_msg_store: Arc<MsgStore>,
+        events_entry_count: Arc<RwLock<usize>>,
+        tuning: StartupTuning,
+    ) -> Result<Self, DeploymentError> {
         // Generate a unique user ID for this deployment
         let user_id = Uuid::new_v4().to_string();
         let git = GitService::new();
         let msg_stores = Arc::new(RwLock::new(HashMap::new()));
         let filesystem = FilesystemService::new();
-
-        // Create shared components for EventService
-        let events_msg_store = Arc::new(MsgStore::new());
-        let events_entry_count = Arc::new(RwLock::new(0));
-
-        // Create DB with event hooks
-        // Use bootstrap() for the hook's internal DB (lightweight, no migrations)
-        // Then create the main DB with the hook attached (runs full init + migrations)
-        let db = {
-            let bootstrap_db = DBService::bootstrap().await?;
-            let hook = EventService::create_hook(
-                events_msg_store.clone(),
-                events_entry_count.clone(),
-                bootstrap_db,
-            );
-            DBService::new_with_after_connect(hook).await?
-        };
 
         let image = ImageService::new(db.clone().pool)?;
         {
@@ -321,6 +317,118 @@ impl Deployment for LocalDeployment {
                 )
             };
 
+        // Create the EventBus over the LIVE DBService pool (the one from
+        // `new_with_after_connect`), so the tailer reads the pool the application writes to.
+        let event_bus =
+            Arc::new(EventBus::new(db.pool.clone(), EVENT_BUS_BROADCAST_CAPACITY).await);
+
+        // Build the trigger-hook registry with the one real status hook
+        let hooks: Vec<Arc<dyn services::services::trigger_hooks::TriggerHook>> =
+            vec![Arc::new(TaskStatusChangedHook)];
+        let hook_registry = TriggerHookRegistry::new(hooks);
+
+        // One spawned task per hook, each with its own supervised respawn loop.
+        let mut runner_handles = Vec::new();
+        for hook in hook_registry.all() {
+            // `name()` returns a `&'static str`, so it moves into the spawned task as-is.
+            let hook_name = hook.name();
+
+            // Registration-time cursor row, BEFORE the runner is spawned: a hook with no
+            // `trigger_cursors` row contributes nothing to the compaction floor and matches no
+            // row in compaction's flag UPDATE, so a brand-new hook mid-replay could have the
+            // journal deleted underneath it and never be flagged. A failure here fails startup.
+            trigger_cursor::ensure_row(&db.pool, hook_name).await?;
+
+            let hook_clone = hook.clone();
+            let db_clone = db.clone();
+            let event_bus_clone = event_bus.clone();
+            let initial_backoff = tuning.trigger_runner_initial_backoff;
+            let max_backoff = tuning.trigger_runner_max_backoff;
+
+            let task = tokio::spawn(async move {
+                let mut backoff = initial_backoff;
+
+                loop {
+                    // Belt and braces: the row is created at registration above, but a runner
+                    // whose row was lost (manual deletion, restore from an older database) must
+                    // recreate it rather than silently drop off the compaction floor.
+                    if let Err(e) = trigger_cursor::ensure_row(&db_clone.pool, hook_name).await {
+                        tracing::error!(hook = %hook_name, error = ?e, "failed to ensure cursor row");
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(max_backoff);
+                        continue;
+                    }
+
+                    let db_for_runner = db_clone.clone();
+                    let hook_for_runner = hook_clone.clone();
+                    let bus_for_runner = event_bus_clone.clone();
+
+                    // Spawn run_hook as its own task so a panic in `fire()` is caught as a
+                    // JoinError and respawned, rather than killing this supervisor.
+                    let inner_task = tokio::spawn(async move {
+                        if let Err(e) = services::services::trigger_hooks::run_hook(
+                            db_for_runner.pool,
+                            hook_for_runner,
+                            bus_for_runner,
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                hook = %hook_name,
+                                error = ?e,
+                                "trigger hook runner failed"
+                            );
+                        }
+                    });
+
+                    // Wait for completion and catch panics
+                    if let Err(e) = inner_task.await {
+                        tracing::error!(
+                            hook = %hook_name,
+                            error = ?e,
+                            "trigger hook task panicked"
+                        );
+                    }
+
+                    // Re-read the rebootstrap flag so a flag raised by LIVE compaction is
+                    // observable in the log without a process restart; `run_hook` itself re-reads
+                    // both cursor and flag on its next start.
+                    let (_, needs_rebootstrap) =
+                        match trigger_cursor::get_with_flag(&db_clone.pool, hook_name).await {
+                            Ok(cf) => cf,
+                            Err(e) => {
+                                tracing::error!(
+                                    hook = %hook_name,
+                                    error = ?e,
+                                    "failed to read rebootstrap flag"
+                                );
+                                (0, false)
+                            }
+                        };
+
+                    tracing::warn!(
+                        hook = %hook_name,
+                        needs_rebootstrap = needs_rebootstrap,
+                        backoff_ms = backoff.as_millis() as u64,
+                        "trigger hook runner terminated; respawning after backoff"
+                    );
+
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                }
+            });
+
+            runner_handles.push(task);
+        }
+
+        // Every runner handle is retained. Dropping a JoinHandle detaches its task rather than
+        // aborting it, so this retention is about being able to observe and (in future) abort
+        // them — not about keeping them alive.
+        let trigger_hook_runner_handles = Arc::new(runner_handles);
+
+        // Spawn the event compaction loop over the same live pool
+        let compaction_handle = EventCompaction::spawn(db.pool.clone(), tuning.compaction);
+
         let deployment = Self {
             config,
             user_id,
@@ -345,6 +453,9 @@ impl Deployment for LocalDeployment {
             node_proxy_client,
             node_cache_sync_started: Arc::new(Mutex::new(false)),
             last_vacuum_time: Arc::new(RwLock::new(None)),
+            event_bus,
+            trigger_hook_runner_handles,
+            compaction_handle,
         };
 
         // Log startup config summary for debugging connection issues
@@ -385,6 +496,156 @@ impl Deployment for LocalDeployment {
         }
 
         Ok(deployment)
+    }
+
+    /// Construct a REAL deployment over a migrated test pool, through the same
+    /// [`from_parts`](Self::from_parts) seam production uses.
+    ///
+    /// Only the pieces `new()` owns are substituted: the config is a default rather than the
+    /// on-disk one, and the OAuth credentials point at an unwritten temp path (never loaded, so
+    /// no file is read or created). Everything the wiring under test touches — the event bus over
+    /// the live pool, the tailer, the supervised runners, the compaction loop — is the real thing.
+    #[cfg(test)]
+    pub(crate) async fn for_test(
+        pool: sqlx::SqlitePool,
+        tuning: StartupTuning,
+    ) -> Result<Self, DeploymentError> {
+        // `from_parts` builds a real LocalContainerService, whose constructor spawns
+        // `cleanup_orphaned_worktrees` (crates/local-deployment/src/container.rs:320). That sweep
+        // treats every directory under the worktree base dir with no matching `task_attempts` row
+        // as orphaned — and a test database has no such rows — so on a machine where the base dir
+        // exists it would delete real worktrees. The reach is pre-existing (container.rs:169's
+        // `new_for_drain_test` already calls the same constructor), but this test module makes it
+        // routine, so disable the sweep for the whole test binary before any deployment is built.
+        static DISABLE_ORPHAN_CLEANUP: std::sync::Once = std::sync::Once::new();
+        DISABLE_ORPHAN_CLEANUP.call_once(|| {
+            // SAFETY (partial, and stated honestly): this write is ordered before THIS call's
+            // own container construction, so the sweep it spawns always observes it. It is NOT
+            // race-free against sibling tests: `set_var` is unsound against any concurrent
+            // `getenv`, and tests on other threads may be inside `from_parts` calling
+            // `ShareConfig::from_env`, `NodeRunnerConfig::from_env` or `database_path()` at this
+            // moment. Accepted deliberately: the value is written once, never unset, never read
+            // for an assertion, and the alternative is a test run that deletes a developer's
+            // worktrees.
+            unsafe {
+                std::env::set_var("DISABLE_WORKTREE_ORPHAN_CLEANUP", "1");
+            }
+        });
+
+        let db = DBService {
+            pool,
+            metrics: db::DbMetrics::new(),
+        };
+        let creds_path = std::env::temp_dir()
+            .join(format!("vk-test-credentials-{}", Uuid::new_v4()))
+            .join("credentials.json");
+
+        Self::from_parts(
+            db,
+            Arc::new(RwLock::new(Config::default())),
+            Arc::new(OAuthCredentials::new(creds_path)),
+            Arc::new(MsgStore::new()),
+            Arc::new(RwLock::new(0)),
+            tuning,
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl Deployment for LocalDeployment {
+    /// Creates and initializes a LocalDeployment with all core services, background tasks, and optional
+    /// remote/hive integrations configured from environment and persisted config.
+    ///
+    /// The function performs startup work such as loading and persisting configuration, initializing
+    /// the database (with event hooks), image and filesystem services, auth context, optional remote
+    /// clients (OAuth and API-key-based), node runner (when configured), and starts background tasks
+    /// like orphaned image cleanup and node cache synchronization when applicable.
+    ///
+    /// # Returns
+    ///
+    /// A fully initialized `LocalDeployment` on success.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn run() {
+    /// use deployment::Deployment;
+    /// let deployment = local_deployment::LocalDeployment::new().await.unwrap();
+    /// assert!(!deployment.user_id().is_empty());
+    /// # }
+    /// ```
+    async fn new() -> Result<Self, DeploymentError> {
+        // Load config and OAuth credentials in parallel for faster startup
+        let config_path = config_path();
+        let creds_path = credentials_path();
+        let (mut raw_config, oauth_credentials) =
+            tokio::join!(load_config_from_file(&config_path), async {
+                let creds = Arc::new(OAuthCredentials::new(creds_path));
+                if let Err(e) = creds.load().await {
+                    tracing::warn!(?e, "failed to load OAuth credentials");
+                }
+                creds
+            });
+
+        let profiles = ExecutorConfigs::get_cached();
+        if !raw_config.onboarding_acknowledged
+            && let Ok(recommended_executor) = profiles.get_recommended_executor_profile().await
+        {
+            raw_config.executor_profile = recommended_executor;
+        }
+
+        // Check if app version has changed and set release notes flag
+        {
+            let current_version = utils::version::APP_VERSION;
+            let stored_version = raw_config.last_app_version.as_deref();
+
+            if stored_version != Some(current_version) {
+                // Show release notes only if this is an upgrade (not first install)
+                raw_config.show_release_notes = stored_version.is_some();
+                raw_config.last_app_version = Some(current_version.to_string());
+            }
+        }
+
+        // Always save config (may have been migrated or version updated)
+        save_config_to_file(&raw_config, &config_path).await?;
+
+        // Log storage locations at startup for debugging
+        tracing::info!(
+            database = %database_path().display(),
+            backups = %backup_dir().display(),
+            worktrees = %services::services::worktree_manager::WorktreeManager::get_worktree_base_dir().display(),
+            "Storage locations"
+        );
+
+        let config = Arc::new(RwLock::new(raw_config));
+
+        // Create shared components for EventService
+        let events_msg_store = Arc::new(MsgStore::new());
+        let events_entry_count = Arc::new(RwLock::new(0));
+
+        // Create DB with event hooks
+        // Use bootstrap() for the hook's internal DB (lightweight, no migrations)
+        // Then create the main DB with the hook attached (runs full init + migrations)
+        let db = {
+            let bootstrap_db = DBService::bootstrap().await?;
+            let hook = EventService::create_hook(
+                events_msg_store.clone(),
+                events_entry_count.clone(),
+                bootstrap_db,
+            );
+            DBService::new_with_after_connect(hook).await?
+        };
+
+        Self::from_parts(
+            db,
+            config,
+            oauth_credentials,
+            events_msg_store,
+            events_entry_count,
+            StartupTuning::default(),
+        )
+        .await
     }
 
     fn user_id(&self) -> &str {
@@ -541,6 +802,29 @@ impl LocalDeployment {
         self.node_auth_client.as_ref()
     }
 
+    /// Get the event bus for durable event streaming and replay-to-live subscriptions.
+    ///
+    /// Returns a clone of the shared EventBus handle. All clones share the same tailer and
+    /// broadcast channel, so any clone can be used for subscribing to events. Calling
+    /// `shutdown()` on any clone will stop the tailer for all clones.
+    pub fn event_bus(&self) -> Arc<EventBus> {
+        self.event_bus.clone()
+    }
+
+    /// Stop the event-journal background writers: the compaction loop and the bus tailer.
+    ///
+    /// Called from the server's shutdown path BEFORE the final WAL checkpoint. Best-effort
+    /// and signal-only: the compaction shutdown returns once the command is queued (not when
+    /// the worker exits) and the tailer abort is asynchronous, so a pass already in flight
+    /// can still commit after the checkpoint — SQLite replays any residual WAL on next open,
+    /// and `pool.close().await` waits out in-flight connections. What this DOES guarantee is
+    /// that no NEW compaction pass or tail poll starts after shutdown, so the writers cannot
+    /// spin on `PoolClosed` errors until process exit.
+    pub async fn shutdown_event_services(&self) {
+        self.compaction_handle.shutdown().await;
+        self.event_bus.shutdown().await;
+    }
+
     /// Get direct access to the local container service.
     ///
     /// This is needed because the `Deployment::container()` method returns
@@ -591,5 +875,398 @@ impl LocalDeployment {
         tokio::spawn(async move {
             sync_service.run().await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use db::models::event::NodeEvent;
+    use db::models::event_journal;
+    use db::test_utils::create_test_pool_with_migrations;
+    use futures::StreamExt;
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    /// The name of the one real hook registered by `from_parts`.
+    const REAL_HOOK: &str = "task_status_changed_logger";
+
+    /// Tuning for deployment tests: a respawn backoff a test can wait out, and a compaction loop
+    /// whose only run is the one a test asks for via `compact_now()` (the loop skips its first
+    /// tick, and an hour-long interval means no second one lands during a test).
+    fn test_tuning() -> StartupTuning {
+        StartupTuning {
+            trigger_runner_initial_backoff: Duration::from_millis(50),
+            trigger_runner_max_backoff: Duration::from_millis(100),
+            compaction: EventCompactionConfig {
+                retention_hours: 168,
+                min_rows: 1,
+                max_rows: 5,
+                compaction_interval_secs: 3600,
+            },
+        }
+    }
+
+    /// Journal one event through the real model function, committing it exactly as a write site
+    /// would. Returns the assigned sequence number.
+    async fn journal_event(pool: &sqlx::SqlitePool) -> i64 {
+        let mut tx = pool.begin().await.expect("begin");
+        let event = NodeEvent::TaskCreated {
+            task_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+        };
+        let seq = event_journal::append(&mut *tx, &event)
+            .await
+            .expect("append event");
+        tx.commit().await.expect("commit");
+        seq
+    }
+
+    async fn journal_row_count(pool: &sqlx::SqlitePool) -> i64 {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM event_journal")
+            .fetch_one(pool)
+            .await
+            .expect("count journal rows")
+    }
+
+    /// The cursor row for `hook_name`, or None when no row exists. Unlike `trigger_cursor::get`,
+    /// this distinguishes "no row" from "row at 0" — which is the whole point of `ensure_row`.
+    async fn cursor_row(pool: &sqlx::SqlitePool, hook_name: &str) -> Option<(i64, bool)> {
+        sqlx::query_as::<_, (i64, bool)>(
+            "SELECT last_processed_seq, needs_rebootstrap FROM trigger_cursors WHERE hook_name = ?",
+        )
+        .bind(hook_name)
+        .fetch_optional(pool)
+        .await
+        .expect("read cursor row")
+    }
+
+    /// Poll `check` until it holds, or fail the test after 10 seconds.
+    async fn wait_for<F, Fut>(label: &str, mut check: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if check().await {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {label}"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// Test 1: the wired deployment exposes a WORKING event bus through the inherent accessor.
+    ///
+    /// The stream is polled rather than merely constructed: a bus wired over the wrong pool, or a
+    /// `subscribe_from` that yields a stream nothing ever feeds, fails here.
+    #[tokio::test]
+    async fn deployment_exposes_an_event_bus() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+            .await
+            .expect("deployment constructs over the test pool");
+
+        let mut stream = deployment
+            .event_bus()
+            .subscribe_from(0)
+            .expect("subscribe_from(0) succeeds");
+
+        let seq = journal_event(&pool).await;
+
+        let delivered = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("stream yields the journaled event within the bounded wait")
+            .expect("stream does not end")
+            .expect("stream does not error");
+
+        assert_eq!(
+            delivered.seq, seq,
+            "the deployment's bus must deliver the event that was journaled to its pool"
+        );
+
+        deployment.event_bus().shutdown().await;
+    }
+
+    /// Test 2: startup actually spawns the tailer, over the deployment's own pool.
+    ///
+    /// The subscriber is a raw broadcast receiver (no journal replay), taken from the bus the
+    /// deployment exposes and BEFORE the commit, so only a live tailer publication can satisfy it.
+    /// A deployment that never spawns the tailer, or wires the bus to a pool nothing writes to,
+    /// fails here.
+    #[tokio::test]
+    async fn startup_spawns_the_tailer() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+            .await
+            .expect("deployment constructs over the test pool");
+
+        let mut live = deployment.event_bus().sender().subscribe();
+
+        let seq = journal_event(&pool).await;
+
+        let delivered = tokio::time::timeout(Duration::from_secs(10), live.recv())
+            .await
+            .expect("the tailer publishes the committed event within the bounded wait")
+            .expect("broadcast channel stays open");
+
+        assert_eq!(
+            delivered.seq, seq,
+            "append -> tail -> broadcast must be connected on a real deployment"
+        );
+
+        deployment.event_bus().shutdown().await;
+    }
+
+    /// Test 3: startup registers the real trigger hook — asserted behaviourally, against the
+    /// database the deployment wired itself to.
+    ///
+    /// `ensure_row` runs at registration, before the runner is spawned, so the row is present the
+    /// moment construction returns. A deployment that builds a registry but never registers the
+    /// hook (or skips `ensure_row`) leaves no row and fails here.
+    #[tokio::test]
+    async fn startup_registers_the_real_trigger_hook() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+            .await
+            .expect("deployment constructs over the test pool");
+
+        assert_eq!(
+            cursor_row(&pool, REAL_HOOK).await,
+            Some((0, false)),
+            "registration must leave a cursor row for the real hook at seq 0, unflagged"
+        );
+
+        // Retention, not just behaviour: one handle per registered hook, none discarded.
+        assert_eq!(
+            deployment.trigger_hook_runner_handles.len(),
+            1,
+            "every registered hook's runner handle must be retained"
+        );
+
+        deployment.event_bus().shutdown().await;
+    }
+
+    /// Test 4: startup spawns the compaction loop — asserted by driving the handle the deployment
+    /// retained and observing rows actually deleted.
+    ///
+    /// The loop skips its first tick and this test's interval is an hour, so the only compaction
+    /// that can run is the one requested here: if the deployment never spawned the loop (or did
+    /// not retain a working handle), nothing consumes the command and the journal stays at 20.
+    #[tokio::test]
+    async fn startup_spawns_compaction() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+            .await
+            .expect("deployment constructs over the test pool");
+
+        // Over the tuned hard cap of 5.
+        for _ in 0..20 {
+            journal_event(&pool).await;
+        }
+        assert_eq!(
+            journal_row_count(&pool).await,
+            20,
+            "journal seeded over cap"
+        );
+
+        deployment.compaction_handle.compact_now().await;
+
+        wait_for("compaction to trim the journal to the hard cap", || async {
+            journal_row_count(&pool).await <= 5
+        })
+        .await;
+
+        deployment.event_bus().shutdown().await;
+    }
+
+    /// Test 5: shutting the deployment's bus down stops the background tailer.
+    ///
+    /// Constraints from the task file, both learned the hard way in task 013:
+    /// (a) assert BEHAVIOURALLY (a committed row is never published), not on a handle;
+    /// (b) take the subscriber BEFORE the commit-and-wait window — a broadcast receiver never sees
+    ///     history, so a subscriber created afterwards would report silence even from a live tailer.
+    #[tokio::test]
+    async fn shutdown_stops_the_background_tasks() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+            .await
+            .expect("deployment constructs over the test pool");
+
+        let mut live = deployment.event_bus().sender().subscribe();
+
+        // Prove the tailer is publishing first, so the silence below means something.
+        journal_event(&pool).await;
+        tokio::time::timeout(Duration::from_secs(10), live.recv())
+            .await
+            .expect("tailer must be publishing before shutdown")
+            .expect("broadcast channel open before shutdown");
+
+        deployment.event_bus().shutdown().await;
+
+        journal_event(&pool).await;
+
+        let after = tokio::time::timeout(Duration::from_secs(2), live.recv()).await;
+        assert!(
+            after.is_err(),
+            "a row committed after shutdown must never be published: {after:?}"
+        );
+    }
+
+    /// REQUIRED §1: all clones of an `EventBus` share ONE tailer handle, so `shutdown()` on any
+    /// clone stops the tailer for every clone.
+    ///
+    /// The clone here is an `EventBus::clone` (the accessor hands out `Arc` clones, which would
+    /// share the handle trivially), so this pins `impl Clone for EventBus` itself: give clones an
+    /// independent handle and the shutdown below becomes a no-op, the tailer survives, and the
+    /// post-shutdown commit reaches `sub1`.
+    #[tokio::test]
+    async fn event_bus_clone_shares_tailer_handle() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+            .await
+            .expect("deployment constructs over the test pool");
+
+        let bus1 = deployment.event_bus();
+        let bus2: EventBus = (*bus1).clone();
+
+        let mut sub1 = bus1.sender().subscribe();
+
+        // Liveness first: silence only proves something once publication is established.
+        journal_event(&pool).await;
+        tokio::time::timeout(Duration::from_secs(10), sub1.recv())
+            .await
+            .expect("the shared tailer must be publishing before shutdown")
+            .expect("broadcast channel open before shutdown");
+
+        // Shut down through the CLONE.
+        bus2.shutdown().await;
+
+        journal_event(&pool).await;
+
+        let after = tokio::time::timeout(Duration::from_secs(2), sub1.recv()).await;
+        assert!(
+            after.is_err(),
+            "shutdown() on a clone must stop the tailer observed through the original: {after:?}"
+        );
+    }
+
+    /// REQUIRED panel-009c: `ensure_row`'s fresh-row INSERT path — the half task 009 left untested.
+    #[tokio::test]
+    async fn ensure_row_creates_cursor_row_at_zero() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let hook_name = "test_fresh_hook";
+
+        assert_eq!(
+            cursor_row(&pool, hook_name).await,
+            None,
+            "no cursor row exists before ensure_row"
+        );
+
+        trigger_cursor::ensure_row(&pool, hook_name)
+            .await
+            .expect("ensure_row succeeds");
+
+        assert_eq!(
+            cursor_row(&pool, hook_name).await,
+            Some((0, false)),
+            "a fresh cursor row starts at seq 0 with needs_rebootstrap = 0"
+        );
+    }
+
+    /// REQUIRED §3: the supervised runner loop survives a fatal cursor-write failure and resumes
+    /// processing once the failure clears — with no process restart and no reconstruction.
+    ///
+    /// `run_hook` returns on ANY cursor write error, so a bare `let _ = run_hook(..)` spawn would
+    /// die permanently here and pin the compaction floor at a stale cursor. The RAISE(ABORT)
+    /// triggers cover INSERT and UPDATE because `trigger_cursor::set` is an upsert and
+    /// `ensure_row` is an INSERT OR IGNORE.
+    #[tokio::test]
+    async fn supervised_runner_resumes_after_poisoned_cursor_writes() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+            .await
+            .expect("deployment constructs over the test pool");
+
+        for stmt in [
+            "CREATE TRIGGER poison_cursor_insert BEFORE INSERT ON trigger_cursors \
+             BEGIN SELECT RAISE(ABORT, 'cursor writes poisoned'); END",
+            "CREATE TRIGGER poison_cursor_update BEFORE UPDATE ON trigger_cursors \
+             BEGIN SELECT RAISE(ABORT, 'cursor writes poisoned'); END",
+        ] {
+            sqlx::query(stmt)
+                .execute(&pool)
+                .await
+                .expect("install poison trigger");
+        }
+
+        let seq = journal_event(&pool).await;
+
+        // Poisoned: the runner keeps dying and respawning (50ms doubling to 100ms), so it gets
+        // several attempts inside this window and none of them can move the cursor.
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(
+            cursor_row(&pool, REAL_HOOK).await,
+            Some((0, false)),
+            "the cursor cannot advance while cursor writes abort"
+        );
+
+        for stmt in [
+            "DROP TRIGGER poison_cursor_insert",
+            "DROP TRIGGER poison_cursor_update",
+        ] {
+            sqlx::query(stmt)
+                .execute(&pool)
+                .await
+                .expect("drop poison trigger");
+        }
+
+        // No reconstruction: the same supervised loop must pick the work back up.
+        wait_for(
+            "the supervised runner to resume and advance the cursor",
+            || async { matches!(cursor_row(&pool, REAL_HOOK).await, Some((c, _)) if c >= seq) },
+        )
+        .await;
+
+        deployment.event_bus().shutdown().await;
+    }
+
+    /// Helper: mutation proof for shutdown_stops_the_background_tasks
+    /// This proves that replacing shutdown() with a no-op would fail the test
+    /// (The test requires silence AFTER shutdown, not just during)
+    #[tokio::test]
+    async fn mutation_proof_shutdown_actually_stops_tailer() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        let bus = EventBus::new(pool.clone(), 64).await;
+        let mut subscriber = bus.sender().subscribe();
+
+        // Prove tailer is live by getting an event
+        journal_event(&pool).await;
+
+        let got_first = tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv())
+            .await
+            .ok()
+            .is_some();
+
+        assert!(got_first, "tailer must be live before shutdown");
+
+        // If we replace shutdown() with a no-op, the tailer keeps running
+        // and this post-shutdown commit will be broadcast
+        bus.shutdown().await;
+
+        journal_event(&pool).await;
+
+        // This MUST be silent if shutdown() actually stopped the tailer
+        if let Ok(Ok(_)) =
+            tokio::time::timeout(std::time::Duration::from_secs(1), subscriber.recv()).await
+        {
+            panic!("shutdown() did not stop the tailer");
+        }
+        // Expected: timeout or channel closed
     }
 }

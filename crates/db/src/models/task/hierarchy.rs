@@ -5,26 +5,65 @@ use sqlx::{Executor, Sqlite, SqlitePool};
 use uuid::Uuid;
 
 use super::{Task, TaskRelationships, TaskStatus};
+use crate::models::event::NodeEvent;
+use crate::models::event_journal;
 use crate::models::{activity_dismissal::ActivityDismissal, task_attempt::TaskAttempt};
 
 impl Task {
     /// Update the status of a task and clear any activity dismissals.
     /// Also marks task for Hive resync by clearing remote_last_synced_at.
+    ///
+    /// Pool-taking site (task 006): opens its own transaction so the status write, the dismissal
+    /// clear, and the `task_status_changed` journal append are all atomic together. Order inside
+    /// the transaction is update status -> clear dismissal -> append event -> commit; the dismissal
+    /// helper is called on the SAME transaction (not the pool) to avoid contending for SQLite's
+    /// single writer lock on a second connection.
     pub async fn update_status(
         pool: &SqlitePool,
         id: Uuid,
         status: TaskStatus,
     ) -> Result<(), sqlx::Error> {
+        // BEGIN IMMEDIATE takes SQLite's RESERVED (write) lock at BEGIN, so this transaction never
+        // holds a read snapshot it must later upgrade — the SQLITE_BUSY_SNAPSHOT (517) class that a
+        // deferred SELECT-first transaction earns is structurally gone, and contention surfaces at
+        // BEGIN as plain SQLITE_BUSY, which busy_timeout retries (task 023).
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+        // Read the prior status INSIDE the transaction — see Task::update for why this can't
+        // happen before begin() without racing a concurrent writer.
+        let old_status: Option<TaskStatus> =
+            sqlx::query_scalar::<_, TaskStatus>("SELECT status FROM tasks WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+
         sqlx::query!(
             "UPDATE tasks SET status = $2, updated_at = CURRENT_TIMESTAMP, activity_at = datetime('now', 'subsec'), remote_last_synced_at = NULL WHERE id = $1",
             id,
             status
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Clear any activity dismissal when task status changes (auto-restore)
-        ActivityDismissal::clear_for_task(pool, id).await?;
+        ActivityDismissal::clear_for_task(&mut *tx, id).await?;
+
+        // Emit ONLY when the status actually differs, mirroring Task::update's "exactly one event
+        // per state change" rule.
+        if let Some(old_status) = old_status
+            && old_status != status
+        {
+            let event = NodeEvent::TaskStatusChanged {
+                task_id: id,
+                old_status,
+                new_status: status,
+            };
+            event_journal::append(&mut *tx, &event)
+                .await
+                .map_err(sqlx::Error::from)?;
+        }
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -211,5 +250,91 @@ mod tests {
             .await
             .expect("Query failed");
         assert!(children.is_empty());
+    }
+
+    /// Regression guard for the SQLITE_BUSY_SNAPSHOT (517) class: if the transaction is ever
+    /// reverted to a deferred `begin()` with a read as its first statement, concurrent status
+    /// updates on the same row take a read snapshot and fail to upgrade. Only concurrency surfaces
+    /// that. This test alternates between two statuses to exercise the status-changed path under
+    /// contention.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_status_updates_serialize_without_errors() {
+        let (pool, _temp_dir) = setup_test_pool().await;
+        let project_id = Uuid::new_v4();
+        let project_data = CreateProject {
+            name: "Test Project".to_string(),
+            git_repo_path: format!("/tmp/test-repo-{}", project_id),
+            use_existing_repo: true,
+            clone_url: None,
+            setup_script: None,
+            dev_script: None,
+            cleanup_script: None,
+            copy_files: None,
+        };
+        Project::create(&pool, &project_data, project_id)
+            .await
+            .unwrap();
+
+        let task_id = Uuid::new_v4();
+        let task_data =
+            CreateTask::from_title_description(project_id, "Task Title".to_string(), None);
+        Task::create(&pool, &task_data, task_id).await.unwrap();
+
+        // 16 concurrent status updates of the SAME task, alternating between two statuses
+        let mut handles = Vec::new();
+        for version in 1..=16i64 {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                let status = if version % 2 == 0 {
+                    TaskStatus::Todo
+                } else {
+                    TaskStatus::InProgress
+                };
+                Task::update_status(&pool, task_id, status).await
+            }));
+        }
+
+        let mut errors: Vec<String> = Vec::new();
+        for handle in handles {
+            match handle.await.expect("update_status task panicked") {
+                Ok(_) => {}
+                Err(e) => errors.push(format!("{:?}", e)),
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "all concurrent status updates must succeed, got {} error(s): {:?}",
+            errors.len(),
+            errors
+        );
+
+        // Read all task_status_changed events
+        let status_change_payloads: Vec<(String,)> = sqlx::query_as(
+            "SELECT payload FROM event_journal WHERE event_type = 'task_status_changed'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        // Every journaled row must record a REAL transition (old_status != new_status).
+        // An old_status equal to new_status would mean the probe read a status that was not the
+        // one the update overwrote — i.e. the probe escaped the write transaction.
+        for (payload,) in &status_change_payloads {
+            let event: NodeEvent =
+                serde_json::from_str(payload).expect("failed to parse event payload");
+            match event {
+                NodeEvent::TaskStatusChanged {
+                    old_status,
+                    new_status,
+                    ..
+                } => {
+                    assert_ne!(
+                        old_status, new_status,
+                        "every journaled status change must record a real transition"
+                    );
+                }
+                other => panic!("expected TaskStatusChanged, got {other:?}"),
+            }
+        }
     }
 }

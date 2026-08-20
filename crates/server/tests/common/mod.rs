@@ -335,6 +335,16 @@ impl HiveHarness {
 
         project_id
     }
+
+    /// Get the HTTP listener address for making requests
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// Get the deployment for direct access to services (e.g., event bus, database)
+    pub fn deployment(&self) -> &DeploymentImpl {
+        &self.deployment
+    }
 }
 
 /// The access token MUST be a real JWT with a future `exp`: RemoteClient calls

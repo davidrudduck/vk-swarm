@@ -1,0 +1,58 @@
+---
+title: "Event Journal Retention"
+description: "Configure retention and compaction for the node's durable event journal"
+audience: admin
+component: event-bus
+sources:
+  - crates/services/src/services/event_compaction.rs
+  - .env.example
+generated: 2026-08-19
+---
+
+Every task-lifecycle change on a node is recorded in a durable **event journal** (an
+`event_journal` table in the node's SQLite database). The journal powers live board updates,
+gapless client reconnection, and internal trigger hooks. A periodic **compaction service** bounds
+its size. All knobs are environment variables with safe defaults — most deployments never need to
+change them.
+
+## Environment variables
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `VK_EVENT_RETENTION_HOURS` | `168` | Rows older than this are eligible for deletion (7 days) |
+| `VK_EVENT_MIN_ROWS` | `10000` | Retention floor — compaction never shrinks the journal below this row count |
+| `VK_EVENT_MAX_ROWS` | `100000` | Hard cap — above this, oldest rows are deleted regardless of the floor |
+| `VK_EVENT_COMPACTION_INTERVAL_SECS` | `60` | How often the compaction pass runs |
+
+These are documented (commented out at their defaults) in `.env.example`.
+
+## How compaction protects consumers
+
+Internal consumers (trigger hooks) persist a cursor recording the last event they processed.
+Compaction normally **never deletes rows at or above the minimum persisted trigger cursor**, so a
+lagging consumer is never starved of events.
+
+The hard cap overrides that floor: above `VK_EVENT_MAX_ROWS`, older rows are deleted regardless,
+and any consumer whose cursor pointed into the deleted range is flagged for **rebootstrap** — it
+re-reads current state instead of replaying lost events. This means a dead consumer cannot pin the
+journal and grow it without bound.
+
+## Misconfiguration handling
+
+Invalid values never prevent the node from starting:
+
+- A non-numeric value falls back to the default with a `WARN` log.
+- `VK_EVENT_MIN_ROWS` or `VK_EVENT_MAX_ROWS` below `1` is clamped to `1` (a value of `0` would let
+  compaction empty the journal silently).
+- `VK_EVENT_MAX_ROWS` below `VK_EVENT_MIN_ROWS` is clamped up to `VK_EVENT_MIN_ROWS`.
+
+Every clamp emits a `tracing::warn!` naming the offending variable and both the configured and
+effective values.
+
+## Operational checks
+
+- On startup the log line `Event compaction service started` confirms the compaction loop spawned.
+- Journal size: `sqlite3 <db> "SELECT COUNT(*) FROM event_journal"` — steady state should sit
+  between the retention floor and the hard cap.
+- Consumer health: `sqlite3 <db> "SELECT hook_name, last_processed_seq, needs_rebootstrap FROM
+  trigger_cursors"` — a cursor that stops advancing indicates a stalled consumer.

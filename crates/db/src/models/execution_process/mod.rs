@@ -8,6 +8,17 @@ mod lifecycle;
 mod queries;
 mod sync;
 
+/// Sentinel executor identity for legacy rows where `task_attempts.executor` is NULL.
+///
+/// `task_attempts.executor` is nullable at the schema level (legacy column) and sqlx's SQLite
+/// driver decodes a NULL into a plain `String` target as `""` rather than erroring. Decoding as
+/// `Option<String>` and substituting THIS sentinel on `None` keeps the emitted identity
+/// self-evidently a placeholder — lowercase and prose-shaped, unlike every real value
+/// (`"CLAUDE_CODE"`, `"AMP"`, `"QA_MOCK"`, all `SCREAMING_SNAKE_CASE` per migration
+/// `20250903091032`) — so a consumer reading the journal cannot mistake it for a real executor.
+/// Wire-visible in journal payloads: this is deliberately the ONLY copy.
+pub(crate) const UNKNOWN_EXECUTOR: &str = "unknown (legacy NULL task_attempts.executor)";
+
 use chrono::{DateTime, Utc};
 use executors::{
     actions::{ExecutorAction, ExecutorActionType},

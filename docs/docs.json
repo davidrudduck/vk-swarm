@@ -50,6 +50,7 @@
           "core-features/creating-projects",
           "core-features/creating-tasks",
           "core-features/monitoring-task-execution",
+          "core-features/live-task-updates",
           "core-features/understanding-execution-logs",
           "core-features/testing-your-application",
           "core-features/reviewing-code-changes",
@@ -86,7 +87,8 @@
           "configuration-customisation/creating-task-tags",
           "configuration-customisation/keyboard-shortcuts",
           "configuration-customisation/database-performance",
-          "configuration-customisation/network-access"
+          "configuration-customisation/network-access",
+          "configuration-customisation/event-journal-retention"
         ]
       },
       {
@@ -112,7 +114,8 @@
           "architecture/storage-paths",
           "architecture/executor-normalization",
           "architecture/task-sorting-implementation",
-          "architecture/task-breakdown"
+          "architecture/task-breakdown",
+          "architecture/event-bus"
         ]
       },
       {

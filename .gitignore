@@ -121,3 +121,11 @@ mcp.json.disabled
 .claude/
 crates/remote/.env.dev
 crates/remote/.env.remote.dev
+
+# wai per-run transients (never commit: .wai-test-cmd is executed by task-gate.sh)
+docs/plans/*/.wai-test-cmd
+# mutation-proof scratch: implementers and panel challengers cp source backups here
+.wai-scratch/
+# ts-rs writes these at the worktree root when a test binary is run directly
+/bindings/
+docs/plans/*/.wai-task-base

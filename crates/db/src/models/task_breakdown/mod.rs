@@ -703,4 +703,151 @@ mod tests {
             "updated_at must refresh on replace_items"
         );
     }
+
+    #[tokio::test]
+    async fn accepting_a_proposal_journals_one_task_created_per_child() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+        replace_items(
+            &pool,
+            proposal.id,
+            vec![
+                item("A", 0, vec![]),
+                item("B", 1, vec![]),
+                item("C", 2, vec![]),
+            ],
+        )
+        .await
+        .expect("replace_items");
+
+        // Clear the journal before accepting so we measure only the acceptance's events
+        sqlx::query("DELETE FROM event_journal")
+            .execute(&pool)
+            .await
+            .expect("clear journal");
+
+        let children = accept_proposal(&pool, proposal.id)
+            .await
+            .expect("accept_proposal");
+        assert_eq!(children.len(), 3, "should create 3 children");
+
+        // Build expected child task id set
+        let expected_child_ids: std::collections::HashSet<String> =
+            children.iter().map(|t| t.id.to_string()).collect();
+
+        // Query event_journal for TaskCreated events (filter to just task_created rows)
+        let journal_rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT seq, payload FROM event_journal WHERE event_type = 'task_created' ORDER BY seq ASC",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("query event_journal");
+
+        // Assert exactly 3 TaskCreated rows (catches duplicate appends)
+        assert_eq!(
+            journal_rows.len(),
+            3,
+            "event_journal must contain exactly 3 TaskCreated rows"
+        );
+
+        // Extract task_ids from the payloads into a HashSet
+        let journaled_task_ids: std::collections::HashSet<String> = journal_rows
+            .iter()
+            .map(|(_seq, payload)| {
+                let event_value: serde_json::Value =
+                    serde_json::from_str(payload).expect("event payload should parse as JSON");
+                // Pin the payload's project_id too: asserting only task_id leaves the rest of
+                // the emitted payload unfalsified, so a wrong project_id would ship green.
+                assert_eq!(
+                    event_value["project_id"]
+                        .as_str()
+                        .expect("project_id should be present in payload"),
+                    project_id.to_string(),
+                    "every TaskCreated payload must carry the parent's project_id"
+                );
+                event_value["task_id"]
+                    .as_str()
+                    .expect("task_id should be present in payload")
+                    .to_string()
+            })
+            .collect();
+
+        // Assert strict HashSet equality: journaled ids must match expected ids exactly
+        assert_eq!(
+            journaled_task_ids, expected_child_ids,
+            "journaled task_ids must be exactly the 3 child ids"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_acceptance_journals_nothing() {
+        let (pool, _temp_dir) = create_test_pool().await;
+        let project_id = create_project(&pool).await;
+        let task_id = create_task(&pool, project_id).await;
+
+        // Build a Draft proposal with a dependency: B depends on A.
+        // This forces accept_proposal's SECOND pass (task_dependencies insert at queries.rs:480-516)
+        // to run AFTER the first pass has inserted all children AND appended all events.
+        let proposal = create(&pool, task_id).await.expect("create proposal");
+        replace_items(
+            &pool,
+            proposal.id,
+            vec![item("A", 0, vec![]), item("B", 1, vec![0])],
+        )
+        .await
+        .expect("replace_items");
+
+        // Clear the journal before the fault injection so we can measure only the acceptance's events
+        sqlx::query("DELETE FROM event_journal")
+            .execute(&pool)
+            .await
+            .expect("clear journal");
+
+        // Fault-inject: rename task_dependencies away BEFORE accepting.
+        // This is a plain statement, outside any transaction.
+        sqlx::query("ALTER TABLE task_dependencies RENAME TO task_dependencies_hidden")
+            .execute(&pool)
+            .await
+            .expect("rename task_dependencies away");
+
+        // Try to accept: must fail when the second pass tries to INSERT into the missing table.
+        let result = accept_proposal(&pool, proposal.id).await;
+        assert!(
+            result.is_err(),
+            "accept must fail when task_dependencies is missing"
+        );
+
+        // Restore the table (fault injection cleanup).
+        sqlx::query("ALTER TABLE task_dependencies_hidden RENAME TO task_dependencies")
+            .execute(&pool)
+            .await
+            .expect("rename task_dependencies back");
+
+        // Assert BOTH:
+        // (1) Journal is empty: no task_created rows (rollback took the appended events)
+        let journal_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM event_journal WHERE event_type = 'task_created'")
+                .fetch_one(&pool)
+                .await
+                .expect("query journal count");
+        assert_eq!(
+            journal_count.0, 0,
+            "journal must be empty after failed acceptance (rollback took events)"
+        );
+
+        // (2) No children were created: zero tasks with parent_task_id pointing to the parent
+        let child_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?")
+                .bind(task_id)
+                .fetch_one(&pool)
+                .await
+                .expect("query child count");
+        assert_eq!(
+            child_count.0, 0,
+            "no children should exist after failed acceptance (rollback removed them)"
+        );
+    }
 }

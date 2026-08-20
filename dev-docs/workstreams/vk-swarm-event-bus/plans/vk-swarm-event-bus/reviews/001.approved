@@ -1,0 +1,7 @@
+approved_by: spec owner (drudduck), via AskUserQuestion in orchestrator session
+approved_at: 2026-08-17
+scope: task 001 — delete the consumer-less GET /api/events record-patch SSE route
+  (crates/server/src/routes/events.rs, its mount in routes/mod.rs, and the orphaned
+  Deployment::stream_events trait method). EventService itself is NOT touched.
+basis: zero consumers repo-wide (verified at decompose; re-verify at dispatch), spec D7
+  (path reuse chosen so P7 binds to one unambiguous /api/events contract).

@@ -74,6 +74,8 @@ pub enum ApiError {
     NotFound(String),
     #[error("Conflict: {0}")]
     Conflict(String),
+    #[error("Gone: {0}")]
+    Gone(String),
     #[error("Sync state broken: {0}")]
     SyncStateBroken(String),
     #[error("Forbidden: {0}")]
@@ -203,6 +205,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BadRequest"),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NotFound"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "ConflictError"),
+            ApiError::Gone(_) => (StatusCode::GONE, "Gone"),
             ApiError::SyncStateBroken(_) => (StatusCode::CONFLICT, "SyncStateBroken"),
             ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, "ForbiddenError"),
             ApiError::BadGateway(_) => (StatusCode::BAD_GATEWAY, "BadGateway"),
