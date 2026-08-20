@@ -158,7 +158,31 @@ pub async fn events(
                 "cursor must be non-negative, got {cursor}"
             )));
         }
-        Some(cursor) => cursor,
+        Some(cursor) => {
+            // A cursor below (low_water - 1) predates retained history: compaction deleted
+            // events the client never saw, and replay would silently skip them. Reject with
+            // 410 Gone so the client knows to full-refresh and reconnect without a cursor.
+            // A cursor of exactly low_water - 1 resumes gaplessly at the first retained row.
+            // Best-effort read: a journal failure here is NOT a setup error on the cursor
+            // path — the established contract (Test 7) is that cursor-path journal failures
+            // surface inside the stream as a terminal error frame, so on Err we skip the
+            // staleness check and let the subscription's own first read report the failure.
+            let low_water = match event_journal::low_water_mark(&deployment.db().pool).await {
+                Ok(mark) => mark,
+                Err(e) => {
+                    error!(error = ?e, "failed to read event journal low-water mark; deferring failure to the stream");
+                    None
+                }
+            };
+            if let Some(min) = low_water
+                && cursor < min - 1
+            {
+                return Err(ApiError::Gone(format!(
+                    "cursor {cursor} predates retained history (earliest retained seq is {min});                      refresh state and reconnect without a cursor"
+                )));
+            }
+            cursor
+        }
     };
 
     let stream = bus.subscribe_from(cursor).map_err(|e| {

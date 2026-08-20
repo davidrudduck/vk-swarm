@@ -71,6 +71,18 @@ pub async fn high_water_mark(pool: &SqlitePool) -> Result<i64, EventJournalError
     Ok(mark)
 }
 
+/// Get the lowest sequence number still retained in the journal.
+///
+/// Returns None when the journal is empty. Compaction can delete rows below this mark;
+/// a consumer cursor below `low_water - 1` has lost events and cannot resume gaplessly.
+pub async fn low_water_mark(pool: &SqlitePool) -> Result<Option<i64>, EventJournalError> {
+    let mark = sqlx::query_scalar::<_, Option<i64>>("SELECT MIN(seq) FROM event_journal")
+        .fetch_one(pool)
+        .await?;
+
+    Ok(mark)
+}
+
 /// Compact the event journal, removing old entries while respecting constraints.
 ///
 /// This is a two-stage process:

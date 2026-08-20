@@ -805,3 +805,55 @@ async fn negative_cursor_returns_400() {
         "a negative cursor must be an input-validation error, not a replay"
     );
 }
+
+/// Test 10: a cursor that predates retained history is rejected with 410 Gone, while a
+/// cursor at exactly low_water - 1 (gapless resume at the first retained row) is accepted.
+/// Without the check, a stale-cursor client would receive ordinary frames and could never
+/// detect that compaction deleted events it never saw.
+#[tokio::test]
+#[serial_test::serial]
+async fn cursor_below_retained_history_returns_410() {
+    let h = common::HiveHarness::hive_absent().await;
+    let pool = h.deployment().db().pool.clone();
+
+    // Seed five journal rows, then simulate compaction deleting the first two:
+    // retained seqs are 3..=5, low_water = 3.
+    for _ in 0..5 {
+        sqlx::query("INSERT INTO event_journal (event_type, payload) VALUES (?, ?)")
+            .bind("task_created")
+            .bind(r#"{"type":"task_created","task_id":"00000000-0000-0000-0000-000000000001","project_id":"00000000-0000-0000-0000-000000000002"}"#)
+            .execute(&pool)
+            .await
+            .expect("failed to seed event_journal");
+    }
+    sqlx::query("DELETE FROM event_journal WHERE seq <= 2")
+        .execute(&pool)
+        .await
+        .expect("failed to simulate compaction");
+
+    let client = reqwest::Client::new();
+
+    // cursor=1 < low_water - 1 = 2: events at seqs 2..=2 were deleted unseen -> 410.
+    let stale = client
+        .get(format!("http://{}/api/events?cursor=1", h.addr()))
+        .send()
+        .await
+        .expect("failed to request /api/events with stale cursor");
+    assert_eq!(
+        stale.status().as_u16(),
+        410,
+        "a cursor predating retained history must be 410 Gone, not a silent partial replay"
+    );
+
+    // cursor=2 == low_water - 1: resumes gaplessly at seq 3 -> stream starts (200).
+    let boundary = client
+        .get(format!("http://{}/api/events?cursor=2", h.addr()))
+        .send()
+        .await
+        .expect("failed to request /api/events with boundary cursor");
+    assert_eq!(
+        boundary.status().as_u16(),
+        200,
+        "a cursor at low_water - 1 resumes gaplessly and must be accepted"
+    );
+}

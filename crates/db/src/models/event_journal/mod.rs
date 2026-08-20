@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 mod queries;
-pub use queries::{append, compact, high_water_mark, read_range};
+pub use queries::{append, compact, high_water_mark, low_water_mark, read_range};
 
 /// Error type for event journal operations.
 #[derive(Debug, thiserror::Error)]

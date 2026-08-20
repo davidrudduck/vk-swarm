@@ -38,8 +38,8 @@ Events are **journaled first, broadcast second**, entirely node-local:
   journaled event skipped, duplicates possible; consumers must be idempotent**. Compaction
   (Amendment 7) bounds retained history: a cursor below the journal low-water mark replays
   only retained rows. Persisted trigger cursors get an explicit `needs_rebootstrap` signal;
-  SSE clients must treat a cursor older than retained history as a full-refresh case (the
-  stream does not report the compacted range).
+  SSE clients get an explicit `410 Gone` when their cursor predates retained history — the
+  documented signal to full-refresh and reconnect without a cursor.
 - Replay-to-live handoff contract (all consumers): subscribe to the live channel FIRST,
   capture the journal high-water mark, replay journal rows `(cursor, mark]` in seq order,
   drain buffered live events discarding `seq <= last-replayed`, and on broadcast `Lagged(n)`
