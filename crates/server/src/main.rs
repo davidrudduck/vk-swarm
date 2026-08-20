@@ -356,8 +356,9 @@ pub async fn perform_cleanup_actions(deployment: &DeploymentImpl) {
     }
 
     // Stop the event-journal background writers (compaction loop, bus tailer) BEFORE the
-    // final checkpoint: they write to the journal/cursor tables, so leaving them live would
-    // re-populate the WAL after the truncate and spin on PoolClosed after the pool closes.
+    // final checkpoint so no NEW pass starts after it. Best-effort: an already-in-flight
+    // pass may still commit after the truncate (SQLite replays the residual WAL on next
+    // open); the guarantee is no PoolClosed error-spin after the pool closes.
     tracing::info!("Stopping event journal services...");
     deployment.shutdown_event_services().await;
     tracing::info!("Event journal services stopped");

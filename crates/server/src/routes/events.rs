@@ -177,7 +177,7 @@ pub async fn events(
                 && cursor < min - 1
             {
                 return Err(ApiError::Gone(format!(
-                    "cursor {cursor} predates retained history (earliest retained seq is                      {min}); refresh state and reconnect without a cursor"
+                    "cursor {cursor} predates retained history (earliest retained seq is {min}); refresh state and reconnect without a cursor"
                 )));
             }
             // A cursor ABOVE the high-water mark is equally unresumable: seq only grows in
@@ -189,7 +189,7 @@ pub async fn events(
             match event_journal::high_water_mark(&deployment.db().pool).await {
                 Ok(mark) if cursor > mark => {
                     return Err(ApiError::Gone(format!(
-                        "cursor {cursor} is above the journal high-water mark ({mark});                          the journal head has regressed — refresh state and reconnect                          without a cursor"
+                        "cursor {cursor} is above the journal high-water mark ({mark}); the journal head has regressed — refresh state and reconnect without a cursor"
                     )));
                 }
                 Ok(_) => {}

@@ -813,10 +813,13 @@ impl LocalDeployment {
 
     /// Stop the event-journal background writers: the compaction loop and the bus tailer.
     ///
-    /// Called from the server's shutdown path BEFORE the final WAL checkpoint — these
-    /// services write to the journal/cursor tables, so leaving them live across the
-    /// checkpoint re-populates the WAL the checkpoint just truncated, and after
-    /// `pool.close()` they spin on `PoolClosed` errors until process exit.
+    /// Called from the server's shutdown path BEFORE the final WAL checkpoint. Best-effort
+    /// and signal-only: the compaction shutdown returns once the command is queued (not when
+    /// the worker exits) and the tailer abort is asynchronous, so a pass already in flight
+    /// can still commit after the checkpoint — SQLite replays any residual WAL on next open,
+    /// and `pool.close().await` waits out in-flight connections. What this DOES guarantee is
+    /// that no NEW compaction pass or tail poll starts after shutdown, so the writers cannot
+    /// spin on `PoolClosed` errors until process exit.
     pub async fn shutdown_event_services(&self) {
         self.compaction_handle.shutdown().await;
         self.event_bus.shutdown().await;
