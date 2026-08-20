@@ -9,26 +9,10 @@ use super::{
     ExecutionProcessStatus, ExecutorActionField, MissingBeforeContext,
 };
 use crate::models::event::NodeEvent;
-use crate::models::event_journal::{self, EventJournalError};
+use crate::models::event_journal;
 use crate::models::{task::Task, task_attempt::TaskAttempt};
 
-/// Map a journal-append failure onto `sqlx::Error` — duplicated from
-/// `task::queries::journal_err_to_sqlx` (that copy is private to its module, and this task's file
-/// set does not include `mod.rs`, so there is nowhere shared to put one copy). See that copy's doc
-/// comment for the Database/Serde split rationale.
-fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
-    match e {
-        EventJournalError::Database(err) => err,
-        EventJournalError::Serde(err) => {
-            sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
-        }
-    }
-}
-
-/// Attempt 2 (task 007), item 4 — duplicated from `lifecycle::UNKNOWN_EXECUTOR` for the same
-/// reason `journal_err_to_sqlx` is duplicated (this task's file set does not include `mod.rs`).
-/// See that copy's doc comment for why this exact sentinel shape was chosen.
-const UNKNOWN_EXECUTOR: &str = "unknown (legacy NULL task_attempts.executor)";
+use super::UNKNOWN_EXECUTOR;
 
 impl ExecutionProcess {
     /// Find execution process by ID
@@ -213,7 +197,7 @@ impl ExecutionProcess {
             };
             event_journal::append(&mut *tx, &event)
                 .await
-                .map_err(journal_err_to_sqlx)?;
+                .map_err(sqlx::Error::from)?;
         }
 
         tx.commit().await?;
@@ -518,7 +502,7 @@ impl ExecutionProcess {
         };
         event_journal::append(&mut *tx, &event)
             .await
-            .map_err(journal_err_to_sqlx)?;
+            .map_err(sqlx::Error::from)?;
 
         tx.commit().await?;
 

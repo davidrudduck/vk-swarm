@@ -105,7 +105,7 @@ pub async fn run_hook(
     pool: SqlitePool,
     hook: Arc<dyn TriggerHook>,
     event_bus: Arc<crate::services::event_bus::EventBus>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let hook_name = hook.name();
 
     // Load the cursor and check the rebootstrap flag
@@ -120,9 +120,7 @@ pub async fn run_hook(
         );
 
         // Find the journal's current low-water mark
-        let new_min: Option<i64> = sqlx::query_scalar("SELECT MIN(seq) FROM event_journal")
-            .fetch_one(&pool)
-            .await?;
+        let new_min = db::models::event_journal::low_water_mark(&pool).await?;
 
         // Compaction flags only cursors that actually lost events (more than one below the
         // new minimum; a cursor at MIN(seq) - 1 still resumes gaplessly and is not flagged).
@@ -130,7 +128,12 @@ pub async fn run_hook(
         // one BELOW the low-water mark for the first retained event to be delivered.
         // `seq` is INTEGER PRIMARY KEY AUTOINCREMENT, so MIN(seq) >= 1 and this cannot go
         // negative.
-        cursor = new_min.map(|m| m - 1).unwrap_or(0);
+        //
+        // Never move the cursor BACKWARDS: `set()` deliberately preserves the flag and a live
+        // runner never re-reads it, so a runner that was flagged mid-run, caught up, and then
+        // respawned would otherwise reset an already-advanced cursor to the low-water mark and
+        // mass-redeliver events it has processed.
+        cursor = cursor.max(new_min.map(|m| m - 1).unwrap_or(0));
         info!(
             hook_name = %hook_name,
             // Exclusive cursor: replay begins at the next seq, i.e. the journal's low-water mark.
@@ -152,16 +155,13 @@ pub async fn run_hook(
     while let Some(result) = futures_util::stream::StreamExt::next(&mut stream).await {
         let event = result?;
 
-        // Check if the event matches this hook's filter
+        // Fire on a match, then persist; non-matching events advance the cursor too (for the
+        // compaction floor). One persist site — the at-least-once fire-before-persist ordering
+        // (D11) is unchanged.
         if hook.matches(&event.event) {
-            // Fire the hook for matching events
             hook.fire(event.clone()).await;
-            // Then persist the cursor
-            trigger_cursor::set(&pool, hook_name, event.seq).await?;
-        } else {
-            // Non-matching events still advance the cursor (for compaction floor)
-            trigger_cursor::set(&pool, hook_name, event.seq).await?;
         }
+        trigger_cursor::set(&pool, hook_name, event.seq).await?;
     }
 
     Ok(())
@@ -478,11 +478,8 @@ mod tests {
         let hook_clone = hook.clone();
         let event_bus_clone = event_bus.clone();
         let pool_clone = pool.clone();
-        let handle = tokio::spawn(async move {
-            run_hook(pool_clone, hook_clone, event_bus_clone)
-                .await
-                .map_err(|e| e.to_string())
-        });
+        let handle =
+            tokio::spawn(async move { run_hook(pool_clone, hook_clone, event_bus_clone).await });
 
         let outcome = handle.await.unwrap();
         assert!(
@@ -725,6 +722,84 @@ mod tests {
             cursor, seq2,
             "Cursor should reflect the last processed event"
         );
+
+        handle.abort();
+    }
+
+    /// Regression: a stale rebootstrap flag must never move an already-advanced cursor
+    /// BACKWARDS. `set` preserves the flag and a live runner never re-reads it, so a runner
+    /// flagged mid-run that caught up and then respawned would otherwise reset its cursor to
+    /// the low-water mark and mass-redeliver processed events.
+    #[tokio::test]
+    async fn rebootstrap_never_moves_an_advanced_cursor_backwards() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let event_bus =
+            Arc::new(crate::services::event_bus::EventBus::new(pool.clone(), 256).await);
+
+        let hook = Arc::new(RecordingHook::new(
+            "test_hook_no_regress",
+            "task_status_changed",
+        ));
+
+        // Two journaled events; the journal's low-water mark is seq1.
+        let task_id = Uuid::new_v4();
+        let seq1 = commit_event(
+            &pool,
+            NodeEvent::TaskStatusChanged {
+                task_id,
+                old_status: db::models::task::TaskStatus::Todo,
+                new_status: db::models::task::TaskStatus::InProgress,
+            },
+        )
+        .await;
+        let seq2 = commit_event(
+            &pool,
+            NodeEvent::TaskStatusChanged {
+                task_id,
+                old_status: db::models::task::TaskStatus::InProgress,
+                new_status: db::models::task::TaskStatus::InReview,
+            },
+        )
+        .await;
+
+        // Stale flag scenario: the flag is set but the cursor has ALREADY advanced past the
+        // low-water mark (the runner caught up after the hard-cap pass that flagged it).
+        sqlx::query(
+            r#"INSERT INTO trigger_cursors (hook_name, last_processed_seq, needs_rebootstrap, updated_at)
+               VALUES (?, ?, 1, datetime('now', 'subsec'))"#,
+        )
+        .bind("test_hook_no_regress")
+        .bind(seq2)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let hook_clone = hook.clone();
+        let event_bus_clone = event_bus.clone();
+        let pool_clone = pool.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_hook(pool_clone, hook_clone, event_bus_clone).await;
+        });
+
+        sleep(Duration::from_millis(300)).await;
+
+        // The cursor stayed at seq2 (max of persisted vs low-water reset), so NEITHER event
+        // is redelivered.
+        assert_eq!(
+            fired_seqs(&hook),
+            Vec::<i64>::new(),
+            "an already-advanced cursor must not replay processed events (got redelivery of {:?}, low-water was {seq1})",
+            fired_seqs(&hook),
+        );
+
+        let (cursor, flag) = trigger_cursor::get_with_flag(&pool, "test_hook_no_regress")
+            .await
+            .unwrap();
+        assert!(
+            !flag,
+            "flag must still be cleared after the no-op rebootstrap"
+        );
+        assert_eq!(cursor, seq2, "cursor must not move backwards");
 
         handle.abort();
     }

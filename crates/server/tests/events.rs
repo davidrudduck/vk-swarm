@@ -857,3 +857,48 @@ async fn cursor_below_retained_history_returns_410() {
         "a cursor at low_water - 1 resumes gaplessly and must be accepted"
     );
 }
+
+/// Test 11: a cursor above the journal high-water mark is rejected with 410 Gone. seq only
+/// grows in normal operation, so this means the journal head regressed (restore from backup);
+/// without the check the client gets a 200 and a permanently silent stream.
+#[tokio::test]
+#[serial_test::serial]
+async fn cursor_above_high_water_returns_410() {
+    let h = common::HiveHarness::hive_absent().await;
+    let pool = h.deployment().db().pool.clone();
+
+    for _ in 0..3 {
+        sqlx::query("INSERT INTO event_journal (event_type, payload) VALUES (?, ?)")
+            .bind("task_created")
+            .bind(r#"{"type":"task_created","task_id":"00000000-0000-0000-0000-000000000001","project_id":"00000000-0000-0000-0000-000000000002"}"#)
+            .execute(&pool)
+            .await
+            .expect("failed to seed event_journal");
+    }
+
+    let client = reqwest::Client::new();
+
+    // High-water mark is 3; a cursor of 10 can only come from a pre-regression journal.
+    let res = client
+        .get(format!("http://{}/api/events?cursor=10", h.addr()))
+        .send()
+        .await
+        .expect("failed to request /api/events with regressed-head cursor");
+    assert_eq!(
+        res.status().as_u16(),
+        410,
+        "a cursor above the high-water mark must be 410 Gone, not a silent stream"
+    );
+
+    // A cursor AT the high-water mark is the normal caught-up case and must be accepted.
+    let caught_up = client
+        .get(format!("http://{}/api/events?cursor=3", h.addr()))
+        .send()
+        .await
+        .expect("failed to request /api/events with caught-up cursor");
+    assert_eq!(
+        caught_up.status().as_u16(),
+        200,
+        "a cursor at the high-water mark must be accepted"
+    );
+}

@@ -42,8 +42,7 @@ pub enum EventBusError {
 }
 
 /// Internal state for the replay-to-live stream.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[derive(Debug)]
 enum StreamState {
     Initializing,
     ReplayingJournal {
@@ -51,7 +50,6 @@ enum StreamState {
         index: usize,
     },
     Live,
-    Closed,
 }
 
 /// Subscription state holding all mutable parts.
@@ -113,9 +111,10 @@ impl EventBus {
         broadcast_capacity: usize,
         ready_timeout: std::time::Duration,
     ) -> Self {
-        let (_tx, _rx) = broadcast::channel(broadcast_capacity);
+        let (sender, _rx) = broadcast::channel(broadcast_capacity);
         let tailer_health = Arc::new(TailerHealth::default());
-        let (tailer, ready) = tailer::spawn(pool.clone(), _tx.clone(), Arc::clone(&tailer_health));
+        let (tailer, ready) =
+            tailer::spawn(pool.clone(), sender.clone(), Arc::clone(&tailer_health));
 
         match tokio::time::timeout(ready_timeout, ready).await {
             Ok(Ok(())) => {
@@ -144,7 +143,7 @@ impl EventBus {
 
         Self {
             pool,
-            sender: _tx,
+            sender,
             tailer_handle: std::sync::Arc::new(tokio::sync::Mutex::new(Some(tailer))),
             tailer_health,
         }
@@ -259,12 +258,20 @@ impl EventBus {
                                     continue;
                                 }
                                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                                    // Overrun; refill from journal (critical invariant 4)
+                                    // Overrun; refill from journal (critical invariant 4).
+                                    //
+                                    // On a refill FAILURE the state resets to Initializing before
+                                    // the Err is yielded: staying Live would let a consumer that
+                                    // polls past the Err silently skip the lagged-out range (the
+                                    // receiver has already been repositioned past it). From
+                                    // Initializing the next poll re-replays from state.last, so
+                                    // the stream self-heals with no gap.
                                     let mark = match event_journal::high_water_mark(&state.pool)
                                         .await
                                     {
                                         Ok(m) => m,
                                         Err(e) => {
+                                            state.state = StreamState::Initializing;
                                             return Some((Err(EventBusError::Journal(e)), state));
                                         }
                                     };
@@ -278,6 +285,7 @@ impl EventBus {
                                             continue;
                                         }
                                         Err(e) => {
+                                            state.state = StreamState::Initializing;
                                             return Some((Err(EventBusError::Journal(e)), state));
                                         }
                                     }
@@ -289,10 +297,6 @@ impl EventBus {
                         } else {
                             return None;
                         }
-                    }
-
-                    StreamState::Closed => {
-                        return None;
                     }
                 }
             }

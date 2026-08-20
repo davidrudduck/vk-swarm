@@ -355,6 +355,13 @@ pub async fn perform_cleanup_actions(deployment: &DeploymentImpl) {
         tracing::error!("Failed to cleanly kill running execution processes: {}", e);
     }
 
+    // Stop the event-journal background writers (compaction loop, bus tailer) BEFORE the
+    // final checkpoint: they write to the journal/cursor tables, so leaving them live would
+    // re-populate the WAL after the truncate and spin on PoolClosed after the pool closes.
+    tracing::info!("Stopping event journal services...");
+    deployment.shutdown_event_services().await;
+    tracing::info!("Event journal services stopped");
+
     // Run TRUNCATE checkpoint to ensure all WAL content is written to main database.
     // This is critical for data durability - if the server is killed after this point,
     // the database will be in a consistent state.

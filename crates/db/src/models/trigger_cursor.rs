@@ -104,21 +104,6 @@ pub async fn ensure_row(pool: &SqlitePool, hook_name: &str) -> Result<(), sqlx::
     Ok(())
 }
 
-/// Get the minimum cursor across all hooks.
-///
-/// Used by compaction to determine which journal rows can be deleted. Returns None if the
-/// table is empty.
-pub async fn min_cursor(pool: &SqlitePool) -> Result<Option<i64>, sqlx::Error> {
-    let min = sqlx::query_scalar::<_, Option<i64>>(
-        r#"SELECT MIN(last_processed_seq) FROM trigger_cursors"#,
-    )
-    .fetch_optional(pool)
-    .await?
-    .flatten();
-
-    Ok(min)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,26 +134,6 @@ mod tests {
 
         let cursor = get(&pool, "test_hook").await.unwrap();
         assert_eq!(cursor, 20);
-    }
-
-    #[tokio::test]
-    async fn test_min_cursor_empty_table() {
-        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
-
-        let min = min_cursor(&pool).await.unwrap();
-        assert_eq!(min, None);
-    }
-
-    #[tokio::test]
-    async fn test_min_cursor_with_rows() {
-        let (pool, _temp_dir) = db::test_utils::create_test_pool().await;
-
-        set(&pool, "hook_a", 10).await.unwrap();
-        set(&pool, "hook_b", 25).await.unwrap();
-        set(&pool, "hook_c", 5).await.unwrap();
-
-        let min = min_cursor(&pool).await.unwrap();
-        assert_eq!(min, Some(5));
     }
 
     #[tokio::test]

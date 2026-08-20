@@ -85,8 +85,8 @@ async fn poll_once(
                         // Publish to the broadcast channel.
                         // Ignore send errors — they mean zero receivers (normal idle state).
                         // Advance the cursor regardless.
-                        let _ = sender.send(seq_ev.clone());
                         *cursor = seq_ev.seq;
+                        let _ = sender.send(seq_ev);
                     }
                     debug!(last_published = *cursor, "tailer pass completed");
                     if count == 0 {

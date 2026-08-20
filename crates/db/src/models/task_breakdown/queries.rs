@@ -9,20 +9,8 @@ use super::{
     TaskDependency,
 };
 use crate::models::event::NodeEvent;
-use crate::models::event_journal::{self, EventJournalError};
+use crate::models::event_journal;
 use crate::models::task::{Task, TaskStatus};
-
-/// Map a journal-append failure onto `sqlx::Error` so the acceptance function maintains
-/// its pre-existing `Result<_, sqlx::Error>` signature. `Database` unwraps directly; `Serde`
-/// (payload serialization) has no sqlx::Error analogue, so it is reported via `Protocol`.
-fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
-    match e {
-        EventJournalError::Database(err) => err,
-        EventJournalError::Serde(err) => {
-            sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
-        }
-    }
-}
 
 /// Insert a new draft proposal for a task.
 pub async fn create(
@@ -471,7 +459,7 @@ pub async fn accept_proposal(
         };
         event_journal::append(&mut *tx, &event)
             .await
-            .map_err(journal_err_to_sqlx)?;
+            .map_err(sqlx::Error::from)?;
 
         item_to_task.insert(item.id, task.id);
         created_tasks.push(task);

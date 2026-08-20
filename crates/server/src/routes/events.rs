@@ -43,7 +43,6 @@ use crate::error::ApiError;
 pub struct EventsQuery {
     /// Cursor to start from. If provided, replays events with seq > cursor.
     /// If absent, streams live events only (NOT cursor=0).
-    #[serde(default)]
     pub cursor: Option<i64>,
 }
 
@@ -178,8 +177,25 @@ pub async fn events(
                 && cursor < min - 1
             {
                 return Err(ApiError::Gone(format!(
-                    "cursor {cursor} predates retained history (earliest retained seq is {min});                      refresh state and reconnect without a cursor"
+                    "cursor {cursor} predates retained history (earliest retained seq is                      {min}); refresh state and reconnect without a cursor"
                 )));
+            }
+            // A cursor ABOVE the high-water mark is equally unresumable: seq only grows in
+            // normal operation, so this happens when the journal head regressed (restore
+            // from backup, a documented workflow). Without this check the client gets a
+            // 200 and then permanent silence — replay is empty and the live dedup
+            // suppresses every event until seq catches back up. Same best-effort contract
+            // as the low-water read.
+            match event_journal::high_water_mark(&deployment.db().pool).await {
+                Ok(mark) if cursor > mark => {
+                    return Err(ApiError::Gone(format!(
+                        "cursor {cursor} is above the journal high-water mark ({mark});                          the journal head has regressed — refresh state and reconnect                          without a cursor"
+                    )));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    error!(error = ?e, "failed to read event journal high-water mark; deferring failure to the stream");
+                }
             }
             cursor
         }

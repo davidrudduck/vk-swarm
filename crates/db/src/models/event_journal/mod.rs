@@ -11,6 +11,22 @@ use sqlx::FromRow;
 mod queries;
 pub use queries::{append, compact, high_water_mark, low_water_mark, read_range};
 
+/// Fold a journal failure into `sqlx::Error` so lifecycle emitters can stay on their
+/// pre-existing `Result<_, sqlx::Error>` signatures. `Database` unwraps directly; `Serde`
+/// (payload serialization) has no sqlx::Error analogue, so it is reported via `Protocol` —
+/// the same pattern this crate already uses for folding non-sqlx failures into sqlx-only
+/// signatures (node_outbox.rs, task_breakdown/queries.rs).
+impl From<EventJournalError> for sqlx::Error {
+    fn from(e: EventJournalError) -> sqlx::Error {
+        match e {
+            EventJournalError::Database(err) => err,
+            EventJournalError::Serde(err) => {
+                sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
+            }
+        }
+    }
+}
+
 /// Error type for event journal operations.
 #[derive(Debug, thiserror::Error)]
 pub enum EventJournalError {

@@ -6,21 +6,8 @@ use uuid::Uuid;
 
 use super::{Task, TaskRelationships, TaskStatus};
 use crate::models::event::NodeEvent;
-use crate::models::event_journal::{self, EventJournalError};
+use crate::models::event_journal;
 use crate::models::{activity_dismissal::ActivityDismissal, task_attempt::TaskAttempt};
-
-/// Map a journal-append failure onto `sqlx::Error` — duplicated from
-/// `task::queries::journal_err_to_sqlx` (that copy is private to its module) rather than shared,
-/// to keep this task's two touched files independent. See that copy's doc comment for the
-/// Database/Serde split rationale.
-fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
-    match e {
-        EventJournalError::Database(err) => err,
-        EventJournalError::Serde(err) => {
-            sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
-        }
-    }
-}
 
 impl Task {
     /// Update the status of a task and clear any activity dismissals.
@@ -73,7 +60,7 @@ impl Task {
             };
             event_journal::append(&mut *tx, &event)
                 .await
-                .map_err(journal_err_to_sqlx)?;
+                .map_err(sqlx::Error::from)?;
         }
 
         tx.commit().await?;

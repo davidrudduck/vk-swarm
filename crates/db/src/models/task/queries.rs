@@ -6,23 +6,8 @@ use uuid::Uuid;
 
 use super::{CreateTask, Task, TaskStatus, TaskWithAttemptStatus};
 use crate::models::event::NodeEvent;
-use crate::models::event_journal::{self, EventJournalError};
+use crate::models::event_journal;
 use crate::models::project::Project;
-
-/// Map a journal-append failure onto `sqlx::Error` so the four task lifecycle functions can stay
-/// on their pre-existing `Result<_, sqlx::Error>` signatures (task 006 forbids changing return
-/// types). `Database` unwraps directly; `Serde` (payload serialization) has no sqlx::Error
-/// analogue, so it is reported via `Protocol` — the same pattern this crate already uses at
-/// node_outbox.rs:79 and task_breakdown/queries.rs:235 for folding a non-sqlx failure into a
-/// sqlx::Error-only signature.
-fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
-    match e {
-        EventJournalError::Database(err) => err,
-        EventJournalError::Serde(err) => {
-            sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
-        }
-    }
-}
 
 impl Task {
     pub async fn parent_project(&self, pool: &SqlitePool) -> Result<Option<Project>, sqlx::Error> {
@@ -314,7 +299,7 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
         };
         event_journal::append(&mut *tx, &event)
             .await
-            .map_err(journal_err_to_sqlx)?;
+            .map_err(sqlx::Error::from)?;
 
         tx.commit().await?;
 
@@ -387,7 +372,7 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
             };
             event_journal::append(&mut *tx, &event)
                 .await
-                .map_err(journal_err_to_sqlx)?;
+                .map_err(sqlx::Error::from)?;
         }
 
         tx.commit().await?;
@@ -498,7 +483,7 @@ ORDER BY COALESCE(t.activity_at, t.created_at) DESC"#,
             };
             event_journal::append(&mut *tx, &event)
                 .await
-                .map_err(journal_err_to_sqlx)?;
+                .map_err(sqlx::Error::from)?;
             1
         } else {
             0

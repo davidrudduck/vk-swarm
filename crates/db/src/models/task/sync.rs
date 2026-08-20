@@ -14,23 +14,7 @@ use uuid::Uuid;
 
 use super::{SyncTask, Task, TaskStatus};
 use crate::models::event::NodeEvent;
-use crate::models::event_journal::{self, EventJournalError};
-
-/// Map a journal-append failure onto `sqlx::Error` so `upsert_remote_task` can stay
-/// on its pre-existing `Result<_, sqlx::Error>` signature (task 006 forbids changing return
-/// types). `Database` unwraps directly; `Serde` (payload serialization) has no sqlx::Error
-/// analogue, so it is reported via `Protocol` — the same pattern already used at
-/// node_outbox.rs:79 and task_breakdown/queries.rs:235 for folding a non-sqlx failure into a
-/// sqlx::Error-only signature. Duplicated from `task::queries::journal_err_to_sqlx` (that copy
-/// is private to its module) rather than shared, to keep this module independent.
-fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
-    match e {
-        EventJournalError::Database(err) => err,
-        EventJournalError::Serde(err) => {
-            sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
-        }
-    }
-}
+use crate::models::event_journal;
 
 impl Task {
     /// Sync a task from a shared task.
@@ -386,7 +370,7 @@ impl Task {
                 };
                 event_journal::append(&mut *tx, &event)
                     .await
-                    .map_err(journal_err_to_sqlx)?;
+                    .map_err(sqlx::Error::from)?;
             }
             // Case 2: probe Some, upsert returned Some, status changed → emit TaskStatusChanged
             (Some((_, old_status)), Some(task)) if old_status != &task.status => {
@@ -397,7 +381,7 @@ impl Task {
                 };
                 event_journal::append(&mut *tx, &event)
                     .await
-                    .map_err(journal_err_to_sqlx)?;
+                    .map_err(sqlx::Error::from)?;
             }
             // Case 3: probe Some, upsert returned Some, status equal → emit nothing
             (Some(_), Some(_)) => {}

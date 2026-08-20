@@ -365,7 +365,6 @@ impl LocalDeployment {
 
                     // Spawn run_hook as its own task so a panic in `fire()` is caught as a
                     // JoinError and respawned, rather than killing this supervisor.
-                    // The closure must return () (not a Result) to satisfy tokio::spawn's Send bound
                     let inner_task = tokio::spawn(async move {
                         if let Err(e) = services::services::trigger_hooks::run_hook(
                             db_for_runner.pool,
@@ -810,6 +809,17 @@ impl LocalDeployment {
     /// `shutdown()` on any clone will stop the tailer for all clones.
     pub fn event_bus(&self) -> Arc<EventBus> {
         self.event_bus.clone()
+    }
+
+    /// Stop the event-journal background writers: the compaction loop and the bus tailer.
+    ///
+    /// Called from the server's shutdown path BEFORE the final WAL checkpoint — these
+    /// services write to the journal/cursor tables, so leaving them live across the
+    /// checkpoint re-populates the WAL the checkpoint just truncated, and after
+    /// `pool.close()` they spin on `PoolClosed` errors until process exit.
+    pub async fn shutdown_event_services(&self) {
+        self.compaction_handle.shutdown().await;
+        self.event_bus.shutdown().await;
     }
 
     /// Get direct access to the local container service.

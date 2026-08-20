@@ -6,30 +6,9 @@ use uuid::Uuid;
 
 use super::{ExecutionProcess, ExecutionProcessStatus};
 use crate::models::event::NodeEvent;
-use crate::models::event_journal::{self, EventJournalError};
+use crate::models::event_journal;
 
-/// Map a journal-append failure onto `sqlx::Error` — duplicated from
-/// `execution_process::queries::journal_err_to_sqlx` (that copy is private to its module, and
-/// this task's file set does not include `mod.rs`, so there is nowhere shared to put one copy).
-/// See `task::queries::journal_err_to_sqlx`'s doc comment for the Database/Serde split rationale.
-fn journal_err_to_sqlx(e: EventJournalError) -> sqlx::Error {
-    match e {
-        EventJournalError::Database(err) => err,
-        EventJournalError::Serde(err) => {
-            sqlx::Error::Protocol(format!("event journal payload serialization failed: {err}"))
-        }
-    }
-}
-
-/// Attempt 2 (task 007), item 4: `task_attempts.executor` is nullable at the schema level
-/// (legacy column, no `NOT NULL`) and sqlx's SQLite driver decodes a NULL into a plain `String`
-/// target as `""` rather than erroring — confirmed empirically, not assumed. Decoding as
-/// `Option<String>` and substituting THIS sentinel on `None` (rather than `unwrap_or_default()`)
-/// keeps the emitted identity self-evidently a placeholder — lowercase and prose-shaped, unlike
-/// every real value (`"CLAUDE_CODE"`, `"AMP"`, `"QA_MOCK"`, all `SCREAMING_SNAKE_CASE` per
-/// migration `20250903091032`) — so a consumer or a human reading the journal cannot mistake it
-/// for a real executor. Duplicated in `queries.rs` for the same reason `journal_err_to_sqlx` is.
-const UNKNOWN_EXECUTOR: &str = "unknown (legacy NULL task_attempts.executor)";
+use super::UNKNOWN_EXECUTOR;
 
 impl ExecutionProcess {
     pub async fn was_stopped(pool: &SqlitePool, id: Uuid) -> bool {
@@ -212,7 +191,7 @@ impl ExecutionProcess {
                 };
                 event_journal::append(&mut *tx, &event)
                     .await
-                    .map_err(journal_err_to_sqlx)?;
+                    .map_err(sqlx::Error::from)?;
             }
         }
 

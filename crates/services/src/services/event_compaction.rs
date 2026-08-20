@@ -118,6 +118,27 @@ fn sanitise_rows(mut min_rows: i64, mut max_rows: i64) -> (i64, i64) {
 /// This is a pure function to avoid environment variable mutation in tests.
 /// It sanitizes all values via [`sanitise_rows`] and logs warnings for any
 /// clamping that occurs.
+/// Clamp `retention_hours` to a sane range, falling back to the default when out of range.
+///
+/// Sanitised like the row thresholds because the config fields are public: a negative value
+/// silently future-dates the cutoff (deleting everything the min_rows floor allows), and an
+/// absurd magnitude panics `chrono::Duration::hours` inside the worker — `supervised_run`
+/// would catch the panic and compaction would silently stop for the process lifetime.
+fn sanitise_retention(retention_hours: i64) -> i64 {
+    const MAX_RETENTION_HOURS: i64 = 1_000_000; // ~114 years, far below chrono's panic bound
+    if (0..=MAX_RETENTION_HOURS).contains(&retention_hours) {
+        retention_hours
+    } else {
+        tracing::warn!(
+            variable = "VK_EVENT_RETENTION_HOURS",
+            configured = retention_hours,
+            effective = DEFAULT_RETENTION_HOURS,
+            "Out-of-range retention; falling back to default"
+        );
+        DEFAULT_RETENTION_HOURS
+    }
+}
+
 fn parse_event_compaction_config(
     retention_hours_str: Option<String>,
     min_rows_str: Option<String>,
@@ -129,6 +150,7 @@ fn parse_event_compaction_config(
         DEFAULT_RETENTION_HOURS,
         "VK_EVENT_RETENTION_HOURS",
     );
+    let retention_hours = sanitise_retention(retention_hours);
 
     let min_rows_raw = parse_i64_or_default(&min_rows_str, DEFAULT_MIN_ROWS, "VK_EVENT_MIN_ROWS");
 
@@ -283,15 +305,23 @@ impl EventCompaction {
 
         loop {
             tokio::select! {
-                Some(cmd) = rx.recv() => {
+                cmd = rx.recv() => {
                     match cmd {
-                        EventCompactionCommand::CompactNow => {
+                        Some(EventCompactionCommand::CompactNow) => {
                             // Errors are already logged inside run_compaction; the
                             // loop must never crash on a failed compaction pass.
                             let _ = self.run_compaction().await;
                         }
-                        EventCompactionCommand::Shutdown => {
+                        Some(EventCompactionCommand::Shutdown) => {
                             tracing::info!("Event compaction service shutting down");
+                            break;
+                        }
+                        // Every handle has dropped: nothing can ever command this worker
+                        // again, so exit instead of ticking forever.
+                        None => {
+                            tracing::info!(
+                                "Event compaction service stopping: all handles dropped"
+                            );
                             break;
                         }
                     }
@@ -315,14 +345,10 @@ impl EventCompaction {
         let start = std::time::Instant::now();
 
         let (min_rows, max_rows) = sanitise_rows(self.config.min_rows, self.config.max_rows);
+        let retention_hours = sanitise_retention(self.config.retention_hours);
 
-        match db::models::event_journal::compact(
-            &self.pool,
-            self.config.retention_hours,
-            min_rows,
-            max_rows,
-        )
-        .await
+        match db::models::event_journal::compact(&self.pool, retention_hours, min_rows, max_rows)
+            .await
         {
             Ok(deleted_count) => {
                 let duration = start.elapsed();

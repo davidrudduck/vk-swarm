@@ -9547,3 +9547,26 @@ Line 8042 originally named the live node/hive endpoints verbatim. Redacted to pl
 standing rule that deployment endpoints live in operator memory only, never in checked-in files
 (/dr:pr STEP 1 clean-commit audit). Semantics of the manual-verification obligation are unchanged.
 The endpoints remain in earlier commits of this branch; a squash-merge keeps them out of main.
+
+## Post-review known issues
+
+Populated by the /wai:close pre-graduation code-review loop (round 1, 2026-08-20; full detail in
+`reviews/code-review-round-1.md` items 18-30). These are adjudicated non-actionable for this run;
+they must not resurface as fresh blockers in later rounds.
+
+- **All-run-reason attempt emission** (record #18): Attempt* events emit for setup/cleanup/dev-server/breakdown processes, not just coding agents — adjudicated by SC2 + undictated-choice-1 ("executor identity on every attempt event regardless of run reason"). Semantic refinement = spec change; consumers disambiguate via execution_process_id -> run_reason.
+- **410 gate is advisory** (#19): one-compaction-tick TOCTOU window between the route check and the stream's first read; atomic fix requires the check inside subscribe_from's replay transaction.
+- **clear_rebootstrap can erase a concurrent fresh loss-flag** (#20): signal-only, narrow window.
+- **Full-window replay materialization** (#21): bounded by the hard cap; batching is follow-up.
+- **ReconcileCompleted journaled on failure/no-client** (#22): possibly intended; design decision pending.
+- **Pre-stream 500 leaks sqlx Display text** (#23): consistent with repo-wide ApiError behavior.
+- **read_range poison-pill under version skew** (#24), **compact under-flag on emptied journal** (#25, unreachable in production), **accept_proposal deferred-tx shape** (#26, pre-existing), **subscribe_from infallible Result** (#27), **replay-arm duplication** (#28), **test-only duplication** (#29), **supervisor backoff never resets** (#30).
+
+### Deviation note — remediation executed by the orchestrator (2026-08-20)
+
+The close skill routes remediation through the standard WAI loop (constrained implementer ->
+Stage-1 gate -> Stage-2 panel). This run's board is terminal (23/23 passed) and the remediation
+set is 17 small, verified findings from the close gate itself; the orchestrator applied them
+directly with gate-equivalent validation (cargo test affected suites + workspace clippy -D
+warnings + fmt + generate-types:check) and round-2 /dr:code-review as the independent check.
+Recorded here so the departure from the dispatch protocol is declared, not silent.
