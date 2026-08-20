@@ -153,6 +153,11 @@ pub async fn events(
                 error!(error = ?e, "failed to read event journal high-water mark");
                 internal_error(e)
             })?,
+        Some(cursor) if cursor < 0 => {
+            return Err(ApiError::BadRequest(format!(
+                "cursor must be non-negative, got {cursor}"
+            )));
+        }
         Some(cursor) => cursor,
     };
 

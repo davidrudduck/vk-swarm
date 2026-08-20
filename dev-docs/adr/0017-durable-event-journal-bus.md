@@ -34,16 +34,22 @@ Events are **journaled first, broadcast second**, entirely node-local:
   "after commit" is now enforced structurally by a journal tailer rather than by the model function
   publishing; the `Sender` lives in `crates/services`, not `crates/db`.)
 - Consumers (internal trigger hooks and the external SSE endpoint) resume from any
-  `seq` cursor by reading the journal, then switch to live — **at-least-once, no journaled
-  event skipped, duplicates possible; consumers must be idempotent**.
+  `seq` cursor by reading the journal, then switch to live — **at-least-once, no retained
+  journaled event skipped, duplicates possible; consumers must be idempotent**. Compaction
+  (Amendment 7) bounds retained history: a cursor below the journal low-water mark replays
+  only retained rows. Persisted trigger cursors get an explicit `needs_rebootstrap` signal;
+  SSE clients must treat a cursor older than retained history as a full-refresh case (the
+  stream does not report the compacted range).
 - Replay-to-live handoff contract (all consumers): subscribe to the live channel FIRST,
   capture the journal high-water mark, replay journal rows `(cursor, mark]` in seq order,
   drain buffered live events discarding `seq <= last-replayed`, and on broadcast `Lagged(n)`
   refill from the journal at the last-delivered seq before resuming live. Lag never skips a
-  journaled event — it degrades to a journal re-read.
-- `seq` is monotonic and never reused or regressed, but **not contiguous**: a rolled-back
-  transaction may consume a value. A hole in the integer sequence is not evidence of a missed
-  event; the journal is the authority.
+  retained journaled event — it degrades to a journal re-read.
+- `seq` is monotonic over committed, observable rows and never reused or regressed among
+  them, but **not contiguous** as a matter of contract: consumers must tolerate holes. A hole
+  in the integer sequence is not evidence of a missed event; the journal is the authority.
+  (Amendment 2 corrected the original rationale here: SQLite reverts and reuses a rolled-back
+  allocation, which is never observable — see Amendment 8 for the committed-row scope.)
 - The event schema is one Rust enum (snake_case serde, ts-rs export) — the single typed
   contract for backend and external subscribers.
 - Retention: journal is bounded by a compaction policy (age + row-count floor, env-tunable)

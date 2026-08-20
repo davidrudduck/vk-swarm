@@ -124,9 +124,10 @@ pub async fn run_hook(
             .fetch_one(&pool)
             .await?;
 
-        // Compaction flags cursors STRICTLY BELOW the new minimum, so the event at MIN(seq)
-        // survived and is unprocessed. `subscribe_from` replays `seq > cursor` exclusively, so
-        // the cursor must sit one BELOW the low-water mark for that event to be delivered.
+        // Compaction flags only cursors that actually lost events (more than one below the
+        // new minimum; a cursor at MIN(seq) - 1 still resumes gaplessly and is not flagged).
+        // `subscribe_from` replays `seq > cursor` exclusively, so the reset cursor must sit
+        // one BELOW the low-water mark for the first retained event to be delivered.
         // `seq` is INTEGER PRIMARY KEY AUTOINCREMENT, so MIN(seq) >= 1 and this cannot go
         // negative.
         cursor = new_min.map(|m| m - 1).unwrap_or(0);

@@ -784,3 +784,24 @@ async fn no_cursor_with_unreadable_journal_returns_500() {
         "an unreadable journal on the no-cursor path must be an HTTP error, not a stream"
     );
 }
+
+/// Test 9: a negative cursor is rejected with 400 before any journal read or subscription.
+/// A journal cursor cannot be negative; cursor=-1 previously behaved like a full
+/// retained-history replay instead of an input-validation error.
+#[tokio::test]
+#[serial_test::serial]
+async fn negative_cursor_returns_400() {
+    let h = common::HiveHarness::hive_absent().await;
+
+    let res = reqwest::Client::new()
+        .get(format!("http://{}/api/events?cursor=-1", h.addr()))
+        .send()
+        .await
+        .expect("failed to request /api/events");
+
+    assert_eq!(
+        res.status().as_u16(),
+        400,
+        "a negative cursor must be an input-validation error, not a replay"
+    );
+}

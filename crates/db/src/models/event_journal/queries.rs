@@ -175,11 +175,13 @@ pub async fn compact(
                 .await?
                 .unwrap_or(0);
 
-        // Flag cursors that are below the new minimum
+        // Flag only cursors that actually lost events. A cursor c resumes at seq > c, so
+        // c = new_min_seq - 1 still delivers the first retained row (new_min_seq) with no gap;
+        // loss requires c + 1 < new_min_seq, i.e. c < new_min_seq - 1.
         sqlx::query(
             "UPDATE trigger_cursors SET needs_rebootstrap = 1 WHERE last_processed_seq < ?",
         )
-        .bind(new_min_seq)
+        .bind(new_min_seq - 1)
         .execute(&mut *tx)
         .await?;
 

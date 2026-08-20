@@ -508,4 +508,68 @@ mod tests {
             "cursor above new minimum should NOT be flagged"
         );
     }
+
+    /// Regression: a cursor at new_min_seq - 1 lost nothing — it resumes at seq > cursor,
+    /// which is exactly the first retained row — so it must NOT be flagged for rebootstrap.
+    /// Only cursors below new_min_seq - 1 have a deleted, unprocessed event between the
+    /// cursor and the low-water mark.
+    #[tokio::test]
+    async fn hard_cap_does_not_rebootstrap_a_cursor_at_the_retained_boundary() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+
+        // Boundary cursor: after hard-cap deletion the new minimum surviving seq is 16,
+        // so a cursor at 15 resumes gaplessly at 16.
+        sqlx::query("INSERT INTO trigger_cursors (hook_name, last_processed_seq) VALUES (?, ?)")
+            .bind("test_hook_boundary")
+            .bind(15)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // One below the boundary: seq 15 existed, was deleted, and was never processed.
+        sqlx::query("INSERT INTO trigger_cursors (hook_name, last_processed_seq) VALUES (?, ?)")
+            .bind("test_hook_lost")
+            .bind(14)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let max_rows = 10;
+        for i in 0..(max_rows + 15) {
+            sqlx::query("INSERT INTO event_journal (event_type, payload) VALUES (?, ?)")
+                .bind("task_created")
+                .bind(format!(
+                    r#"{{"type":"task_created","task_id":"00000000-0000-0000-0000-00000000000{}","project_id":"00000000-0000-0000-0000-00000000000{}"}}"#,
+                    i, i
+                ))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Hard cap deletes seqs 1-15; new minimum surviving seq = 16.
+        compact(&pool, 24, 1, max_rows as i64).await.unwrap();
+
+        let boundary: (i64,) =
+            sqlx::query_as("SELECT needs_rebootstrap FROM trigger_cursors WHERE hook_name = ?")
+                .bind("test_hook_boundary")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            boundary.0, 0,
+            "a cursor at new_min_seq - 1 resumes gaplessly and must not be flagged"
+        );
+
+        let lost: (i64,) =
+            sqlx::query_as("SELECT needs_rebootstrap FROM trigger_cursors WHERE hook_name = ?")
+                .bind("test_hook_lost")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            lost.0, 1,
+            "a cursor with a deleted unprocessed event between it and the low-water mark must be flagged"
+        );
+    }
 }

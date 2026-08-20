@@ -211,13 +211,33 @@ enum EventCompactionCommand {
 
 impl EventCompactionHandle {
     /// Request an immediate compaction run.
+    ///
+    /// Best-effort: if the worker has already exited (its panic/exit is logged by
+    /// supervised_run), the send failure is logged rather than silently discarded.
     pub async fn compact_now(&self) {
-        let _ = self.tx.send(EventCompactionCommand::CompactNow).await;
+        if self
+            .tx
+            .send(EventCompactionCommand::CompactNow)
+            .await
+            .is_err()
+        {
+            tracing::warn!("compact_now ignored: event compaction worker has exited");
+        }
     }
 
     /// Shutdown the event compaction service.
+    ///
+    /// Best-effort: a send failure means the worker is already gone, which is the goal
+    /// state of shutdown; it is logged for observability rather than silently discarded.
     pub async fn shutdown(&self) {
-        let _ = self.tx.send(EventCompactionCommand::Shutdown).await;
+        if self
+            .tx
+            .send(EventCompactionCommand::Shutdown)
+            .await
+            .is_err()
+        {
+            tracing::warn!("shutdown signal ignored: event compaction worker has already exited");
+        }
     }
 }
 
