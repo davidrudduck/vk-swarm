@@ -1,0 +1,302 @@
+{
+  "schema_version": 1,
+  "workstream": "local-node-browser-oauth",
+  "decisions": [
+    {
+      "id": "D1",
+      "title": "Authorization boundary",
+      "options": [
+        {
+          "label": "Explicit public and protected routers",
+          "consequence": "All node-local routes inherit authorization unless deliberately placed in the small public router.",
+          "chosen": true
+        },
+        {
+          "label": "Per-handler authorization",
+          "consequence": "Every current and future handler must remember to opt in, leaving omission as an anonymous-data leak.",
+          "chosen": false
+        }
+      ],
+      "rationale": "Deny-by-default routing makes the security boundary reviewable and future-safe."
+    },
+    {
+      "id": "D2",
+      "title": "Local authorization persistence",
+      "options": [
+        {
+          "label": "Migrated SQLite owner, handoff, and session records",
+          "consequence": "Browser authorization and owner identity survive node restart and participate in atomic claims/revocations.",
+          "chosen": true
+        },
+        {
+          "label": "Process-local maps",
+          "consequence": "Restart loses sessions and handoffs, and ownership/replay behavior cannot be transactionally enforced.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The accepted session lifetime and restart behavior require durable local state."
+    },
+    {
+      "id": "D3",
+      "title": "Browser handoff binding",
+      "options": [
+        {
+          "label": "HTTP-only pre-auth binding cookie plus atomic handoff claim",
+          "consequence": "The callback URL alone is insufficient in another browser and one matching concurrent claimant wins.",
+          "chosen": true
+        },
+        {
+          "label": "Handoff UUID only",
+          "consequence": "Anyone receiving the callback URL can complete the handoff in a different browser.",
+          "chosen": false
+        }
+      ],
+      "rationale": "A browser-held secret binds the existing Hive handoff without exposing daemon credentials."
+    },
+    {
+      "id": "D4",
+      "title": "Owner lifecycle",
+      "options": [
+        {
+          "label": "First subject pins; different subjects reject; disconnect retains owner",
+          "consequence": "A disconnected node remains owned and cannot be claimed by another Hive user through ordinary OAuth.",
+          "chosen": true
+        },
+        {
+          "label": "Disconnect clears owner",
+          "consequence": "Anyone who can reach a disconnected trusted-LAN node can race to become its new owner.",
+          "chosen": false
+        },
+        {
+          "label": "Different OAuth subject replaces owner",
+          "consequence": "Normal login doubles as an ownership-transfer path without a separate high-risk confirmation.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The roadmap is single-owner and explicitly excludes an owner-transfer workflow."
+    },
+    {
+      "id": "D5",
+      "title": "Logout and disconnect API",
+      "options": [
+        {
+          "label": "Add browser-session logout; keep explicit Hive disconnect separate",
+          "consequence": "UI logout revokes one browser while existing daemon-disconnect semantics remain available as a protected operation.",
+          "chosen": true
+        },
+        {
+          "label": "Reuse one logout operation for both",
+          "consequence": "A routine browser logout stops sync and revokes every browser session.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The two operator intents have different revocation scopes and must remain visible."
+    },
+    {
+      "id": "D6",
+      "title": "Hive outage semantics",
+      "options": [
+        {
+          "label": "Authorize locally after session creation",
+          "consequence": "Established local work continues through transport, timeout, refresh, and 5xx failures.",
+          "chosen": true
+        },
+        {
+          "label": "Revalidate every browser request with Hive",
+          "consequence": "Hive availability becomes a dependency for all node-local operations.",
+          "chosen": false
+        }
+      ],
+      "rationale": "Local availability is a first-release requirement and explicit disconnect remains the only intentional global revocation path."
+    },
+    {
+      "id": "D7",
+      "title": "Long-lived stream authentication",
+      "options": [
+        {
+          "label": "Browser cookie for node-local streams; explicit valid connection token only on direct-log routes",
+          "consequence": "Local browser streams share one boundary while existing remote direct-log access remains authenticated rather than anonymously open.",
+          "chosen": true
+        },
+        {
+          "label": "Require browser cookie on every stream without exception",
+          "consequence": "Existing Hive-issued direct-log consumers can no longer connect to the node.",
+          "chosen": false
+        },
+        {
+          "label": "Leave streams anonymous when no token is supplied",
+          "consequence": "Unauthenticated LAN clients retain raw execution and terminal access.",
+          "chosen": false
+        }
+      ],
+      "rationale": "Preserve the existing separate remote-auth contract without leaving an anonymous fallback."
+    },
+    {
+      "id": "D8",
+      "title": "Frontend bootstrap",
+      "options": [
+        {
+          "label": "Minimal public auth state, then protected app bootstrap",
+          "consequence": "Fresh browsers render login without receiving configuration or starting protected live connections.",
+          "chosen": true
+        },
+        {
+          "label": "Keep `/api/info` public",
+          "consequence": "Unauthenticated clients continue receiving node configuration and executor/environment information.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The login shell needs only authorization availability, not protected system data."
+    },
+    {
+      "id": "D9",
+      "title": "Session cookie policy",
+      "options": [
+        {
+          "label": "Five-year HttpOnly SameSite=Lax cookie without Secure",
+          "consequence": "Sessions persist across browser restart on supported plain HTTP LAN deployments, with the documented plaintext risk.",
+          "chosen": true
+        },
+        {
+          "label": "Require Secure",
+          "consequence": "Browsers on the explicitly supported HTTP deployment will not send the session cookie.",
+          "chosen": false
+        },
+        {
+          "label": "Short server expiry",
+          "consequence": "The operator must periodically reauthenticate and Hive availability affects routine local continuity.",
+          "chosen": false
+        }
+      ],
+      "rationale": "This exactly matches the accepted trusted-LAN and generous-session constraints."
+    }
+  ],
+  "obstacles": [
+    {
+      "id": "O1",
+      "criterion": "SC1",
+      "obstacle": "The current router merges every API into one anonymous subtree and unknown API GETs can fall through to SPA HTML.",
+      "countermeasure": "Construct explicit public/protected routers, authenticate the protected subtree, and terminate unknown `/api/*` paths inside the API boundary."
+    },
+    {
+      "id": "O2",
+      "criterion": "SC2",
+      "obstacle": "WebSocket and SSE handlers currently upgrade or stream without a browser-session boundary, and optional-token routes accept no token as local access.",
+      "countermeasure": "Authenticate before extraction/upgrade for every stream and remove anonymous fallback while retaining only explicitly valid alternative connection-token mode."
+    },
+    {
+      "id": "O3",
+      "criterion": "SC3",
+      "obstacle": "The existing handoff UUID is bearer-like and global auth polling authorizes every browser after daemon login.",
+      "countermeasure": "Bind each handoff to a secret HTTP-only browser cookie and return browser-specific local auth state from the presenting session."
+    },
+    {
+      "id": "O4",
+      "criterion": "SC4",
+      "obstacle": "Local pending handoffs have no timestamp and removal-before-I/O is not a durable atomic single-consumer contract.",
+      "countermeasure": "Persist exact expiry and state, conditionally claim matching pending rows, and make claimed/completed/failed rows non-replayable."
+    },
+    {
+      "id": "O5",
+      "criterion": "SC5",
+      "obstacle": "No browser-session schema or cookie exists, and daemon profile cache disappears on restart.",
+      "countermeasure": "Persist hash-only local sessions independent of profile cache and issue a long-lived opaque cookie with no server-time expiry check."
+    },
+    {
+      "id": "O6",
+      "criterion": "SC6",
+      "obstacle": "The node currently saves candidate credentials before profile lookup and persists no stable owner subject.",
+      "countermeasure": "Fetch candidate profile first, atomically pin/compare the owner, reject mismatches, and only then replace daemon credentials and mint a session."
+    },
+    {
+      "id": "O7",
+      "criterion": "SC7",
+      "obstacle": "Current navbar logout invokes global daemon logout, stops sync, and deletes credentials.",
+      "countermeasure": "Add a presenting-session revocation operation and update navbar state without calling the explicit disconnect path."
+    },
+    {
+      "id": "O8",
+      "criterion": "SC8",
+      "obstacle": "SQLite session revocation and file/Keychain credential deletion cannot share one transaction.",
+      "countermeasure": "Revoke all sessions transactionally first, then stop sync/delete credentials, return any deletion failure visibly, and retain the pinned owner."
+    },
+    {
+      "id": "O9",
+      "criterion": "SC9",
+      "obstacle": "Current login status depends on cached/remote Hive profile and restart during outage appears logged out.",
+      "countermeasure": "Derive browser authorization solely from durable local sessions and keep transport/refresh errors separate from explicit disconnect side effects."
+    },
+    {
+      "id": "O10",
+      "criterion": "SC10",
+      "obstacle": "OAuth changes can accidentally return candidate tokens in errors, redirects, debug logs, or frontend state.",
+      "countermeasure": "Keep redemption and profile lookup server-side, redact token-bearing errors, use opaque local cookies, and scan real-harness browser-visible surfaces with sentinel credentials."
+    }
+  ],
+  "decision_points": [
+    {
+      "id": "DP1",
+      "trigger": "Execution reaches the additive SQLite migration task and requires explicit approval before applying an irreversible production schema migration.",
+      "halt_codes": [
+        "human_gate_required"
+      ]
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "A1",
+      "claim": "Hive exposes a stable owner subject as `ProfileResponse.user_id` derived from the authenticated Hive user UUID.",
+      "kind": "contract",
+      "probe": "Read crates/utils/src/api/oauth.rs:57-70 and crates/remote/src/routes/oauth.rs:180-205 on 2026-08-21.",
+      "status": "verified"
+    },
+    {
+      "id": "A2",
+      "claim": "The current node callback consumes a process-local handoff and saves Hive credentials server-side without a browser-specific session.",
+      "kind": "contract",
+      "probe": "Read crates/server/src/routes/oauth.rs:80-165 and crates/local-deployment/src/lib.rs:743-764 on 2026-08-21.",
+      "status": "verified"
+    },
+    {
+      "id": "A3",
+      "claim": "All current node APIs and node-local stream routers lack a browser-session middleware boundary.",
+      "kind": "contract",
+      "probe": "Read crates/server/src/routes/mod.rs:43-88 plus the task, draft, attempt, execution, log, event, and terminal stream route modules on 2026-08-21.",
+      "status": "verified"
+    },
+    {
+      "id": "A4",
+      "claim": "Shared migrated SQLite test pools and a real served-router/Wiremock Hive harness exist for deterministic and real-seam tests.",
+      "kind": "gate",
+      "probe": "test -f crates/db/src/test_utils.rs && test -f crates/server/tests/common/mod.rs (exit 0 on 2026-08-21)",
+      "status": "verified"
+    },
+    {
+      "id": "A5",
+      "claim": "The WAI 0.30.0 submitter, child tracker, and draft spec exist before promotion.",
+      "kind": "gate",
+      "probe": "test -x /home/david/.codex/plugins/cache/agent-plugins/wai/0.30.0/scripts/wai-submit-spec.sh && test -f dev-docs/workstreams/local-node-browser-oauth/README.md && test -f docs/superpowers/specs/2026-08-21-local-node-browser-oauth.md (exit 0 on 2026-08-21)",
+      "status": "verified"
+    },
+    {
+      "id": "A6",
+      "claim": "A real Hive deployment and non-loopback browser can be made available for feature-branch acceptance evidence.",
+      "kind": "environment",
+      "probe": "Run TS7 against the feature-branch build before close.",
+      "status": "unprobed"
+    }
+  ],
+  "questions": [
+    {
+      "id": "Q1",
+      "asked": "Should the trusted-LAN node remain anonymously open or require per-browser Hive OAuth?",
+      "resolves": "D1"
+    },
+    {
+      "id": "Q2",
+      "asked": "Should the first release enforce TLS, Secure cookies, CORS, or Origin policy?",
+      "resolves": "D9"
+    }
+  ],
+  "no_decision_points_reason": ""
+}
