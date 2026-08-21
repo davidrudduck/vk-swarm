@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "workstream": "local-node-first-use",
+  "decisions": [
+    {
+      "id": "D1",
+      "title": "Delivery objective",
+      "options": [
+        {
+          "label": "Local usable loop first",
+          "consequence": "The operator receives daily value after M3 while later orchestration phases continue incrementally.",
+          "chosen": true
+        },
+        {
+          "label": "Complete P5-P7 first",
+          "consequence": "Architectural breadth lands before the currently unusable operator journey, delaying feedback and value.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The operator explicitly prioritized a usable local product before further refactor completion."
+    },
+    {
+      "id": "D2",
+      "title": "Browser authorization",
+      "options": [
+        {
+          "label": "Per-browser Hive OAuth session",
+          "consequence": "Each browser proves the single Hive identity and receives a separate revocable local session without seeing daemon tokens.",
+          "chosen": true
+        },
+        {
+          "label": "Open trusted-LAN API",
+          "consequence": "Any LAN client can read configuration and invoke execution controls without browser authorization.",
+          "chosen": false
+        },
+        {
+          "label": "Local account or password",
+          "consequence": "A second identity store and credential lifecycle must be operated alongside Hive.",
+          "chosen": false
+        }
+      ],
+      "rationale": "Hive remains the only identity provider while browser authorization becomes explicit."
+    },
+    {
+      "id": "D3",
+      "title": "Browser-session lifetime",
+      "options": [
+        {
+          "label": "Persistent session without routine server expiry",
+          "consequence": "A five-year cookie survives idle and browser restart until logout, Hive disconnect, or owner change.",
+          "chosen": true
+        },
+        {
+          "label": "Short inactivity or absolute expiry",
+          "consequence": "The operator must repeatedly reauthenticate and local work depends on session-renewal timing.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The first release favors generous persistence and explicit invalidation."
+    },
+    {
+      "id": "D4",
+      "title": "WAI artifact shape",
+      "options": [
+        {
+          "label": "Umbrella roadmap plus child workstreams",
+          "consequence": "Each milestone has one canonical spec, bounded decomposition, and an independent outcome gate.",
+          "chosen": true
+        },
+        {
+          "label": "One M0-M7 implementation plan",
+          "consequence": "The plan becomes too broad for reliable decomposition and can conceal unfinished milestone outcomes.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The release train needs independently shippable, reviewable milestones."
+    },
+    {
+      "id": "D5",
+      "title": "Execution identity ownership",
+      "options": [
+        {
+          "label": "Permanent generation model in M2",
+          "consequence": "M3-M5 use the same identity that M6 later claims and resumes.",
+          "chosen": true
+        },
+        {
+          "label": "Temporary first-release identity then M6 redesign",
+          "consequence": "Crash continuation requires replacing lifecycle state after executors already depend on it.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The first usable release must not create lifecycle follow-up debt."
+    },
+    {
+      "id": "D6",
+      "title": "Attached OpenCode launch handshake",
+      "options": [
+        {
+          "label": "Pre-create and persist remote session before prompt",
+          "consequence": "Every possibly active remote writer has a durable abort identity across crashes.",
+          "chosen": true
+        },
+        {
+          "label": "Discover session ID from running-client output",
+          "consequence": "A crash after remote work starts but before output persistence can leave an unknown orphan writer.",
+          "chosen": false
+        }
+      ],
+      "rationale": "OpenCode exposes create, prompt, and abort session operations, enabling a two-stage durable handshake."
+    },
+    {
+      "id": "D7",
+      "title": "OpenCode compatibility",
+      "options": [
+        {
+          "label": "Explicit certified versions",
+          "consequence": "The audited 1.18.19 contract launches; other versions are blocked until fixtures and a golden path certify them.",
+          "chosen": true
+        },
+        {
+          "label": "Assume all installed versions work",
+          "consequence": "CLI, API, or event drift can silently corrupt execution behavior.",
+          "chosen": false
+        }
+      ],
+      "rationale": "OpenCode evolves quickly and current event drift is already confirmed."
+    },
+    {
+      "id": "D8",
+      "title": "Restart behavior before M6",
+      "options": [
+        {
+          "label": "Safe interruption without automatic continuation",
+          "consequence": "Accidental restart retains history, fences writers, and requires explicit retry.",
+          "chosen": true
+        },
+        {
+          "label": "Ship existing automatic resume",
+          "consequence": "Known ownership and persistence windows can produce duplicate writers or lost resumed output.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The operator accepts finish-before-planned-restart, but accidental restart must fail safely."
+    },
+    {
+      "id": "D9",
+      "title": "Attached-server credentials",
+      "options": [
+        {
+          "label": "Environment-variable name only",
+          "consequence": "Profiles persist only the variable name and secrets stay out of JSON, argv, logs, and responses.",
+          "chosen": true
+        },
+        {
+          "label": "Profile or command-line password",
+          "consequence": "Long-lived credentials can appear in persistent configuration or process inspection.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The attached-server adapter needs authentication without expanding secret exposure."
+    },
+    {
+      "id": "D10",
+      "title": "Trusted-LAN transport controls",
+      "options": [
+        {
+          "label": "Do not enforce TLS, Secure cookie, CORS, or Origin policy",
+          "consequence": "Existing plain-HTTP LAN operation remains supported and documentation carries the plaintext-session risk.",
+          "chosen": true
+        },
+        {
+          "label": "Require transport or origin controls",
+          "consequence": "First use depends on new certificate, proxy, or browser-origin deployment work.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The operator explicitly accepted trusted-LAN plaintext operation for this release."
+    },
+    {
+      "id": "D11",
+      "title": "Executor certification order",
+      "options": [
+        {
+          "label": "Attached OpenCode, direct OpenCode, Claude",
+          "consequence": "The operator's existing OpenCode server becomes useful first; shared behavior then certifies the other adapters.",
+          "chosen": true
+        },
+        {
+          "label": "Certify all executors together",
+          "consequence": "The first usable release waits for independent adapter defects to be resolved together.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The operator supplied this priority order."
+    }
+  ],
+  "obstacles": [
+    {
+      "id": "O1",
+      "criterion": "SC1",
+      "obstacle": "The current OAuth handoff authenticates only the daemon, and transient Hive failures can be confused with explicit disconnect.",
+      "countermeasure": "Create browser-bound one-time handoffs, hashed local sessions tied to the stable owner subject, and separate explicit disconnect from connectivity loss."
+    },
+    {
+      "id": "O2",
+      "criterion": "SC2",
+      "obstacle": "The attached client can start work in the server default directory and reveal its remote session ID only after work begins.",
+      "countermeasure": "Pre-create the remote session for the canonical worktree, persist its ID, then prompt that known session with dynamic directory enforcement."
+    },
+    {
+      "id": "O3",
+      "criterion": "SC3",
+      "obstacle": "MsgStore subscription and final log migration have confirmed races that can omit live or trailing output.",
+      "countermeasure": "Make snapshot-plus-subscribe atomic, acknowledge batch completion, await raw and normalized persistence, and use resumable idempotent migration."
+    },
+    {
+      "id": "O4",
+      "criterion": "SC4",
+      "obstacle": "Stopping the local attached client does not prove the independent remote OpenCode session stopped.",
+      "countermeasure": "Abort by durable remote session ID and verify both local process-group and remote-session quiescence before reporting success."
+    },
+    {
+      "id": "O5",
+      "criterion": "SC5",
+      "obstacle": "Current retry hides history and clears the draft before replacement launch succeeds.",
+      "countermeasure": "Delay supersession and draft deletion until replacement startup commits; retain both on failure."
+    },
+    {
+      "id": "O6",
+      "criterion": "SC6",
+      "obstacle": "Background startup recovery can race mutations and resume with incomplete logging or stale ownership.",
+      "countermeasure": "Add a recovery readiness barrier, fence known generations, disable pre-M6 auto-resume, and expose interrupted state with explicit retry."
+    },
+    {
+      "id": "O7",
+      "criterion": "SC7",
+      "obstacle": "M2, adapter launch, and M6 can each invent a different ownership or generation model.",
+      "countermeasure": "Define the durable generation schema in M2 and require every later adapter and recovery claim to use it unchanged."
+    },
+    {
+      "id": "O8",
+      "criterion": "SC8",
+      "obstacle": "A broad umbrella can be marked complete while child runtime evidence or review findings remain open.",
+      "countermeasure": "Use one WAI child spec per milestone and forbid closure until deterministic tests, live evidence, review, and remediation pass on the same state."
+    }
+  ],
+  "decision_points": [],
+  "assumptions": [
+    {
+      "id": "A1",
+      "claim": "The local OpenCode executable is version 1.18.19, the first certified compatibility baseline.",
+      "kind": "environment",
+      "probe": "opencode --version",
+      "status": "verified"
+    },
+    {
+      "id": "A2",
+      "claim": "OpenCode exposes session creation with directory context, prompting an existing session, and session abort.",
+      "kind": "contract",
+      "probe": "Context7 /anomalyco/opencode documentation query on 2026-08-21 returned session.create, session.prompt, directory, and POST /session/{id}/abort contracts.",
+      "status": "verified"
+    },
+    {
+      "id": "A3",
+      "claim": "The current node OAuth callback consumes a handoff once and stores Hive access/refresh credentials only in node-side credential storage.",
+      "kind": "contract",
+      "probe": "Read crates/server/src/routes/oauth.rs:98-137 and confirmed take_oauth_handoff followed by node-side save_credentials.",
+      "status": "verified"
+    },
+    {
+      "id": "A4",
+      "claim": "The umbrella workstream tracker and canonical roadmap file exist before spec promotion.",
+      "kind": "gate",
+      "probe": "test -f dev-docs/workstreams/local-node-first-use/README.md && test -f docs/superpowers/specs/2026-08-21-local-node-first-use-roadmap-design.md (exit 0 on 2026-08-21)",
+      "status": "verified"
+    },
+    {
+      "id": "A5",
+      "claim": "A real Hive deployment, non-loopback browser, and authenticated OpenCode 1.18.19 server can be made available for the first-release live acceptance run.",
+      "kind": "environment",
+      "probe": "Run the M3 real-LAN acceptance procedure against the final release commit.",
+      "status": "unprobed"
+    }
+  ],
+  "questions": [
+    {
+      "id": "Q1",
+      "asked": "Should the next tranche optimize for the complete orchestration refactor or for a usable local product loop first?",
+      "resolves": "D1"
+    },
+    {
+      "id": "Q2",
+      "asked": "Should the trusted-LAN node API remain open or require each browser to complete Hive OAuth?",
+      "resolves": "D2"
+    },
+    {
+      "id": "Q3",
+      "asked": "Should the first release use generous/no routine browser-session timeouts?",
+      "resolves": "D3"
+    },
+    {
+      "id": "Q4",
+      "asked": "Should this roadmap pass through /wai:prd-new before detailed implementation planning?",
+      "resolves": "D4"
+    },
+    {
+      "id": "Q5",
+      "asked": "Must automatic in-flight crash continuation block first use, or may planned restarts require active work to finish?",
+      "resolves": "D8"
+    },
+    {
+      "id": "Q6",
+      "asked": "Should the first release enforce TLS, CORS, Origin policy, or other transport controls?",
+      "resolves": "D10"
+    },
+    {
+      "id": "Q7",
+      "asked": "Which executor paths should be certified first?",
+      "resolves": "D11"
+    }
+  ],
+  "no_decision_points_reason": "All material product and sequencing forks are settled. Missing dependencies, failed gates, unavailable review panels, or implementation defects require remediation or explicit operator escalation; none is an anticipated halt that this umbrella should authorize automatically."
+}
