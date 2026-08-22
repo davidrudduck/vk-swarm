@@ -67,7 +67,32 @@ async fn browser_auth_epoch_is_shared_by_deployment_clones() {
     assert_eq!(*deployment.browser_auth_epoch().lock().await, 1);
     deployment.event_bus().shutdown().await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn configured_startup_sync_is_installed_before_constructor_returns() {
+    // Build through `from_parts` with injected ShareConfig and loaded test credentials. On a
+    // current-thread runtime the old detached `spawn_remote_sync` cannot run before `from_parts`
+    // returns, so this assertion deterministically catches the startup/disconnect race.
+    let deployment = /* migrated test DB + loaded test credentials + injected ShareConfig */;
+    assert!(deployment.share_sync_handle().lock().await.is_some());
+    deployment
+        .share_sync_handle()
+        .lock()
+        .await
+        .take()
+        .unwrap()
+        .shutdown()
+        .await;
+    deployment.event_bus().shutdown().await;
+}
 ```
+
+Keep the second test's setup local to the test module. Refactor `from_parts` to accept the already
+parsed `Option<ShareConfig>` as an internal dependency: production `new()` passes
+`ShareConfig::from_env()`, ordinary `for_test()` passes `None`, and this test passes a loopback
+configuration directly. Derive `api_base` from that injected configuration instead of reading the
+same environment variable a second time. This is a behavior-preserving seam refactor and avoids
+process-global environment mutation in a parallel test binary.
 
 ## Change
 **File:** `crates/db/src/models/browser_auth/handoff.rs`
@@ -105,7 +130,7 @@ fn browser_auth_epoch(&self) -> &Arc<Mutex<u64>>;
 ```
 
 Immediately after the existing detached `spawn_remote_sync`, add a synchronous install path used
-only by browser-login commit:
+by browser-login commit and configured startup:
 
 ```rust
 async fn install_remote_sync(&self, config: ShareConfig) {
@@ -121,8 +146,10 @@ async fn install_remote_sync(&self, config: ShareConfig) {
 }
 ```
 
-Do not change `spawn_remote_sync`: startup and existing tests retain its current behavior. The new
-method closes the detached-install race only for the login path: after it returns, disconnect must
+Do not change `spawn_remote_sync`; the legacy OAuth route retains its current behavior until task
+011 moves it to the synchronous method. Configured startup must call
+`deployment.install_remote_sync(sc).await` before `from_parts` returns. This closes the startup
+variant of the detached-install race as well: once the deployment can be served, disconnect must
 observe the installed handle.
 
 **File:** `crates/local-deployment/src/lib.rs`
@@ -139,9 +166,10 @@ inside `spawn_remote_sync()`.
 
 ## Allowed moves
 [
-  "Append the two handoff invalidation tests and one local-deployment clone-sharing test before production edits.",
+  "Append the two handoff invalidation tests, the clone-sharing test, and the deterministic current-thread startup-install test before the behavioral startup edit.",
   "Add exactly one UPDATE helper and re-export it; do not change schema or existing owner/handoff/session semantics.",
   "Add one shared u64 mutex field/accessor and one synchronous sync-install default method.",
+  "Refactor from_parts to inject the parsed optional ShareConfig, then synchronously install configured startup sync before returning.",
   "Do not edit any OAuth route in this task; tasks 009-012 consume these primitives."
 ]
 
@@ -150,7 +178,7 @@ inside `spawn_remote_sync()`.
   "Any migration or schema change — the approved irreversible task 001 does not authorize one.",
   "Adding a third handoff state — terminal invalidation must reuse the existing claimed state.",
   "Deleting handoffs or sessions instead of preserving observable terminal/revoked state.",
-  "Holding the browser-auth epoch inside spawn_remote_sync or changing that existing method.",
+  "Holding the browser-auth epoch inside spawn_remote_sync or changing that existing method; configured startup changes its call site to install_remote_sync instead.",
   "Using a process-global static epoch instead of one Arc owned by each deployment.",
   "Any route edit or credential operation in this primitive task."
 ]
@@ -160,6 +188,7 @@ inside `spawn_remote_sync()`.
 2. `cargo test -p db browser_auth` passes.
 3. `cargo clippy -p db -p deployment -p local-deployment --all-targets --all-features -- -D warnings` passes.
 4. Record that this task is the integrated phase-1 review remediation; tasks 009-012 must still wire the epoch/invalidation into real routes before SC8 is complete.
+5. Record the Stage-2 follow-up evidence: dropping an overwritten `RemoteSyncHandle` does abort its task, but detached configured startup could still install after disconnect observed an empty slot; the synchronous startup call closes that remaining race.
 
 ## Done when
 `WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones" bash "$HOME/.agents/wai/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0
