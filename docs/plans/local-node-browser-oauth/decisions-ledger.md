@@ -99,3 +99,25 @@ GATE_FAIL_CHECK=none
 
 - Stage-2 Opus adversarial review verdict: `CONFORMS`. It independently reran format, focused tests, and clippy; verified exact public interfaces, CSPRNG/base64url behavior, atomics and mutex soundness, byte-identical SHA-256 encoding versus `routes/oauth.rs`, integration-test visibility, and the one-line lockfile update.
 - No undictated implementation choice was made beyond the explicit lockfile plan correction recorded above.
+
+## Task 003 — atomic owner pin-or-compare
+
+- Constrained implementer followed the task's test-first sequence and implemented only the exact owner model/export surface.
+- The focused four-test suite passed three consecutive runs; the concurrent first-pin test remained stable.
+- Runtime SQLx macro scan returned no matches under `crates/db/src/models/browser_auth/`.
+- Stage-1 deterministic gate output:
+
+```text
+WAI gate: topic=local-node-browser-oauth task=003 commit=54936598c5cafa8cd425bd92d2b04126d0d1e5ca allowed_change=mixed
+  - file-set: only declared files changed (3 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/db/src/models/browser_auth/owner.rs' ...
+  - tests: scope 'crates/db/src/models/browser_auth/owner.rs' green
+CONFORMS: task 003 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+- Stage-2 Opus adversarial review verdict: `CONFORMS`. It independently verified one-statement atomicity, incumbent-owner return without value mutation, mismatch side-effect freedom, BLOB UUID codec compatibility, SQLite race behavior, exact public exports, all three sibling patterns, no macro SQLx forms, and no undeclared files. It additionally ran the full DB suite and workspace clippy clean.
+- No undictated implementation choice was made.

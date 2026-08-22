@@ -2,7 +2,7 @@
 id: "003"
 phase: 1
 title: "Add the browser_auth model with an atomic owner pin-or-compare"
-status: ready
+status: passed
 depends_on: ["001"]
 parallel: false
 conflicts_with: ["004","005"]
