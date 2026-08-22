@@ -88,11 +88,20 @@ async fn configured_startup_sync_is_installed_before_constructor_returns() {
 ```
 
 Keep the second test's setup local to the test module. Refactor `from_parts` to accept the already
-parsed `Option<ShareConfig>` as an internal dependency: production `new()` passes
-`ShareConfig::from_env()`, ordinary `for_test()` passes `None`, and this test passes a loopback
-configuration directly. Derive `api_base` from that injected configuration instead of reading the
-same environment variable a second time. This is a behavior-preserving seam refactor and avoids
-process-global environment mutation in a parallel test binary.
+parsed `Option<ShareConfig>` and the legacy raw `Option<String>` API base as separate internal
+dependencies: production `new()` resolves and passes both environment-derived values, ordinary
+`for_test()` passes `None` for both, and this test passes a matching loopback pair directly. Keep
+remote-client construction driven by the raw API base exactly as it was before this task: a value
+that `RemoteClient` accepts must not be disabled merely because `ShareConfig` cannot derive a
+WebSocket URL from it. Add a focused regression test that injects no `ShareConfig` plus a parseable
+non-HTTP raw base such as `ftp://example.invalid` and proves `remote_client()` remains configured.
+This avoids process-global environment mutation in the parallel test binary while preserving the
+legacy client boundary.
+
+Both direct `from_parts` tests must invoke the same process-wide orphan-worktree cleanup guard used
+by `for_test()` before constructing a `LocalContainerService`. Extract that guard into a shared
+test-only helper rather than duplicating its unsafe environment write. A focused constructor test
+must never make the real worktree base eligible for cleanup.
 
 ## Change
 **File:** `crates/db/src/models/browser_auth/handoff.rs`
@@ -166,10 +175,11 @@ inside `spawn_remote_sync()`.
 
 ## Allowed moves
 [
-  "Append the two handoff invalidation tests, the clone-sharing test, and the deterministic current-thread startup-install test before the behavioral startup edit.",
+  "Append the two handoff invalidation tests, the clone-sharing test, the deterministic current-thread startup-install test, and the raw-API-base compatibility test before their behavioral edits.",
   "Add exactly one UPDATE helper and re-export it; do not change schema or existing owner/handoff/session semantics.",
   "Add one shared u64 mutex field/accessor and one synchronous sync-install default method.",
-  "Refactor from_parts to inject the parsed optional ShareConfig, then synchronously install configured startup sync before returning.",
+  "Refactor from_parts to inject both the raw optional API base and parsed optional ShareConfig, preserve legacy remote-client construction from the raw value, and synchronously install configured startup sync before returning.",
+  "Extract and call the existing test-binary orphan-cleanup guard before every direct from_parts test construction.",
   "Do not edit any OAuth route in this task; tasks 009-012 consume these primitives."
 ]
 
@@ -184,11 +194,12 @@ inside `spawn_remote_sync()`.
 ]
 
 ## Manual verification (record in decisions-ledger)
-1. `WAI_ROOT="$HOME/.agents/wai"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0.
+1. `WAI_ROOT="$HOME/.agents/wai"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns && cargo test -p local-deployment raw_api_base_remains_available_when_share_sync_config_is_unavailable" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0.
 2. `cargo test -p db browser_auth` passes.
 3. `cargo clippy -p db -p deployment -p local-deployment --all-targets --all-features -- -D warnings` passes.
 4. Record that this task is the integrated phase-1 review remediation; tasks 009-012 must still wire the epoch/invalidation into real routes before SC8 is complete.
 5. Record the Stage-2 follow-up evidence: dropping an overwritten `RemoteSyncHandle` does abort its task, but detached configured startup could still install after disconnect observed an empty slot; the synchronous startup call closes that remaining race.
+6. Record the Stage-2 remediation evidence: direct constructor tests invoke the shared orphan-cleanup guard, and raw API-base client behavior remains independent from parsed sync configuration.
 
 ## Done when
-`WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns" bash "$HOME/.agents/wai/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0
+`WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns && cargo test -p local-deployment raw_api_base_remains_available_when_share_sync_config_is_unavailable" bash "$HOME/.agents/wai/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0
