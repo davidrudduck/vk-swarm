@@ -2,7 +2,7 @@
 id: "005"
 phase: 1
 title: "Add session create, authenticate-by-hash, revoke-one and revoke-all"
-status: ready
+status: passed
 depends_on: ["001","003","004"]
 parallel: false
 conflicts_with: ["003","004"]
