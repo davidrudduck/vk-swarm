@@ -2,7 +2,7 @@
 id: "002"
 phase: 1
 title: "Add deterministic clock, token-source and hashing seams with public test fakes"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: ["006","007","011"]

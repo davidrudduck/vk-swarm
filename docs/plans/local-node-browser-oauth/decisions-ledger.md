@@ -68,3 +68,34 @@ GATE_FAIL_CHECK=none
 ## Task 002 — execution-time plan correction
 
 The task added `base64` to `crates/server/Cargo.toml` but omitted the repository lockfile from `files:` and allowed moves. Running the specified Cargo checks correctly regenerated the existing `server` package entry in `Cargo.lock` by adding only `"base64"`; no package version or resolution changed. The task contract was amended before validating implementation so the required generated lockfile change is explicit and gated rather than silently left dirty or deferred.
+
+## Task 002 — deterministic browser-auth seams
+
+- Constrained implementer followed the specified test-first sequence and reported the five colocated tests RED before completing the interfaces, then GREEN after the minimal implementation.
+- Focused verification passed: `cargo test -p server auth::seams` ran all five task tests successfully.
+- `cargo clippy -p server --all-targets --all-features -- -D warnings` passed.
+- Stage-1 deterministic gates passed independently for source commit `6425a16c2d1a201b51654dd7c5deab50fb98ed06` and generated-lockfile commit `2d8b3aba`:
+
+```text
+WAI gate: topic=local-node-browser-oauth task=002 commit=6425a16c2d1a201b51654dd7c5deab50fb98ed06 allowed_change=mixed
+  - file-set: only declared files changed (4 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/server/src/auth/seams.rs' ...
+  - tests: scope 'crates/server/src/auth/seams.rs' green
+CONFORMS: task 002 passed all deterministic gates
+GATE_FAIL_CHECK=none
+WAI gate: topic=local-node-browser-oauth task=002 commit=2d8b3aba allowed_change=mixed
+  - file-set: only declared files changed (1 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/server/src/auth/seams.rs' ...
+  - tests: scope 'crates/server/src/auth/seams.rs' green
+CONFORMS: task 002 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+- Stage-2 Opus adversarial review verdict: `CONFORMS`. It independently reran format, focused tests, and clippy; verified exact public interfaces, CSPRNG/base64url behavior, atomics and mutex soundness, byte-identical SHA-256 encoding versus `routes/oauth.rs`, integration-test visibility, and the one-line lockfile update.
+- No undictated implementation choice was made beyond the explicit lockfile plan correction recorded above.
