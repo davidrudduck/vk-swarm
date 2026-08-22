@@ -184,11 +184,11 @@ inside `spawn_remote_sync()`.
 ]
 
 ## Manual verification (record in decisions-ledger)
-1. `WAI_ROOT="$HOME/.agents/wai"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0.
+1. `WAI_ROOT="$HOME/.agents/wai"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0.
 2. `cargo test -p db browser_auth` passes.
 3. `cargo clippy -p db -p deployment -p local-deployment --all-targets --all-features -- -D warnings` passes.
 4. Record that this task is the integrated phase-1 review remediation; tasks 009-012 must still wire the epoch/invalidation into real routes before SC8 is complete.
 5. Record the Stage-2 follow-up evidence: dropping an overwritten `RemoteSyncHandle` does abort its task, but detached configured startup could still install after disconnect observed an empty slot; the synchronous startup call closes that remaining race.
 
 ## Done when
-`WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones" bash "$HOME/.agents/wai/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0
+`WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns" bash "$HOME/.agents/wai/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0
