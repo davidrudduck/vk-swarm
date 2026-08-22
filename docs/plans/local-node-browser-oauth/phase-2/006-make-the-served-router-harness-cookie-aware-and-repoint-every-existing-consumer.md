@@ -322,6 +322,12 @@ pub async fn sse_probe(&self, path: &str, jar: Option<&CookieJar>) -> ProtocolPr
 /// each `profile` mock MUST additionally match `Authorization: Bearer <access_token>` because different login candidates have different subjects; only `init` needs the one-use limit.
 pub async fn mock_hive_oauth(&self, app_code: &str, access_token_label: &str,
     refresh_token: &str, subject: uuid::Uuid) -> uuid::Uuid;
+/// Replace the profile mock for `access_token_label` with a priority-1 responder that signals
+/// request arrival, then returns the same valid ProfileResponse after `delay`. Task 012 uses this
+/// as a deterministic callback-vs-disconnect barrier: the callback has claimed its handoff and is
+/// in candidate Hive I/O when disconnect linearizes.
+pub async fn delay_hive_profile(&self, access_token_label: &str, subject: uuid::Uuid,
+    delay: std::time::Duration) -> tokio::sync::oneshot::Receiver<()>;
 /// The access-token argument remains source-compatible but is a stable LABEL. Derive (or memoize)
 /// a deterministic HS256 JWT with a fixed future `exp` and a `test_label` claim. Redeem returns
 /// that exact complete JWT; the `/v1/profile` matcher uses `Authorization: Bearer <that JWT>`.
@@ -402,7 +408,7 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
 **All 14 `/api/events` builders are structural edits, not a grep oracle.** In `crates/server/tests/events.rs`, enumerate and edit the request builders at current lines **118, 196, 269, 336, 381, 461, 574, 666, 770, 797, 838, 850, 883, 895**. This includes seven one-line `client.get(&url)` forms and seven multiline/inline `reqwest::Client::new().get(...)` / `client.get(format!(...))` forms. In every containing test create one `let jar = h.authorized_jar().await;`, insert `.header(reqwest::header::COOKIE, jar.header_value().unwrap())` into that exact builder before `.send()`, and preserve every existing status, body/frame, cursor, error, teardown, and ordering assertion unchanged. The acceptance check is review of these 14 concrete builder chains and the existing tests passing; raw grep counts and comments do not qualify.
 
 
-**WAI symbol grounding.** This task owns `access_token_for_label()`, `redeemed_access_token()`, `mock_hive_connection_reset()`, `mock_hive_delayed()`, and `hive_request_count()` through the typed declarations above. It uses Wiremock 0.6.5's dependency-owned `with_priority()` method; it does not reimplement that dependency API.
+**WAI symbol grounding.** This task owns `access_token_for_label()`, `redeemed_access_token()`, `delay_hive_profile()`, `mock_hive_connection_reset()`, `mock_hive_delayed()`, and `hive_request_count()` through the typed declarations above. It uses Wiremock 0.6.5's dependency-owned `with_priority()` method; it does not reimplement that dependency API.
 
 
 ## Allowed moves
@@ -432,6 +438,7 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
   "Treating mock_hive_oauth access-token labels as literal bearer tokens — derive the same complete future-expiring JWT for redeem, profile matching, profile_subject_for and task 018 scanning.",
   "Mounting an outage mock at default priority — it can be shadowed by an earlier success mock; exact method/path overrides are priority 1 and signal on receipt.",
   "Sleeping through RemoteClient retries or a delayed response — await the Wiremock arrival signal under a short diagnostic watchdog, assert exact request observation, then abort/await the caller.",
+  "A delayed-profile helper that returns an empty/generic response instead of the same valid subject response as mock_hive_oauth — task 012 must resume the real success path after disconnect.",
   "Using a grep/comment count as proof for events.rs — all 14 cited request-builder expressions must be individually edited while retaining their assertions.",
   "Consuming a response body before cloning all headers, or allowing get_no_redirect to follow Location."
 ]

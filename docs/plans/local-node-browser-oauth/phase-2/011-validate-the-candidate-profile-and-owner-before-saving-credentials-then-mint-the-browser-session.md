@@ -5,7 +5,7 @@ title: "Validate the candidate profile and owner before saving credentials, then
 status: ready
 depends_on: ["003","005","010"]
 parallel: false
-conflicts_with: ["002","007","008","009","010","012"]
+conflicts_with: ["002","007","008","009","010","012","022"]
 files:
   - "crates/services/src/services/remote_client.rs"
   - "crates/server/src/auth/login.rs"
@@ -188,6 +188,7 @@ pub async fn complete_browser_login(
     handoff_id: Uuid,
     app_code: String,
     app_verifier: String,
+    epoch_at_claim: u64,
 ) -> Result<String, BrowserLoginError>;
 ```
 
@@ -197,7 +198,7 @@ pub async fn complete_browser_login(
 **After:**
 ```rust
     let session_token = match complete_browser_login(
-        &deployment, query.handoff_id, app_code, app_verifier).await
+        &deployment, query.handoff_id, app_code, app_verifier, epoch_at_claim).await
     {
         Ok(token) => token,
         Err(BrowserLoginError::OwnerMismatch) => {
@@ -216,7 +217,18 @@ pub async fn complete_browser_login(
         }
     };
 ```
-The sync-spawn and node-cache-sync blocks that follow stay exactly as they are. The final response becomes the same `close_window_response` carrying one added header:
+Inside `complete_browser_login`, redemption, candidate profile fetch and owner verification happen
+without the epoch guard. Immediately before the first credential/session side effect, acquire the
+shared epoch guard and compare `*guard` to `epoch_at_claim`. A mismatch returns a new sanitized
+`BrowserLoginError::Disconnected` without saving credentials or creating a session. While the
+matching guard remains held: acquire `auth_context.refresh_guard()`, save credentials, create the
+hash-only session, and call `deployment.install_remote_sync(config).await`; then release both
+guards. This commit section is the only login path allowed to save credentials or mint a session.
+The refresh guard prevents an older in-flight refresh from overwriting the accepted candidate.
+
+Remove the later detached `spawn_remote_sync` call from `handoff_complete`; synchronous installation
+already happened inside the fenced commit. The node-cache-sync block stays unchanged. The final
+response becomes the same `close_window_response` carrying one added header:
 ```rust
     let mut response = close_window_response(format!(
         "Signed in with {provider}. You can return to the app."));
@@ -247,7 +259,8 @@ The static Display is sanitized while retaining the typed source. Candidate expi
 [
   "Add exactly one method to remote_client.rs; change nothing else in crates/services.",
   "Create auth/login.rs and add one `pub mod login;` line.",
-  "Replace only the redeem/save block inside handoff_complete and add the Set-Cookie to the success response.",
+  "Replace the redeem/save block, remove the later detached spawn_remote_sync call, and add the Set-Cookie to the success response.",
+  "Commit credentials, session and synchronous sync installation only after a matching epoch re-check under browser_auth_epoch.",
   "Append the three tests to crates/server/tests/browser_oauth.rs."
 ]
 
@@ -262,7 +275,10 @@ The static Display is sanitized while retaining the typed source. Candidate expi
   "Returning the session token in a JSON body, a redirect Location, or a query parameter.",
   "Adding an owner-reset or owner-replacement operation — out of scope; and any such op would owe a same-transaction revoke-all.",
   "Mapping TokenClaimsError to OwnerMismatch or RemoteClientError — malformed candidate JWTs are BrowserLoginError::InvalidToken.",
-  "Displaying the wrapped TokenClaimsError, token, claims or upstream body to the browser; InvalidToken has a static sanitized Display and existing generic 400 handling."
+  "Displaying the wrapped TokenClaimsError, token, claims or upstream body to the browser; InvalidToken has a static sanitized Display and existing generic 400 handling.",
+  "Saving credentials or creating a session without re-checking epoch_at_claim under browser_auth_epoch.",
+  "Holding browser_auth_epoch across Hive redemption or candidate profile I/O.",
+  "Calling detached spawn_remote_sync from the successful browser-login path."
 ]
 
 

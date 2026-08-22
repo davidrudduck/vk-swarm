@@ -166,3 +166,28 @@ GATE_FAIL_CHECK=none
 
 - Both independent Stage-2 challengers returned `CONFORMS`. They verified the exact API/export and two-file scope; local live-session authorization without time, expiry or Hive state; token-hash-scoped idempotent revocation preserving the first timestamp; live-only all-session revocation and exact count; uniqueness; runtime SQLx; no DELETE/owner/credential/sync writes; sibling guard alignment; and discriminating tests.
 - `create_session` uses `INSERT ... RETURNING` to satisfy its required `Result<BrowserSession, sqlx::Error>` signature. The task fixes the signature but does not dictate insert SQL; `RETURNING` is the existing browser-auth house pattern in owner and handoff models. This is recorded as an explicit, reversible implementation choice rather than silently claiming there was none.
+
+## Integrated phase-1 review — disconnect/login serialization
+
+- Cross-model review over `41f55c4b..8fd674a8` produced two `CONFORMS` verdicts and one cited
+  `DEVIATES`. The cited finding was independently reproduced: revoking all rows cannot revoke a
+  session inserted afterward (`revoke_all_rows=1 live_after_disconnect=['after']`). Under the
+  original locked tasks, a callback paused in Hive I/O could recreate credentials, session and
+  sync after explicit disconnect returned, violating SC8.
+- Investigation found two coupled real races: detached `spawn_remote_sync` can install after
+  disconnect observes an empty slot, and in-flight refresh can save credentials after clear.
+- Remediation is corrective task 022 plus amended tasks 009–012: a per-deployment in-memory commit
+  epoch, durable invalidation of pending handoffs using existing terminal `claimed`, synchronous
+  login-path sync installation, and precise use of `AuthContext::refresh_guard` around credential
+  commit/clear. No new schema is required.
+- Initiation linearizes at `create_handoff`. A handoff inserted before disconnect is invalidated;
+  one inserted after disconnect is a legitimate fresh login. Claim plus epoch capture is one short
+  guarded DB section. Callback Hive I/O is deliberately unlocked; callback commit re-checks the
+  epoch before any daemon/session side effect.
+- Durable generation was rejected because no approved schema can store it; adding a table/column
+  would exceed task 001's irreversible approval. The in-memory epoch is sufficient while one node
+  process owns the SQLite file, and durable pending-handoff invalidation covers restart.
+- O8 residual accepted and explicit: a process crash between SQLite revoke-all and file/Keychain
+  credential clear can leave an over-locked-out node with credentials present. The operator retries
+  disconnect. A durable crash-recovery state would require a separately approved migration.
+- Full report: `.agents/reports/2026-08-22-round-1-cross-model-phase-one.md`.

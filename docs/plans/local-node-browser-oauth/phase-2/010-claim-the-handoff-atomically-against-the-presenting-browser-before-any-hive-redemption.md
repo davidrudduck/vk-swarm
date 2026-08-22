@@ -5,7 +5,7 @@ title: "Claim the handoff atomically against the presenting browser before any H
 status: ready
 depends_on: ["009"]
 parallel: false
-conflicts_with: ["008","009","011","012"]
+conflicts_with: ["008","009","011","012","022"]
 files:
   - "crates/server/src/routes/oauth.rs"
   - "crates/server/tests/browser_oauth.rs"
@@ -131,6 +131,10 @@ Note: an unauthorized browser B is also asserted to still see `authorized:false`
         }
     };
 
+    // Claim and epoch capture are one short linearization section. Disconnect cannot fit between
+    // them and make a stale callback appear current at commit time. No Hive I/O runs under it.
+    let epoch_guard = deployment.browser_auth_epoch().lock().await;
+    let epoch_at_claim = *epoch_guard;
     let claimed = claim_handoff(
         &deployment.db().pool,
         query.handoff_id,
@@ -139,6 +143,7 @@ Note: an unauthorized browser B is also asserted to still see `authorized:false`
     )
     .await
     .map_err(ApiError::Database)?;
+    drop(epoch_guard);
 
     let Some(handoff) = claimed else {
         // Deliberately ONE message for unknown / wrong-browser / expired / already-claimed: the
@@ -162,6 +167,7 @@ Everything after this block (redeem, credential save, sync spawn) is UNCHANGED i
 ## Allowed moves
 [
   "Replace exactly the take_oauth_handoff lookup block in handoff_complete, add the headers extractor and the two imports.",
+  "Capture epoch_at_claim and claim_handoff while holding one short browser_auth_epoch guard, then drop it before Hive I/O.",
   "Append the four tests to crates/server/tests/browser_oauth.rs.",
   "Do not touch handoff_init, logout, status, the routers, or the code after the claim block."
 ]
@@ -173,7 +179,9 @@ Everything after this block (redeem, credential save, sync spawn) is UNCHANGED i
   "Different error messages for wrong-browser vs expired vs replayed — that is an oracle for an attacker and is not required by any criterion.",
   "Any attempt to re-claim or un-claim after a failed redemption — a claimed handoff is terminal by design; recovery is a fresh initiation.",
   "Reading the binding cookie from anywhere but the request headers (e.g. a query parameter) — it would then be copyable.",
-  "The claim happening after `client.handoff_redeem(...)` — the one-time hive code would then be burned by a wrong browser."
+  "The claim happening after `client.handoff_redeem(...)` — the one-time hive code would then be burned by a wrong browser.",
+  "Reading epoch_at_claim outside the same guard that encloses claim_handoff — disconnect could linearize between them.",
+  "Holding browser_auth_epoch across redemption/profile Hive I/O."
 ]
 
 

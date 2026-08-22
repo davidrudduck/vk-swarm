@@ -5,7 +5,7 @@ title: "Add the browser_auth model with an atomic owner pin-or-compare"
 status: passed
 depends_on: ["001"]
 parallel: false
-conflicts_with: ["004","005"]
+conflicts_with: ["004","005","022"]
 files:
   - "crates/db/src/models/browser_auth/mod.rs"
   - "crates/db/src/models/browser_auth/owner.rs"

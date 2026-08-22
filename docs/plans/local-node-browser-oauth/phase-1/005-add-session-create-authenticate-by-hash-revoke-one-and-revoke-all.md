@@ -5,7 +5,7 @@ title: "Add session create, authenticate-by-hash, revoke-one and revoke-all"
 status: passed
 depends_on: ["001","003","004"]
 parallel: false
-conflicts_with: ["003","004"]
+conflicts_with: ["003","004","022"]
 files:
   - "crates/db/src/models/browser_auth/session.rs"
   - "crates/db/src/models/browser_auth/mod.rs"

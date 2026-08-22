@@ -5,7 +5,7 @@ title: "Add handoff create and the single-statement atomic claim"
 status: passed
 depends_on: ["001","003"]
 parallel: false
-conflicts_with: ["003","005"]
+conflicts_with: ["003","005","022"]
 files:
   - "crates/db/src/models/browser_auth/handoff.rs"
   - "crates/db/src/models/browser_auth/mod.rs"

@@ -3,9 +3,9 @@ id: "009"
 phase: 2
 title: "Bind OAuth initiation to a browser: issue the binding cookie and persist the handoff"
 status: ready
-depends_on: ["004","007","008"]
+depends_on: ["004","007","008","022"]
 parallel: false
-conflicts_with: ["008","010","011","012"]
+conflicts_with: ["008","010","011","012","022"]
 files:
   - "crates/server/src/routes/oauth.rs"
   - "crates/server/tests/browser_oauth.rs"
@@ -120,6 +120,10 @@ async fn handoff_init(
     let binding_hash = hash_token(&binding_token);
     let now_millis = SystemClock.now_millis();
 
+    // The DB insert is the initiation linearization point. Hive I/O is deliberately outside this
+    // short guard. If disconnect linearizes first, this is a legitimate fresh post-disconnect
+    // handoff; if this insert linearizes first, disconnect durably invalidates it.
+    let _epoch_guard = deployment.browser_auth_epoch().lock().await;
     create_handoff(
         &deployment.db().pool,
         response.handoff_id,
@@ -156,6 +160,7 @@ Imports to add at the top of the file: `crate::auth::cookies::binding_set_cookie
 [
   "Change only the body and return type of handoff_init, plus the file's import block.",
   "Create crates/server/tests/browser_oauth.rs with exactly the two tests above.",
+  "Acquire browser_auth_epoch only around create_handoff; never around client.handoff_init Hive I/O.",
   "Do not touch handoff_complete, logout, status, the helper fns, or the router fns in this file.",
   "Do not delete store_oauth_handoff / take_oauth_handoff from local-deployment."
 ]
@@ -167,7 +172,8 @@ Imports to add at the top of the file: `crate::auth::cookies::binding_set_cookie
   "Storing the binding token instead of its hash.",
   "Computing expires_at at this call site instead of letting create_handoff derive it from HANDOFF_TTL_MILLIS.",
   "Using chrono::Utc::now() inline instead of the Clock seam.",
-  "Any edit to crates/local-deployment/src/lib.rs — not in files:.",
+  "Any edit to crates/local-deployment/src/lib.rs — task 022 owns the shared epoch primitive.",
+  "Holding browser_auth_epoch across client.handoff_init or any other Hive I/O.",
   "A test needing a harness method that does not exist — STOP; harness changes belong to task 006."
 ]
 
