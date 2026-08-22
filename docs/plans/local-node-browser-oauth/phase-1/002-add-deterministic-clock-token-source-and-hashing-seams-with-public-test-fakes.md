@@ -7,6 +7,7 @@ depends_on: []
 parallel: false
 conflicts_with: ["006","007","011"]
 files:
+  - "Cargo.lock"
   - "crates/server/src/auth/mod.rs"
   - "crates/server/src/auth/seams.rs"
   - "crates/server/src/lib.rs"
@@ -93,6 +94,11 @@ base64 = "0.22"
 ```
 (`base64 = "0.22"` is the version already used by `crates/services` and `crates/remote`; keep it identical.) Touch ONLY the `[dependencies]` block: task 006 adds a `tokio-tungstenite` dev-dependency to the same file, which is why these two tasks declare each other in `conflicts_with`.
 
+**File:** `Cargo.lock`
+**Anchor:** the generated `server` package dependency list.
+**Before:** the `server` package dependency list does not include `"base64"`.
+**After:** regenerate the lockfile after adding the dependency; the only lockfile change is adding `"base64"` to the existing `server` package dependency list. The package/version already exists elsewhere in the lockfile, so no package resolution may change.
+
 **File:** `crates/server/src/lib.rs`
 **Anchor:** the `pub mod` block, L1-7 (verified).
 **Before:**
@@ -173,6 +179,7 @@ pub fn hash_token(token: &str) -> String;
 ## Allowed moves
 [
   "Add exactly one dependency line (`base64 = \"0.22\"`) to crates/server/Cargo.toml.",
+  "Regenerate Cargo.lock; add only the existing `base64` package to the `server` dependency list.",
   "Add exactly one `pub mod auth;` line to crates/server/src/lib.rs.",
   "Create crates/server/src/auth/mod.rs with only the doc comment and `pub mod seams;`.",
   "Create crates/server/src/auth/seams.rs with the interfaces above plus the colocated test module.",
@@ -187,7 +194,8 @@ pub fn hash_token(token: &str) -> String;
   "Any temptation to put the fakes behind #[cfg(test)] — integration tests in crates/server/tests/ link the lib without cfg(test) and would not see them.",
   "`hash_token` output does not match `hash_sha256_hex` for the same input — STOP, the encodings must be identical.",
   "base64 0.22 fails to resolve at the workspace level — STOP rather than bumping other crates' versions.",
-  "Editing the [dev-dependencies] block of crates/server/Cargo.toml — that belongs to task 006."
+  "Editing the [dev-dependencies] block of crates/server/Cargo.toml — that belongs to task 006.",
+  "Cargo.lock changes anything except adding `base64` to the existing `server` package dependency list — STOP rather than accepting unrelated resolution drift."
 ]
 
 
