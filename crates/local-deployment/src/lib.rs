@@ -155,6 +155,7 @@ impl LocalDeployment {
         events_msg_store: Arc<MsgStore>,
         events_entry_count: Arc<RwLock<usize>>,
         tuning: StartupTuning,
+        share_config: Option<ShareConfig>,
     ) -> Result<Self, DeploymentError> {
         // Generate a unique user ID for this deployment
         let user_id = Uuid::new_v4().to_string();
@@ -175,16 +176,14 @@ impl LocalDeployment {
 
         let approvals = Approvals::new(msg_stores.clone());
 
-        let share_config = ShareConfig::from_env();
-
         // oauth_credentials already loaded in parallel at startup
 
         let profile_cache = Arc::new(RwLock::new(None));
         let auth_context = AuthContext::new(oauth_credentials.clone(), profile_cache.clone());
 
-        let api_base = std::env::var("VK_SHARED_API_BASE")
-            .ok()
-            .or_else(|| option_env!("VK_SHARED_API_BASE").map(|s| s.to_string()));
+        let api_base = share_config
+            .as_ref()
+            .map(|config| config.api_base.to_string());
 
         // Create OAuth-based remote client for user-initiated operations (frontend)
         let remote_client = match &api_base {
@@ -486,7 +485,7 @@ impl LocalDeployment {
         }
 
         if let Some(sc) = share_sync_config {
-            deployment.spawn_remote_sync(sc);
+            deployment.install_remote_sync(sc).await;
         }
 
         // Start node cache sync if user is already logged in
@@ -550,6 +549,7 @@ impl LocalDeployment {
             Arc::new(MsgStore::new()),
             Arc::new(RwLock::new(0)),
             tuning,
+            None,
         )
         .await
     }
@@ -647,6 +647,7 @@ impl Deployment for LocalDeployment {
             events_msg_store,
             events_entry_count,
             StartupTuning::default(),
+            ShareConfig::from_env(),
         )
         .await
     }
@@ -1287,6 +1288,47 @@ mod tests {
         assert_eq!(*deployment.browser_auth_epoch().lock().await, 0);
         *clone.browser_auth_epoch().lock().await += 1;
         assert_eq!(*deployment.browser_auth_epoch().lock().await, 1);
+        deployment.event_bus().shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn configured_startup_sync_is_installed_before_constructor_returns() {
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let credentials = Arc::new(OAuthCredentials::new(
+            temp_dir.path().join("credentials.json"),
+        ));
+        credentials
+            .save(&services::services::oauth_credentials::Credentials {
+                access_token: Some("test-access-token".to_owned()),
+                refresh_token: "test-refresh-token".to_owned(),
+                expires_at: None,
+            })
+            .await
+            .unwrap();
+
+        let deployment = LocalDeployment::from_parts(
+            DBService {
+                pool,
+                metrics: db::DbMetrics::new(),
+            },
+            Arc::new(RwLock::new(Config::default())),
+            credentials,
+            Arc::new(MsgStore::new()),
+            Arc::new(RwLock::new(0)),
+            test_tuning(),
+            Some(ShareConfig {
+                api_base: "http://127.0.0.1:1".parse().unwrap(),
+                websocket_base: "ws://127.0.0.1:1".parse().unwrap(),
+                activity_page_limit: 1,
+                bulk_sync_threshold: 1,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let sync_handle = deployment.share_sync_handle().lock().await.take();
+        assert!(sync_handle.is_some());
+        sync_handle.unwrap().shutdown().await;
         deployment.event_bus().shutdown().await;
     }
 }
