@@ -56,6 +56,7 @@ axum-extra = { version = "0.10", features = ["typed-header"] }
 url = "2.5"
 rand = { version = "0.9", features = ["std"] }
 sha2 = "0.10"
+base64 = "0.22"
 strum = "0.27.2"
 gethostname = "1.0"
 dotenvy = "0.15"
