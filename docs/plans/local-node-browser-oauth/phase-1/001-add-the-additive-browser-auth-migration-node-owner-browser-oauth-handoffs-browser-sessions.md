@@ -2,7 +2,7 @@
 id: "001"
 phase: 1
 title: "Add the additive browser-auth migration: node_owner, browser_oauth_handoffs, browser_sessions"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: []
