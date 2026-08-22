@@ -9,8 +9,10 @@
 //! dependencies and keeps the hashing seam in one place
 //! (`crates/server/src/auth/seams.rs::hash_token`).
 
+mod handoff;
 mod owner;
 
+pub use handoff::{BrowserHandoff, HANDOFF_TTL_MILLIS, claim_handoff, create_handoff};
 pub use owner::{NodeOwner, get_owner, pin_or_verify_owner};
 
 /// Errors that are not plain database failures.
