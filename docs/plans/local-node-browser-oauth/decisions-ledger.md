@@ -40,4 +40,27 @@ No live SQLite schema checker is configured for WAI, so plan lint cannot dynamic
 
 ## Execution boundary
 
-No implementation has started. Task 001 is the sole irreversible task. Execution must halt with `human_gate_required` until `docs/plans/local-node-browser-oauth/reviews/001.approved` exists following explicit human approval.
+Task 001 is the sole irreversible task. The operator explicitly approved it, and the approval was recorded at `docs/plans/local-node-browser-oauth/reviews/001.approved` at `2026-08-22T01:32:37+00:00` before the migration was created.
+
+## Task 001 — additive browser-auth migration
+
+- TDD RED observed before the migration existed: `cargo test -p db test_utils` failed only `browser_auth_migration_creates_owner_handoff_and_session_tables` with `migration did not create node_owner`; 2 existing tests passed.
+- TDD GREEN after adding `20260821000000_add_browser_auth.sql`: the focused run passed all 3 `test_utils` tests.
+- `cargo test -p db` passed all eight targets: 286 unit tests, 8 bulk-operation tests, 1 emission-conformance test, 6 SQLite pragma tests, 8 task-timestamp tests, 8 variable-inheritance tests, 5 visibility tests, and 11 doctests; zero failures.
+- Stage-1 deterministic gate output:
+
+```text
+WAI gate: topic=local-node-browser-oauth task=001 commit=HEAD allowed_change=mixed
+  - irreversible: approval token present
+  - file-set: only declared files changed (3 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/db/src/test_utils.rs' ...
+  - tests: scope 'crates/db/src/test_utils.rs' green
+CONFORMS: task 001 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+- Stage-2 Opus adversarial review verdict: `CONFORMS`. It verified the migration SQL is byte-identical to the task contract, additive-only, highest-versioned, free of existing table-name collisions, structurally enforces the owner singleton and handoff states, stores integer epoch-millisecond timestamps without timestamp defaults, gives sessions no expiry column, and changes no undeclared production file.
+- No undictated implementation choice was made. The test was appended at the actual end of the existing test module after `test_template_reuse`; the task's stale line anchor said the module ended after `test_create_test_pool`, but its required behavior and exact test remained unambiguous.
