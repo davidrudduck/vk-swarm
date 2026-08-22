@@ -506,13 +506,6 @@ impl LocalDeployment {
         Ok(deployment)
     }
 
-    /// Construct a REAL deployment over a migrated test pool, through the same
-    /// [`from_parts`](Self::from_parts) seam production uses.
-    ///
-    /// Only the pieces `new()` owns are substituted: the config is a default rather than the
-    /// on-disk one, and the OAuth credentials point at an unwritten temp path (never loaded, so
-    /// no file is read or created). Everything the wiring under test touches — the event bus over
-    /// the live pool, the tailer, the supervised runners, the compaction loop — is the real thing.
     #[cfg(test)]
     fn disable_orphan_cleanup_for_tests() {
         static DISABLE_ORPHAN_CLEANUP: std::sync::Once = std::sync::Once::new();
@@ -531,6 +524,13 @@ impl LocalDeployment {
         });
     }
 
+    /// Construct a REAL deployment over a migrated test pool, through the same
+    /// [`from_parts`](Self::from_parts) seam production uses.
+    ///
+    /// Only the pieces `new()` owns are substituted: the config is a default rather than the
+    /// on-disk one, and the OAuth credentials point at an unwritten temp path (never loaded, so
+    /// no file is read or created). Everything the wiring under test touches — the event bus over
+    /// the live pool, the tailer, the supervised runners, the compaction loop — is the real thing.
     #[cfg(test)]
     pub(crate) async fn for_test(
         pool: sqlx::SqlitePool,
