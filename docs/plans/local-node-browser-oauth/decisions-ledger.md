@@ -191,3 +191,25 @@ GATE_FAIL_CHECK=none
   credential clear can leave an over-locked-out node with credentials present. The operator retries
   disconnect. A durable crash-recovery state would require a separately approved migration.
 - Full report: `.agents/reports/2026-08-22-round-1-cross-model-phase-one.md`.
+
+## Task 022 — disconnect fence primitives and startup linearization
+
+- Task 022 added durable pending-handoff invalidation, a per-deployment browser-auth epoch, and a
+  synchronous `install_remote_sync` path. Source commits are `6eece603`, formatting follow-up
+  `a32804bc`, startup linearization fix `cc70f9d7`, and Stage-2 compatibility/safety remediation
+  `94e5aecc`; plan corrections are `fed8958d`, `3e10fd1f`, and `5922e7b3`.
+- The initial Stage-2 observation that overwriting a `RemoteSyncHandle` necessarily leaves an
+  unreachable live task was disproved at `crates/services/src/services/share.rs:682-689`:
+  `RemoteSyncHandleInner::drop` sends shutdown and aborts the join handle. A distinct race was real:
+  detached configured startup could return before installing its handle, allowing disconnect to
+  observe an empty slot before the late install. `LocalDeployment::from_parts` now awaits
+  `install_remote_sync` before returning, and the current-thread constructor test proves the handle
+  is observable immediately.
+- Stage-2 remediation preserved the pre-task client boundary by injecting raw `api_base` separately
+  from parsed `ShareConfig`. `raw_api_base_remains_available_when_share_sync_config_is_unavailable`
+  proves a parseable raw base still configures `RemoteClient` even when sync configuration is absent.
+- The direct constructor tests now call the same process-wide orphan-cleanup guard as `for_test()`.
+  Review also reproduced a pre-existing exposure in `LocalContainerService::new_for_drain_test()`;
+  it is explicitly split and tracked in
+  `dev-docs/workstreams/local-deployment-test-orphan-cleanup-safety/README.md` rather than deferred
+  silently inside the browser-auth task.
