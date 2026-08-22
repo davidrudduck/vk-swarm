@@ -2,7 +2,7 @@
 id: "004"
 phase: 1
 title: "Add handoff create and the single-statement atomic claim"
-status: ready
+status: passed
 depends_on: ["001","003"]
 parallel: false
 conflicts_with: ["003","005"]
