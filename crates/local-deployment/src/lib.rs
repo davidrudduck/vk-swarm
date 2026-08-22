@@ -121,6 +121,11 @@ pub(crate) struct StartupTuning {
     compaction: EventCompactionConfig,
 }
 
+struct StartupRemoteConfig {
+    api_base: Option<String>,
+    share_config: Option<ShareConfig>,
+}
+
 impl Default for StartupTuning {
     fn default() -> Self {
         Self {
@@ -155,8 +160,13 @@ impl LocalDeployment {
         events_msg_store: Arc<MsgStore>,
         events_entry_count: Arc<RwLock<usize>>,
         tuning: StartupTuning,
-        share_config: Option<ShareConfig>,
+        remote_config: StartupRemoteConfig,
     ) -> Result<Self, DeploymentError> {
+        let StartupRemoteConfig {
+            api_base,
+            share_config,
+        } = remote_config;
+
         // Generate a unique user ID for this deployment
         let user_id = Uuid::new_v4().to_string();
         let git = GitService::new();
@@ -180,10 +190,6 @@ impl LocalDeployment {
 
         let profile_cache = Arc::new(RwLock::new(None));
         let auth_context = AuthContext::new(oauth_credentials.clone(), profile_cache.clone());
-
-        let api_base = share_config
-            .as_ref()
-            .map(|config| config.api_base.to_string());
 
         // Create OAuth-based remote client for user-initiated operations (frontend)
         let remote_client = match &api_base {
@@ -508,17 +514,7 @@ impl LocalDeployment {
     /// no file is read or created). Everything the wiring under test touches — the event bus over
     /// the live pool, the tailer, the supervised runners, the compaction loop — is the real thing.
     #[cfg(test)]
-    pub(crate) async fn for_test(
-        pool: sqlx::SqlitePool,
-        tuning: StartupTuning,
-    ) -> Result<Self, DeploymentError> {
-        // `from_parts` builds a real LocalContainerService, whose constructor spawns
-        // `cleanup_orphaned_worktrees` (crates/local-deployment/src/container.rs:320). That sweep
-        // treats every directory under the worktree base dir with no matching `task_attempts` row
-        // as orphaned — and a test database has no such rows — so on a machine where the base dir
-        // exists it would delete real worktrees. The reach is pre-existing (container.rs:169's
-        // `new_for_drain_test` already calls the same constructor), but this test module makes it
-        // routine, so disable the sweep for the whole test binary before any deployment is built.
+    fn disable_orphan_cleanup_for_tests() {
         static DISABLE_ORPHAN_CLEANUP: std::sync::Once = std::sync::Once::new();
         DISABLE_ORPHAN_CLEANUP.call_once(|| {
             // SAFETY (partial, and stated honestly): this write is ordered before THIS call's
@@ -533,6 +529,21 @@ impl LocalDeployment {
                 std::env::set_var("DISABLE_WORKTREE_ORPHAN_CLEANUP", "1");
             }
         });
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn for_test(
+        pool: sqlx::SqlitePool,
+        tuning: StartupTuning,
+    ) -> Result<Self, DeploymentError> {
+        // `from_parts` builds a real LocalContainerService, whose constructor spawns
+        // `cleanup_orphaned_worktrees` (crates/local-deployment/src/container.rs:320). That sweep
+        // treats every directory under the worktree base dir with no matching `task_attempts` row
+        // as orphaned — and a test database has no such rows — so on a machine where the base dir
+        // exists it would delete real worktrees. The reach is pre-existing (container.rs:169's
+        // `new_for_drain_test` already calls the same constructor), but this test module makes it
+        // routine, so disable the sweep for the whole test binary before any deployment is built.
+        Self::disable_orphan_cleanup_for_tests();
 
         let db = DBService {
             pool,
@@ -549,7 +560,10 @@ impl LocalDeployment {
             Arc::new(MsgStore::new()),
             Arc::new(RwLock::new(0)),
             tuning,
-            None,
+            StartupRemoteConfig {
+                api_base: None,
+                share_config: None,
+            },
         )
         .await
     }
@@ -640,6 +654,11 @@ impl Deployment for LocalDeployment {
             DBService::new_with_after_connect(hook).await?
         };
 
+        let api_base = std::env::var("VK_SHARED_API_BASE")
+            .ok()
+            .or_else(|| option_env!("VK_SHARED_API_BASE").map(String::from));
+        let share_config = ShareConfig::from_env();
+
         Self::from_parts(
             db,
             config,
@@ -647,7 +666,10 @@ impl Deployment for LocalDeployment {
             events_msg_store,
             events_entry_count,
             StartupTuning::default(),
-            ShareConfig::from_env(),
+            StartupRemoteConfig {
+                api_base,
+                share_config,
+            },
         )
         .await
     }
@@ -1293,6 +1315,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn configured_startup_sync_is_installed_before_constructor_returns() {
+        LocalDeployment::disable_orphan_cleanup_for_tests();
         let (pool, temp_dir) = create_test_pool_with_migrations().await;
         let credentials = Arc::new(OAuthCredentials::new(
             temp_dir.path().join("credentials.json"),
@@ -1316,12 +1339,15 @@ mod tests {
             Arc::new(MsgStore::new()),
             Arc::new(RwLock::new(0)),
             test_tuning(),
-            Some(ShareConfig {
-                api_base: "http://127.0.0.1:1".parse().unwrap(),
-                websocket_base: "ws://127.0.0.1:1".parse().unwrap(),
-                activity_page_limit: 1,
-                bulk_sync_threshold: 1,
-            }),
+            StartupRemoteConfig {
+                api_base: Some("http://127.0.0.1:1".to_owned()),
+                share_config: Some(ShareConfig {
+                    api_base: "http://127.0.0.1:1".parse().unwrap(),
+                    websocket_base: "ws://127.0.0.1:1".parse().unwrap(),
+                    activity_page_limit: 1,
+                    bulk_sync_threshold: 1,
+                }),
+            },
         )
         .await
         .unwrap();
@@ -1329,6 +1355,34 @@ mod tests {
         let sync_handle = deployment.share_sync_handle().lock().await.take();
         assert!(sync_handle.is_some());
         sync_handle.unwrap().shutdown().await;
+        deployment.event_bus().shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn raw_api_base_remains_available_when_share_sync_config_is_unavailable() {
+        LocalDeployment::disable_orphan_cleanup_for_tests();
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::from_parts(
+            DBService {
+                pool,
+                metrics: db::DbMetrics::new(),
+            },
+            Arc::new(RwLock::new(Config::default())),
+            Arc::new(OAuthCredentials::new(
+                temp_dir.path().join("credentials.json"),
+            )),
+            Arc::new(MsgStore::new()),
+            Arc::new(RwLock::new(0)),
+            test_tuning(),
+            StartupRemoteConfig {
+                api_base: Some("ftp://example.invalid".to_owned()),
+                share_config: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(deployment.remote_client().is_ok());
         deployment.event_bus().shutdown().await;
     }
 }
