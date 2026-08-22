@@ -17,6 +17,7 @@
 pub mod activity_dismissal;
 pub mod activity_feed;
 pub mod all_tasks;
+pub mod browser_auth;
 pub mod dashboard;
 pub mod draft;
 pub mod event;
