@@ -55,6 +55,7 @@ pub struct LocalDeployment {
     drafts: DraftsService,
     share_publisher: Result<SharePublisher, RemoteClientNotConfigured>,
     share_sync_handle: Arc<Mutex<Option<RemoteSyncHandle>>>,
+    browser_auth_epoch: Arc<Mutex<u64>>,
     share_config: Option<ShareConfig>,
     remote_client: Result<RemoteClient, RemoteClientNotConfigured>,
     /// API key-based client for node operations (available even when not logged in via OAuth)
@@ -227,6 +228,7 @@ impl LocalDeployment {
 
         let oauth_handoffs = Arc::new(RwLock::new(HashMap::new()));
         let share_sync_handle = Arc::new(Mutex::new(None));
+        let browser_auth_epoch = Arc::new(Mutex::new(0u64));
 
         let mut share_sync_config: Option<ShareConfig> = None;
         if let (Some(sc_ref), Ok(_)) = (share_config.as_ref(), &share_publisher)
@@ -443,6 +445,7 @@ impl LocalDeployment {
             drafts,
             share_publisher,
             share_sync_handle: share_sync_handle.clone(),
+            browser_auth_epoch: browser_auth_epoch.clone(),
             share_config: share_config.clone(),
             remote_client,
             node_auth_client,
@@ -698,6 +701,10 @@ impl Deployment for LocalDeployment {
 
     fn share_sync_handle(&self) -> &Arc<Mutex<Option<RemoteSyncHandle>>> {
         &self.share_sync_handle
+    }
+
+    fn browser_auth_epoch(&self) -> &Arc<Mutex<u64>> {
+        &self.browser_auth_epoch
     }
 
     fn auth_context(&self) -> &AuthContext {
@@ -1268,5 +1275,16 @@ mod tests {
             panic!("shutdown() did not stop the tailer");
         }
         // Expected: timeout or channel closed
+    }
+
+    #[tokio::test]
+    async fn browser_auth_epoch_is_shared_by_deployment_clones() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool, test_tuning()).await.unwrap();
+        let clone = deployment.clone();
+        assert_eq!(*deployment.browser_auth_epoch().lock().await, 0);
+        *clone.browser_auth_epoch().lock().await += 1;
+        assert_eq!(*deployment.browser_auth_epoch().lock().await, 1);
+        deployment.event_bus().shutdown().await;
     }
 }

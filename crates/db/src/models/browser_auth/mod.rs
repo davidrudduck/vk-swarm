@@ -13,7 +13,7 @@ mod handoff;
 mod owner;
 mod session;
 
-pub use handoff::{BrowserHandoff, HANDOFF_TTL_MILLIS, claim_handoff, create_handoff};
+pub use handoff::{BrowserHandoff, HANDOFF_TTL_MILLIS, claim_handoff, create_handoff, invalidate_pending_handoffs};
 pub use owner::{NodeOwner, get_owner, pin_or_verify_owner};
 pub use session::{
     BrowserSession, authenticate_session, create_session, revoke_all_sessions, revoke_session,
