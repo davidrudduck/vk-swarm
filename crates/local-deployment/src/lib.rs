@@ -1280,7 +1280,9 @@ mod tests {
     #[tokio::test]
     async fn browser_auth_epoch_is_shared_by_deployment_clones() {
         let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let deployment = LocalDeployment::for_test(pool, test_tuning()).await.unwrap();
+        let deployment = LocalDeployment::for_test(pool, test_tuning())
+            .await
+            .unwrap();
         let clone = deployment.clone();
         assert_eq!(*deployment.browser_auth_epoch().lock().await, 0);
         *clone.browser_auth_epoch().lock().await += 1;

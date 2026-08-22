@@ -87,11 +87,10 @@ pub async fn claim_handoff(
 /// commit before it or fail their epoch re-check, while callbacks after disconnect cannot claim a
 /// pre-disconnect handoff. The state survives restart; no new migration is required.
 pub async fn invalidate_pending_handoffs(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        "UPDATE browser_oauth_handoffs SET state = 'claimed' WHERE state = 'pending'",
-    )
-    .execute(pool)
-    .await?;
+    let result =
+        sqlx::query("UPDATE browser_oauth_handoffs SET state = 'claimed' WHERE state = 'pending'")
+            .execute(pool)
+            .await?;
     Ok(result.rows_affected())
 }
 
@@ -230,28 +229,52 @@ mod tests {
         let (pool, _t) = create_test_pool().await;
         let pending = Uuid::new_v4();
         let already_claimed = Uuid::new_v4();
-        create_handoff(&pool, pending, "github", "v1", "h1", 0).await.unwrap();
-        create_handoff(&pool, already_claimed, "github", "v2", "h2", 0).await.unwrap();
-        assert!(claim_handoff(&pool, already_claimed, "h2", 1).await.unwrap().is_some());
+        create_handoff(&pool, pending, "github", "v1", "h1", 0)
+            .await
+            .unwrap();
+        create_handoff(&pool, already_claimed, "github", "v2", "h2", 0)
+            .await
+            .unwrap();
+        assert!(
+            claim_handoff(&pool, already_claimed, "h2", 1)
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         assert_eq!(invalidate_pending_handoffs(&pool).await.unwrap(), 1);
-        assert!(claim_handoff(&pool, pending, "h1", 1).await.unwrap().is_none());
+        assert!(
+            claim_handoff(&pool, pending, "h1", 1)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(invalidate_pending_handoffs(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]
     async fn handoff_invalidation_does_not_touch_owner_or_sessions() {
-        use crate::models::browser_auth::{pin_or_verify_owner, create_session, authenticate_session, get_owner};
+        use crate::models::browser_auth::{
+            authenticate_session, create_session, get_owner, pin_or_verify_owner,
+        };
 
         let (pool, _t) = create_test_pool().await;
         let owner = Uuid::new_v4();
         pin_or_verify_owner(&pool, owner, 10).await.unwrap();
-        create_session(&pool, Uuid::new_v4(), "session-hash", owner, 11).await.unwrap();
+        create_session(&pool, Uuid::new_v4(), "session-hash", owner, 11)
+            .await
+            .unwrap();
         create_handoff(&pool, Uuid::new_v4(), "github", "v", "binding-hash", 12)
-            .await.unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(invalidate_pending_handoffs(&pool).await.unwrap(), 1);
         assert_eq!(get_owner(&pool).await.unwrap().unwrap().hive_user_id, owner);
-        assert!(authenticate_session(&pool, "session-hash").await.unwrap().is_some());
+        assert!(
+            authenticate_session(&pool, "session-hash")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 }
