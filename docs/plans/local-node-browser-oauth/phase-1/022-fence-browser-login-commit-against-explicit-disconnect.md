@@ -2,7 +2,7 @@
 id: "022"
 phase: 1
 title: "Fence browser-login commit against explicit disconnect"
-status: ready
+status: passed
 depends_on: ["004","005"]
 parallel: false
 conflicts_with: ["003","004","005","009","010","011","012"]

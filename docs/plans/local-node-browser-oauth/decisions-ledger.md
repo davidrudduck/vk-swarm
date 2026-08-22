@@ -213,3 +213,28 @@ GATE_FAIL_CHECK=none
   it is explicitly split and tracked in
   `dev-docs/workstreams/local-deployment-test-orphan-cleanup-safety/README.md` rather than deferred
   silently inside the browser-auth task.
+- The final source commits were gated explicitly rather than relying on plan-only `HEAD`: the
+  behavioral remediation `94e5aecc` and comment-only follow-up `53a962b8` each passed the task gate.
+  Final gate transcript for `53a962b8`:
+
+```text
+WAI gate: topic=local-node-browser-oauth task=022 commit=53a962b8 allowed_change=edit
+  - file-set: only declared files changed (1 paths)
+  - edit: structural check relaxed — relies on adversarial panel
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/db/src/models/browser_auth/handoff.rs' ...
+  - tests: scope 'crates/db/src/models/browser_auth/handoff.rs' green
+CONFORMS: task 022 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+- `cargo test -p db browser_auth` passed all 17 tests. The epoch clone, configured startup install,
+  and raw API-base compatibility tests each passed focused runs. `cargo clippy -p db -p deployment
+  -p local-deployment --all-targets --all-features -- -D warnings` and
+  `cargo fmt --all -- --check` passed with repo-local `TMPDIR` used to avoid the host `/tmp` quota.
+- Final independent Stage-2 convergence returned two `CONFORMS` verdicts. The panel verified all
+  prior deviations closed, the startup linearization remained intact, the four declared source
+  files and STOP triggers remained respected, and the pre-existing cleanup hazard had a legitimate
+  tracked scope split. The only final observation was a displaced test-helper doc comment; commit
+  `53a962b8` moved it back onto `for_test()` without changing behavior and was re-gated above.
