@@ -787,3 +787,91 @@ browser_auth_routes` 4 passed; `--test harness_smoke` 11 passed; `cargo clippy -
   harness_smoke 11; clippy -p server --all-targets --all-features -D warnings clean; fmt
   clean; git diff --check clean.
 - Status flipped ready → passed.
+
+## Task 011 decisions
+
+### RED evidence (tests written first; suite `cargo test -p server --test browser_oauth`, 8 passed / 4 failed)
+
+- `successful_login_mints_a_hash_only_persistent_session_cookie` FAILED at browser_oauth.rs:363
+  `no session cookie` — the pre-task callback completed 200 with NO session cookie (no mint path
+  existed).
+- `the_same_owner_may_authorize_a_second_browser` FAILED at browser_oauth.rs:422
+  `first session survived: left 401, right 200` — first browser had no session.
+- `a_different_subject_is_rejected_without_replacing_credentials_or_sessions` FAILED at
+  browser_oauth.rs:458 `left: 200, right: 400`, body "Signed in with github" — the EXACT ordering
+  defect this task fixes: pre-task code saved the intruder's credentials before any subject
+  check and happily completed the login.
+- `an_invalid_candidate_token_yields_a_sanitized_generic_400_with_no_writes`, two RED stages:
+  - Stage 1 (redeem override mounted AFTER `mock_hive_oauth`, per the dispatch note's "wiremock
+    is LIFO" claim): FAILED at :503 `left: 200, right: 400` — the override never fired; wiremock
+    0.6.5 resolves EQUAL-priority matches by FIRST registration, not last (the harness's own
+    overrides — `mock_hive_failure`, `delay_hive_profile`, `mock_hive_delayed` — all use
+    `.with_priority(1)` for exactly this reason). Empirically proven on this repo.
+  - Stage 2 (override mounted BEFORE `mock_hive_oauth`, no body matcher so it shadows the
+    code-1-specific redeem for the whole test): FAILED at :513 `must be the generic
+    browser-login failure message: {"success":false,...,"message":"Invalid access token: failed
+    to decode JWT: InvalidToken"}` — the pre-task path leaked the decode-error detail into the
+    HTTP body instead of the sanitized generic message.
+
+### GREEN evidence
+
+`cargo test -p server --test browser_oauth` → 12 passed, 0 failed (8 carried over from
+009/010 + the three plan tests at :350/:403/:432 + the invalid-candidate-token test at :485).
+
+### Ordering satisfied (login.rs `complete_browser_login`, crates/server/src/auth/login.rs)
+
+1. redeem → candidate `Credentials` built in memory, never saved;
+2. `extract_expiration(&redeem.access_token)?` → `BrowserLoginError::InvalidToken` via
+   `#[from] utils::jwt::TokenClaimsError]` (static Display "candidate access token is invalid";
+   never mapped to OwnerMismatch/Remote);
+3. `profile_with_token(&redeem.access_token)` (new `RemoteClient` method; AuthMode::ApiKey
+   passes the CANDIDATE token straight to `bearer_auth`, never the saved daemon creds, never
+   `get_login_status()`/cached profile);
+4. `pin_or_verify_owner(pool, profile.user_id, now)` with `BrowserAuthError::OwnerMismatch` →
+   `BrowserLoginError::OwnerMismatch` and `BrowserAuthError::Database` → `Database` remapping
+   (db error type differs, as instructed); runs BEFORE any credential/session write;
+5. fenced commit: `browser_auth_epoch` guard acquired ONLY here (never across redemption or
+   profile I/O), `*guard != epoch_at_claim` → sanitized static-Display `Disconnected` with
+   nothing saved/minted; then `auth_context.refresh_guard()` acquired, `save_credentials`,
+   `create_session` (hash-only), `install_remote_sync(config).await` when `share_config()` is
+   Some, then both guards dropped. Raw token returned to the caller for exactly one
+   destination: the Set-Cookie header (never a body, redirect or query param).
+
+Route (`routes/oauth.rs`): `_epoch_at_claim` renamed to `epoch_at_claim` and passed through;
+the redeem/save/get_login_status/detached-spawn_remote_sync region replaced by the
+`complete_browser_login` match (OwnerMismatch → warn + specific 400; everything else →
+`error = %e` Display-only log + generic 400 "Sign-in could not be completed. Please start
+again." — no `?e`/Debug anywhere); node-cache-sync block kept; success response is
+`close_window_response` + one inserted `Set-Cookie: vks_browser_session=…` header.
+
+### Deviations from plan/dispatch text (all mechanical, evidenced)
+
+- Redeem-override mount order in the invalid-candidate-token test: dispatch said mount AFTER
+  `mock_hive_oauth` ("wiremock is LIFO"); empirically false for wiremock 0.6.5 (stage-1 RED
+  above), so the override is mounted BEFORE with no body matcher — same intent (override
+  redeem with a malformed token), correct resolution semantics. No harness change needed.
+- `BrowserLoginError::NotConfigured` variant added: `deployment.remote_client()` returns
+  `Result<_, RemoteClientNotConfigured>`, which cannot flow through `#[from]
+  RemoteClientError`. Unreachable in practice (a claimable handoff implies `handoff_init`
+  already required a configured client); static sanitized Display, folds into the generic 400.
+- `Clock` trait imported in login.rs (`SystemClock.now_millis()` is a trait method) —
+  mechanical import fix.
+- `pub mod login;` inserted alphabetically in auth/mod.rs.
+
+### Manual verification
+
+- `cargo test -p server --test browser_auth_routes` → 4 passed; `--test harness_smoke` →
+  11 passed; `cargo test -p services` → 318+12+5+6+5 passed, 0 failed (all green);
+  `cargo clippy -p server -p services --all-targets --all-features -- -D warnings` clean;
+  `cargo fmt --all` then `-- --check` clean; `git diff --check` clean. task-gate.sh NOT run
+  by the implementer per explicit dispatch instruction; the gate's constituent commands
+  (fmt --check, browser_oauth suite) were run directly and are green.
+- TS2 walk-through: public/protected routing → 008's `browser_auth_routes` suite
+  (public_surface…, protected_api_is_denied_by_default, unknown_api_paths…,
+  oauth_initiation_and_callback_stay_public); browser-A isolation, callback copying/replay →
+  010's suite (a_copied_callback…, a_forged_binding_cookie…, replaying_a_completed_callback…,
+  an_expired_handoff…); cookie attributes, hash-only storage, same-owner and different-owner
+  redemption → this suite (:350, :403, :432) plus invalid-candidate-token (:485); browser
+  logout and explicit disconnect → 012's suite (not yet written).
+- SC5 restart clause (survival across a planned idle node restart) is proven by task 015's
+  TS4 suite against the same migrated SQLite/assets directory — NOT re-proven here.

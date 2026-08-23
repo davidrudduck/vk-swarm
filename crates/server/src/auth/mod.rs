@@ -5,6 +5,7 @@
 //! `node_token` and `login` here.
 
 pub mod cookies;
+pub mod login;
 pub mod node_token;
 pub mod seams;
 pub mod session;

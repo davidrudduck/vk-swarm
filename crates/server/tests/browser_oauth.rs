@@ -347,6 +347,201 @@ async fn an_expired_handoff_cannot_be_completed() {
 
 #[tokio::test]
 #[serial_test::serial]
+async fn successful_login_mints_a_hash_only_persistent_session_cookie() {
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    let id = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    let done = h.get_with(&cb, &mut a).await;
+    assert_eq!(done.status, 200, "body: {}", done.body);
+
+    let line = done
+        .set_cookie
+        .iter()
+        .find(|c| c.starts_with("vks_browser_session="))
+        .expect("no session cookie");
+    assert!(
+        line.contains("HttpOnly")
+            && line.contains("SameSite=Lax")
+            && line.contains("Path=/")
+            && line.contains("Max-Age=157680000"),
+        "{line}"
+    );
+    assert!(!line.contains("Secure"), "{line}");
+
+    let raw = a.get("vks_browser_session").unwrap().to_string();
+    let stored: Vec<String> = sqlx::query_scalar("SELECT token_hash FROM browser_sessions")
+        .fetch_all(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(stored, vec![server::auth::seams::hash_token(&raw)]);
+    assert!(
+        !stored.contains(&raw),
+        "the raw session token must never be stored"
+    );
+    assert!(
+        !done.body.contains(&raw),
+        "session token leaked into the response body"
+    );
+
+    // The authorized browser now reaches protected data; a clean browser still does not.
+    let info = h.get_with("/api/info", &mut a).await;
+    assert_eq!(info.status, 200, "body: {}", info.body);
+    let mut b = common::CookieJar::fresh();
+    assert_eq!(h.get_with("/api/info", &mut b).await.status, 401);
+    let state_b = h.get_with("/api/auth/state", &mut b).await;
+    assert!(
+        state_b.body.contains("\"authorized\":false"),
+        "{}",
+        state_b.body
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn the_same_owner_may_authorize_a_second_browser() {
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    let id1 = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb1 = start_login(&h, &mut a, id1).await;
+    assert_eq!(h.get_with(&cb1, &mut a).await.status, 200);
+
+    let id2 = h.mock_hive_oauth("code-2", "acc2", "ref2", owner).await;
+    let mut b = common::CookieJar::fresh();
+    let cb2 = format!("/api/auth/handoff/complete?handoff_id={id2}&app_code=code-2");
+    h.post_with(
+        "/api/auth/handoff/init",
+        serde_json::json!({"provider":"github","return_to":"/"}),
+        &mut b,
+    )
+    .await;
+    assert_eq!(h.get_with(&cb2, &mut b).await.status, 200);
+
+    assert_eq!(
+        h.get_with("/api/info", &mut a).await.status,
+        200,
+        "first session survived"
+    );
+    assert_eq!(h.get_with("/api/info", &mut b).await.status, 200);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_different_subject_is_rejected_without_replacing_credentials_or_sessions() {
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    let id1 = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb1 = start_login(&h, &mut a, id1).await;
+    assert_eq!(h.get_with(&cb1, &mut a).await.status, 200);
+    let creds_before = std::fs::read_to_string(h.credentials_path()).unwrap();
+
+    let intruder = uuid::Uuid::new_v4();
+    let id2 = h
+        .mock_hive_oauth("code-2", "intruder-access", "intruder-refresh", intruder)
+        .await;
+    let mut c = common::CookieJar::fresh();
+    h.post_with(
+        "/api/auth/handoff/init",
+        serde_json::json!({"provider":"github","return_to":"/"}),
+        &mut c,
+    )
+    .await;
+    let res = h
+        .get_with(
+            &format!("/api/auth/handoff/complete?handoff_id={id2}&app_code=code-2"),
+            &mut c,
+        )
+        .await;
+    assert_eq!(res.status, 400, "body: {}", res.body);
+    assert!(
+        res.set_cookie
+            .iter()
+            .all(|l| !l.starts_with("vks_browser_session="))
+    );
+
+    // Owner unchanged, daemon credentials untouched, existing session still authorized.
+    let pinned: Vec<u8> = sqlx::query_scalar("SELECT hive_user_id FROM node_owner")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(uuid::Uuid::from_slice(&pinned).unwrap(), owner);
+    assert_eq!(
+        std::fs::read_to_string(h.credentials_path()).unwrap(),
+        creds_before,
+        "candidate credentials must never be saved on a rejected subject"
+    );
+    assert_eq!(
+        h.get_with("/api/info", &mut a).await.status,
+        200,
+        "a rejected login must not revoke existing sessions"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn an_invalid_candidate_token_yields_a_sanitized_generic_400_with_no_writes() {
+    let h = common::HiveHarness::configured().await;
+    // wiremock 0.6 resolves equal-priority matches by FIRST registration (the harness's own
+    // overrides use .with_priority(1) to beat earlier mounts), so this no-body-matcher redeem
+    // mock is mounted BEFORE mock_hive_oauth to take precedence over its code-1-specific one.
+    h.mock_json(
+        "POST",
+        "/v1/oauth/web/redeem",
+        200,
+        serde_json::json!({"access_token": "not-a-jwt", "refresh_token": "ref-x"}),
+    )
+    .await;
+    let owner = uuid::Uuid::new_v4();
+    let id = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    let creds_before = std::fs::read_to_string(h.credentials_path()).unwrap();
+
+    let res = h.get_with(&cb, &mut a).await;
+    assert_eq!(res.status, 400, "body: {}", res.body);
+    // Sanitized generic 400: no candidate token text, no upstream/decode-error detail, and
+    // never misclassified as the OwnerMismatch message.
+    assert!(!res.body.contains("not-a-jwt"), "body: {}", res.body);
+    assert!(!res.body.contains("ref-x"), "body: {}", res.body);
+    assert!(
+        !res.body.contains("owned by a different account"),
+        "a malformed candidate JWT is InvalidToken, never OwnerMismatch: {}",
+        res.body
+    );
+    assert!(
+        res.body.contains("Sign-in could not be completed"),
+        "must be the generic browser-login failure message: {}",
+        res.body
+    );
+    assert!(
+        res.set_cookie
+            .iter()
+            .all(|l| !l.starts_with("vks_browser_session="))
+    );
+
+    // Nothing was written: no owner pin, no session, credentials file byte-identical.
+    let owners: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM node_owner")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(owners, 0);
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_sessions")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(sessions, 0);
+    assert_eq!(
+        std::fs::read_to_string(h.credentials_path()).unwrap(),
+        creds_before,
+        "a malformed candidate token must never reach credential persistence"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
 async fn completion_drops_the_epoch_fence_before_hive_redemption() {
     use deployment::Deployment;
 

@@ -9,16 +9,15 @@ use db::models::browser_auth::{claim_handoff, create_handoff};
 use deployment::Deployment;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use services::services::oauth_credentials::Credentials;
 use sha2::{Digest, Sha256};
 use utils::{
-    api::oauth::{HandoffInitRequest, HandoffRedeemRequest, LoginStatus, StatusResponse},
-    jwt::extract_expiration,
+    api::oauth::{HandoffInitRequest, LoginStatus, StatusResponse},
     response::ApiResponse,
 };
 use uuid::Uuid;
 
-use crate::auth::cookies::{BINDING_COOKIE, binding_set_cookie, read_cookie};
+use crate::auth::cookies::{BINDING_COOKIE, binding_set_cookie, read_cookie, session_set_cookie};
+use crate::auth::login::{BrowserLoginError, complete_browser_login};
 use crate::auth::seams::{Clock, OsTokenSource, SystemClock, TokenSource, hash_token};
 use crate::{DeploymentImpl, error::ApiError};
 
@@ -149,7 +148,7 @@ async fn handoff_complete(
     // Claim and epoch capture are one short linearization section. Disconnect cannot fit between
     // them and make a stale callback appear current at commit time. No Hive I/O runs under it.
     let epoch_guard = deployment.browser_auth_epoch().lock().await;
-    let _epoch_at_claim = *epoch_guard;
+    let epoch_at_claim = *epoch_guard;
     let claimed = claim_handoff(
         &deployment.db().pool,
         query.handoff_id,
@@ -172,60 +171,48 @@ async fn handoff_complete(
     };
     let (provider, app_verifier) = (handoff.provider, handoff.app_verifier);
 
-    let client = deployment.remote_client()?;
-
-    let redeem_request = HandoffRedeemRequest {
-        handoff_id: query.handoff_id,
+    let session_token = match complete_browser_login(
+        &deployment,
+        query.handoff_id,
         app_code,
         app_verifier,
-    };
-
-    let redeem = client.handoff_redeem(&redeem_request).await?;
-
-    let expires_at = extract_expiration(&redeem.access_token)
-        .map_err(|err| ApiError::BadRequest(format!("Invalid access token: {err}")))?;
-    let credentials = Credentials {
-        access_token: Some(redeem.access_token.clone()),
-        refresh_token: redeem.refresh_token.clone(),
-        expires_at: Some(expires_at),
-    };
-
-    deployment
-        .auth_context()
-        .save_credentials(&credentials)
-        .await
-        .map_err(|e| {
-            tracing::error!(?e, "failed to save credentials");
-            ApiError::Io(e)
-        })?;
-
-    // Fetch and cache the user's profile
-    let _ = deployment.get_login_status().await;
-
-    // Start remote sync if not already running
+        epoch_at_claim,
+    )
+    .await
     {
-        let handle_guard = deployment.share_sync_handle().lock().await;
-        let should_start = handle_guard.is_none();
-        drop(handle_guard);
-
-        if should_start {
-            if let Some(share_config) = deployment.share_config() {
-                tracing::info!("Starting remote sync after login");
-                deployment.spawn_remote_sync(share_config.clone());
-            } else {
-                tracing::debug!(
-                    "Share config not available; skipping remote sync spawn after login"
-                );
-            }
+        Ok(token) => token,
+        Err(BrowserLoginError::OwnerMismatch) => {
+            // Rejection is side-effect free: no credentials saved, owner unchanged, no session
+            // revoked. Owner reset is deliberately out of scope.
+            tracing::warn!(handoff_id = %query.handoff_id, "rejected a different hive subject");
+            return Ok(simple_html_response(
+                StatusCode::BAD_REQUEST,
+                "This node is already owned by a different account.".to_string(),
+            ));
         }
-    }
+        Err(e) => {
+            // `e` is Display-formatted deliberately: Debug on a redemption error can carry the
+            // candidate token (SC10).
+            tracing::error!(handoff_id = %query.handoff_id, error = %e, "browser login failed");
+            return Ok(simple_html_response(
+                StatusCode::BAD_REQUEST,
+                "Sign-in could not be completed. Please start again.".to_string(),
+            ));
+        }
+    };
 
     // Start node cache sync to fetch all nodes/projects from other nodes in the org
     deployment.start_node_cache_sync().await;
 
-    Ok(close_window_response(format!(
+    let mut response = close_window_response(format!(
         "Signed in with {provider}. You can return to the app."
-    )))
+    ));
+    response.headers_mut().insert(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&session_set_cookie(&session_token))
+            .expect("session cookie is ascii"),
+    );
+    Ok(response)
 }
 
 async fn logout(State(deployment): State<DeploymentImpl>) -> Result<StatusCode, ApiError> {
