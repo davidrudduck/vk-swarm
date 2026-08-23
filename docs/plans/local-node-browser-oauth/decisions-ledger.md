@@ -360,3 +360,8 @@ GATE_FAIL_CHECK=none
 - Task 012 now interprets SC8 “stop synchronization” as both RemoteSync and node-cache. Browser
   logout leaves both running; explicit Hive disconnect awaits both; a fresh same-owner login can
   start both again. Task 015 uses the same owned shutdown seam after its seeded restart.
+- The implementation awaits `start_node_cache_sync()` inside `from_parts` instead of detaching the
+  handle-slot installation. `NodeCacheSyncService::spawn()` itself returns without awaiting network
+  work, so startup latency is unchanged in substance; the ordering guarantees a completed
+  constructor cannot later install a node-cache handle after restart/disconnect already observed an
+  empty slot. This is the node-cache analogue of task 022's synchronous RemoteSync startup install.

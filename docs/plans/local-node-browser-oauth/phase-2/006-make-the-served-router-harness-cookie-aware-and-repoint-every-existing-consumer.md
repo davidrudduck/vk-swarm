@@ -264,6 +264,13 @@ so shutdown interrupts an in-flight request or the five-minute idle interval pro
 retains its current never-cancelled behavior by holding the sender while delegating to the same
 private loop; `stop()` retains its existing stop-flag behavior. Do not add a dependency or sleep.
 
+Add focused tests in this module that prove: `shutdown()` completes under a short timeout after a
+signalled delayed `/v1/organizations` request is in flight; shutdown completes under a short
+timeout after the immediate startup passes have completed and the service is waiting on a
+five-minute interval; and the existing `run()`/`stop()` path still exits after observing the stop
+flag. The idle-wait test must first observe completion of the startup sync work, not merely request
+arrival, or an in-flight cancellation mutant would satisfy both tests.
+
 **File:** `crates/local-deployment/src/lib.rs`
 
 Replace `node_cache_sync_started: Arc<Mutex<bool>>` with
@@ -285,7 +292,10 @@ pub async fn shutdown_node_cache_sync(&self) {
 The handle slot is clone-shared through `Arc`, just like `share_sync_handle`. Taking the handle
 before awaiting prevents holding the slot lock across shutdown. A final deployment drop aborts a
 still-owned node-cache task through `NodeCacheSyncHandle::drop`; a planned restart/disconnect uses
-the awaited shutdown method.
+the awaited shutdown method. In `from_parts`, replace the detached wrapper around
+`start_node_cache_sync()` with `deployment.start_node_cache_sync().await` before returning. `spawn()`
+returns immediately after the slot is populated, so construction does not wait for network I/O;
+the await only closes the late-start-versus-shutdown race.
 
 **File:** `crates/server/tests/common/mod.rs`
 
@@ -560,7 +570,8 @@ and task 012's explicit-disconnect implementation.
   "An outage self-test that sends raw reqwest directly to `/v1/tokens/refresh` instead of forcing refresh-only credentials and calling the deployment RemoteClient's real access-token path.",
   "Moving configured()'s credential seed after LocalDeployment::new(), or forcing refresh-only credentials before both owned sync handles are shut down and awaited — either makes request provenance scheduler-dependent.",
   "Inferring node-cache quiescence from `/v1/organizations` request counts — RemoteSync migration uses the same path, so only owned task shutdown proves provenance.",
-  "Detaching the node-cache JoinHandle, awaiting its five-minute interval after cancellation, or holding the LocalDeployment handle-slot mutex while awaiting shutdown."
+  "Detaching either the node-cache JoinHandle or the startup call that fills its handle slot, awaiting its five-minute interval after cancellation, or holding the LocalDeployment handle-slot mutex while awaiting shutdown.",
+  "An idle-interval lifecycle test that observes only Wiremock request arrival rather than completed startup sync work — that does not distinguish idle-wait cancellation from in-flight cancellation."
 ]
 
 
