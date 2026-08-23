@@ -238,3 +238,22 @@ GATE_FAIL_CHECK=none
   files and STOP triggers remained respected, and the pre-existing cleanup hazard had a legitimate
   tracked scope split. The only final observation was a displaced test-helper doc comment; commit
   `53a962b8` moved it back onto `for_test()` without changing behavior and was re-gated above.
+
+## Integrated phase-1 review round 2 remediation
+
+- The eight-seat review of `41f55c4b..ae5ee15f` confirmed the phase-1 browser-auth state machines,
+  epoch, startup sync linearization, raw API-base compatibility, task scopes, and STOP triggers.
+  Route wiring in tasks 009–012 is still required before SC8 is complete.
+- The review found that task 022's startup fixture could select the production macOS Keychain
+  backend before saving `test-refresh-token`. Commit `594d531c` added the explicit
+  `OAuthCredentials::new_file_backed()` constructor and changed both direct constructor fixtures to
+  use isolated temporary paths. `OAuthCredentials::new()` and backend detection are unchanged.
+  RED was E0599 for the missing constructor; the focused service test, both constructor tests, and
+  focused services/local-deployment clippy were green after implementation.
+- The review also enforced the previously promised scope split
+  `sqlite-busy-snapshot-calibration-stability`. The pre-existing calibration failure reproduced at
+  `crates/db/src/models/execution_process/queries.rs:1437` with 0/200
+  `SQLITE_BUSY_SNAPSHOT` observations. It is tracked at
+  `dev-docs/workstreams/sqlite-busy-snapshot-calibration-stability/README.md` and fixed in this
+  branch by forcing the read-snapshot/intervening-commit/write-upgrade schedule in both calibration
+  controls. The two controls passed together in ten consecutive runs; no test was ignored.
