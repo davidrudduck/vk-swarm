@@ -17,6 +17,7 @@ files:
   - "crates/remote/src/routes/nodes.rs"
   - "frontend/src/hooks/useNodeLogStream.ts"
   - "frontend/src/hooks/useNodeLogStream.test.ts"
+  - "frontend/src/hooks/useAvailableNodes.test.ts"
   - "frontend/src/components/tasks/TaskDetails/ProcessLogsViewer.tsx"
 siblings: ["crates/server/src/routes/events.rs","crates/server/tests/events.rs","crates/server/src/routes/terminal.rs","crates/server/tests/harness_smoke.rs","frontend/src/hooks/useDiffStream.ts","crates/remote/src/routes/tasks.rs","crates/services/src/services/connection_token.rs","crates/remote/src/db/node_execution_processes.rs","crates/remote/src/db/node_task_attempts.rs","crates/server/tests/mcp_context_test.rs","frontend/src/hooks/index.ts"]
 irreversible: false
@@ -265,9 +266,18 @@ token with `Some(query.execution_process_id)`, never `assignment.local_attempt_i
 the existing broken assignment/attempt/process identifier mix into one exact resource scope.
 
 **File:** `frontend/src/hooks/useNodeLogStream.ts`
-Change the hook to `useNodeLogStream(assignmentId, executionProcessId)`. Add the encoded process ID
+Change the hook to `useNodeLogStream(assignmentId, executionProcessId)` — the second parameter is a required argument typed `string | undefined` (not optional with `?`); the remote stream is attempted only when BOTH are defined. Add the encoded process ID
 to the connection-info query and construct the direct node URL with `executionProcessId`, not
 `assignmentId`. Relay remains assignment-scoped and unchanged.
+
+**File:** `frontend/src/hooks/useAvailableNodes.test.ts`
+This file embeds a `useNodeLogStream on a node with no hive` describe block whose two `renderHook`
+fixtures call the hook with the pre-013 single-ID signature. The locked required
+`execution_process_id` contract makes single-ID fetching unreachable (the hook never fetches
+without both IDs), so the "still surfaces a real failure (500)" test fails vacuously. Update ONLY
+the two fixtures to `useNodeLogStream('assignment-1', 'process-1')` — every assertion stays
+byte-identical; the tests' discriminating purpose (hive-absent swallow vs real-failure surfacing)
+is preserved and once again exercises the fetch path.
 
 **File:** `frontend/src/components/tasks/TaskDetails/ProcessLogsViewer.tsx`
 Pass the already-available `processId` through `NodeProcessLogsViewer` into `useNodeLogStream`.
