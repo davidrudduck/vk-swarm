@@ -72,3 +72,8 @@ wiremock = "0.6"
 tempfile = "3"
 jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"] }
 tracing-test = { version = "0.2", features = ["no-env-filter"] }
+# Real WebSocket client for the TS3 protocol tests. An ordinary GET carrying hand-written or
+# deliberately malformed upgrade headers is NOT a protocol test: it cannot observe a 101, so it cannot
+# distinguish "authentication rejected the request" from "the upgrade was refused". Version 0.28
+# matches crates/services and crates/utils, so the workspace resolves one copy.
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }

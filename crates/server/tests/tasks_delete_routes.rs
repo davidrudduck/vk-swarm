@@ -27,6 +27,7 @@ async fn delete_task_with_dangling_shared_id_deletes_locally() {
     )
     .await;
 
+    let _jar = h.authorized_jar().await;
     let resp = h.delete(&format!("/api/tasks/{task_id}")).await;
     resp.assert_registered();
     assert_eq!(
@@ -68,6 +69,7 @@ async fn delete_task_aborts_when_hive_fails_with_conflict() {
     )
     .await;
 
+    let _jar = h.authorized_jar().await;
     let resp = h.delete(&format!("/api/tasks/{task_id}")).await;
     resp.assert_registered();
     assert!(
@@ -112,6 +114,7 @@ async fn delete_task_success_path_retains_local_row_for_ws_cleanup() {
     )
     .await;
 
+    let _jar = h.authorized_jar().await;
     let resp = h.delete(&format!("/api/tasks/{task_id}")).await;
     resp.assert_registered();
     assert_eq!(
