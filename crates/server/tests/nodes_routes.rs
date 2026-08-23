@@ -8,7 +8,10 @@ async fn configured_hive_returns_success() {
         .await;
     let mut jar = h.authorized_jar().await;
     let res = h
-        .get_with("/api/nodes?organization_id=00000000-0000-0000-0000-000000000000", &mut jar)
+        .get_with(
+            "/api/nodes?organization_id=00000000-0000-0000-0000-000000000000",
+            &mut jar,
+        )
         .await;
     res.assert_registered();
     assert_eq!(res.status, 200, "body: {}", res.body);
@@ -21,7 +24,10 @@ async fn absent_hive_is_registered_and_not_a_500() {
     let h = common::HiveHarness::hive_absent().await;
     let mut jar = h.authorized_jar().await;
     let res = h
-        .get_with("/api/nodes?organization_id=00000000-0000-0000-0000-000000000000", &mut jar)
+        .get_with(
+            "/api/nodes?organization_id=00000000-0000-0000-0000-000000000000",
+            &mut jar,
+        )
         .await;
     res.assert_registered();
     assert_eq!(

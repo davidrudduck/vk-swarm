@@ -1,4 +1,3 @@
-use chrono::Utc;
 use db::models::{
     project::{CreateProject, Project},
     task::{CreateTask, Task, TaskStatus},
@@ -24,6 +23,9 @@ pub struct HiveHarness {
     serve_handle: Option<tokio::task::JoinHandle<()>>,
     current_server_generation: u64,
     last_completed_server_generation: Option<u64>,
+    mounted_hive_mocks:
+        std::sync::Arc<tokio::sync::Mutex<std::collections::BTreeSet<(String, String)>>>,
+    redirect_mock_paths: std::sync::Arc<tokio::sync::Mutex<std::collections::BTreeSet<String>>>,
 }
 
 pub struct Resp {
@@ -65,6 +67,7 @@ impl Resp {
     }
 
     /// Extract the Location header value.
+    #[allow(dead_code)]
     pub fn location(&self) -> Option<&str> {
         self.headers
             .get(reqwest::header::LOCATION)
@@ -81,7 +84,9 @@ pub struct CookieJar {
 
 #[allow(dead_code)]
 impl CookieJar {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
     /// Set a cookie directly (used to forge a wrong-browser value).
     pub fn insert(&mut self, name: &str, value: &str) {
         self.cookies.insert(name.to_string(), value.to_string());
@@ -99,7 +104,7 @@ impl CookieJar {
                     .iter()
                     .map(|(k, v)| format!("{}={}", k, v))
                     .collect::<Vec<_>>()
-                    .join("; ")
+                    .join("; "),
             )
         }
     }
@@ -108,23 +113,24 @@ impl CookieJar {
     pub fn apply(&mut self, set_cookie: &[String]) {
         for line in set_cookie {
             // Extract name=value from the Set-Cookie header.
-            if let Some(name_value) = line.split(';').next() {
-                if let Some((name, value)) = name_value.split_once('=') {
-                    let name = name.trim();
-                    let value = value.trim();
-                    
-                    // Check if this line has Max-Age=0 (deletion)
-                    if line.contains("Max-Age=0") {
-                        self.cookies.remove(name);
-                    } else {
-                        self.cookies.insert(name.to_string(), value.to_string());
-                    }
+            if let Some(name_value) = line.split(';').next()
+                && let Some((name, value)) = name_value.split_once('=')
+            {
+                let name = name.trim();
+                let value = value.trim();
+                // Check if this line has Max-Age=0 (deletion)
+                if line.contains("Max-Age=0") {
+                    self.cookies.remove(name);
+                } else {
+                    self.cookies.insert(name.to_string(), value.to_string());
                 }
             }
         }
     }
     /// A jar that shares nothing with `self` -- an explicitly clean second browser.
-    pub fn fresh() -> Self { Self::default() }
+    pub fn fresh() -> Self {
+        Self::default()
+    }
 }
 
 /// Outcome of a REAL protocol probe (websocket handshake or SSE request).
@@ -141,6 +147,10 @@ pub struct ProtocolProbe {
 impl HiveHarness {
     /// VK_SHARED_API_BASE points at a live wiremock server -> hive IS configured.
     pub async fn configured() -> Self {
+        Self::configured_inner(None).await
+    }
+
+    async fn configured_inner(node_auth: Option<(String, Uuid)>) -> Self {
         // 1. Create temp_dir
         let temp_dir = tempfile::TempDir::new().unwrap();
 
@@ -181,6 +191,15 @@ impl HiveHarness {
             .mount(&mock_server)
             .await;
 
+        if let Some((secret, _)) = &node_auth {
+            let hive_url = mock_server.uri().replacen("http://", "ws://", 1);
+            unsafe {
+                std::env::set_var("VK_HIVE_URL", hive_url);
+                std::env::set_var("VK_NODE_API_KEY", "test-api-key");
+                std::env::set_var("VK_CONNECTION_TOKEN_SECRET", secret);
+            }
+        }
+
         // 6. configured(): set VK_SHARED_API_BASE
         unsafe {
             std::env::set_var("VK_SHARED_API_BASE", mock_server.uri());
@@ -188,6 +207,12 @@ impl HiveHarness {
 
         // 7. Build deployment the same way main.rs does
         let deployment = LocalDeployment::new().await.unwrap();
+        if let Some((_, expected_node_id)) = node_auth {
+            let context = deployment
+                .node_runner_context()
+                .expect("node-auth harness must start the node runner");
+            context.state.write().await.node_id = Some(expected_node_id);
+        }
 
         // 9. Serve real router on ephemeral listener
         let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel();
@@ -212,6 +237,15 @@ impl HiveHarness {
             serve_handle: Some(serve_handle),
             current_server_generation: 1,
             last_completed_server_generation: None,
+            mounted_hive_mocks: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::BTreeSet::from([(
+                    "POST".to_string(),
+                    "/v1/tokens/refresh".to_string(),
+                )]),
+            )),
+            redirect_mock_paths: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::BTreeSet::new(),
+            )),
         }
     }
 
@@ -275,6 +309,12 @@ impl HiveHarness {
             serve_handle: Some(serve_handle),
             current_server_generation: 1,
             last_completed_server_generation: None,
+            mounted_hive_mocks: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::BTreeSet::new(),
+            )),
+            redirect_mock_paths: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::BTreeSet::new(),
+            )),
         }
     }
 
@@ -285,6 +325,7 @@ impl HiveHarness {
             .respond_with(wiremock::ResponseTemplate::new(status).set_body_json(body))
             .mount(&self.mock_server)
             .await;
+        self.record_hive_mock(method, path).await;
     }
 
     /// Drive the REAL served router over HTTP
@@ -501,9 +542,45 @@ impl HiveHarness {
         }
     }
 
-    pub async fn post_with(&self, path: &str, body: serde_json::Value, jar: &mut CookieJar) -> Resp {
+    pub async fn post_with(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        jar: &mut CookieJar,
+    ) -> Resp {
         let client = reqwest::Client::new();
-        let mut builder = client.post(format!("http://{}{}", self.addr, path)).json(&body);
+        let mut builder = client
+            .post(format!("http://{}{}", self.addr, path))
+            .json(&body);
+        if let Some(cookie_header) = jar.header_value() {
+            builder = builder.header(reqwest::header::COOKIE, cookie_header);
+        }
+        let res = builder.send().await.unwrap();
+        let status = res.status().as_u16();
+        let headers = res.headers().clone();
+        let content_type = headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let set_cookie = headers
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
+            .collect::<Vec<_>>();
+        jar.apply(&set_cookie);
+        let body = res.text().await.unwrap();
+        Resp {
+            status,
+            body,
+            content_type,
+            headers,
+            set_cookie,
+        }
+    }
+
+    pub async fn delete_with(&self, path: &str, jar: &mut CookieJar) -> Resp {
+        let client = reqwest::Client::new();
+        let mut builder = client.delete(format!("http://{}{}", self.addr, path));
         if let Some(cookie_header) = jar.header_value() {
             builder = builder.header(reqwest::header::COOKIE, cookie_header);
         }
@@ -565,7 +642,12 @@ impl HiveHarness {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
-        let mut builder = client.get(format!("http://{}{}", self.addr, path));
+        let base = if self.redirect_mock_paths.lock().await.contains(path) {
+            self.mock_server.uri()
+        } else {
+            format!("http://{}", self.addr)
+        };
+        let mut builder = client.get(format!("{base}{path}"));
         if let Some(cookie_header) = jar.header_value() {
             builder = builder.header(reqwest::header::COOKIE, cookie_header);
         }
@@ -599,9 +681,21 @@ impl HiveHarness {
 
     /// Observe the exact JWT returned by the redeem mock for this app code (harness self-test only).
     pub async fn redeemed_access_token(&self, app_code: &str) -> String {
-        // For this harness self-test, we derive it from the label like mock_hive_oauth does
-        let jwt = test_access_token(&format!("acc-{}", app_code));
-        jwt
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/oauth/web/redeem", self.mock_server.uri()))
+            .json(&serde_json::json!({
+                "handoff_id": Uuid::new_v4(),
+                "app_code": app_code,
+                "app_verifier": "harness-observer"
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "redeem mock did not match app_code");
+        response.json::<serde_json::Value>().await.unwrap()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_string()
     }
 
     /// REAL websocket handshake via `tokio_tungstenite::connect_async`.
@@ -610,23 +704,26 @@ impl HiveHarness {
     }
 
     /// The same real handshake with explicit request headers.
-    pub async fn ws_probe_with_headers(&self, path: &str, jar: Option<&CookieJar>,
-        headers: &[(&str, &str)]) -> ProtocolProbe {
+    pub async fn ws_probe_with_headers(
+        &self,
+        path: &str,
+        jar: Option<&CookieJar>,
+        headers: &[(&str, &str)],
+    ) -> ProtocolProbe {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        
+
         let ws_url = format!("ws://{}{}", self.addr, path);
         let mut request = ws_url.into_client_request().unwrap();
-        
+
         // Add jar's cookie header if present
-        if let Some(jar) = jar {
-            if let Some(cookie_value) = jar.header_value() {
-                request.headers_mut().insert(
-                    reqwest::header::COOKIE,
-                    cookie_value.parse().unwrap(),
-                );
-            }
+        if let Some(jar) = jar
+            && let Some(cookie_value) = jar.header_value()
+        {
+            request
+                .headers_mut()
+                .insert(reqwest::header::COOKIE, cookie_value.parse().unwrap());
         }
-        
+
         // Add extra headers
         for (name, value) in headers {
             request.headers_mut().insert(
@@ -634,9 +731,10 @@ impl HiveHarness {
                 value.parse().unwrap(),
             );
         }
-        
+
         match tokio_tungstenite::connect_async(request).await {
-            Ok((_socket, _response)) => {
+            Ok((mut socket, _response)) => {
+                let _ = socket.close(None).await;
                 ProtocolProbe {
                     status: 101,
                     upgraded: true,
@@ -645,19 +743,22 @@ impl HiveHarness {
             }
             Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
                 let status = resp.status().as_u16();
+                let content_type = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned);
                 ProtocolProbe {
                     status,
                     upgraded: false,
-                    content_type: None,
+                    content_type,
                 }
             }
-            Err(_) => {
-                ProtocolProbe {
-                    status: 0,
-                    upgraded: false,
-                    content_type: None,
-                }
-            }
+            Err(_) => ProtocolProbe {
+                status: 0,
+                upgraded: false,
+                content_type: None,
+            },
         }
     }
 
@@ -666,12 +767,12 @@ impl HiveHarness {
         let client = reqwest::Client::new();
         let mut builder = client.get(format!("http://{}{}", self.addr, path));
         builder = builder.header(reqwest::header::ACCEPT, "text/event-stream");
-        if let Some(jar) = jar {
-            if let Some(cookie_header) = jar.header_value() {
-                builder = builder.header(reqwest::header::COOKIE, cookie_header);
-            }
+        if let Some(jar) = jar
+            && let Some(cookie_header) = jar.header_value()
+        {
+            builder = builder.header(reqwest::header::COOKIE, cookie_header);
         }
-        
+
         let res = builder.send().await.unwrap();
         let status = res.status().as_u16();
         let content_type = res
@@ -679,10 +780,10 @@ impl HiveHarness {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        
+
         // Drop the response without reading the body (SSE streams are endless)
         drop(res);
-        
+
         ProtocolProbe {
             status,
             upgraded: false,
@@ -691,79 +792,96 @@ impl HiveHarness {
     }
 
     /// Mount the three hive endpoints a browser login needs.
-    pub async fn mock_hive_oauth(&self, app_code: &str, access_token_label: &str,
-        refresh_token: &str, subject: uuid::Uuid) -> uuid::Uuid {
+    pub async fn mock_hive_oauth(
+        &self,
+        app_code: &str,
+        access_token_label: &str,
+        refresh_token: &str,
+        subject: uuid::Uuid,
+    ) -> uuid::Uuid {
         let handoff_id = uuid::Uuid::new_v4();
         let access_token = test_access_token(access_token_label);
-        
+
         // Mount POST /v1/oauth/web/init — returns handoff_id
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/v1/oauth/web/init"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "handoff_id": handoff_id,
                     "authorize_url": "https://github.com/login/oauth/authorize"
-                })
-            ))
+                })),
+            )
             .up_to_n_times(1)
             .mount(&self.mock_server)
             .await;
-        
+
         // Mount POST /v1/oauth/web/redeem — returns tokens
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/v1/oauth/web/redeem"))
-            .and(wiremock::matchers::body(wiremock::matchers::json_partial(
-                serde_json::json!({"code": app_code})
-            )))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({
+            .and(wiremock::matchers::body_partial_json(
+                serde_json::json!({"app_code": app_code}),
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "access_token": access_token,
                     "refresh_token": refresh_token
-                })
-            ))
+                })),
+            )
             .mount(&self.mock_server)
             .await;
-        
+
         // Mount GET /v1/profile with bearer token matching
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/v1/profile"))
             .and(wiremock::matchers::header(
                 "authorization",
-                format!("Bearer {}", access_token)
+                format!("Bearer {}", access_token),
             ))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({
-                    "user_id": subject
-                })
-            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(test_profile(subject)))
             .mount(&self.mock_server)
             .await;
-        
+
+        for (method, path) in [
+            ("POST", "/v1/oauth/web/init"),
+            ("POST", "/v1/oauth/web/redeem"),
+            ("GET", "/v1/profile"),
+        ] {
+            self.record_hive_mock(method, path).await;
+        }
+
         handoff_id
     }
 
     /// Replace the profile mock for `access_token_label` with a priority-1 responder.
-    pub async fn delay_hive_profile(&self, access_token_label: &str, subject: uuid::Uuid,
-        delay: std::time::Duration) -> tokio::sync::oneshot::Receiver<()> {
+    pub async fn delay_hive_profile(
+        &self,
+        access_token_label: &str,
+        subject: uuid::Uuid,
+        delay: std::time::Duration,
+    ) -> tokio::sync::oneshot::Receiver<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let access_token = test_access_token(access_token_label);
-        
+        let signal = std::sync::Mutex::new(Some(tx));
+
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/v1/profile"))
             .and(wiremock::matchers::header(
                 "authorization",
-                format!("Bearer {}", access_token)
+                format!("Bearer {}", access_token),
             ))
-            .respond_with({
-                let tx = std::sync::Mutex::new(Some(tx));
+            .respond_with(move |_: &wiremock::Request| {
+                if let Some(tx) = signal.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
                 wiremock::ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"user_id": subject}))
+                    .set_body_json(test_profile(subject))
                     .set_delay(delay)
             })
             .with_priority(1)
             .mount(&self.mock_server)
             .await;
-        
+        self.record_hive_mock("GET", "/v1/profile").await;
+
         rx
     }
 
@@ -779,78 +897,97 @@ impl HiveHarness {
             .send()
             .await
             .unwrap();
-        
-        let body: serde_json::Value = res.json().await.unwrap();
-        uuid::Uuid::parse_str(body["user_id"].as_str().unwrap()).unwrap()
+
+        let profile: utils::api::oauth::ProfileResponse = res.json().await.unwrap();
+        profile.user_id
     }
 
     /// Build a validator-enabled node harness.
     pub async fn configured_with_node_auth(secret: &str, expected_node_id: uuid::Uuid) -> Self {
-        unsafe {
-            std::env::set_var("VK_CONNECTION_TOKEN_SECRET", secret);
-            std::env::set_var("VK_NODE_API_KEY", "test-api-key");
-        }
-        let h = Self::configured().await;
-        h
+        Self::configured_inner(Some((secret.to_string(), expected_node_id))).await
     }
 
     /// True when a mock is mounted for this method+path.
     pub async fn hive_mock_registered(&self, method: &str, path: &str) -> bool {
-        let requests = self.mock_server.received_requests().await;
-        requests.iter().any(|r| r.method.as_str() == method && r.url.path() == path)
-            || self.hive_request_count(method, path).await > 0
+        self.mounted_hive_mocks
+            .lock()
+            .await
+            .contains(&(method.to_ascii_uppercase(), path.to_string()))
     }
 
     /// Mount a priority-1 exact method+path override returning `status`.
-    pub async fn mock_hive_failure(&self, method: &str, path: &str, status: u16)
-        -> tokio::sync::oneshot::Receiver<()> {
+    pub async fn mock_hive_failure(
+        &self,
+        method: &str,
+        path: &str,
+        status: u16,
+    ) -> tokio::sync::oneshot::Receiver<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let tx = std::sync::Mutex::new(Some(tx));
-        
+        let signal = std::sync::Mutex::new(Some(tx));
+
         wiremock::Mock::given(wiremock::matchers::method(method))
             .and(wiremock::matchers::path(path))
-            .respond_with(wiremock::ResponseTemplate::new(status))
+            .respond_with(move |_: &wiremock::Request| {
+                if let Some(tx) = signal.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                wiremock::ResponseTemplate::new(status)
+            })
             .with_priority(1)
             .mount(&self.mock_server)
             .await;
-        
+        self.record_hive_mock(method, path).await;
+
         rx
     }
 
     /// Priority-1 exact override whose `RespondErr` signals then returns `std::io::ErrorKind::ConnectionReset`.
-    pub async fn mock_hive_connection_reset(&self, method: &str, path: &str)
-        -> tokio::sync::oneshot::Receiver<()> {
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        let _ = tx;
-        
+    pub async fn mock_hive_connection_reset(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let signal = std::sync::Mutex::new(Some(tx));
+
         wiremock::Mock::given(wiremock::matchers::method(method))
             .and(wiremock::matchers::path(path))
-            .respond_with(wiremock::ResponseTemplate::new(500))
+            .respond_with_err(move |_: &wiremock::Request| {
+                if let Some(tx) = signal.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset")
+            })
             .with_priority(1)
             .mount(&self.mock_server)
             .await;
-        
-        let (tx2, rx2) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let _ = tx2.send(());
-        });
-        rx2
+        self.record_hive_mock(method, path).await;
+
+        rx
     }
 
     /// Priority-1 exact override whose `Respond` signals then returns a ResponseTemplate with a long delay.
-    pub async fn mock_hive_delayed(&self, method: &str, path: &str)
-        -> tokio::sync::oneshot::Receiver<()> {
+    pub async fn mock_hive_delayed(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> tokio::sync::oneshot::Receiver<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let tx = std::sync::Mutex::new(Some(tx));
-        
+        let signal = std::sync::Mutex::new(Some(tx));
+
         wiremock::Mock::given(wiremock::matchers::method(method))
             .and(wiremock::matchers::path(path))
-            .respond_with(wiremock::ResponseTemplate::new(200)
-                .set_delay(std::time::Duration::from_secs(60)))
+            .respond_with(move |_: &wiremock::Request| {
+                if let Some(tx) = signal.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(60))
+            })
             .with_priority(1)
             .mount(&self.mock_server)
             .await;
-        
+        self.record_hive_mock(method, path).await;
+
         rx
     }
 
@@ -859,6 +996,7 @@ impl HiveHarness {
         self.mock_server
             .received_requests()
             .await
+            .unwrap_or_default()
             .iter()
             .filter(|r| r.method.as_str() == method && r.url.path() == path)
             .count()
@@ -866,38 +1004,55 @@ impl HiveHarness {
 
     /// Mount a mock_redirect for testing Location and Set-Cookie preservation.
     pub async fn mock_redirect(&self, from_path: &str, to_path: &str, set_cookie: &[&str]) {
-        let mut template = wiremock::ResponseTemplate::new(302)
-            .append_header("Location", to_path);
+        let mut template = wiremock::ResponseTemplate::new(302).append_header("Location", to_path);
         for cookie in set_cookie {
             template = template.append_header("Set-Cookie", *cookie);
         }
-        
+
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(from_path))
             .respond_with(template)
             .mount(&self.mock_server)
             .await;
+        self.redirect_mock_paths
+            .lock()
+            .await
+            .insert(from_path.to_string());
     }
 
     /// Rebuild the deployment and served router on the SAME temp dir.
     pub async fn restart(mut self) -> Self {
-        // Signal the old server to shutdown
-        if let Some(sender) = self.shutdown_sender.take() {
-            let _ = sender.send(());
-        }
-        
-        // Wait for the old server to complete
-        if let Some(handle) = self.serve_handle.take() {
-            let _ = handle.await;
-        }
-        
+        let sender = self
+            .shutdown_sender
+            .take()
+            .expect("running harness must retain its shutdown sender");
+        assert!(sender.send(()).is_ok(), "old server stopped before restart");
+
+        let handle = self
+            .serve_handle
+            .take()
+            .expect("running harness must retain its serve JoinHandle");
+        handle.await.expect("old server task panicked");
+
         // Record the old generation as completed
-        self.last_completed_server_generation = Some(self.server_generation);
-        self.server_generation += 1;
-        
+        let completed_generation = self.current_server_generation;
+        self.last_completed_server_generation = Some(completed_generation);
+
+        let HiveHarness {
+            temp_dir,
+            mock_server,
+            deployment: old_deployment,
+            current_server_generation,
+            last_completed_server_generation,
+            mounted_hive_mocks,
+            redirect_mock_paths,
+            ..
+        } = self;
+        drop(old_deployment);
+
         // Rebuild deployment on the SAME temp dir
         let deployment = LocalDeployment::new().await.unwrap();
-        
+
         // Serve the new router
         let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel();
         let app = server::routes::router(deployment.clone()).await;
@@ -911,17 +1066,19 @@ impl HiveHarness {
                 .await
                 .unwrap();
         });
-        
+
         // Return a new harness with the new server
         HiveHarness {
-            temp_dir: self.temp_dir,
-            mock_server: self.mock_server,
+            temp_dir,
+            mock_server,
             deployment,
             addr,
             shutdown_sender: Some(shutdown_sender),
             serve_handle: Some(serve_handle),
-            current_server_generation: self.current_server_generation,
-            last_completed_server_generation: self.last_completed_server_generation,
+            current_server_generation: current_server_generation + 1,
+            last_completed_server_generation,
+            mounted_hive_mocks,
+            redirect_mock_paths,
         }
     }
 
@@ -936,7 +1093,9 @@ impl HiveHarness {
     }
 
     /// The raw sqlite pool.
-    pub fn pool(&self) -> &sqlx::SqlitePool { &self.deployment.db().pool }
+    pub fn pool(&self) -> &sqlx::SqlitePool {
+        &self.deployment.db().pool
+    }
 
     /// Path of the credentials file inside the harness temp dir.
     pub fn credentials_path(&self) -> std::path::PathBuf {
@@ -948,7 +1107,7 @@ impl HiveHarness {
         let raw = server::auth::seams::OsTokenSource.generate_token();
         let hashed = server::auth::seams::hash_token(&raw);
         let now_millis = chrono::Utc::now().timestamp_millis();
-        
+
         db::models::browser_auth::create_session(
             self.pool(),
             Uuid::new_v4(),
@@ -958,10 +1117,17 @@ impl HiveHarness {
         )
         .await
         .unwrap();
-        
+
         let mut jar = CookieJar::new();
         jar.insert("vks_browser_session", &raw);
         jar
+    }
+
+    async fn record_hive_mock(&self, method: &str, path: &str) {
+        self.mounted_hive_mocks
+            .lock()
+            .await
+            .insert((method.to_ascii_uppercase(), path.to_string()));
     }
 }
 
@@ -986,4 +1152,13 @@ fn test_access_token(label: &str) -> String {
         &jsonwebtoken::EncodingKey::from_secret(b"test-secret"),
     )
     .expect("failed to encode test JWT")
+}
+
+fn test_profile(subject: Uuid) -> utils::api::oauth::ProfileResponse {
+    utils::api::oauth::ProfileResponse {
+        user_id: subject,
+        username: Some("harness-user".to_string()),
+        email: "harness@example.com".to_string(),
+        providers: Vec::new(),
+    }
 }
