@@ -275,3 +275,10 @@ GATE_FAIL_CHECK=none
   operation tests, the emission conformance test, 6 pragma tests, 8 execution-timestamp tests, 8
   variable-inheritance tests, 5 visibility tests, and 11 live doctests; no failures. Existing
   selectively ignored deprecated remote-cache and environment-dependent doctests were unchanged.
+- Remediation re-review confirmed both production fixes but rejected two evidence claims. The
+  SQLite controls force the hazard directly; they do not use or calibrate the unchanged,
+  scheduler-sensitive background-writer generators in the real-function stress tests. The test
+  comments and tracked workstream now state that limitation explicitly. The credential regression
+  test now inspects `OAuthCredentials`' private backend before saving, requires `Backend::File`, and
+  verifies the exact configured path; on macOS a Keychain selection therefore fails without a
+  Keychain write.

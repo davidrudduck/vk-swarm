@@ -1024,12 +1024,12 @@ mod lifecycle_event_tests {
         (pool, temp_dir)
     }
 
-    /// REQUIRED by the attempt-2 amendment: proves the chosen shape does NOT read-then-upgrade.
-    /// 200 independent processes, each transitioned by one real `update_completion` call, while a
-    /// background writer commits to the SAME table every ~200µs (17B's own tight-loop
-    /// methodology) for the whole run. The pre-007 (and pre-attempt-2) shape scored 0/200; this
-    /// must too, because `update_completion`'s first and only write-adjacent statement is the
-    /// UPDATE itself (see its doc comment) — no SELECT ever opens the transaction as a read.
+    /// Scheduler-sensitive stress check for the real write-first `update_completion` shape.
+    /// It transitions 200 independent processes while a background writer commits to the same
+    /// table. A zero-error result is expected because the UPDATE is the transaction's first
+    /// statement, but this timing-driven generator is supplemental evidence rather than a
+    /// deterministic proof against every read-before-write mutation. The control below separately
+    /// forces the hazardous SQLite schedule deterministically.
     #[tokio::test]
     async fn update_completion_does_not_read_then_upgrade() {
         const ITERATIONS: usize = 200;
@@ -1100,12 +1100,11 @@ mod lifecycle_event_tests {
     /// 17A's *proposed remediation* (read the prior status before the UPDATE to gate on a real
     /// transition), which is what panel 18 injected into the real function and scored 15/200 on
     /// (ledger). This control hand-reconstructs that SAME hypothetical shape, independently, to
-    /// prove the harness here is capable of reproducing the hazard rather than being silently
-    /// toothless. Panel 18's own injection-into-real-code result (C1) already proves the same
-    /// point more strongly (against production code, not a reconstruction) but was done in its own
-    /// detached worktree and isn't itself a shipped, repeatable test — kept, not deleted, so this
-    /// file also carries a permanent, in-tree regression guard against reintroducing a
-    /// read-before-write shape into `update_completion`.
+    /// force SQLite's hazardous schedule directly. Panel 18's own injection-into-real-code result
+    /// (C1) tested production code in a detached worktree but is not a shipped, repeatable test.
+    /// This in-tree control proves the database failure mode independently; it does not calibrate
+    /// the timing-driven production stress generator above or deterministically mutation-test the
+    /// real function.
     #[tokio::test]
     async fn control_prior_status_read_reproduces_busy_snapshot() {
         let (pool, _tmp) = build_contention_pool().await;

@@ -1301,13 +1301,12 @@ mod lifecycle_event_tests {
         (pool, temp_dir)
     }
 
-    /// REQUIRED by the attempt-2 amendment: proves `mark_orphaned_as_failed`'s write-first
-    /// `UPDATE ... RETURNING` shape does NOT read-then-upgrade. 200 iterations, each seeding a
-    /// fresh orphaned 'running' row and calling the real function once, while a background
-    /// writer commits to the SAME table every ~200µs for the whole run (17B's own methodology;
-    /// F17B-1 measured 6/200 for attempt 1's SELECT-then-UPDATE shape and 0/200 for the pre-007
-    /// single-statement shape). This must score 0/200 too, because the UPDATE is now the FIRST
-    /// statement the transaction issues — no prior SELECT ever opens it as a read.
+    /// Scheduler-sensitive stress check for `mark_orphaned_as_failed`'s write-first
+    /// `UPDATE ... RETURNING` shape. It calls the real function 200 times while a background
+    /// writer commits to the same table. A zero-error result is expected because the UPDATE is
+    /// the transaction's first statement, but this timing-driven generator is supplemental
+    /// evidence rather than a deterministic proof against every read-before-write mutation. The
+    /// control below separately forces the hazardous SQLite schedule deterministically.
     #[tokio::test]
     async fn mark_orphaned_as_failed_does_not_read_then_upgrade() {
         const ITERATIONS: usize = 200;
@@ -1361,10 +1360,10 @@ mod lifecycle_event_tests {
         );
     }
 
-    /// Calibration control: reconstructs attempt 1's REJECTED shape (SELECT the orphaned rows,
-    /// then UPDATE, in one deferred transaction — attempt 1's code, hand-rolled here since it is
-    /// gone from the tree) against the IDENTICAL harness, to prove it is capable of reproducing
-    /// F17B-1's finding rather than being silently toothless.
+    /// Deterministic hazard control: reconstructs attempt 1's rejected shape (SELECT the orphaned
+    /// rows, then UPDATE, in one deferred transaction) and explicitly commits another connection's
+    /// write between those statements. This proves SQLite returns `SQLITE_BUSY_SNAPSHOT` for the
+    /// hazardous shape; it does not calibrate the timing-driven stress generator above.
     #[tokio::test]
     async fn control_read_then_write_shape_reproduces_busy_snapshot() {
         let (pool, _tmp) = build_contention_pool().await;

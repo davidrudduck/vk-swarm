@@ -261,6 +261,12 @@ mod tests {
         let path = temp_dir.path().join("credentials.json");
         let credentials = OAuthCredentials::new_file_backed(path.clone());
 
+        match &credentials.backend {
+            Backend::File(backend) => assert_eq!(backend.path, path),
+            #[cfg(target_os = "macos")]
+            Backend::Keychain(_) => panic!("explicit file backend selected the macOS Keychain"),
+        }
+
         credentials
             .save(&Credentials {
                 access_token: Some("test-access-token".to_owned()),

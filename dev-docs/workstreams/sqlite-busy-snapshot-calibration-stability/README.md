@@ -37,6 +37,13 @@ The production write-first stress tests remain unchanged. No test is ignored and
 disabled. The two repaired controls passed together in ten consecutive focused runs, and focused DB
 clippy passed with warnings denied.
 
+The repaired controls and production stress tests intentionally use different schedules. The
+controls deterministically prove SQLite rejects a read-snapshot/write-upgrade after an intervening
+commit. The production tests remain scheduler-sensitive stress checks over the real write-first
+functions; their zero-error result is supported by the functions' UPDATE-first structure, but the
+background-writer generator is not a deterministic mutation test and is not calibrated by the
+controls. This distinction replaces the previous inaccurate “identical harness” claim.
+
 ## Completion criteria
 
 - [x] Both negative controls force the conflicting commit instead of relying on scheduler timing.

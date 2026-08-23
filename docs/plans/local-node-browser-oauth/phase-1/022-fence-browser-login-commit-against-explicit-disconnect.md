@@ -181,7 +181,8 @@ Add `OAuthCredentials::new_file_backed()` with signature
 `pub fn new_file_backed(path: PathBuf) -> Self`, constructing
 `Backend::File(FileBackend { path })` directly. Keep `OAuthCredentials::new` and production backend
 detection unchanged. Use the explicit constructor wherever task-022 tests save credentials so no
-test can overwrite the production macOS Keychain slot.
+test can overwrite the production macOS Keychain slot. Its same-module regression test must inspect
+the private backend before saving, require `Backend::File`, and assert the exact configured path.
 
 ```rust
 pub fn new_file_backed(path: PathBuf) -> Self {
@@ -227,7 +228,8 @@ inside `spawn_remote_sync()`.
 5. Record the Stage-2 follow-up evidence: dropping an overwritten `RemoteSyncHandle` does abort its task, but detached configured startup could still install after disconnect observed an empty slot; the synchronous startup call closes that remaining race.
 6. Record the Stage-2 remediation evidence: direct constructor tests invoke the shared orphan-cleanup guard, and raw API-base client behavior remains independent from parsed sync configuration.
 7. Record the integrated-review remediation evidence: task-022 tests that save credentials use an
-   explicit file backend and cannot select the fixed production macOS Keychain entry.
+   explicit file backend and cannot select the fixed production macOS Keychain entry; the
+   constructor regression test verifies the backend variant and path before any persistent write.
 
 ## Done when
 `WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p services explicit_file_backend_is_path_scoped && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns && cargo test -p local-deployment raw_api_base_remains_available_when_share_sync_config_is_unavailable" bash "$HOME/.agents/wai/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0
