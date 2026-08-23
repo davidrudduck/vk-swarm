@@ -2,7 +2,7 @@
 id: "009"
 phase: 2
 title: "Bind OAuth initiation to a browser: issue the binding cookie and persist the handoff"
-status: ready
+status: passed
 depends_on: ["004","007","008","022"]
 parallel: false
 conflicts_with: ["008","010","011","012","022"]

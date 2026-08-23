@@ -637,3 +637,17 @@ crates/server/src/routes/oauth.rs →
 `panicked at crates/server/tests/browser_oauth.rs:146:5: handoff row appeared while the epoch fence was held` — RED as required. Green after restore: 3/3 passed; fence test
 stable across 5 consecutive runs (5/5 passed); fmt --check, clippy -D warnings, git diff --check
 all clean.
+
+## Task 009 closure — gates, mutation evidence, panel verdicts
+
+Source provenance: implementation `e58946c3` (task(009): bind oauth initiation to a browser; RED captured: both plan tests failed — "no binding cookie issued" and two-browser None/None), remediation `07ad0dac` (test(auth): make binding tests discriminating). Plan amendments: `eb999901` (corrected two-browser test + epoch-fence test + mutation requirements), `a6204f31` (stale "2 tests green" count → 3).
+
+Stage-1 gate transcripts (per-commit, plan commits interleave):
+- `e58946c3` vs base `91ac6483`: WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p server --test browser_oauth && cargo test -p server --test browser_auth_routes" → "file-set: only declared files changed (3 paths)… typecheck: override command exit 0… tests: scope 'crates/server/tests/browser_oauth.rs' green… CONFORMS: task 009 passed all deterministic gates. GATE_FAIL_CHECK=none".
+- `07ad0dac` vs base `eb999901`: same typecheck, WAI_TEST_CMD="cargo test -p server --test browser_oauth" → "(2 paths)… exit 0… green… CONFORMS… GATE_FAIL_CHECK=none". (First attempt of this gate spuriously failed on a missing `.cargo-tmp/` scratch dir — mktemp ENOENT cascaded into an empty typecheck log; recreating the untracked dir and re-running produced the recorded CONFORMS. No source or gate semantics changed.)
+
+Stage-2 round 1 (parallel, range 91ac6483..e58946c3): subagent-kimi CONFORMS (file scope exact; all six STOP triggers cleared with citations; guard-across-Hive-I/O disproved by await-order trace; deviations adjudicated mechanical). subagent-gpt DEVIATES with two valid findings: [BLOCKING] two-browser test false-green — `mock_hive_oauth` mounts `/v1/oauth/web/init` with `up_to_n_times(1)` (common/mod.rs:826-839), so the second initiation failed closed and `assert_ne!(Some, None)` passed vacuously; [SHOULD-FIX] no observable discriminated the create_handoff-under-epoch-fence ordering.
+
+Remediation: plan `eb999901` + test-only source `07ad0dac`. Two-browser test now mounts two mocks, asserts both statuses 200, expects both cookies. New `initiation_persists_the_handoff_behind_the_epoch_fence` holds `browser_auth_epoch` from outside via `h.deployment()`, proves Hive I/O completed (`hive_request_count("POST","/v1/oauth/web/init") >= 1`), asserts the row cannot appear while the fence is held, then opens the fence and asserts 200 + state pending. Mutation evidence (ledger ## Task 009 decisions, decisions-ledger.md:629-639): (a) single-mock revert → two-browser FAILED "browser B initiation failed … left: 404 right: 200"; (b) create_handoff moved above the epoch lock → fence FAILED "handoff row appeared while the epoch fence was held". Both restored; oauth.rs byte-identical after (git checkout --). Fence test 5/5 stable; browser_oauth 3 green.
+
+Focused re-review by the dissenting seat (subagent-gpt) over eb999901..07ad0dac: both prior findings verified closed, no new functional issues, flakiness hazards checked (current-thread scheduling safe; 200ms window 5/5 stable); one SHOULD-FIX doc defect — plan line 247 still said "2 tests green". Fixed in `a6204f31` (plan-lint PASS). All remediation converged in-session.
