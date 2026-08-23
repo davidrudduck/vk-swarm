@@ -244,7 +244,7 @@ Declared decision points (from the spec; do not edit here):
 
 ## Manual verification (record in decisions-ledger)
 1. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p server --test browser_oauth" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 009` exits 0.
-2. `cargo test -p server --test browser_oauth` — 2 tests green.
+2. `cargo test -p server --test browser_oauth` — 3 tests green.
 3. `git grep -n 'store_oauth_handoff' crates/server/` returns nothing (the call site is gone).
 4. `cargo test -p server --test browser_auth_routes` still green (initiation stayed public).
 
