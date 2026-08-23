@@ -421,3 +421,37 @@ observation retained as a non-finding: the harness share-sync `if let Some(h) = 
 holds the share-sync slot guard across `shutdown().await` — no cycle exists because the RemoteSync
 task never re-acquires that lock, and the plan's take-before-await constraint targets the
 node-cache method.
+
+## Task 007 — cookie helpers, session resolver, scoped auth middlewares
+
+Cross-class evidence (manual verification 4). The two cross-audience assertions and the
+wrong-resource assertion from
+`crates/server/src/auth/node_token.rs::tests::each_predicate_requires_its_own_audience_node_and_resource_scope`:
+
+```rust
+assert!(!connection_token_is_valid_for_resource(
+    &v, Some(&proxy), expected_node, resource));   // proxy aud never opens the connection surface
+assert!(!proxy_token_is_valid_for_node(&v, Some(&conn), expected_node)); // connection aud never opens the proxy surface
+assert!(!connection_token_is_valid_for_resource(
+    &v, Some(&conn), expected_node, other));       // right aud+node, wrong resource: rejected
+```
+
+Audiences are set by the validator at
+`crates/services/src/services/connection_token.rs:106` (`set_audience(&["connection"])` in
+`validate()`) and `crates/services/src/services/connection_token.rs:201`
+(`set_audience(&["node_proxy"])` in `validate_proxy_token()`). The receiving middlewares call
+only the strict `validate_for_resource` (connection_token.rs:157) and `validate_proxy_for_node`
+(connection_token.rs:227); the loose audience-decoding methods are never used receiver-side.
+`git grep -n 'Secure' crates/server/src/auth/cookies.rs` shows the D9 doc comment and the test's
+negative assertion only — no emitted `Secure` attribute.
+
+Choices the task did not fully dictate:
+
+- The task's node_token test sketch used undeclared `secret()`/`SECRET` placeholders; bound them
+  to the task's own `test_secret()` fixture (`let secret = test_secret();` passed by reference),
+  per the task's "no undeclared secret()/SECRET placeholder remains" rule.
+- Appended two positive-control service tests (`test_validate_for_resource_accepts_exact_node_and_resource`,
+  `test_validate_proxy_for_node_accepts_exact_target`) alongside the mandated rejection tests:
+  rejection-only tests cannot distinguish a strict validator from one that always errors.
+- `resolve_browser_session` maps a DB error to `None` (fail closed) with a `tracing::warn!`
+  carrying only the error, never the presented token.
