@@ -100,7 +100,14 @@ async { ... })` so a lock regression fails instead of hanging CI:
 4. `disconnect_is_not_undone_by_an_in_flight_token_refresh`: arrange near-expiry credentials,
    install a delayed priority-1 refresh response and await its arrival, then call disconnect. The
    request must finish after the refresh guard becomes available and the final credentials path
-   must be absent. Never take `refresh_guard` before `client.logout`.
+   must be absent. Never take `refresh_guard` before `client.logout`. The delayed refresh
+   response MUST carry an INVALID access token (e.g. `"not-a-jwt"`): with a valid token the
+   refresher persists it inside the guard, so a mutant that takes `refresh_guard` before
+   `client.logout()` sees a valid on-disk token and never re-enters the guard — no deadlock,
+   identical outcome, mutation false-green. With the invalid body the refresher errors without
+   saving; the mutant's in-handler refresh re-enters the already-held guard and deadlocks into
+   the 30-second timeout, while the correct implementation stays green because `client.logout()`
+   completes (best-effort) before the handler acquires the guard.
 
 The first test is the incident-symptom assertion for the integrated finding: after disconnect has
 returned, an earlier OAuth callback cannot recreate any browser authorization or daemon state.
