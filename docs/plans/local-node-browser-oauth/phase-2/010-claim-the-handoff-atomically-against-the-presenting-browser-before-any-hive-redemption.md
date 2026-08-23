@@ -2,7 +2,7 @@
 id: "010"
 phase: 2
 title: "Claim the handoff atomically against the presenting browser before any Hive redemption"
-status: ready
+status: passed
 depends_on: ["009"]
 parallel: false
 conflicts_with: ["008","009","011","012","022"]

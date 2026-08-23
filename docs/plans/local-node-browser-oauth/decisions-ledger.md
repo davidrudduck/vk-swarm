@@ -754,3 +754,36 @@ Verification: `cargo test -p server --test browser_oauth` 8 passed; `--test
 browser_auth_routes` 4 passed; `--test harness_smoke` 11 passed; `cargo clippy -p server
 --all-targets --all-features -- -D warnings` clean; `cargo fmt --all` then `-- --check` clean;
 `git diff --check` clean; `git diff crates/server/src/routes/oauth.rs` empty.
+
+## Task 010 closure — gates, panel verdicts, remediation provenance
+
+- Preflight: freshness PASS (spec 680587143dbb2f1cbe74d1f7ef78a250705d5686); plan lint PASS;
+  stale "6 tests" count corrected to 7 in `fe896a7b` (lint re-run PASS).
+- Implementation `0f5064d1` (oauth.rs + browser_oauth.rs + ledger; RED 5 passed/2 failed with
+  the two 200-expecting tests failing and the two 400-expecting tests vacuously green — RED
+  mechanism recorded; GREEN 7 passed).
+- Stage-1 gate `0f5064d1` vs `fe896a7b` (fmt override; browser_oauth scope): CONFORMS,
+  GATE_FAIL_CHECK=none.
+- Stage-2 round 1: kimi CONFORMS (epoch-guard await-order trace, single-decider UPDATE,
+  post-claim region byte-identical, 2 INFO: epoch-capture-consumed-in-011 by design;
+  take_oauth_handoff inert outside scope). gpt DEVIATES: 1 BLOCKING (distinct no-cookie
+  message) adjudicated FALSE POSITIVE as source defect — pre-claim exit performs zero DB
+  access, all four claim failures share the one message; plan self-contradiction fixed by
+  STOP-trigger rewording in `c34c5eb2` (lint PASS). 3 REAL test-strength findings:
+  claim-after-redeem, epoch-held-across-redeem, query-param binding fallback — all
+  mutation-false-green.
+- Remediation plan `c34c5eb2`; remediation source `0fca152c` (test-only + ledger adjudication
+  note; oauth.rs byte-identical, hash 9c3b4e6f…61376). Mutation evidence recorded above:
+  (a) claim-after-redeem → forged/expired/replay redeem-count assertions FAIL (:282, :341,
+  :317); copied-callback test itself stays green under (a) because cookieless attempts exit at
+  the pre-claim no-cookie branch — the count assertions are the claim-order discriminators;
+  (b) epoch guard held across redeem → try_lock test FAILS (:389 TryLockError(())); (c)
+  query-param fallback → stolen-raw-token attempt FAILS (:238 left 200 right 400).
+- Stage-1 gate `0fca152c` vs `c34c5eb2`: CONFORMS, GATE_FAIL_CHECK=none (transcript:
+  file-set 2 paths; typecheck override exit 0; browser_oauth scope green).
+- Stage-2 focused re-review (dissenting seat, gpt): all three test-strength findings CLOSED,
+  scope exact, oauth.rs byte-identical, no new issues; VERDICT: APPROVE.
+- Final verification at `0fca152c`: browser_oauth 8 passed; browser_auth_routes 4;
+  harness_smoke 11; clippy -p server --all-targets --all-features -D warnings clean; fmt
+  clean; git diff --check clean.
+- Status flipped ready → passed.
