@@ -62,14 +62,72 @@ async fn initiation_issues_a_binding_cookie_and_persists_only_its_hash() {
 #[serial_test::serial]
 async fn two_browsers_get_two_different_binding_secrets() {
     let h = common::HiveHarness::configured().await;
+    // mock_hive_oauth mounts /v1/oauth/web/init with up_to_n_times(1); a second
+    // initiation would find no mock and fail closed (no cookie, no row). Two
+    // initiations therefore require two mounted mocks.
     h.mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4()).await;
+    h.mock_hive_oauth("code-2", "acc-2", "ref-2", uuid::Uuid::new_v4()).await;
     let mut a = common::CookieJar::new();
     let mut b = common::CookieJar::fresh();
-    h.post_with("/api/auth/handoff/init",
+    let ra = h.post_with("/api/auth/handoff/init",
         serde_json::json!({"provider":"github","return_to":"/"}), &mut a).await;
-    h.post_with("/api/auth/handoff/init",
+    assert_eq!(ra.status, 200, "browser A initiation failed: {}", ra.body);
+    let rb = h.post_with("/api/auth/handoff/init",
         serde_json::json!({"provider":"github","return_to":"/"}), &mut b).await;
-    assert_ne!(a.get("vks_browser_binding"), b.get("vks_browser_binding"));
+    assert_eq!(rb.status, 200, "browser B initiation failed: {}", rb.body);
+    let a_raw = a.get("vks_browser_binding").expect("browser A must receive a binding cookie");
+    let b_raw = b.get("vks_browser_binding").expect("browser B must receive a binding cookie");
+    assert_ne!(a_raw, b_raw);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn initiation_persists_the_handoff_behind_the_epoch_fence() {
+    use deployment::Deployment;
+
+    let h = common::HiveHarness::configured().await;
+    let handoff_id = h.mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4()).await;
+
+    // Hold the epoch fence from the outside. The handler may finish its Hive
+    // I/O unfenced, but its create_handoff must queue behind the fence: the
+    // handoff row may not exist while the fence is held, and must exist once
+    // it is released.
+    let epoch = h.deployment().browser_auth_epoch().clone();
+    let fence = epoch.lock().await;
+
+    let addr = h.addr();
+    let pool = h.pool().clone();
+    let request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("http://{addr}/api/auth/handoff/init"))
+            .json(&serde_json::json!({"provider":"github","return_to":"/"}))
+            .send()
+            .await
+            .expect("initiation request must complete")
+    });
+
+    // Wait until the request has certainly passed its Hive I/O (the init mock
+    // was served), then give the handler every opportunity to mis-insert.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2_000);
+    while h.hive_request_count("POST", "/v1/oauth/web/init").await < 1 {
+        assert!(std::time::Instant::now() < deadline, "initiation never reached the Hive mock");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT binding_hash FROM browser_oauth_handoffs WHERE handoff_id = ?")
+        .bind(handoff_id).fetch_optional(&pool).await.unwrap();
+    assert!(row.is_none(), "handoff row appeared while the epoch fence was held");
+
+    drop(fence);
+    let res = request.await.unwrap();
+    assert_eq!(res.status(), 200, "initiation must succeed once the fence opens");
+
+    let state: String = sqlx::query_scalar(
+        "SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+        .bind(handoff_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(state, "pending");
 }
 ```
 
@@ -151,7 +209,9 @@ Imports to add at the top of the file: `crate::auth::cookies::binding_set_cookie
 
 **Deliberately retained.** `LocalDeployment::store_oauth_handoff` / `take_oauth_handoff` and the in-memory `oauth_handoffs` map stay in `crates/local-deployment/src/lib.rs:743-764` but are no longer CALLED. Removing them is a public-contract change on a type this plan did not author, and this plan's only irreversible budget is task 001's migration. They are inert once task 010 stops reading them.
 
-**File:** `crates/server/tests/browser_oauth.rs` — create, with the two tests above.
+**File:** `crates/server/tests/browser_oauth.rs` — create, with exactly the three tests above.
+
+**Remediation note (Stage-2 round 1):** the original two-browser snippet mounted a single `mock_hive_oauth` (whose `/v1/oauth/web/init` mock is `up_to_n_times(1)`), so the second initiation failed closed and `assert_ne!(Some, None)` passed vacuously; the corrected test mounts two mocks, asserts both statuses 200, and `expect`s both cookies before comparing. The epoch-fence test was added because no other observable discriminated the `create_handoff`-under-fence ordering: it holds `browser_auth_epoch` from outside, proves the Hive mock was served, asserts the row cannot appear while the fence is held, and only then opens the fence. Mutation evidence required at implementation time: (a) reverting to a single mounted mock must fail the two-browser test; (b) moving `create_handoff` above the epoch `lock().await` (or deleting the guard) must fail the fence test.
 
 **Symbol grounding:** This task introduces no new function: it rewrites the body of the existing `handoff_init()` handler. It calls `create_handoff()` (task 004), `hash_token()` and `generate_token()` (task 002) and `binding_set_cookie()` (task 007). The pre-existing `generate_secret()` and `hash_sha256_hex()` in this file are left untouched.
 
@@ -159,7 +219,7 @@ Imports to add at the top of the file: `crate::auth::cookies::binding_set_cookie
 ## Allowed moves
 [
   "Change only the body and return type of handoff_init, plus the file's import block.",
-  "Create crates/server/tests/browser_oauth.rs with exactly the two tests above.",
+  "Create crates/server/tests/browser_oauth.rs with exactly the three tests above.",
   "Acquire browser_auth_epoch only around create_handoff; never around client.handoff_init Hive I/O.",
   "Do not touch handoff_complete, logout, status, the helper fns, or the router fns in this file.",
   "Do not delete store_oauth_handoff / take_oauth_handoff from local-deployment."
