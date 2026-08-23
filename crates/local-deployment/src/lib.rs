@@ -1317,7 +1317,7 @@ mod tests {
     async fn configured_startup_sync_is_installed_before_constructor_returns() {
         LocalDeployment::disable_orphan_cleanup_for_tests();
         let (pool, temp_dir) = create_test_pool_with_migrations().await;
-        let credentials = Arc::new(OAuthCredentials::new(
+        let credentials = Arc::new(OAuthCredentials::new_file_backed(
             temp_dir.path().join("credentials.json"),
         ));
         credentials
@@ -1368,7 +1368,7 @@ mod tests {
                 metrics: db::DbMetrics::new(),
             },
             Arc::new(RwLock::new(Config::default())),
-            Arc::new(OAuthCredentials::new(
+            Arc::new(OAuthCredentials::new_file_backed(
                 temp_dir.path().join("credentials.json"),
             )),
             Arc::new(MsgStore::new()),

@@ -52,6 +52,13 @@ impl OAuthCredentials {
         }
     }
 
+    pub fn new_file_backed(path: PathBuf) -> Self {
+        Self {
+            backend: Backend::File(FileBackend { path }),
+            inner: RwLock::new(None),
+        }
+    }
+
     pub async fn load(&self) -> std::io::Result<()> {
         let creds = self.backend.load().await?.map(Credentials::from);
         *self.inner.write().await = creds;
@@ -241,5 +248,28 @@ impl KeychainBackend {
             Err(e) if e.code() == Self::ERR_SEC_ITEM_NOT_FOUND => Ok(()),
             Err(e) => Err(std::io::Error::other(e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn explicit_file_backend_is_path_scoped() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("credentials.json");
+        let credentials = OAuthCredentials::new_file_backed(path.clone());
+
+        credentials
+            .save(&Credentials {
+                access_token: Some("test-access-token".to_owned()),
+                refresh_token: "test-refresh-token".to_owned(),
+                expires_at: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(path.exists());
     }
 }
