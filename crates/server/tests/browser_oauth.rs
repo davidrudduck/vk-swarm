@@ -66,21 +66,104 @@ async fn initiation_issues_a_binding_cookie_and_persists_only_its_hash() {
 #[serial_test::serial]
 async fn two_browsers_get_two_different_binding_secrets() {
     let h = common::HiveHarness::configured().await;
+    // mock_hive_oauth mounts /v1/oauth/web/init with up_to_n_times(1); a second
+    // initiation would find no mock and fail closed (no cookie, no row). Two
+    // initiations therefore require two mounted mocks.
     h.mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    h.mock_hive_oauth("code-2", "acc-2", "ref-2", uuid::Uuid::new_v4())
         .await;
     let mut a = common::CookieJar::new();
     let mut b = common::CookieJar::fresh();
-    h.post_with(
-        "/api/auth/handoff/init",
-        serde_json::json!({"provider":"github","return_to":"/"}),
-        &mut a,
-    )
-    .await;
-    h.post_with(
-        "/api/auth/handoff/init",
-        serde_json::json!({"provider":"github","return_to":"/"}),
-        &mut b,
-    )
-    .await;
-    assert_ne!(a.get("vks_browser_binding"), b.get("vks_browser_binding"));
+    let ra = h
+        .post_with(
+            "/api/auth/handoff/init",
+            serde_json::json!({"provider":"github","return_to":"/"}),
+            &mut a,
+        )
+        .await;
+    assert_eq!(ra.status, 200, "browser A initiation failed: {}", ra.body);
+    let rb = h
+        .post_with(
+            "/api/auth/handoff/init",
+            serde_json::json!({"provider":"github","return_to":"/"}),
+            &mut b,
+        )
+        .await;
+    assert_eq!(rb.status, 200, "browser B initiation failed: {}", rb.body);
+    let a_raw = a
+        .get("vks_browser_binding")
+        .expect("browser A must receive a binding cookie");
+    let b_raw = b
+        .get("vks_browser_binding")
+        .expect("browser B must receive a binding cookie");
+    assert_ne!(a_raw, b_raw);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn initiation_persists_the_handoff_behind_the_epoch_fence() {
+    use deployment::Deployment;
+
+    let h = common::HiveHarness::configured().await;
+    let handoff_id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+
+    // Hold the epoch fence from the outside. The handler may finish its Hive
+    // I/O unfenced, but its create_handoff must queue behind the fence: the
+    // handoff row may not exist while the fence is held, and must exist once
+    // it is released.
+    let epoch = h.deployment().browser_auth_epoch().clone();
+    let fence = epoch.lock().await;
+
+    let addr = h.addr();
+    let pool = h.pool().clone();
+    let request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("http://{addr}/api/auth/handoff/init"))
+            .json(&serde_json::json!({"provider":"github","return_to":"/"}))
+            .send()
+            .await
+            .expect("initiation request must complete")
+    });
+
+    // Wait until the request has certainly passed its Hive I/O (the init mock
+    // was served), then give the handler every opportunity to mis-insert.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2_000);
+    while h.hive_request_count("POST", "/v1/oauth/web/init").await < 1 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "initiation never reached the Hive mock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT binding_hash FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(handoff_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    assert!(
+        row.is_none(),
+        "handoff row appeared while the epoch fence was held"
+    );
+
+    drop(fence);
+    let res = request.await.unwrap();
+    assert_eq!(
+        res.status(),
+        200,
+        "initiation must succeed once the fence opens"
+    );
+
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(handoff_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "pending");
 }

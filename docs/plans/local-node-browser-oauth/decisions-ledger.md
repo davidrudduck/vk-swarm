@@ -625,3 +625,15 @@ Formatting-only deviations: `IntoResponse` was inlined into the existing `axum::
 (`response::{IntoResponse, Json as ResponseJson}`) instead of a separate top-level use; and the
 mandatory `cargo fmt --all` gate reflowed the plan-verbatim test snippet's line breaks
 (whitespace only, no semantic change). Test logic is byte-equivalent to the plan modulo fmt.
+
+Stage-2 remediation (plan commit eb999901) applied to browser_oauth.rs: the two-browser test now
+mounts two mocks and asserts both statuses 200 plus both cookies (`expect`) before `assert_ne`;
+added `initiation_persists_the_handoff_behind_the_epoch_fence`. Mutation evidence (both mutations
+temporary, both restored, oauth.rs byte-identical afterward — `git diff` empty):
+(a) reverted two-browser test to a single mounted `mock_hive_oauth` →
+`assertion left == right failed: browser B initiation failed: {"success":false,...,"message":"Remote service error. Please try again."}  left: 404  right: 200` — RED as required (the pre-remediation test passed vacuously here);
+(b) moved `create_handoff(...)` above `deployment.browser_auth_epoch().lock().await` in
+crates/server/src/routes/oauth.rs →
+`panicked at crates/server/tests/browser_oauth.rs:146:5: handoff row appeared while the epoch fence was held` — RED as required. Green after restore: 3/3 passed; fence test
+stable across 5 consecutive runs (5/5 passed); fmt --check, clippy -D warnings, git diff --check
+all clean.
