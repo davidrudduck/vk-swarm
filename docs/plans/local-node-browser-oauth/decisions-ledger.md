@@ -282,3 +282,16 @@ GATE_FAIL_CHECK=none
   test now inspects `OAuthCredentials`' private backend before saving, requires `Backend::File`, and
   verifies the exact configured path; on macOS a Keychain selection therefore fails without a
   Keychain write.
+- The strengthened credential test passed task 022's deterministic gate on commit `9d705438`:
+
+```text
+WAI gate: topic=local-node-browser-oauth task=022 commit=HEAD allowed_change=edit
+  - file-set: only declared files changed (1 paths)
+  - edit: structural check relaxed — relies on adversarial panel
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/db/src/models/browser_auth/handoff.rs' ...
+  - tests: scope 'crates/db/src/models/browser_auth/handoff.rs' green
+CONFORMS: task 022 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
