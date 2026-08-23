@@ -7,6 +7,7 @@ depends_on: ["001","002","005"]
 parallel: false
 conflicts_with: ["002","008"]
 files:
+  - "Cargo.lock"
   - "crates/server/Cargo.toml"
   - "crates/server/tests/common/mod.rs"
   - "crates/server/tests/harness_smoke.rs"
@@ -271,6 +272,7 @@ pub struct ProtocolProbe {
 /// GET through a jar: sends the jar's `Cookie:` header and applies the response's Set-Cookie.
 pub async fn get_with(&self, path: &str, jar: &mut CookieJar) -> Resp;
 pub async fn post_with(&self, path: &str, body: serde_json::Value, jar: &mut CookieJar) -> Resp;
+pub async fn delete_with(&self, path: &str, jar: &mut CookieJar) -> Resp;
 /// GET with arbitrary extra headers and NO jar (anonymous or hand-built requests).
 pub async fn get_with_headers(&self, path: &str, headers: &[(&str, &str)]) -> Resp;
 /// GET that does NOT follow redirects, so a callback's `Location` can be inspected.
@@ -390,16 +392,16 @@ Use the LITERAL cookie name `"vks_browser_session"` in the harness so this task 
 
 **Anchor 4 — repoint the seven existing consumers.** In each of `events.rs`, `nodes_routes.rs`, `projects_with_stats.rs`, `swarm_labels_routes.rs`, `swarm_projects_routes.rs`, `swarm_templates_routes.rs`, `tasks_delete_routes.rs`:
 - **Before:** `let res = h.get("/api/…").await;` (and the `post`/`delete` equivalents; in `events.rs` the SSE calls are raw reqwest builders — `let res = client.get(&url).send().await.unwrap();` at L118, L196, L269, L336, L381).
-- **After:** the same call through an authorized jar — `let mut jar = h.authorized_jar().await;` once per test, then `h.get_with("/api/…", &mut jar)`; for the raw reqwest SSE builders add `.header("cookie", jar.header_value().unwrap())` to the existing builder chain and change nothing else about the stream handling.
+- **After:** the same call through an authorized jar — `let mut jar = h.authorized_jar().await;` once per test, then `h.get_with("/api/…", &mut jar)` / `h.post_with(...)` / `h.delete_with(...)` as appropriate; for the raw reqwest SSE builders add `.header("cookie", jar.header_value().unwrap())` to the existing builder chain and change nothing else about the stream handling. Constructing an authorized jar without passing it to the request is not a repoint and fails this task.
 This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization boundary does not exist yet, so sending a cookie changes nothing. Doing it here — before task 008 — is what keeps `cargo test -p server` green across the whole plan instead of red between two tasks.
 
 **File:** `crates/server/tests/harness_smoke.rs`
 **Anchor:** end of file, after the existing `harness_detects_an_unregistered_route` test.
-**After:** the five tests from the Failing-test section, appended verbatim. Its two existing tests that call `/api/organizations` are repointed through `authorized_jar()` exactly like the other consumers.
+**After:** the eight tests from the Failing-test section, appended verbatim. Its two existing tests that call `/api/organizations` are repointed through `authorized_jar()` exactly like the other consumers.
 
 **Sibling alignment (rubric 9).** Read `crates/server/tests/events.rs` before writing the probes — it is the only existing test that consumes a live stream and documents the axum SSE frame format and why a body read must break early; and read `crates/services/Cargo.toml:52` for the exact `tokio-tungstenite` version/feature string to copy.
 
-**Symbol grounding:** This task introduces the harness methods `get_with()`, `post_with()`, `get_with_headers()`, `get_no_redirect()`, `ws_probe()`, `ws_probe_with_headers()`, `sse_probe()`, `mock_hive_oauth()`, `profile_subject_for()`, `configured_with_node_auth()`, `hive_mock_registered()`, `mock_hive_failure()`, `restart()`, `server_generation()`, `last_completed_server_generation()`, `pool()`, `credentials_path()` and `authorized_jar()` on `HiveHarness`, plus the `CookieJar` and `ProtocolProbe` types. `up_to_n_times()` is NOT introduced here: it is an existing wiremock 0.6 `MockBuilder` method, verified in the vendored dependency source alongside `MountedMockSet::handle_request`'s first-match-wins resolution. `hash_token()` is likewise not introduced here — it is defined by task 002 and merely called by `authorized_jar()`.
+**Symbol grounding:** This task introduces the harness methods `get_with()`, `post_with()`, `delete_with()`, `get_with_headers()`, `get_no_redirect()`, `ws_probe()`, `ws_probe_with_headers()`, `sse_probe()`, `mock_hive_oauth()`, `profile_subject_for()`, `configured_with_node_auth()`, `hive_mock_registered()`, `mock_hive_failure()`, `restart()`, `server_generation()`, `last_completed_server_generation()`, `pool()`, `credentials_path()` and `authorized_jar()` on `HiveHarness`, plus the `CookieJar` and `ProtocolProbe` types. `up_to_n_times()` is NOT introduced here: it is an existing wiremock 0.6 `MockBuilder` method, verified in the vendored dependency source alongside `MountedMockSet::handle_request`'s first-match-wins resolution. `hash_token()` is likewise not introduced here — it is defined by task 002 and merely called by `authorized_jar()`.
 
 **OAuth JWT construction (mandatory).** Replace the existing zero-argument `test_access_token()` helper with `test_access_token(label: &str)`. Serialize `{ exp: 4_102_444_800_i64, test_label: label }` and encode deterministically. The exact signature is test-only and unverified by `extract_expiration`; the stable full compact JWT string is the contract. `mock_hive_oauth`, `access_token_for_label`, `redeemed_access_token`, and `profile_subject_for` MUST all call the same derivation/memoization path. The harness self-test calls production `utils::jwt::extract_expiration` and proves the result is future-dated.
 
@@ -413,7 +415,7 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
 
 ## Allowed moves
 [
-  "Add exactly one dev-dependency (tokio-tungstenite) to crates/server/Cargo.toml.",
+  "Add exactly one dev-dependency (tokio-tungstenite) to crates/server/Cargo.toml and record the server package dependency edge in Cargo.lock.",
   "Extend Resp with a cloned all-headers collection, keep raw Set-Cookie values, add location(), and populate headers before every body read.",
   "Add CookieJar, ProtocolProbe, access-token-label JWT derivation, deployment()/response helpers, exact request counting, and priority-1 signalled outage responders to HiveHarness.",
   "Append eight focused harness tests covering jars, successive handoffs, real WS/SSE, exact generated JWT/profile matching, all headers/Location, signalled priority override, and restart generations.",
