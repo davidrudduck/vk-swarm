@@ -37,7 +37,6 @@ pub struct HiveHarness {
     retained_database_path: std::path::PathBuf,
     retained_shared_api_base: Option<String>,
     retained_node_auth: Option<RetainedNodeAuth>,
-    node_cache_request_baseline: usize,
 }
 
 pub struct Resp {
@@ -227,8 +226,6 @@ impl HiveHarness {
             std::env::set_var("VK_SHARED_API_BASE", mock_server.uri());
         }
 
-        let node_cache_request_baseline = organizations_request_count(&mock_server).await;
-
         // 7. Build deployment the same way main.rs does
         let deployment = LocalDeployment::new().await.unwrap();
         if let Some((_, expected_node_id)) = node_auth {
@@ -279,7 +276,6 @@ impl HiveHarness {
             redirect_mock_paths: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::BTreeSet::new(),
             )),
-            node_cache_request_baseline,
         }
     }
 
@@ -309,8 +305,6 @@ impl HiveHarness {
         unsafe {
             std::env::remove_var("VK_SHARED_API_BASE");
         }
-
-        let node_cache_request_baseline = organizations_request_count(&mock_server).await;
 
         // 7. Build deployment the same way main.rs does
         let deployment = LocalDeployment::new().await.unwrap();
@@ -355,7 +349,6 @@ impl HiveHarness {
             redirect_mock_paths: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::BTreeSet::new(),
             )),
-            node_cache_request_baseline,
         }
     }
 
@@ -1069,6 +1062,14 @@ impl HiveHarness {
         };
         self.last_completed_server_generation = Some(completed_generation);
 
+        // The old serve task is complete. Quiesce the old generation's owned background
+        // tasks through their owned handles BEFORE dropping the old deployment, so no
+        // old-generation hive traffic can overlap the replacement's requests.
+        if let Some(handle) = self.deployment.share_sync_handle().lock().await.take() {
+            handle.shutdown().await;
+        }
+        self.deployment.shutdown_node_cache_sync().await;
+
         let HiveHarness {
             temp_dir,
             mock_server,
@@ -1091,8 +1092,6 @@ impl HiveHarness {
             retained_shared_api_base.as_deref(),
             retained_node_auth.as_ref(),
         );
-
-        let node_cache_request_baseline = organizations_request_count(&mock_server).await;
 
         let deployment = LocalDeployment::new().await.unwrap();
         if let Some(node_auth) = &retained_node_auth {
@@ -1131,7 +1130,6 @@ impl HiveHarness {
             retained_database_path,
             retained_shared_api_base,
             retained_node_auth,
-            node_cache_request_baseline,
         }
     }
 
@@ -1157,28 +1155,13 @@ impl HiveHarness {
 
     /// Replace this harness's credential file with refresh-token-only credentials so the next
     /// `RemoteClient::access_token()` call must traverse the real `/v1/tokens/refresh` path.
+    /// Takes and awaits BOTH owned background handles (share sync, then node-cache sync)
+    /// before saving, so only an explicit caller can issue the next observed request.
     pub async fn write_refresh_only_credentials(&self, refresh_token: &str) {
         if let Some(handle) = self.deployment.share_sync_handle().lock().await.take() {
             handle.shutdown().await;
         }
-        let target = self.node_cache_request_baseline + 2;
-        if tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            loop {
-                if self.hive_request_count("GET", "/v1/organizations").await >= target {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .is_err()
-        {
-            let actual = self.hive_request_count("GET", "/v1/organizations").await;
-            panic!(
-                "timed out waiting for node-cache quiescence: GET /v1/organizations count {actual} < baseline {} + 2",
-                self.node_cache_request_baseline
-            );
-        }
+        self.deployment.shutdown_node_cache_sync().await;
         let creds = services::services::oauth_credentials::Credentials {
             access_token: None,
             refresh_token: refresh_token.to_string(),
@@ -1241,16 +1224,6 @@ fn test_access_token(label: &str) -> String {
         &jsonwebtoken::EncodingKey::from_secret(b"test-secret"),
     )
     .expect("failed to encode test JWT")
-}
-
-async fn organizations_request_count(mock_server: &wiremock::MockServer) -> usize {
-    mock_server
-        .received_requests()
-        .await
-        .unwrap_or_default()
-        .iter()
-        .filter(|r| r.method.as_str() == "GET" && r.url.path() == "/v1/organizations")
-        .count()
 }
 
 fn attach_jar_cookie(builder: reqwest::RequestBuilder, jar: &CookieJar) -> reqwest::RequestBuilder {

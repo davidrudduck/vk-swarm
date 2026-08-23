@@ -19,7 +19,7 @@ use services::services::{
     filesystem::FilesystemService,
     git::GitService,
     image::ImageService,
-    node_cache::NodeCacheSyncService,
+    node_cache::{NodeCacheSyncHandle, NodeCacheSyncService},
     node_proxy_client::NodeProxyClient,
     node_runner::{NodeRunnerConfig, NodeRunnerContext, spawn_node_runner},
     oauth_credentials::OAuthCredentials,
@@ -68,8 +68,9 @@ pub struct LocalDeployment {
     connection_token_validator: Arc<ConnectionTokenValidator>,
     /// HTTP client for proxying requests to remote nodes
     node_proxy_client: NodeProxyClient,
-    /// Whether the node cache sync has been started
-    node_cache_sync_started: Arc<Mutex<bool>>,
+    /// Owned handle to the background node-cache sync task, clone-shared through `Arc`.
+    /// `Some` means the sync task is running; `shutdown_node_cache_sync()` takes and awaits it.
+    node_cache_sync_handle: Arc<Mutex<Option<NodeCacheSyncHandle>>>,
     /// Timestamp of the last VACUUM operation (for rate limiting)
     last_vacuum_time: Arc<RwLock<Option<std::time::Instant>>>,
     /// The event bus for durable event streaming and replay-to-live subscriptions
@@ -459,7 +460,7 @@ impl LocalDeployment {
             node_runner_context,
             connection_token_validator: Arc::new(connection_token_validator),
             node_proxy_client,
-            node_cache_sync_started: Arc::new(Mutex::new(false)),
+            node_cache_sync_handle: Arc::new(Mutex::new(None)),
             last_vacuum_time: Arc::new(RwLock::new(None)),
             event_bus,
             trigger_hook_runner_handles,
@@ -495,13 +496,10 @@ impl LocalDeployment {
         }
 
         // Start node cache sync if user is already logged in
-        // (runs in background, syncs nodes/projects from all organizations)
-        {
-            let d = deployment.clone();
-            tokio::spawn(async move {
-                d.start_node_cache_sync().await;
-            });
-        }
+        // (runs in background, syncs nodes/projects from all organizations).
+        // Awaited inline so the handle slot is deterministically filled (or skipped)
+        // before construction returns — a later shutdown can never race a detached start.
+        deployment.start_node_cache_sync().await;
 
         Ok(deployment)
     }
@@ -875,8 +873,8 @@ impl LocalDeployment {
     /// from all organizations the user has access to.
     pub async fn start_node_cache_sync(&self) {
         // Only start once
-        let mut started = self.node_cache_sync_started.lock().await;
-        if *started {
+        let mut slot = self.node_cache_sync_handle.lock().await;
+        if slot.is_some() {
             tracing::debug!("node cache sync already started, skipping");
             return;
         }
@@ -897,14 +895,24 @@ impl LocalDeployment {
             db_path = %database_path().display(),
             "starting background node cache sync"
         );
-        *started = true;
 
         let pool = self.db.pool.clone();
-        let sync_service = NodeCacheSyncService::new(pool, client);
+        *slot = Some(NodeCacheSyncService::new(pool, client).spawn());
+    }
 
-        tokio::spawn(async move {
-            sync_service.run().await;
-        });
+    /// True while the background node-cache sync task holds a handle slot.
+    pub async fn node_cache_sync_is_running(&self) -> bool {
+        self.node_cache_sync_handle.lock().await.is_some()
+    }
+
+    /// Shut down the background node-cache sync task, if running.
+    ///
+    /// Takes the handle slot BEFORE awaiting so the slot lock is never held across shutdown.
+    pub async fn shutdown_node_cache_sync(&self) {
+        let handle = self.node_cache_sync_handle.lock().await.take();
+        if let Some(handle) = handle {
+            handle.shutdown().await;
+        }
     }
 }
 

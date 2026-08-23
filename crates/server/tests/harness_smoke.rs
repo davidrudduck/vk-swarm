@@ -319,6 +319,12 @@ async fn no_redirect_preserves_location() {
 #[serial_test::serial]
 async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
     let h = common::HiveHarness::configured().await;
+    // Seed an unlinked project (no shared_task_id) and restart: the replacement RemoteSync
+    // therefore walks the same GET /v1/organizations path node-cache startup uses, proving
+    // that owned shutdown — not a request-count threshold — removes background refreshers.
+    h.seed_project("refresh-provenance", &[db::models::task::TaskStatus::Todo])
+        .await;
+    let h = h.restart().await;
     let owner = uuid::Uuid::new_v4();
     h.mock_hive_oauth("code-a", "access-a", "refresh-a", owner)
         .await;
