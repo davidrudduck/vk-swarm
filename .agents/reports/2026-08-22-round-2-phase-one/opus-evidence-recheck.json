@@ -1,0 +1,29 @@
+{
+  "argv": [
+    "claude",
+    "-p",
+    "--permission-mode",
+    "plan",
+    "--output-format",
+    "json",
+    "--model",
+    "opus",
+    "--effort",
+    "high"
+  ],
+  "cwd": "/home/david/.cache/dr-panel-tmp/dr-panel-gentle-mongoose-6a304873-1372255",
+  "exit_code": 0,
+  "finished_at": "2026-08-23T04:12:53.074143+00:00",
+  "notes": [],
+  "prompt_file": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/gentle-mongoose/.agents/reports/2026-08-22-round-2-phase-one/opus-evidence-recheck-prompt.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/gentle-mongoose/.agents/reports/2026-08-22-round-2-phase-one/opus-evidence-recheck.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/gentle-mongoose/.agents/reports/2026-08-22-round-2-phase-one/opus-evidence-recheck.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-08-23T03:56:00.095283+00:00",
+  "status": "ok",
+  "stub_risk_accepted": false,
+  "task": "codebase-review",
+  "tool": "claude",
+  "tool_version": "2.1.240 (Claude Code)"
+}

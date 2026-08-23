@@ -1,0 +1,29 @@
+{
+  "argv": [
+    "claude",
+    "-p",
+    "--permission-mode",
+    "plan",
+    "--output-format",
+    "json",
+    "--model",
+    "opus",
+    "--effort",
+    "high"
+  ],
+  "cwd": "/home/david/.cache/dr-panel-tmp/dr-panel-gentle-mongoose-ae5ee15f-1106208",
+  "exit_code": 0,
+  "finished_at": "2026-08-22T23:56:40.275677+00:00",
+  "notes": [],
+  "prompt_file": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/gentle-mongoose/.agents/reports/2026-08-22-round-2-phase-one/challenger-prompt.md",
+  "raw_log": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/gentle-mongoose/.agents/reports/2026-08-22-round-2-phase-one/opus.raw.log",
+  "report": "/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/gentle-mongoose/.agents/reports/2026-08-22-round-2-phase-one/opus.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-08-22T23:31:05.069796+00:00",
+  "status": "ok",
+  "stub_risk_accepted": false,
+  "task": "codebase-review",
+  "tool": "claude",
+  "tool_version": "2.1.240 (Claude Code)"
+}
