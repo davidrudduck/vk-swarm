@@ -1015,6 +1015,35 @@ impl HiveHarness {
         rx
     }
 
+    /// Priority-1 override that signals on arrival, then answers `body` after `delay_ms`.
+    pub async fn mock_hive_delayed_json(
+        &self,
+        method: &str,
+        path: &str,
+        delay_ms: u64,
+        body: serde_json::Value,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let signal = std::sync::Mutex::new(Some(tx));
+
+        wiremock::Mock::given(wiremock::matchers::method(method))
+            .and(wiremock::matchers::path(path))
+            .respond_with(move |_: &wiremock::Request| {
+                if let Some(tx) = signal.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(body.clone())
+                    .set_delay(std::time::Duration::from_millis(delay_ms))
+            })
+            .with_priority(1)
+            .mount(&self.mock_server)
+            .await;
+        self.record_hive_mock(method, path).await;
+
+        rx
+    }
+
     /// Count recorded requests matching BOTH exact HTTP method and path.
     pub async fn hive_request_count(&self, method: &str, path: &str) -> usize {
         self.mock_server

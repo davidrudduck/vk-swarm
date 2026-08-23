@@ -875,3 +875,63 @@ again." — no `?e`/Debug anywhere); node-cache-sync block kept; success respons
   logout and explicit disconnect → 012's suite (not yet written).
 - SC5 restart clause (survival across a planned idle node restart) is proven by task 015's
   TS4 suite against the same migrated SQLite/assets directory — NOT re-proven here.
+
+### Round-1 panel remediation (post-implementation; kimi CONFORMS; gpt found the items below)
+
+Provenance: round-1 adversarial panel — kimi seat returned CONFORMS (no findings); gpt seat
+found four items, all assigned to this owning task: (1) upstream-body log leak via the
+transparent `Remote` Display (task 018's sentinel obligation assigned here per
+no-deferred-remediation), (2) a logout slot-guard-across-await deadlock cycle newly reachable
+because this task's fenced commit holds `browser_auth_epoch` + `refresh_guard` across
+`install_remote_sync` (which locks the share-sync slot) while `logout` held that same slot
+across `handle.shutdown().await` and the RemoteSync task can be blocked on `refresh_guard`, and
+(3)+(4) the fence and save-failure orderings were mutation-false-green — no test existed that
+could turn red under either mutation.
+
+Changes applied (plan section "Panel-strengthened corrections (round-1 remediation)"):
+
+- `BrowserLoginError::Remote` Display made static: `#[error("remote service error")]`
+  (`#[from]` retained; only Display changes). Pinned by same-file unit test
+  `remote_variant_display_is_sanitized` wrapping `RemoteClientError::Http { status: 500,
+  body: "SENTINEL-ACCESS-8f31c0d2" }`.
+- `logout` take-before-await: the share-sync handle is `.take()`n inside a scoped block so the
+  slot guard drops BEFORE `handle.shutdown().await` — the pattern used everywhere else. Cycle
+  removed; full disconnect semantics remain task 012's.
+- New additive harness helper `mock_hive_delayed_json(method, path, delay_ms, body)` — same
+  signal-on-arrival shape as `mock_hive_delayed`, `.with_priority(1)`, `record_hive_mock`, but
+  answers `set_body_json(body)` after `delay_ms`. One mechanical fix: the `Respond` closure
+  must be `Fn` (wiremock calls it per request) but `set_body_json` consumes its value, so the
+  closure clones `body` per invocation.
+- Test A `a_stale_callback_cannot_commit_after_the_epoch_moves`: deterministic "stale"-label
+  JWT obtained before mounting; priority-1 delayed-json redeem (300ms) mounted BEFORE
+  `mock_hive_oauth("code-1", "stale", "ref", owner)`; completion GET spawned via raw reqwest
+  (addr + Cookie header cloned before the spawn); arrival awaited under 2s; epoch bumped from
+  the test; asserts 400 + generic body + NOT owner-mismatch wording + 0 browser_sessions rows
+  + credentials bytes unchanged.
+- Test B `a_credential_save_failure_mints_no_session`: after `start_login`,
+  `credentials.json.tmp` sabotaged as a directory (EISDIR inside `FileBackend::save`'s temp
+  open); asserts 400 generic body, no `vks_browser_session` Set-Cookie, 0 session rows.
+
+Mutation evidence (each mutant applied to the source, focused test run, source restored
+byte-identical — sha256-verified against a snapshot of the remediated file; note
+`git checkout -- login.rs` alone could not serve as the restore because the remediation is not
+yet committed, so restores used the snapshot copy and `cmp`):
+
+- (a) Deleted the `if *epoch_guard != epoch_at_claim { return Err(Disconnected); }` block →
+  Test A FAILED at browser_oauth.rs:649 `assertion left == right failed ... left: 200
+  right: 400` (body: "Signed in with github. You can return to the app." — the mutant committed
+  the stale login and, per the plan's prediction, the session-count assertion path follows).
+- (b) Moved `create_session` before `save_credentials` → Test B FAILED at
+  browser_oauth.rs:706 `assertion left == right failed: no session row may exist when the save
+  failed — left: 1 right: 0`.
+- (c) Reverted `Remote` Display to `#[error(transparent)]` → the sentinel unit test FAILED at
+  login.rs:151 `assertion left == right failed — left: "http 500: SENTINEL-ACCESS-8f31c0d2"
+  right: "remote service error"` (the exact log-leak the panel flagged).
+
+Verification: `cargo test -p server --test browser_oauth` → 14 passed (12 prior + A + B);
+`--lib auth::login` → 1 passed (103 filtered); `--test browser_auth_routes` → 4 passed;
+`--test harness_smoke` → 11 passed; `cargo clippy -p server --all-targets --all-features --
+-D warnings` clean; `cargo fmt --all` + `-- --check` clean (stable-channel warnings about
+nightly-only rustfmt.toml options are pre-existing and cosmetic); `git diff --check` clean;
+`git diff` on login.rs + oauth.rs shows ONLY the intended Display and take-before-await
+changes. task-gate.sh NOT run per dispatch instruction.

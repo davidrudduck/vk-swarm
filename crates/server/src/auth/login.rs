@@ -27,7 +27,10 @@ pub enum BrowserLoginError {
     Disconnected,
     #[error("failed to persist hive credentials")]
     CredentialPersistence(#[source] std::io::Error),
-    #[error(transparent)]
+    /// Static sanitized Display: `RemoteClientError::Http` renders `http {status}: {body}` and an
+    /// upstream 5xx body can carry reflected sentinels, while the route logs `error = %e`. The
+    /// wrapped source stays reachable for programmatic handling; only the Display is static.
+    #[error("remote service error")]
     Remote(#[from] RemoteClientError),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
@@ -132,4 +135,27 @@ pub async fn complete_browser_login(
     drop(refresh_guard);
     drop(epoch_guard);
     Ok(raw_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `Remote` variant's Display must stay static: `RemoteClientError::Http` renders
+    /// `http {status}: {body}`, and the route logs `error = %e`, so a transparent Display
+    /// would leak an upstream body (which can carry reflected sentinels) into the logs.
+    #[test]
+    fn remote_variant_display_is_sanitized() {
+        let inner = RemoteClientError::Http {
+            status: 500,
+            body: "SENTINEL-ACCESS-8f31c0d2".to_string(),
+        };
+        let wrapped = BrowserLoginError::Remote(inner);
+        assert_eq!(wrapped.to_string(), "remote service error");
+        assert!(
+            !wrapped.to_string().contains("SENTINEL"),
+            "upstream body leaked through Display: {}",
+            wrapped
+        );
+    }
 }

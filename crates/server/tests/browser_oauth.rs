@@ -587,3 +587,121 @@ async fn completion_drops_the_epoch_fence_before_hive_redemption() {
     request.abort();
     let _ = request.await;
 }
+
+/// Test A (round-1 remediation): a callback whose claim predates a disconnect (epoch bump)
+/// must be refused at the fenced commit — no credentials saved, no session minted — and the
+/// refusal must be the generic message, never the owner-mismatch wording.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_stale_callback_cannot_commit_after_the_epoch_moves() {
+    use deployment::Deployment;
+
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    // The deterministic JWT is derived BEFORE mounting so the delayed redeem override can
+    // answer with exactly the bearer that mock_hive_oauth's profile mock expects for "stale".
+    let jwt = h.access_token_for_label("stale");
+    // Priority-1 delayed redeem, mounted BEFORE mock_hive_oauth so it shadows the normal
+    // redeem: signals the moment the request ARRIVES, answers 300ms later — a window wide
+    // enough to bump the epoch while the handler is between claim and commit.
+    let redeem_arrived = h
+        .mock_hive_delayed_json(
+            "POST",
+            "/v1/oauth/web/redeem",
+            300,
+            serde_json::json!({"access_token": jwt, "refresh_token": "ref"}),
+        )
+        .await;
+    let id = h.mock_hive_oauth("code-1", "stale", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    let creds_before = std::fs::read(h.credentials_path()).unwrap();
+
+    let addr = h.addr();
+    let cookie = a
+        .header_value()
+        .expect("browser A must hold a binding cookie");
+    let request = tokio::spawn(async move {
+        let res = reqwest::Client::new()
+            .get(format!("http://{addr}{cb}"))
+            .header(reqwest::header::COOKIE, cookie)
+            .send()
+            .await
+            .expect("callback request must be issued");
+        let status = res.status().as_u16();
+        let body = res.text().await.unwrap();
+        (status, body)
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), redeem_arrived)
+        .await
+        .expect("redemption never reached the Hive mock")
+        .expect("delayed-responder signal channel closed");
+
+    // The claim (and its epoch capture) precedes redemption, so epoch_at_claim is now
+    // captured. Bumping the epoch from the test simulates the disconnect; the fenced
+    // commit must compare and refuse to write anything.
+    let mut g = h.deployment().browser_auth_epoch().lock().await;
+    *g += 1;
+    drop(g);
+
+    let (status, body) = request.await.expect("callback task panicked");
+    assert_eq!(status, 400, "body: {body}");
+    assert!(
+        body.contains("Sign-in could not be completed"),
+        "must be the generic browser-login failure message: {body}"
+    );
+    assert!(
+        !body.contains("owned by a different account"),
+        "a stale callback is a disconnect, never an owner mismatch: {body}"
+    );
+
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_sessions")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(sessions, 0, "a stale callback must not mint a session");
+    assert_eq!(
+        std::fs::read(h.credentials_path()).unwrap(),
+        creds_before,
+        "a stale callback must not save credentials"
+    );
+}
+
+/// Test B (round-1 remediation): a credential-save failure must abort WITHOUT minting a
+/// session. Mutating the order (mint before save) turns this red.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_credential_save_failure_mints_no_session() {
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    let id = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+
+    // Sabotage the file backend deterministically: the temp-file create inside
+    // FileBackend::save now fails with EISDIR regardless of user.
+    let tmp = h.credentials_path().with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::create_dir(&tmp).unwrap();
+
+    let res = h.get_with(&cb, &mut a).await;
+    assert_eq!(res.status, 400, "body: {}", res.body);
+    assert!(
+        res.body.contains("Sign-in could not be completed"),
+        "must be the generic browser-login failure message: {}",
+        res.body
+    );
+    assert!(
+        res.set_cookie
+            .iter()
+            .all(|l| !l.starts_with("vks_browser_session=")),
+        "a failed credential save must not mint a session cookie"
+    );
+
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_sessions")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(sessions, 0, "no session row may exist when the save failed");
+}

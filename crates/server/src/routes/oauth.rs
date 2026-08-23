@@ -216,8 +216,13 @@ async fn handoff_complete(
 }
 
 async fn logout(State(deployment): State<DeploymentImpl>) -> Result<StatusCode, ApiError> {
-    // Stop remote sync if running
-    if let Some(handle) = deployment.share_sync_handle().lock().await.take() {
+    // Stop remote sync if running. Take the handle out of its slot and drop the slot guard
+    // BEFORE awaiting shutdown(): the fenced browser-login commit holds `browser_auth_epoch` +
+    // `refresh_guard` across `install_remote_sync`, which locks this same slot — holding the
+    // slot across the shutdown join would complete a three-party deadlock cycle when the
+    // RemoteSync task is itself blocked on `refresh_guard`.
+    let handle = { deployment.share_sync_handle().lock().await.take() };
+    if let Some(handle) = handle {
         tracing::info!("Stopping remote sync due to logout");
         handle.shutdown().await;
     }
