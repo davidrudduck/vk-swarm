@@ -2,7 +2,7 @@
 id: "012"
 phase: 3
 title: "Add browser-scoped logout and make Hive disconnect revoke every session while retaining the owner"
-status: ready
+status: passed
 depends_on: ["011"]
 parallel: false
 conflicts_with: ["008","009","010","011","022"]

@@ -1219,3 +1219,61 @@ The dissenting seat demanded race 6 deterministically fail under the mutant that
 4. The one undetectable-when-benign case is behaviorally indistinguishable from the sanctioned
    race-3 outcome (a fully re-authenticated post-bump login completing after disconnect), so no
    assertion can separate benign-mutant from correct without controlling the scheduler.
+
+### Task 012 closure — gates, panels, provenance
+
+**Commits:** source `c02b9643` (impl) and `06e3920e` (round-2 test strengthening) against plans
+`636cba61` (race-4 invalid-token fixture) and `57480fb4` (fence proofs); dismissal `245c9220`.
+
+**Gate transcripts (verbatim):**
+
+```
+WAI gate: topic=local-node-browser-oauth task=012 commit=c02b9643 allowed_change=edit
+  - file-set: only declared files changed (3 paths)
+  - edit: structural check relaxed — relies on adversarial panel
+  - typecheck: override command exit 0
+  - tests: scope 'crates/server/tests/browser_auth_routes.rs' green
+CONFORMS: task 012 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+```
+WAI gate: topic=local-node-browser-oauth task=012 commit=06e3920e allowed_change=edit
+  - file-set: only declared files changed (2 paths)
+  - edit: structural check relaxed — relies on adversarial panel
+  - typecheck: override command exit 0
+  - tests: scope 'crates/server/tests/browser_auth_routes.rs' green
+CONFORMS: task 012 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+**Panel:** kimi CONFORMS round 1 (lock-graph cycle proof E→R→S with N take-before-await; O8
+terminal-state coverage argument; 5 INFO). gpt DEVIATES round 1 (4 SHOULD-FIX: SC7
+creds/owner unasserted; ordering STOPs undiscriminated; race-1 timing margin; race-4 refresher
+outcome unasserted) → all four remediated in `06e3920e` (SC7 assertions; race-5 mid-stall O8
+proof; race-6 held-fence stall proof; 1500ms profile delay; `Err(RemoteClientError::Token(_))`
+assertion). gpt re-review round 2: findings 1/3/4 CLOSED, race 5+6 sound, but REJECT on the
+release-immediately-before-clear variant → dispositioned by evidence-backed dismissal
+(`245c9220`; race 6 catches the regression whenever the adverse scheduling manifests; no
+deterministic mechanism exists — the reviewer's own round-3 check confirmed all four claims and
+found no missed mechanism) → **APPROVE**.
+
+**Mutations proven:** epoch re-check removal (race 1 RED), invalidate removal (race 2 RED),
+refresh_guard before client.logout (race 4 RED via 30s Elapsed), valid-JWT refresh body (race 4
+RED at outcome assertion), revoke-after-clear (race 5 RED mid-stall), early epoch release after
+revoke (race 6 RED at final credential assertion).
+
+**Implementer escalations adjudicated:** (1) `FileBackend::clear` swallows delete errors
+(oauth_credentials.rs:201-204) making the plan's non-2xx-on-clear-failure unenforceable — race 5
+rewritten to the stronger mid-stall ordering proof; gap recorded as backlog finding
+F-2026-08-23-01 (O8 invariant unaffected). (2) race 6's fresh login runs as one spawned task
+because `handoff_init` itself takes the epoch — accepted; all plan assertions preserved.
+
+**SC7/SC8 walk-through:** SC7 scope (one session by hash, revoked_at pinned, cookie Max-Age=0,
+other browser 200, both syncs live, credentials present, owner retained) —
+browser_auth_routes.rs:181-233. SC8 (epoch bump + durable invalidation + revoke-all before any
+sync/credential effect, both syncs stopped and awaited, owner retained, credentials absent,
+pre-disconnect callback 400, pending handoff terminal, fresh same-owner login restores both
+syncs, in-flight refresh cannot resurrect) — :240-300 and races 1-6 as listed.
+
+SC7/SC8 delivered at the model/route level; UI separation is task 017, sentinel disclosure task 018.
