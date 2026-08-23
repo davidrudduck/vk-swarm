@@ -467,7 +467,7 @@ impl LocalDeployment {
         };
 
         // Log startup config summary for debugging connection issues
-        let has_shared_api = std::env::var("VK_SHARED_API_BASE").is_ok();
+        let has_shared_api = api_base.is_some();
         let has_hive_url = std::env::var("VK_HIVE_URL").is_ok();
         let has_api_key = std::env::var("VK_NODE_API_KEY").is_ok();
 
@@ -514,8 +514,8 @@ impl LocalDeployment {
             // own container construction, so the sweep it spawns always observes it. It is NOT
             // race-free against sibling tests: `set_var` is unsound against any concurrent
             // `getenv`, and tests on other threads may be inside `from_parts` calling
-            // `ShareConfig::from_env`, `NodeRunnerConfig::from_env` or `database_path()` at this
-            // moment. Accepted deliberately: the value is written once, never unset, never read
+            // `NodeRunnerConfig::from_env` or `database_path()` at this moment. Accepted
+            // deliberately: the value is written once, never unset, never read
             // for an assertion, and the alternative is a test run that deletes a developer's
             // worktrees.
             unsafe {

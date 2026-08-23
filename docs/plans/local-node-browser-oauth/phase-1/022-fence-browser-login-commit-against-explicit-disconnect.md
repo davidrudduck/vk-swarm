@@ -26,7 +26,7 @@ In `crates/db/src/models/browser_auth/handoff.rs`:
 ```rust
 #[tokio::test]
 async fn invalidating_pending_handoffs_makes_them_durably_unclaimable() {
-    let pool = create_test_pool().await;
+    let (pool, _tmp) = create_test_pool().await;
     let pending = Uuid::new_v4();
     let already_claimed = Uuid::new_v4();
     create_handoff(&pool, pending, "github", "v1", "h1", 0).await.unwrap();
@@ -40,7 +40,7 @@ async fn invalidating_pending_handoffs_makes_them_durably_unclaimable() {
 
 #[tokio::test]
 async fn handoff_invalidation_does_not_touch_owner_or_sessions() {
-    let pool = create_test_pool().await;
+    let (pool, _tmp) = create_test_pool().await;
     let owner = Uuid::new_v4();
     pin_or_verify_owner(&pool, owner, 10).await.unwrap();
     create_session(&pool, Uuid::new_v4(), "session-hash", owner, 11).await.unwrap();
@@ -223,7 +223,7 @@ inside `spawn_remote_sync()`.
 ## Manual verification (record in decisions-ledger)
 1. `WAI_ROOT="$HOME/.agents/wai"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p services explicit_file_backend_is_path_scoped && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns && cargo test -p local-deployment raw_api_base_remains_available_when_share_sync_config_is_unavailable" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0.
 2. `cargo test -p db browser_auth` passes.
-3. `cargo clippy -p db -p deployment -p local-deployment --all-targets --all-features -- -D warnings` passes.
+3. `cargo clippy -p db -p deployment -p services -p local-deployment --all-targets --all-features -- -D warnings` passes.
 4. Record that this task is the integrated phase-1 review remediation; tasks 009-012 must still wire the epoch/invalidation into real routes before SC8 is complete.
 5. Record the Stage-2 follow-up evidence: dropping an overwritten `RemoteSyncHandle` does abort its task, but detached configured startup could still install after disconnect observed an empty slot; the synchronous startup call closes that remaining race.
 6. Record the Stage-2 remediation evidence: direct constructor tests invoke the shared orphan-cleanup guard, and raw API-base client behavior remains independent from parsed sync configuration.

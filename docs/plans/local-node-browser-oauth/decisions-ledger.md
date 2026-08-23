@@ -295,3 +295,25 @@ WAI gate: running tests for scope 'crates/db/src/models/browser_auth/handoff.rs'
 CONFORMS: task 022 passed all deterministic gates
 GATE_FAIL_CHECK=none
 ```
+
+## Integrated phase-1 informational-finding closure
+
+- Startup diagnostics now derive `has_shared_api` from the already-resolved raw API-base
+  dependency. This keeps injected tests and compile-time fallback configuration aligned with the
+  remote client that was actually constructed. The orphan-cleanup SAFETY comment no longer claims
+  that `from_parts` parses `ShareConfig`; production parsing moved to `new()` during task 022.
+- The task-022 examples now destructure `create_test_pool()`'s real `(pool, TempDir)` return value,
+  and its manual clippy command includes `services`, which task 022 added to its file set.
+- The contention-pool comment now distinguishes its explicit five-second busy timeout and ten
+  connections from the shared helpers' SQLx-default five-second timeout and five connections.
+  A busy timeout retries plain `SQLITE_BUSY`; it does not prevent extended code 517 after an
+  invalid read-snapshot/write-upgrade.
+- Durable terminal handoff rows and revoked session rows are intentionally preserved by phase 1;
+  tasks 004, 005 and 022 explicitly prohibit deletion. Their eventual retention policy requires a
+  product/storage decision and is tracked as the legitimate scope split
+  `browser-auth-terminal-row-retention` at
+  `dev-docs/workstreams/browser-auth-terminal-row-retention/README.md`.
+- The task-022 `siblings:` concern is non-actionable: it edits existing modules, introduces no new
+  sibling file, and current plan lint emits no task-022 sibling advisory. The synchronous
+  `RemoteSync::spawn` panic concern is also unreachable: `share_sync_config` is populated only when
+  `RemoteClient::new` has already parsed the same URL bytes successfully.

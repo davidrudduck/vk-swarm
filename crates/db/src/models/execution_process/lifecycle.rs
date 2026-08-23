@@ -999,9 +999,10 @@ mod lifecycle_event_tests {
             .unwrap_or(false)
     }
 
-    /// Prod-like pool: WAL + `busy_timeout` + `max_connections(10)`, matching `crates/db/src/lib.rs`
-    /// (not `test_utils::create_test_pool*`, which set neither `busy_timeout` nor >5 connections) —
-    /// 17B's own harness pattern. A real file (not `:memory:`): WAL requires one.
+    /// Prod-like pool: WAL + an explicit five-second `busy_timeout` +
+    /// `max_connections(10)`, matching `crates/db/src/lib.rs`. The shared test-pool helpers cap
+    /// pools at five connections and rely on SQLx's five-second default busy timeout instead.
+    /// A real file (not `:memory:`) is required for WAL.
     async fn build_contention_pool() -> (SqlitePool, tempfile::TempDir) {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path().join("contention.db");

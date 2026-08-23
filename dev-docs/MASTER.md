@@ -10,6 +10,7 @@
 
 | Workstream | Status | Title | Rescued branches | Contradictions | Staging pointers |
 |---|---|---|---|---|---|
+| browser-auth-terminal-row-retention | ready | Define retention for terminal browser-auth rows | - | - | 1 |
 | claude-executor-hooks-hang | draft | Claude executor initialize hooks payload hangs claude-code | - | - | 1 |
 | error-handling-and-dialog-a11y | shipped | Shared error parsing, dialog accessibility, mutation guard tests | - | - | 2 |
 | fix-nonloopback-signin | shipped | fix-nonloopback-signin | - | - | 2 |
@@ -18,6 +19,9 @@
 | frontend-test-debt-2026-08 | active |  | - | - | 0 |
 | hive-node-api-key-ui | shipped | Hive node API key management UI — generate/revoke/unblock keys on the Nodes page | - | - | 2 |
 | hive-oauth-sw-bypass | shipped |  | - | - | 2 |
+| local-deployment-test-orphan-cleanup-safety | ready | Prevent local-deployment tests from sweeping real clean worktrees | - | - | 1 |
+| local-node-browser-oauth | draft | local-node-browser-oauth | - | - | 1 |
+| local-node-first-use | active | Local node first use — usable local execution before further orchestration | - | - | 1 |
 | mcp-server-dev-loop-rebuild | draft | Dev loop never rebuilds or restarts vks-mcp-server | - | - | 1 |
 | node-task-delete-dangling-shared-id | active |  | - | - | 1 |
 | node-ui-localize-followups | shipped |  | - | - | 0 |
@@ -25,6 +29,7 @@
 | remote-docker-build-fix | shipped | Fix crates/remote Docker build — unblock remote/hive standup | - | - | 2 |
 | remote-services-doctest-revival | active | Bring 32 rust,ignore'd doctests in remote + services crates back to live | - | - | 0 |
 | services-normalize-flaky-test | active |  | - | - | 0 |
+| sqlite-busy-snapshot-calibration-stability | active | Make SQLite busy-snapshot calibration deterministic | - | - | 1 |
 | task-breakdown-followups | draft | Task-breakdown follow-ups deferred from PR #475 review | - | - | 1 |
 | terminal-session-pty-tests | active | Bring 5 #[ignore]'d PTY-spawning tests in terminal_session back to live | - | - | 0 |
 | ui-overhaul | shipped | ui-overhaul | - | - | 2 |
