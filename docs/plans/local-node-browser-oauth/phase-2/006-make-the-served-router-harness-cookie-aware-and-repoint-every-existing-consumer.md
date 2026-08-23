@@ -175,16 +175,20 @@ async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
     let h = common::HiveHarness::configured().await;
     let owner = uuid::Uuid::new_v4();
     h.mock_hive_oauth("code-a", "access-a", "refresh-a", owner).await;
-    let reached = h.mock_hive_failure("POST", "/v1/tokens/refresh", 503).await;
     // Force refresh-only persisted credentials, then drive RemoteClient::access_token(). This is
     // the real production refresh path, not a raw reqwest request to the mock URL.
     h.write_refresh_only_credentials("test-refresh-token").await;
+    let refreshes_before = h.hive_request_count("POST", "/v1/tokens/refresh").await;
+    let reached = h.mock_hive_failure("POST", "/v1/tokens/refresh", 503).await;
     let request = spawn_real_refresh_request(&h);
     tokio::time::timeout(std::time::Duration::from_secs(2), reached)
         .await.expect("refresh never reached Wiremock").unwrap();
-    assert_eq!(h.hive_request_count("POST", "/v1/tokens/refresh").await, 1);
-    request.abort();
-    let _ = request.await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), request)
+        .await.expect("explicit refresh caller did not complete").unwrap();
+    assert!(result.is_err(), "priority-1 503 must reach the explicit RemoteClient caller");
+    assert_eq!(h.hive_request_count("POST", "/v1/tokens/refresh").await,
+        refreshes_before + 1,
+        "exactly the explicit caller may issue the observed refresh request");
 }
 ```
 
@@ -215,6 +219,11 @@ tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 Add nothing else to this file; the `base64` runtime dependency belongs to task 002.
 
 **File:** `crates/server/tests/common/mod.rs`
+
+`configured()` preserves the existing harness startup contract exactly: its refresh-only
+`credentials.json` fixture is written **before** `LocalDeployment::new()`. Do not move credential
+persistence after deployment/server construction to suppress startup traffic. Outage tests prove
+the intended caller by awaiting its result and asserting a one-request count delta.
 
 **Anchor 1 — `pub struct Resp` (L24-30).**
 **Before:**
@@ -443,6 +452,7 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
   "Structurally add the authorized cookie header to all 14 cited `/api/events` request builders and repoint the other six consumer files; preserve every assertion.",
   "Retain and await the old serve JoinHandle, record generation completion only after await, reuse persisted paths, and permit OS port reuse.",
   "Retain constructor environment values and restore this harness's own values immediately before restart reconstruction, even when another live harness overwrote process globals.",
+  "Keep configured()'s refresh-only credentials fixture before LocalDeployment::new(); prove outage-call provenance by awaiting the explicit caller and asserting a one-request delta rather than changing constructor order.",
   "Do not change existing configured()/hive_absent()/get()/post()/delete()/seed_* semantics or Resp registration helpers."
 ]
 
@@ -466,7 +476,8 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
   "Using a grep/comment count as proof for events.rs — all 14 cited request-builder expressions must be individually edited while retaining their assertions.",
   "Consuming a response body before cloning all headers, or allowing get_no_redirect to follow Location.",
   "Cookie deletion based on case-sensitive substring matching rather than a complete, case-insensitive Max-Age attribute parse.",
-  "An outage self-test that sends raw reqwest directly to `/v1/tokens/refresh` instead of forcing refresh-only credentials and calling the deployment RemoteClient's real access-token path."
+  "An outage self-test that sends raw reqwest directly to `/v1/tokens/refresh` instead of forcing refresh-only credentials and calling the deployment RemoteClient's real access-token path.",
+  "Moving configured()'s credential seed after LocalDeployment::new(), or aborting the explicit refresh caller before proving its result and exact one-request delta — either makes request provenance scheduler-dependent."
 ]
 
 
