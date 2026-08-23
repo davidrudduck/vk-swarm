@@ -611,3 +611,17 @@ Final state: 4/4 browser_auth_routes green, full server suite green, generate-ty
 SC1 delivered: public/protected subtrees, deny-by-default layer, API-terminating JSON-404
 boundary, minimal `/api/auth/state`. Cross-node proxy subtree breakage behind the browser layer
 is INTENDED and is undone by tasks 013/014 (STOP trigger honored).
+
+## Task 009 decisions
+
+Mechanical compile fix beyond the plan text: the plan's new return type
+`Result<axum::response::Response, ApiError>` no longer pins `ApiResponse`'s second generic
+parameter (`ApiResponse<T, E = T>`, crates/utils/src/response.rs:5), so the plan-verbatim
+`ApiResponse::success(body)` failed E0282 (cannot infer `E`). Fixed with the turbofish
+`ApiResponse::<HandoffInitResponseBody>::success(body)`, which restores exactly the type the
+handler returned before this task (`E` defaults to `T`). No behavioral or serialization change.
+
+Formatting-only deviations: `IntoResponse` was inlined into the existing `axum::{...}` use tree
+(`response::{IntoResponse, Json as ResponseJson}`) instead of a separate top-level use; and the
+mandatory `cargo fmt --all` gate reflowed the plan-verbatim test snippet's line breaks
+(whitespace only, no semantic change). Test logic is byte-equivalent to the plan modulo fmt.

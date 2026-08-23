@@ -2,9 +2,10 @@ use axum::{
     Router,
     extract::{Json, Query, State},
     http::{Response, StatusCode},
-    response::Json as ResponseJson,
+    response::{IntoResponse, Json as ResponseJson},
     routing::{get, post},
 };
+use db::models::browser_auth::create_handoff;
 use deployment::Deployment;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,8 @@ use utils::{
 };
 use uuid::Uuid;
 
+use crate::auth::cookies::binding_set_cookie;
+use crate::auth::seams::{Clock, OsTokenSource, SystemClock, TokenSource, hash_token};
 use crate::{DeploymentImpl, error::ApiError};
 
 /// PUBLIC: a browser must be able to start and finish OAuth before it has any session.
@@ -51,7 +54,7 @@ struct HandoffInitResponseBody {
 async fn handoff_init(
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<HandoffInitPayload>,
-) -> Result<ResponseJson<ApiResponse<HandoffInitResponseBody>>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let client = deployment.remote_client()?;
 
     let app_verifier = generate_secret();
@@ -62,19 +65,43 @@ async fn handoff_init(
         return_to: payload.return_to.clone(),
         app_challenge,
     };
-
     let response = client.handoff_init(&request).await?;
 
-    deployment
-        .store_oauth_handoff(response.handoff_id, payload.provider, app_verifier)
-        .await;
+    // A fresh browser-held secret per initiation. Only its hash is persisted; the raw value
+    // exists solely in this Set-Cookie header and the presenting browser, which is what makes a
+    // copied callback URL useless in another browser (D3/SC3).
+    let binding_token = OsTokenSource.generate_token();
+    let binding_hash = hash_token(&binding_token);
+    let now_millis = SystemClock.now_millis();
 
-    Ok(ResponseJson(ApiResponse::success(
-        HandoffInitResponseBody {
-            handoff_id: response.handoff_id,
-            authorize_url: response.authorize_url,
-        },
-    )))
+    // The DB insert is the initiation linearization point. Hive I/O is deliberately outside this
+    // short guard. If disconnect linearizes first, this is a legitimate fresh post-disconnect
+    // handoff; if this insert linearizes first, disconnect durably invalidates it.
+    let _epoch_guard = deployment.browser_auth_epoch().lock().await;
+    create_handoff(
+        &deployment.db().pool,
+        response.handoff_id,
+        &payload.provider,
+        &app_verifier,
+        &binding_hash,
+        now_millis,
+    )
+    .await
+    .map_err(ApiError::Database)?;
+
+    let body = HandoffInitResponseBody {
+        handoff_id: response.handoff_id,
+        authorize_url: response.authorize_url,
+    };
+
+    Ok((
+        [(
+            axum::http::header::SET_COOKIE,
+            binding_set_cookie(&binding_token),
+        )],
+        ResponseJson(ApiResponse::<HandoffInitResponseBody>::success(body)),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize)]
