@@ -1091,3 +1091,100 @@ uncommitted work); byte-identical restore verified by sha256 against the snapsho
 - SC8 sync stopped: sync slot `None` and `!node_cache_sync_is_running()` (same test).
 - SC8/D4 owner retained: `stored_owner_uuid == owner` after disconnect (same test, race 1, and
   the different-subject test pins that a different subject cannot replace it).
+
+### Round-2 remediation (stage-2 SHOULD-FIX test-strength gaps, plan pin `57480fb4`)
+
+Test-only changes to `crates/server/tests/browser_auth_routes.rs`; oauth.rs verified untouched
+(`git diff c02b9643 -- crates/server/src/routes/oauth.rs` empty; sha256 `885530…09cc2a`
+re-verified after every mutation restore).
+
+- SC7 completion: added `h.credentials_path().exists()` (:227) and
+  `stored_owner_uuid == owner` (:232) after the sync assertions in
+  `browser_logout_revokes_the_presented_raw_token_only_and_keeps_real_sync` (plan code block).
+- Race 1: `delay_hive_profile` margin widened 400ms → 1500ms (:344), so the disconnect's epoch
+  acquisition robustly precedes the delayed profile response (plan: "delay >= 1.5s").
+- Race 4: the spawned refresher's outcome is now captured and asserted
+  `Err(RemoteClientError::Token(_))` (:548-552) — variant confirmed at
+  crates/services/src/services/remote_client.rs:77 (`Token(String)`, produced by
+  `extract_expiration` failure at :312-313). Existing timeout/absence assertions unchanged.
+- NEW race 5 `a_credential_clear_failure_still_leaves_every_session_revoked` (:576) and
+  NEW race 6 `disconnect_holds_the_epoch_fence_until_fully_complete` (:671).
+
+#### Race 5 design deviations (two, both forced by mechanics, documented here)
+
+1. **The plan's non-2xx expectation is unimplementable on the file backend.** The dispatch
+   says the disconnect's failed credential clear must surface non-2xx (500 expected) via the
+   handler's `map_err(ApiError::Io)`. But `FileBackend::clear` is best-effort —
+   `let _ = std::fs::remove_file(&self.path); Ok(())`
+   (crates/services/src/services/oauth_credentials.rs:201-204) — so the EISDIR from the
+   directory-occupied path is discarded, `clear_credentials` returns `Ok(())`, and the
+   disconnect answers 204. The test asserts today's real status (204) with an inline comment
+   pointing here. **ESCALATED FINDING (user decision required):** the O8 failure contract
+   ("if credential removal fails the node is at worst over-locked-out" — visible as an error)
+   is unenforceable because `clear` swallows every error, not just NotFound. The minimal
+   production fix (propagate all errors except `ErrorKind::NotFound`) is OUT OF SCOPE for this
+   test-only remediation and is not carried forward silently.
+2. **Ordering is observed mid-flight, not post-hoc.** With the error swallowed, a post-hoc
+   `live_session_count == 0` is green even under the revoke-after-clear mutant (revoke still
+   runs eventually), so the dispatch's mutation (a) would not discriminate. The test instead
+   forces `client.logout()` through a 5s-delayed refresh (refresh-only credentials + delayed
+   invalid-token response), which stalls the disconnect strictly BETWEEN revocation and the
+   credential clear, and asserts `live_session_count == 0` DURING the stall (:619-626). This
+   is exactly the dispatch's own mutation-(a) predicate ("live count > 0"). The on-disk delete
+   still genuinely fails: the test asserts the credentials path remains a directory
+   (:658-661); per instruction, absence is not asserted.
+
+#### Race 6 design deviation (one, forced by mechanics)
+
+The dispatch sequences "fresh jar init (200), spawn its completion GET" after the arrival
+watchdog. But `handoff_init`'s `create_handoff` itself acquires `browser_auth_epoch`
+(routes/oauth.rs:97), so an init issued during the stall cannot RETURN until the fence is
+released — a separately-spawned completion would then finish in milliseconds and the
+"must not complete within 1500ms" assertion would be red on the CORRECT implementation. The
+fresh init + completion GET therefore run inside ONE spawned task (spawned only after
+`arrived`, so the handoff is created strictly after `invalidate_pending_handoffs` swept and
+stays claimable); the 1500ms `timeout(.., &mut completion)` measures that task's JoinHandle —
+which is precisely the "does a wholly fresh login complete during the stall" predicate. The
+epoch `try_lock` (on a cloned `Arc`) and all final assertions (disconnect 2xx, completion 200,
+credentials present because the commit ran after the clear, 1 live session, RemoteSync
+installed, node-cache running) are exactly as dispatched.
+
+#### Round-2 mutation evidence (focused runs, snapshot restore, sha256-verified)
+
+- (a) oauth.rs `logout`: moved `revoke_all_sessions` after the credential clear (tracing split
+  to keep it compiling) → race 5 FAILED (panic at browser_auth_routes.rs:622:9; message line
+  :625 in the restored file) `O8: every session must be revoked before the credential clear is
+  attempted: left: 1, right: 0` (2.94s) — live count > 0 exactly as dispatched. Restored via
+  `git checkout --`; sha256 `885530…09cc2a` match.
+- (b) oauth.rs `logout`: added `drop(epoch_guard);` immediately after the revoke block → race 6
+  FAILED (panic at browser_auth_routes.rs:776:9; message line :778) `the fence must order the
+  fresh login's credential commit AFTER the disconnect's clear` (6.07s) — the second of the
+  dispatch's two accepted mechanisms ("credentials absent at the end"). Mechanism note: under
+  this mutant the fresh login's commit still blocks past 1500ms because it queues on
+  `refresh_guard` (held by the disconnect's stalled refresh) WHILE holding the epoch
+  (auth/login.rs:113-117) — so the not-within-1500ms and try_lock assertions alone cannot tell
+  WHO holds the fence; the credentials-present assertion is the discriminator. Restored;
+  sha256 `885530…09cc2a` match.
+- (c) browser_auth_routes.rs race 4: body reverted to a valid labeled JWT via
+  `h.access_token_for_label("configured-label")` → race 4 FAILED (panic at :546:9 on the
+  mutated file — the edit removed the 8-line rationale comment above the body; message line
+  :551 in the restored file) `the in-flight refresher must error on the invalid token:
+  Ok("eyJ…configured-label…")` (0.90s) — the refresher outcome is now Ok. Restored from
+  snapshot; sha256 `673f3988…a6b1` match (re-verified after all later steps).
+
+#### Round-2 verification (TMPDIR=$PWD/.cargo-tmp DISABLE_WORKTREE_ORPHAN_CLEANUP=1)
+
+| check | result |
+| --- | --- |
+| `cargo test -p server --test browser_auth_routes` | 14 passed / 0 failed (18.17s) |
+| `cargo test -p server --test browser_oauth` | 14 passed / 0 failed (6.82s) |
+| `cargo test -p server --test harness_smoke` | 11 passed / 0 failed (7.57s) |
+| `cargo clippy -p server --all-targets --all-features -- -D warnings` | exit 0, clean |
+| `cargo fmt --all` + `cargo fmt --all -- --check` | clean |
+| `git diff --check` | clean |
+| `git diff c02b9643 -- crates/server/src/routes/oauth.rs` | empty (byte-identical) |
+| race 1 stability (3x focused) | 3/3 green (1.94–2.04s) |
+| race 6 stability (3x focused) | 3/3 green (6.65–7.37s) |
+
+Committed as `test(auth): discriminate disconnect fence ordering` on top of `57480fb4`.
+task-gate.sh NOT run per dispatch instruction.

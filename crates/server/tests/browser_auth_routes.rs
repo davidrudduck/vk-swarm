@@ -222,6 +222,15 @@ async fn browser_logout_revokes_the_presented_raw_token_only_and_keeps_real_sync
         h.deployment().node_cache_sync_is_running().await,
         "browser logout must leave node-cache synchronization running"
     );
+    assert!(
+        h.credentials_path().exists(),
+        "browser logout must leave the daemon's Hive credentials untouched (SC7)"
+    );
+    assert_eq!(
+        stored_owner_uuid(h.pool()).await,
+        owner,
+        "browser logout must leave the pinned owner (SC7)"
+    );
 }
 
 #[tokio::test]
@@ -332,7 +341,7 @@ async fn disconnect_during_an_in_flight_callback_leaves_no_session_credentials_o
             .mock_hive_oauth("code-a", "delayed-a", "test-refresh-token", owner)
             .await;
         let profile_arrived = h
-            .delay_hive_profile("delayed-a", owner, Duration::from_millis(400))
+            .delay_hive_profile("delayed-a", owner, Duration::from_millis(1500))
             .await;
 
         let mut a = common::CookieJar::fresh();
@@ -367,7 +376,8 @@ async fn disconnect_during_an_in_flight_callback_leaves_no_session_credentials_o
             .expect("profile never reached the delayed Hive mock")
             .expect("delayed-profile signal channel closed");
 
-        // The valid profile response is still ~400ms away: B disconnects NOW.
+        // The valid profile response is still ~1.5s away: B disconnects NOW. The wide margin
+        // makes the disconnect's epoch acquisition robustly precede the callback's commit.
         let out = h.post_with("/api/auth/logout", json!({}), &mut b).await;
         assert!(
             matches!(out.status, 200 | 204),
@@ -532,8 +542,251 @@ async fn disconnect_is_not_undone_by_an_in_flight_token_refresh() {
             !h.credentials_path().exists(),
             "the in-flight refresh must not out-live the disconnect's credential clear"
         );
-        let _ = refresher.await;
+        // The refresher must have FAILED the invalid token without saving: this is what keeps
+        // mutation (c) (reverting the body to a valid labeled JWT) red instead of
+        // silently restoring the round-1 false-green.
+        let refreshed = refresher.await.expect("refresher task panicked");
+        assert!(
+            matches!(refreshed, Err(services::RemoteClientError::Token(_))),
+            "the in-flight refresher must error on the invalid token: {refreshed:?}"
+        );
     })
     .await
     .expect("disconnect during in-flight token refresh timed out (lock regression?)");
+}
+
+/// Integrated race 5: a credential-clear failure must not weaken O8. The on-disk delete
+/// genuinely fails (the credentials path stays a directory), yet every session is already
+/// revoked, the pinned owner is retained, and both synchronization tasks are stopped.
+///
+/// Ordering is observed MID-FLIGHT: refresh-only credentials plus a delayed refresh response
+/// stall the disconnect INSIDE `client.logout()` — strictly AFTER revocation and BEFORE the
+/// credential clear — so `live_session_count == 0` during the stall proves revoke-before-clear
+/// (a mutant that revokes after the clear leaves the count at 1 here).
+///
+/// NOTE on the status assertion: the plan expects the failed clear to surface as non-2xx via
+/// the handler's `map_err(ApiError::Io)` (oauth.rs logout), but `FileBackend::clear` is
+/// best-effort on the file backend — `let _ = std::fs::remove_file(&self.path); Ok(())`
+/// (crates/services/src/services/oauth_credentials.rs) — so the EISDIR never propagates and
+/// the disconnect answers 204 today. Escalated in the decisions-ledger (round-2 remediation);
+/// when `clear` learns to propagate real errors while staying NotFound-idempotent, flip this
+/// to the plan's non-2xx assertion.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_credential_clear_failure_still_leaves_every_session_revoked() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let h = common::HiveHarness::configured().await;
+        let owner = Uuid::new_v4();
+        let b = login(&h, owner, "code-b").await;
+        // Force the disconnect's `client.logout()` through the real (delayed) refresh path so
+        // the stall lands between revocation and the credential clear. This also empties the
+        // in-memory access token and shuts both owned sync handles first.
+        h.write_refresh_only_credentials("test-refresh-token").await;
+        // Make the on-disk credential delete fail: remove the file, occupy the path with a dir.
+        tokio::fs::remove_file(h.credentials_path()).await.unwrap();
+        std::fs::create_dir(h.credentials_path()).unwrap();
+        let arrived = h
+            .mock_hive_delayed_json(
+                "POST",
+                "/v1/tokens/refresh",
+                5000,
+                json!({
+                    "access_token": "not-a-jwt",
+                    "refresh_token": "test-refresh-token"
+                }),
+            )
+            .await;
+
+        let addr = h.addr();
+        let cookie = b
+            .header_value()
+            .expect("browser B must hold a session cookie");
+        let disconnect = tokio::spawn(async move {
+            let res = reqwest::Client::new()
+                .post(format!("http://{addr}/api/auth/logout"))
+                .header(reqwest::header::COOKIE, cookie)
+                .json(&json!({}))
+                .send()
+                .await
+                .expect("disconnect request must be issued");
+            res.status().as_u16()
+        });
+        tokio::time::timeout(Duration::from_secs(2), arrived)
+            .await
+            .expect("refresh never reached the delayed Hive mock")
+            .expect("delayed-responder signal channel closed");
+
+        // The disconnect is stalled inside client.logout() — PAST revocation, BEFORE the
+        // credential clear. O8 ordering is observable right now: every session must already
+        // be revoked. (A mutant revoking after the clear leaves the count at 1 here.)
+        assert_eq!(
+            live_session_count(h.pool()).await,
+            0,
+            "O8: every session must be revoked before the credential clear is attempted"
+        );
+
+        let out = disconnect.await.expect("disconnect task panicked");
+        // Today the swallowed clear error yields 204 (see the test doc comment above).
+        assert!(matches!(out, 200 | 204), "disconnect status: {out}");
+        assert_eq!(
+            live_session_count(h.pool()).await,
+            0,
+            "the finished disconnect must leave every session revoked"
+        );
+        assert_eq!(
+            stored_owner_uuid(h.pool()).await,
+            owner,
+            "a failed credential clear must not lose the pinned owner"
+        );
+        assert!(
+            h.deployment().share_sync_handle().lock().await.is_none(),
+            "remote sync must be stopped despite the clear failure"
+        );
+        assert!(
+            !h.deployment().node_cache_sync_is_running().await,
+            "node-cache sync must be stopped despite the clear failure"
+        );
+        assert!(
+            h.credentials_path().is_dir(),
+            "the on-disk credential delete genuinely failed (the path stays a directory)"
+        );
+    })
+    .await
+    .expect("credential-clear-failure disconnect timed out (lock regression?)");
+}
+
+/// Integrated race 6: the disconnect holds the browser-auth epoch fence until it is FULLY
+/// complete. Refresh-only credentials plus a 5s delayed refresh response stall the disconnect
+/// INSIDE `client.logout()` — after revocation, while still holding `browser_auth_epoch` — and
+/// a wholly fresh login for the same owner must not complete during the stall.
+///
+/// The fresh init and its completion GET run inside ONE spawned task: `handoff_init`'s
+/// `create_handoff` itself acquires `browser_auth_epoch`, so the init cannot even return while
+/// the fence is held — the "does the fresh login complete during the stall" predicate must
+/// measure init+completion as a unit. After the delay elapses both finish: disconnect 2xx and
+/// the fresh login 200 with credentials present (its commit ran AFTER the disconnect's clear),
+/// exactly one live session, RemoteSync installed, node-cache running.
+#[tokio::test]
+#[serial_test::serial]
+async fn disconnect_holds_the_epoch_fence_until_fully_complete() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let h = common::HiveHarness::configured().await;
+        let owner = Uuid::new_v4();
+        let b = login(&h, owner, "code-b").await;
+        h.write_refresh_only_credentials("test-refresh-token").await;
+        let arrived = h
+            .mock_hive_delayed_json(
+                "POST",
+                "/v1/tokens/refresh",
+                5000,
+                json!({
+                    "access_token": "not-a-jwt",
+                    "refresh_token": "test-refresh-token"
+                }),
+            )
+            .await;
+        let fresh_id = h
+            .mock_hive_oauth(
+                "code-fresh",
+                "label-code-fresh",
+                "test-refresh-token",
+                owner,
+            )
+            .await;
+
+        let addr = h.addr();
+        let cookie = b
+            .header_value()
+            .expect("browser B must hold a session cookie");
+        let disconnect = tokio::spawn(async move {
+            let res = reqwest::Client::new()
+                .post(format!("http://{addr}/api/auth/logout"))
+                .header(reqwest::header::COOKIE, cookie)
+                .json(&json!({}))
+                .send()
+                .await
+                .expect("disconnect request must be issued");
+            res.status().as_u16()
+        });
+        tokio::time::timeout(Duration::from_secs(2), arrived)
+            .await
+            .expect("refresh never reached the delayed Hive mock")
+            .expect("delayed-responder signal channel closed");
+
+        // The refresh arrival proves the disconnect already holds the epoch and is stalled
+        // inside client.logout(). Only NOW is the fresh login issued, so its handoff is created
+        // strictly after invalidate_pending_handoffs swept — it must remain claimable.
+        let mut completion = {
+            let addr = h.addr();
+            let init_url = format!("http://{addr}/api/auth/handoff/init");
+            let cb_url = format!(
+                "http://{addr}/api/auth/handoff/complete?handoff_id={fresh_id}&app_code=code-fresh"
+            );
+            tokio::spawn(async move {
+                let client = reqwest::Client::new();
+                let mut jar = common::CookieJar::fresh();
+                let init = client
+                    .post(&init_url)
+                    .json(&json!({"provider": "github", "return_to": "/"}))
+                    .send()
+                    .await
+                    .expect("fresh init request must be issued");
+                let init_status = init.status().as_u16();
+                let set_cookie = init
+                    .headers()
+                    .get_all(reqwest::header::SET_COOKIE)
+                    .iter()
+                    .filter_map(|v| v.to_str().ok().map(str::to_owned))
+                    .collect::<Vec<_>>();
+                let init_body = init.text().await.unwrap();
+                assert_eq!(init_status, 200, "fresh init body: {init_body}");
+                jar.apply(&set_cookie);
+
+                let res = client
+                    .get(&cb_url)
+                    .header(
+                        reqwest::header::COOKIE,
+                        jar.header_value().expect("binding cookie must be set"),
+                    )
+                    .send()
+                    .await
+                    .expect("fresh completion request must be issued");
+                let status = res.status().as_u16();
+                let body = res.text().await.unwrap();
+                (status, body)
+            })
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1500), &mut completion)
+                .await
+                .is_err(),
+            "a wholly fresh login must not complete while the disconnect still holds the fence"
+        );
+        let epoch_fence = h.deployment().browser_auth_epoch().clone();
+        assert!(
+            epoch_fence.try_lock().is_err(),
+            "the stalled disconnect must still hold browser_auth_epoch"
+        );
+
+        let out = disconnect.await.expect("disconnect task panicked");
+        assert!(matches!(out, 200 | 204), "disconnect status: {out}");
+        let (status, body) = completion.await.expect("fresh login task panicked");
+        assert_eq!(status, 200, "fresh login body: {body}");
+
+        assert!(
+            h.credentials_path().exists(),
+            "the fence must order the fresh login's credential commit AFTER the disconnect's clear"
+        );
+        assert_eq!(live_session_count(h.pool()).await, 1);
+        assert!(
+            h.deployment().share_sync_handle().lock().await.is_some(),
+            "the fresh login must reinstall RemoteSync after the disconnect"
+        );
+        assert!(
+            h.deployment().node_cache_sync_is_running().await,
+            "the fresh login must restart node-cache sync after the disconnect"
+        );
+    })
+    .await
+    .expect("held-epoch stall timed out (lock regression?)");
 }
