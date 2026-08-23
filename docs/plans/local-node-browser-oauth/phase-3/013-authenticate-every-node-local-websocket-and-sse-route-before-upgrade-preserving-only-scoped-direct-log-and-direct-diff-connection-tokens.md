@@ -43,6 +43,8 @@ File: `crates/server/tests/stream_auth.rs` — create. Use the real `ws_probe()`
 
 The route-4/route-5 distinction is grounded in production use, not their similar names. `frontend/src/hooks/useDiffStream.ts:113-139` constructs only `wss://{node}/api/task-attempts/{attempt_id}/diff/ws?token=...`. No frontend or server proxy client constructs the by-task-id diff URL. Route 5 is retained for local browser compatibility but receives neither token alternative.
 
+Census note (verified live against the served router at task-013 dispatch): an authorized browser hitting `/api/task-attempts/{id}/diff/ws` with a nonexistent attempt id observes **500**, not 404 — `load_task_attempt_middleware` does not reject unknown attempts for GET; it runs the Hive fallback and, when that misses, inserts `RemoteAttemptNeeded` and calls the handler (`crates/server/src/middleware/model_loaders.rs:637-641`), whose required `Extension<TaskAttempt>` then rejects with `MissingExtension` → 500 (`crates/server/src/routes/task_attempts/handlers/worktree.rs:46`). This predates the workstream; task 013 preserves the loader unchanged, so the post-change post-auth status stays 500. The census pins it at 500 deliberately: if a later task gives this endpoint 404 semantics, the census test must flag the behavior change. The security boundary under test (anonymous/token-class credentials get 401 BEFORE the loader runs) is unaffected.
+
 ```rust
 mod common;
 
@@ -50,7 +52,7 @@ fn protected_ws(id: uuid::Uuid) -> Vec<(String, u16)> {
     vec![
         (format!("/api/tasks/stream/ws?project_id={id}"), 101),
         (format!("/api/drafts/stream/ws?project_id={id}"), 101),
-        (format!("/api/task-attempts/{id}/diff/ws"), 404),
+        (format!("/api/task-attempts/{id}/diff/ws"), 500), // RemoteAttemptNeeded + required Extension<TaskAttempt> -> MissingExtension (see census note)
         (format!("/api/task-attempts/by-task-id/{id}/diff/ws"), 404),
         (format!("/api/execution-processes/stream/ws?task_attempt_id={id}"), 101),
         (format!("/api/execution-processes/{id}/raw-logs/ws"), 404),
