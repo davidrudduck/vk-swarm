@@ -243,6 +243,16 @@ mod tests {
         );
 
         assert_eq!(invalidate_pending_handoffs(&pool).await.unwrap(), 1);
+        let state: String =
+            sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+                .bind(pending)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            state, "claimed",
+            "invalidation must preserve a terminal row"
+        );
         assert!(
             claim_handoff(&pool, pending, "h1", 1)
                 .await
