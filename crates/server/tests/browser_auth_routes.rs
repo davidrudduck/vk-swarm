@@ -87,15 +87,20 @@ async fn oauth_initiation_and_callback_stay_public() {
         )
         .await;
     init.assert_registered();
-    assert_ne!(
-        init.status, 401,
-        "initiation must not require the session it creates"
-    );
+    // Handler-specific pinning: the public JSON-404 catch-all answers `{"success":false,
+    // "message":"unknown api route"}` with 404 when a route is dropped, so `!= 401` alone
+    // cannot prove registration (STOP trigger: status-code-alone proves routing).
+    assert_eq!(init.status, 200, "body: {}", init.body);
+    assert!(init.body.contains("handoff_id"), "body: {}", init.body);
+    // No app_code: the registered handler answers 400 with its own message; a dropped route
+    // would answer 404 JSON. No `assert_registered` here: this handler answers with HTML,
+    // which `is_spa_fallback()` would misread.
     let cb = h
         .get(
             &("/api/auth/handoff/complete?handoff_id=".to_string()
                 + &uuid::Uuid::new_v4().to_string()),
         )
         .await;
-    assert_ne!(cb.status, 401);
+    assert_eq!(cb.status, 400, "body: {}", cb.body);
+    assert!(cb.body.contains("Missing app_code"), "body: {}", cb.body);
 }
