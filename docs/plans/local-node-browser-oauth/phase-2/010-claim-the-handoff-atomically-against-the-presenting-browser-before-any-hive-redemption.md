@@ -95,6 +95,13 @@ async fn an_expired_handoff_cannot_be_completed() {
 ```
 Note: an unauthorized browser B is also asserted to still see `authorized:false` from `/api/auth/state` in task 011's suite once sessions exist.
 
+## Panel-strengthened assertions (round-1 remediation)
+The four tests must additionally pin claim-before-redeem and headers-only binding, and one new test pins epoch-drop-before-redeem:
+1. In `a_copied_callback_url_cannot_be_completed_in_another_browser`: before the stolen attempt record `redeems = h.hive_request_count("POST", "/v1/oauth/web/redeem").await`; after browser B's 400 assert the count is unchanged; then a second stolen attempt whose URL appends browser A's RAW binding token as `&vks_browser_binding=<raw>` (extract from `a.header_value()`) must also 400, leave the count unchanged and the row `pending` — pinning that the binding secret is read only from request headers, never a query parameter; the rightful completion then takes the count to exactly `redeems + 1`.
+2. In `a_forged_binding_cookie_does_not_consume_the_handoff` and `an_expired_handoff_cannot_be_completed`: assert the redeem count is unchanged by the 400 attempt.
+3. In `replaying_a_completed_callback_is_rejected`: after the successful completion the redeem count is 1; after the rejected replay it is still 1.
+4. New test `completion_drops_the_epoch_fence_before_hive_redemption` (`#[serial_test::serial]`): mount `mock_hive_oauth`, drive `start_login` in jar A, mount `let redeem_arrived = h.mock_hive_delayed("POST", "/v1/oauth/web/redeem").await` (priority-1, 60s delay), spawn the callback GET via raw reqwest with jar A's Cookie header (clone `h.addr()`, `use deployment::Deployment;` for the epoch); await `redeem_arrived` under a 2s timeout so redemption is provably in flight; then `h.deployment().browser_auth_epoch().try_lock()` must succeed — the epoch guard was dropped before Hive I/O; drop the guard and abort the spawned request task (a mutant holding the epoch across redemption makes `try_lock` fail while the delayed response is pending).
+
 
 ## Change
 **File:** `crates/server/src/routes/oauth.rs`
@@ -176,7 +183,7 @@ Everything after this block (redeem, credential save, sync spawn) is UNCHANGED i
 ## STOP triggers
 [
   "Any SELECT/lookup of the handoff row BEFORE the claim UPDATE — that reintroduces wrong-browser consumption and breaks the SC3/SC4 tests.",
-  "Different error messages for wrong-browser vs expired vs replayed — that is an oracle for an attacker and is not required by any criterion.",
+  "Different error messages among CLAIM failures — unknown id, wrong binding cookie, expired, and replayed must all share the one claim-failure message prescribed by the After block. (The earlier no-binding-cookie exit is a separate pre-claim branch: it performs no DB access, reveals nothing about any handoff row, and the browser already knows whether it holds a cookie; its 'start again' guidance message is prescribed by the After block.)",
   "Any attempt to re-claim or un-claim after a failed redemption — a claimed handoff is terminal by design; recovery is a fresh initiation.",
   "Reading the binding cookie from anywhere but the request headers (e.g. a query parameter) — it would then be copyable.",
   "The claim happening after `client.handoff_redeem(...)` — the one-time hive code would then be burned by a wrong browser.",
@@ -191,7 +198,7 @@ Declared decision points (from the spec; do not edit here):
 
 ## Manual verification (record in decisions-ledger)
 1. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p server --test browser_oauth" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 010` exits 0.
-2. `cargo test -p server --test browser_oauth` — 7 tests green (3 from task 009 + 4 new).
+2. `cargo test -p server --test browser_oauth` — 8 tests green (3 from task 009 + 4 new + 1 panel-strengthening test).
 3. `git grep -n 'take_oauth_handoff' crates/server/` returns nothing.
 4. SC3/SC4 walk-through recorded in the ledger: name the test that proves each clause — expiry (an_expired_handoff_cannot_be_completed), single consumer (concurrent claim, task 004), copied URL (a_copied_callback_url_cannot_be_completed_in_another_browser), replay (replaying_a_completed_callback_is_rejected).
 
