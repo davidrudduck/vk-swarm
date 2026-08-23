@@ -36,12 +36,12 @@ Coverage ownership: SC1->008, SC2->013, SC3/SC4->010, SC5/SC6->011, SC7/SC8->012
 | 004 | 1 | Add handoff create and the single-statement atomic claim | dep: 001 003 | conflicts: 003 005 022 |
 | 005 | 1 | Add session create, authenticate-by-hash, revoke-one and revoke-all | dep: 001 003 004 | conflicts: 003 004 022 |
 | 022 | 1 | Fence browser-login commit against explicit disconnect | dep: 004 005 | conflicts: 003 004 005 006 009 010 011 012 |
-| 006 | 2 | Make the served-router harness cookie-aware and repoint every existing consumer | dep: 001 002 005 | conflicts: 002 008 022 |
+| 006 | 2 | Make the served-router harness cookie-aware and repoint every existing consumer | dep: 001 002 005 | conflicts: 002 008 011 022 |
 | 007 | 2 | Add cookie helpers, the browser-session resolver and THREE route-scoped authorization middlewares | dep: 002 005 | conflicts: 002 011 |
 | 008 | 2 | Split the node router into explicit public and protected subtrees with an API-terminating fallback | dep: 006 007 | conflicts: 006 009 010 011 012 013 014 |
 | 009 | 2 | Bind OAuth initiation to a browser: issue the binding cookie and persist the handoff | dep: 004 007 008 022 | conflicts: 008 010 011 012 022 |
 | 010 | 2 | Claim the handoff atomically against the presenting browser before any Hive redemption | dep: 009 | conflicts: 008 009 011 012 022 |
-| 011 | 2 | Validate the candidate profile and owner before saving credentials, then mint the browser session | dep: 003 005 010 | conflicts: 002 007 008 009 010 012 022 |
+| 011 | 2 | Validate the candidate profile and owner before saving credentials, then mint the browser session | dep: 003 005 010 | conflicts: 002 006 007 008 009 010 012 022 |
 | 012 | 3 | Add browser-scoped logout and make Hive disconnect revoke every session while retaining the owner | dep: 011 | conflicts: 008 009 010 011 022 |
 | 013 | 3 | Authenticate every node-local WebSocket and SSE route before upgrade, preserving only scoped direct-log and direct-diff connection tokens | dep: 008 011 | conflicts: 008 014 |
 | 014 | 3 | Move node-to-node HTTP proxy routes under the node_proxy alternative while keeping the by-task-id diff browser-only | dep: 013 | conflicts: 008 013 |

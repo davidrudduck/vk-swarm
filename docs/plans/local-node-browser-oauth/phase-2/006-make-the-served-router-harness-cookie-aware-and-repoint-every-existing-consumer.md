@@ -5,7 +5,7 @@ title: "Make the served-router harness cookie-aware and repoint every existing c
 status: passed
 depends_on: ["001","002","005"]
 parallel: false
-conflicts_with: ["002","008","022"]
+conflicts_with: ["002","008","011","022"]
 files:
   - "Cargo.lock"
   - "crates/services/src/services/node_cache.rs"

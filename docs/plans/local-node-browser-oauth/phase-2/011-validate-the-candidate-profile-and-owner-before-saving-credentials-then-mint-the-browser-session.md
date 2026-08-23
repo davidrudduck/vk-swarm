@@ -5,13 +5,14 @@ title: "Validate the candidate profile and owner before saving credentials, then
 status: ready
 depends_on: ["003","005","010"]
 parallel: false
-conflicts_with: ["002","007","008","009","010","012","022"]
+conflicts_with: ["002","006","007","008","009","010","012","022"]
 files:
   - "crates/services/src/services/remote_client.rs"
   - "crates/server/src/auth/login.rs"
   - "crates/server/src/auth/mod.rs"
   - "crates/server/src/routes/oauth.rs"
   - "crates/server/tests/browser_oauth.rs"
+  - "crates/server/tests/common/mod.rs"
 siblings: ["crates/services/src/services/oauth_credentials.rs","crates/server/tests/events.rs","crates/server/tests/harness_smoke.rs","crates/server/tests/mcp_context_test.rs"]
 irreversible: false
 scope_test: "crates/server/tests/browser_oauth.rs"
@@ -255,13 +256,82 @@ The static Display is sanitized while retaining the typed source. Candidate expi
 
 
 
+## Panel-strengthened corrections (round-1 remediation)
+
+**Sanitized `Remote` Display (SC10; task 018's sentinel obligation is fixed in THIS owning
+task).** `RemoteClientError::Http` Displays `http {status}: {body}` — an upstream 5xx body can
+carry reflected sentinels, and the route logs `error = %e`. The `Remote` variant must therefore
+NOT be `#[error(transparent)]`. Use exactly:
+```rust
+#[error("remote service error")]
+Remote(#[from] RemoteClientError),
+```
+(`#[from]` is retained so `?` keeps working; only the Display becomes static.) A same-file unit
+test constructs `RemoteClientError::Http { status: 500, body: "SENTINEL-ACCESS-8f31c0d2".into() }`,
+wraps it, and asserts `to_string()` equals `"remote service error"` (no sentinel substring).
+
+**Logout slot-guard release (deadlock cycle introduced by this task's fenced commit).** The
+fenced commit holds `browser_auth_epoch` + `refresh_guard` across `install_remote_sync`, which
+locks the share-sync slot. The existing `logout` holds that slot across `handle.shutdown().await`
+(join), and the RemoteSync task can be blocked on `refresh_guard` inside an in-flight authed
+call — a reachable three-party cycle. Fix in `logout` (take-before-await, the pattern used
+everywhere else):
+```rust
+let handle = { deployment.share_sync_handle().lock().await.take() };
+if let Some(handle) = handle {
+    tracing::info!("Stopping remote sync due to logout");
+    handle.shutdown().await;
+}
+```
+Task 012 owns the full disconnect semantics; this change only removes the cycle.
+
+**New harness helper (additive, mirrors `mock_hive_delayed`).** In
+`crates/server/tests/common/mod.rs`:
+```rust
+/// Priority-1 override that signals on arrival, then answers `body` after `delay_ms`.
+pub async fn mock_hive_delayed_json(
+    &self,
+    method: &str,
+    path: &str,
+    delay_ms: u64,
+    body: serde_json::Value,
+) -> tokio::sync::oneshot::Receiver<()>
+```
+(same signal-then-delay responder shape as `mock_hive_delayed`, `.with_priority(1)`, but with a
+real JSON body and a short caller-chosen delay).
+
+**Test A — `a_stale_callback_cannot_commit_after_the_epoch_moves` (serial, browser_oauth.rs).**
+Mount `mock_hive_delayed_json("POST", "/v1/oauth/web/redeem", 300, {"access_token": <jwt>,
+"refresh_token": "ref"})` where `<jwt> = h.access_token_for_label("stale")` obtained BEFORE
+mounting (deterministic HS256; the profile mock mounted next by `mock_hive_oauth("code-1",
+"stale", "ref", owner)` matches that exact bearer). Then `start_login` in jar A; spawn the
+completion GET via raw reqwest with jar A's Cookie header (clone `h.addr()` + header value
+first; `use deployment::Deployment;`); await the arrival signal under 2s (claim has happened —
+it precedes redeem); bump the epoch from the test
+(`let mut g = h.deployment().browser_auth_epoch().lock().await; *g += 1; drop(g);`); await the
+spawned response: status 400 with the generic body ("Sign-in could not be completed"), NOT the
+owner-mismatch wording; `SELECT COUNT(*) FROM browser_sessions` = 0; credentials file bytes
+unchanged. Mutation check: deleting the `*epoch_guard != epoch_at_claim` comparison (or
+returning Ok on mismatch) must turn this test RED (200 + a session row).
+
+**Test B — `a_credential_save_failure_mints_no_session` (serial, browser_oauth.rs).** After
+`start_login`, sabotage the file backend deterministically:
+`let tmp = h.credentials_path().with_extension("tmp"); let _ = std::fs::remove_file(&tmp);
+std::fs::create_dir(&tmp).unwrap();` (the temp-file `open` inside `FileBackend::save` now fails
+with EISDIR regardless of user). Complete the callback: status 400, generic body, NO
+`vks_browser_session` Set-Cookie, `SELECT COUNT(*) FROM browser_sessions` = 0. Mutation check:
+moving `create_session` before `save_credentials` must turn this RED.
 ## Allowed moves
 [
   "Add exactly one method to remote_client.rs; change nothing else in crates/services.",
   "Create auth/login.rs and add one `pub mod login;` line.",
   "Replace the redeem/save block, remove the later detached spawn_remote_sync call, and add the Set-Cookie to the success response.",
   "Commit credentials, session and synchronous sync installation only after a matching epoch re-check under browser_auth_epoch.",
-  "Append the three tests to crates/server/tests/browser_oauth.rs."
+  "Append the three tests to crates/server/tests/browser_oauth.rs.",
+  "Make the Remote variant's Display static (keep #[from]) and pin it with a sentinel unit test.",
+  "In logout, take the share-sync handle and drop the slot guard BEFORE awaiting shutdown() (deadlock-cycle removal).",
+  "Add the additive mock_hive_delayed_json helper to tests/common/mod.rs.",
+  "Append tests A and B to browser_oauth.rs with the specified mutation checks."
 ]
 
 
@@ -288,7 +358,7 @@ Declared decision points (from the spec; do not edit here):
 
 ## Manual verification (record in decisions-ledger)
 1. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p server --test browser_oauth" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 011` exits 0.
-2. `cargo test -p server --test browser_oauth` — 12 tests green (8 carried over from tasks 009/010 + the three above + the invalid-candidate-token test); `cargo test -p services` still green.
+2. `cargo test -p server --test browser_oauth` — 14 tests green (12 prior + tests A and B); `cargo test -p server --lib auth::login` green (sentinel Display test); `cargo test -p services` still green.
 3. TS2 walk-through recorded in the ledger: name the test covering each TS2 clause (public/protected routing -> 008's suite; browser-A isolation, callback copying/replay -> 010's suite; cookie attributes, same-owner and different-owner redemption -> this suite; browser logout and explicit disconnect -> 012's suite).
 4. SC5 restart clause: note that it is proven by task 015 (TS4), not here.
 
