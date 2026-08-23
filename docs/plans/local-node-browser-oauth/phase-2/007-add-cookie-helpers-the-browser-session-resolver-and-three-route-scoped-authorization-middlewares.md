@@ -2,7 +2,7 @@
 id: "007"
 phase: 2
 title: "Add cookie helpers, the browser-session resolver and THREE route-scoped authorization middlewares"
-status: ready
+status: passed
 depends_on: ["002","005"]
 parallel: false
 conflicts_with: ["002","011"]

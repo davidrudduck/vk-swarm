@@ -455,3 +455,47 @@ Choices the task did not fully dictate:
   rejection-only tests cannot distinguish a strict validator from one that always errors.
 - `resolve_browser_session` maps a DB error to `None` (fail closed) with a `tracing::warn!`
   carrying only the error, never the presented token.
+
+### Task 007 closure — gates, mutation evidence, panel verdicts
+
+Source provenance (plan commits interleave, gated per-commit):
+- `06fa46d6` (implementation) vs base `9daad75a`: 6 paths (5 declared files + ledger).
+  Gate transcript: `WAI gate: topic=local-node-browser-oauth task=007 commit=HEAD allowed_change=mixed
+  - file-set: only declared files changed (6 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+  - typecheck (override): cargo fmt --all -- --check ... exit 0
+  - tests: scope 'crates/server/src/auth/session.rs' green
+  CONFORMS: task 007 passed all deterministic gates / GATE_FAIL_CHECK=none`
+  (WAI_TEST_CMD="cargo test -p server auth:: && cargo test -p services connection_token":
+  server 11 passed / services 9 passed at review time).
+- `6e760955` (test-strength remediation) vs base `46fa0e83` (plan amendment): 2 paths.
+  Same gate command shape → CONFORMS, GATE_FAIL_CHECK=none (server 12 passed).
+
+Stage-2 panel (over 9daad75a..06fa46d6):
+- subagent-gpt: DEVIATES with two SHOULD-FIX test-strength findings — (1) clear-cookie test
+  substring-only, a `; Secure` mutant would pass; (2) no discriminating test for the resolver's
+  DB-error fail-closed branch.
+- subagent-kimi: CONFORMS — cookie bytes byte-exact, resolver hashes-then-lookups with stored-hash
+  replay craft covered, revocation enforced in SQL, privilege separation verified (predicates call
+  only validate_for_resource/validate_proxy_for_node; cross-audience rejection asserted both
+  directions), middleware mechanics match the compile-order contract, no secrets in any warn!/error
+  text, mutant table for every STOP trigger; 3 INFO (single Cookie header field read — fail-closed;
+  middleware body unit tests deferred to tasks 008/013/014 by contract line 23; duplicate cookie
+  name first-wins benign). All three INFO items are plan-sanctioned or fail-closed; none carried
+  forward.
+
+Remediation (plan `46fa0e83`, source `6e760955`, only cookies.rs + session.rs tests):
+- `clear_cookie_expires_immediately` now byte-exact
+  (`vks_browser_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`) + `!contains("Secure")`.
+  Mutation evidence: injecting `; Secure` → FAILED assert_eq (left showed injected attribute);
+  implementation unchanged, test passed on arrival once aligned.
+- New `resolver_fails_closed_when_the_database_errors` (pool.close().await → is_none()).
+  Mutation A `.expect("db")` → panic `db: PoolClosed` (test FAILED). Mutation B fabricated
+  `Some(BrowserSessionCtx{..})` on error → `is_none()` FAILED. Restored → GREEN. No
+  production-code changes in the remediation commit (verified by reviewer diff).
+- Focused re-review by the dissenting seat (subagent-gpt) over 46fa0e83..6e760955:
+  VERDICT: APPROVE — both findings closed, nothing new.
+
+Final state: server auth:: 12 passed / 0 failed; services connection_token 9 passed / 0 failed;
+clippy `-p server -p services --all-targets --all-features -D warnings` clean; fmt clean;
+git diff --check clean at 6e760955. Task 007 frontmatter status: passed.
