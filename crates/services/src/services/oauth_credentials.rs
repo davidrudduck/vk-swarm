@@ -261,6 +261,7 @@ mod tests {
         let path = temp_dir.path().join("credentials.json");
         let credentials = OAuthCredentials::new_file_backed(path.clone());
 
+        // Inspect before saving so a backend regression cannot touch the production Keychain.
         match &credentials.backend {
             Backend::File(backend) => assert_eq!(backend.path, path),
             #[cfg(target_os = "macos")]
