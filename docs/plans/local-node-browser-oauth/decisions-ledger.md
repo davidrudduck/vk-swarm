@@ -694,3 +694,63 @@ SC3/SC4 walk-through (manual-verification item 4):
 - SC4 expiry: `an_expired_handoff_cannot_be_completed` (row DB-aged past TTL → 400).
 - SC4 replay: `replaying_a_completed_callback_is_rejected` (a claimed row is terminal → second
   callback 400).
+
+### Task 010 round-1 remediation — panel-strengthened assertions (test-only)
+
+Test-only remediation per the plan's "Panel-strengthened assertions (round-1 remediation)"
+section, on top of `0f5064d1` and plan amendment `c34c5eb2`. `crates/server/src/routes/oauth.rs`
+is UNTOUCHED (git diff on the file is empty at commit).
+
+Strengthened/new assertions in `crates/server/tests/browser_oauth.rs`:
+- `a_copied_callback_url_cannot_be_completed_in_another_browser` records
+  `redeems = hive_request_count("POST", "/v1/oauth/web/redeem")` after start_login; the count
+  must be unchanged after browser B's cookieless 400 AND after a second stolen attempt whose URL
+  appends browser A's RAW binding token as `&vks_browser_binding=<raw>` (extracted from
+  `a.header_value()`; the token is URL-safe base64 without padding, so raw embedding is exact);
+  the row must still be 'pending' after the smuggle; the rightful completion then takes the
+  count to exactly `redeems + 1`.
+- `a_forged_binding_cookie_does_not_consume_the_handoff` and
+  `an_expired_handoff_cannot_be_completed` assert the redeem count is unchanged by the 400.
+- `replaying_a_completed_callback_is_rejected` asserts the count is 1 after the successful
+  completion and still 1 after the rejected replay.
+- NEW `completion_drops_the_epoch_fence_before_hive_redemption`: `mock_hive_oauth` +
+  `start_login` in jar A, priority-1 `mock_hive_delayed("POST", "/v1/oauth/web/redeem")`, the
+  callback GET spawned via raw reqwest carrying jar A's Cookie header, the arrival oneshot
+  awaited under a 2s timeout (redemption provably in flight), then
+  `h.deployment().browser_auth_epoch().try_lock()` must succeed — the claim guard was dropped
+  before Hive I/O; the guard is dropped and the spawned request task aborted and awaited.
+
+Mutation evidence (each mutant applied to `crates/server/src/routes/oauth.rs` temporarily,
+focused run, then `git checkout --` restore; final `git diff` on the file verified empty):
+- (a) `claim_handoff` moved to AFTER `handoff_redeem` (a non-consuming SELECT feeds the redeem
+  its `app_verifier` — the only way the relocation compiles): 3 tests FAILED —
+  `a_forged_binding_cookie_does_not_consume_the_handoff` at browser_oauth.rs:282 "a forged
+  binding cookie must not burn the one-time Hive code: left 1, right 0";
+  `an_expired_handoff_cannot_be_completed` at browser_oauth.rs:341 "an expired handoff must not
+  reach Hive redemption: left 1, right 0"; `replaying_a_completed_callback_is_rejected` at
+  browser_oauth.rs:317 "a replayed callback must not redeem again: left 2, right 1". The
+  cookieless wrong-browser attempts in the copied-callback test still exit at the pre-claim
+  no-cookie branch and never reach Hive, so the forged/expired/replay redeem-count assertions
+  are the claim-order discriminators, exactly as designed.
+- (b) `drop(epoch_guard)` deleted (guard held across redemption to end of handler scope):
+  `completion_drops_the_epoch_fence_before_hive_redemption` FAILED at browser_oauth.rs:389
+  "epoch fence is still held while Hive redemption is in flight: TryLockError(())".
+- (c) query-parameter fallback accepted for `vks_browser_binding` (read from the query params
+  in addition to headers): `a_copied_callback_url_cannot_be_completed_in_another_browser`
+  FAILED at browser_oauth.rs:238 "a query-parameter binding token must not complete the
+  handoff: left 200, right 400" — the smuggled raw token completed the login ("Signed in with
+  github"), the exact copied-URL escalation the headers-only rule exists to prevent.
+
+Panel finding-1 adjudication (no code change): the no-binding-cookie branch is a separate
+pre-claim exit performing ZERO DB access — it reveals nothing about any handoff row, and the
+browser itself knows whether it holds a cookie, so its distinct "start again" guidance message
+is not an oracle. All four claim-failure paths (unknown id / wrong cookie / expired / replay)
+share the single message "OAuth handoff not found, expired, or already completed" prescribed by
+the After block. The plan's self-contradiction (a STOP trigger that read as forbidding the
+distinct no-cookie message) was resolved by amending the STOP-trigger wording in commit
+`c34c5eb2` — source unchanged.
+
+Verification: `cargo test -p server --test browser_oauth` 8 passed; `--test
+browser_auth_routes` 4 passed; `--test harness_smoke` 11 passed; `cargo clippy -p server
+--all-targets --all-features -- -D warnings` clean; `cargo fmt --all` then `-- --check` clean;
+`git diff --check` clean; `git diff crates/server/src/routes/oauth.rs` empty.

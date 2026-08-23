@@ -195,10 +195,16 @@ async fn a_copied_callback_url_cannot_be_completed_in_another_browser() {
     let mut a = common::CookieJar::new();
     let mut b = common::CookieJar::fresh();
     let cb = start_login(&h, &mut a, id).await;
+    let redeems = h.hive_request_count("POST", "/v1/oauth/web/redeem").await;
 
     // Browser B copies the URL. B has no binding cookie at all.
     let stolen = h.get_with(&cb, &mut b).await;
     assert_eq!(stolen.status, 400, "body: {}", stolen.body);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems,
+        "a cookieless wrong-browser callback must not reach Hive redemption"
+    );
     assert!(
         stolen
             .set_cookie
@@ -217,9 +223,47 @@ async fn a_copied_callback_url_cannot_be_completed_in_another_browser() {
         "the rightful handoff must NOT have been consumed"
     );
 
-    // The rightful browser still completes.
+    // A second stolen attempt smuggles browser A's RAW binding token as a query
+    // parameter. The binding secret is read only from request headers, so even
+    // the genuine secret is inert in the URL.
+    let raw_binding = a
+        .header_value()
+        .expect("browser A must hold a binding cookie")
+        .split(';')
+        .find_map(|part| part.trim().strip_prefix("vks_browser_binding="))
+        .expect("binding cookie missing from browser A's Cookie header")
+        .to_string();
+    let smuggled_url = format!("{cb}&vks_browser_binding={raw_binding}");
+    let smuggled = h.get_with(&smuggled_url, &mut b).await;
+    assert_eq!(
+        smuggled.status, 400,
+        "a query-parameter binding token must not complete the handoff: {}",
+        smuggled.body
+    );
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems,
+        "a query-parameter binding token must not reach Hive redemption"
+    );
+    let state_after_smuggle: String =
+        sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        state_after_smuggle, "pending",
+        "even a raw-token query smuggle must not consume the handoff"
+    );
+
+    // The rightful browser still completes -- exactly one redemption for the pair.
     let ok = h.get_with(&cb, &mut a).await;
     assert_eq!(ok.status, 200, "body: {}", ok.body);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems + 1,
+        "only the rightful completion may redeem"
+    );
 }
 
 #[tokio::test]
@@ -233,7 +277,13 @@ async fn a_forged_binding_cookie_does_not_consume_the_handoff() {
     let cb = start_login(&h, &mut a, id).await;
     let mut forged = common::CookieJar::fresh();
     forged.insert("vks_browser_binding", "not-the-real-secret");
+    let redeems = h.hive_request_count("POST", "/v1/oauth/web/redeem").await;
     assert_eq!(h.get_with(&cb, &mut forged).await.status, 400);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems,
+        "a forged binding cookie must not burn the one-time Hive code"
+    );
     let state: String =
         sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
             .bind(id)
@@ -253,11 +303,21 @@ async fn replaying_a_completed_callback_is_rejected() {
     let mut a = common::CookieJar::new();
     let cb = start_login(&h, &mut a, id).await;
     assert_eq!(h.get_with(&cb, &mut a).await.status, 200);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        1,
+        "one successful completion is exactly one redemption"
+    );
     let replay = h.get_with(&cb, &mut a).await;
     assert_eq!(
         replay.status, 400,
         "a claimed handoff is terminal: {}",
         replay.body
+    );
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        1,
+        "a replayed callback must not redeem again"
     );
 }
 
@@ -276,5 +336,59 @@ async fn an_expired_handoff_cannot_be_completed() {
         .execute(h.pool())
         .await
         .unwrap();
+    let redeems = h.hive_request_count("POST", "/v1/oauth/web/redeem").await;
     assert_eq!(h.get_with(&cb, &mut a).await.status, 400);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems,
+        "an expired handoff must not reach Hive redemption"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn completion_drops_the_epoch_fence_before_hive_redemption() {
+    use deployment::Deployment;
+
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+
+    // Priority-1 delayed responder: signals the moment the redeem request ARRIVES,
+    // then hangs for 60s, so redemption is provably still in flight afterwards.
+    let redeem_arrived = h.mock_hive_delayed("POST", "/v1/oauth/web/redeem").await;
+
+    let addr = h.addr();
+    let cookie = a
+        .header_value()
+        .expect("browser A must hold a binding cookie");
+    let request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .get(format!("http://{addr}{cb}"))
+            .header(reqwest::header::COOKIE, cookie)
+            .send()
+            .await
+            .expect("callback request must be issued")
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), redeem_arrived)
+        .await
+        .expect("redemption never reached the Hive mock")
+        .expect("delayed-responder signal channel closed");
+
+    // Redemption is in flight, so the claim must already be committed and its
+    // epoch guard released: a mutant holding the fence across Hive I/O makes
+    // this try_lock fail while the delayed response is pending.
+    let guard = h
+        .deployment()
+        .browser_auth_epoch()
+        .try_lock()
+        .expect("epoch fence is still held while Hive redemption is in flight");
+    drop(guard);
+
+    request.abort();
+    let _ = request.await;
 }
