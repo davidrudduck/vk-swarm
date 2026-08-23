@@ -71,11 +71,6 @@ async fn jars_are_independent_and_capture_set_cookie() {
     assert_eq!(a.header_value().as_deref(), Some("vks_probe=A"));
     assert_eq!(b.header_value(), None, "jars must not share state");
 
-    a.apply(&["server_cookie=present; Path=/; HttpOnly".to_string()]);
-    assert_eq!(a.get("server_cookie"), Some("present"));
-    a.apply(&["server_cookie=; Path=/; Max-Age=0".to_string()]);
-    assert_eq!(a.get("server_cookie"), None, "Max-Age=0 must delete");
-
     let res = h.get_with("/api/health", &mut a).await;
     res.assert_registered();
     assert_eq!(res.status, 200);
@@ -84,6 +79,12 @@ async fn jars_are_independent_and_capture_set_cookie() {
         "health sets no cookie: {:?}",
         res.set_cookie
     );
+
+    // Attribute names are case-insensitive and values are parsed as complete integers.
+    a.apply(&["vks_probe=gone; max-age=0".to_string()]);
+    assert_eq!(a.get("vks_probe"), None);
+    a.apply(&["vks_probe=kept; Max-Age=01".to_string()]);
+    assert_eq!(a.get("vks_probe"), Some("kept"));
 }
 
 #[tokio::test]
@@ -245,10 +246,14 @@ async fn profile_mocks_are_keyed_by_the_exact_generated_candidate_jwt() {
 #[tokio::test]
 #[serial_test::serial]
 async fn restart_reuses_the_same_assets_dir_and_database() {
-    let h = common::HiveHarness::configured().await;
-    let project_id = h.seed_project("restart-probe", &[]).await;
-    let old_generation = h.server_generation();
-    let h = h.restart().await;
+    let first = common::HiveHarness::configured().await;
+    let project_id = first.seed_project("restart-probe", &[]).await;
+    let old_generation = first.server_generation();
+    // Deliberately overwrite process-global env through a second live harness. restart() must
+    // restore FIRST's retained paths/configuration before reconstruction.
+    let second = common::HiveHarness::configured().await;
+    let second_project_id = second.seed_project("other-harness", &[]).await;
+    let h = first.restart().await;
     assert_eq!(
         h.last_completed_server_generation(),
         Some(old_generation),
@@ -265,6 +270,11 @@ async fn restart_reuses_the_same_assets_dir_and_database() {
     assert!(
         res.body.contains(&project_id.to_string()),
         "restart must reuse the same sqlite file; body: {}",
+        res.body
+    );
+    assert!(
+        !res.body.contains(&second_project_id.to_string()),
+        "restart must not switch to another live harness's sqlite file; body: {}",
         res.body
     );
 }
@@ -312,16 +322,16 @@ async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
     let owner = uuid::Uuid::new_v4();
     h.mock_hive_oauth("code-a", "access-a", "refresh-a", owner)
         .await;
-    h.mock_json("POST", "/outage/status", 200, serde_json::json!({}))
-        .await;
-    let reached = h.mock_hive_failure("POST", "/outage/status", 503).await;
-    // Drive the real request in a spawned task; the signal fires from Wiremock's responder.
-    let request = spawn_real_hive_request(&h, "/outage/status");
+    let reached = h.mock_hive_failure("POST", "/v1/tokens/refresh", 503).await;
+    // Force refresh-only persisted credentials, then drive RemoteClient::access_token(). This is
+    // the real production refresh path, not a raw reqwest request to the mock URL.
+    h.write_refresh_only_credentials("test-refresh-token").await;
+    let request = spawn_real_refresh_request(&h);
     tokio::time::timeout(std::time::Duration::from_secs(2), reached)
         .await
         .expect("refresh never reached Wiremock")
         .unwrap();
-    assert_eq!(h.hive_request_count("POST", "/outage/status").await, 1);
+    assert_eq!(h.hive_request_count("POST", "/v1/tokens/refresh").await, 1);
     request.abort();
     let _ = request.await;
 
@@ -350,6 +360,13 @@ async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
     assert_eq!(h.hive_request_count("POST", "/outage/delayed").await, 1);
     request.abort();
     let _ = request.await;
+}
+
+fn spawn_real_refresh_request(h: &common::HiveHarness) -> tokio::task::JoinHandle<()> {
+    let client = h.deployment().remote_client().unwrap();
+    tokio::spawn(async move {
+        let _ = client.access_token().await;
+    })
 }
 
 fn spawn_real_hive_request(

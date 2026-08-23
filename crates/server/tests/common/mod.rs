@@ -11,6 +11,13 @@ use server::auth::seams::TokenSource;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
+struct RetainedNodeAuth {
+    hive_url: String,
+    api_key: String,
+    secret: String,
+    expected_node_id: Uuid,
+}
+
 pub struct HiveHarness {
     #[allow(dead_code)]
     temp_dir: tempfile::TempDir,
@@ -26,6 +33,10 @@ pub struct HiveHarness {
     mounted_hive_mocks:
         std::sync::Arc<tokio::sync::Mutex<std::collections::BTreeSet<(String, String)>>>,
     redirect_mock_paths: std::sync::Arc<tokio::sync::Mutex<std::collections::BTreeSet<String>>>,
+    retained_asset_dir: std::path::PathBuf,
+    retained_database_path: std::path::PathBuf,
+    retained_shared_api_base: Option<String>,
+    retained_node_auth: Option<RetainedNodeAuth>,
 }
 
 pub struct Resp {
@@ -108,22 +119,32 @@ impl CookieJar {
             )
         }
     }
-    /// Apply raw `Set-Cookie` lines: store `name=value`, and REMOVE the cookie when the line
-    /// carries `Max-Age=0` (that is how logout is observed).
+    /// Apply raw `Set-Cookie` lines: store `name=value`, and REMOVE the cookie when a
+    /// semicolon-delimited, case-insensitive `Max-Age` attribute parses as integer zero. Complete
+    /// numeric parsing is required: `Max-Age=01` is one second and must not be treated as zero.
     pub fn apply(&mut self, set_cookie: &[String]) {
         for line in set_cookie {
-            // Extract name=value from the Set-Cookie header.
-            if let Some(name_value) = line.split(';').next()
-                && let Some((name, value)) = name_value.split_once('=')
-            {
-                let name = name.trim();
-                let value = value.trim();
-                // Check if this line has Max-Age=0 (deletion)
-                if line.contains("Max-Age=0") {
-                    self.cookies.remove(name);
-                } else {
-                    self.cookies.insert(name.to_string(), value.to_string());
-                }
+            let mut parts = line.split(';');
+            let Some(name_value) = parts.next() else {
+                continue;
+            };
+            let Some((name, value)) = name_value.split_once('=') else {
+                continue;
+            };
+            let name = name.trim();
+            let value = value.trim();
+            let max_age_zero = parts.any(|attr| {
+                let attr = attr.trim();
+                let Some((attr_name, attr_value)) = attr.split_once('=') else {
+                    return false;
+                };
+                attr_name.trim().eq_ignore_ascii_case("Max-Age")
+                    && attr_value.trim().parse::<i64>() == Ok(0)
+            });
+            if max_age_zero {
+                self.cookies.remove(name);
+            } else {
+                self.cookies.insert(name.to_string(), value.to_string());
             }
         }
     }
@@ -167,13 +188,6 @@ impl HiveHarness {
             std::env::set_var("VK_ASSET_DIR", temp_dir.path());
             std::env::set_var("VK_DATABASE_PATH", temp_dir.path().join("db.sqlite"));
         }
-
-        // 4. configured() only: seed credentials.json
-        std::fs::write(
-            temp_dir.path().join("credentials.json"),
-            r#"{"refresh_token":"test-refresh-token"}"#,
-        )
-        .unwrap();
 
         // 5. configured() only: start MockServer and mount /v1/tokens/refresh
         let mock_server = wiremock::MockServer::start().await;
@@ -228,7 +242,27 @@ impl HiveHarness {
                 .unwrap();
         });
 
+        let seeded = services::services::oauth_credentials::Credentials {
+            access_token: None,
+            refresh_token: "test-refresh-token".to_string(),
+            expires_at: None,
+        };
+        deployment
+            .auth_context()
+            .save_credentials(&seeded)
+            .await
+            .expect("configured harness must seed refresh-only credentials");
+
         HiveHarness {
+            retained_asset_dir: temp_dir.path().to_path_buf(),
+            retained_database_path: temp_dir.path().join("db.sqlite"),
+            retained_shared_api_base: Some(mock_server.uri()),
+            retained_node_auth: node_auth.map(|(secret, expected_node_id)| RetainedNodeAuth {
+                hive_url: mock_server.uri().replacen("http://", "ws://", 1),
+                api_key: "test-api-key".to_string(),
+                secret,
+                expected_node_id,
+            }),
             temp_dir,
             mock_server,
             deployment,
@@ -301,6 +335,10 @@ impl HiveHarness {
         });
 
         HiveHarness {
+            retained_asset_dir: temp_dir.path().to_path_buf(),
+            retained_database_path: temp_dir.path().join("db.sqlite"),
+            retained_shared_api_base: None,
+            retained_node_auth: None,
             temp_dir,
             mock_server,
             deployment,
@@ -515,10 +553,7 @@ impl HiveHarness {
     /// GET through a jar: sends the jar's `Cookie:` header and applies the response's Set-Cookie.
     pub async fn get_with(&self, path: &str, jar: &mut CookieJar) -> Resp {
         let client = reqwest::Client::new();
-        let mut builder = client.get(format!("http://{}{}", self.addr, path));
-        if let Some(cookie_header) = jar.header_value() {
-            builder = builder.header(reqwest::header::COOKIE, cookie_header);
-        }
+        let builder = attach_jar_cookie(client.get(format!("http://{}{}", self.addr, path)), jar);
         let res = builder.send().await.unwrap();
         let status = res.status().as_u16();
         let headers = res.headers().clone();
@@ -549,12 +584,12 @@ impl HiveHarness {
         jar: &mut CookieJar,
     ) -> Resp {
         let client = reqwest::Client::new();
-        let mut builder = client
-            .post(format!("http://{}{}", self.addr, path))
-            .json(&body);
-        if let Some(cookie_header) = jar.header_value() {
-            builder = builder.header(reqwest::header::COOKIE, cookie_header);
-        }
+        let builder = attach_jar_cookie(
+            client
+                .post(format!("http://{}{}", self.addr, path))
+                .json(&body),
+            jar,
+        );
         let res = builder.send().await.unwrap();
         let status = res.status().as_u16();
         let headers = res.headers().clone();
@@ -580,10 +615,8 @@ impl HiveHarness {
 
     pub async fn delete_with(&self, path: &str, jar: &mut CookieJar) -> Resp {
         let client = reqwest::Client::new();
-        let mut builder = client.delete(format!("http://{}{}", self.addr, path));
-        if let Some(cookie_header) = jar.header_value() {
-            builder = builder.header(reqwest::header::COOKIE, cookie_header);
-        }
+        let builder =
+            attach_jar_cookie(client.delete(format!("http://{}{}", self.addr, path)), jar);
         let res = builder.send().await.unwrap();
         let status = res.status().as_u16();
         let headers = res.headers().clone();
@@ -647,10 +680,7 @@ impl HiveHarness {
         } else {
             format!("http://{}", self.addr)
         };
-        let mut builder = client.get(format!("{base}{path}"));
-        if let Some(cookie_header) = jar.header_value() {
-            builder = builder.header(reqwest::header::COOKIE, cookie_header);
-        }
+        let builder = attach_jar_cookie(client.get(format!("{base}{path}")), jar);
         let res = builder.send().await.unwrap();
         let status = res.status().as_u16();
         let headers = res.headers().clone();
@@ -715,7 +745,6 @@ impl HiveHarness {
         let ws_url = format!("ws://{}{}", self.addr, path);
         let mut request = ws_url.into_client_request().unwrap();
 
-        // Add jar's cookie header if present
         if let Some(jar) = jar
             && let Some(cookie_value) = jar.header_value()
         {
@@ -765,12 +794,11 @@ impl HiveHarness {
     /// REAL SSE request: GET with `Accept: text/event-stream`.
     pub async fn sse_probe(&self, path: &str, jar: Option<&CookieJar>) -> ProtocolProbe {
         let client = reqwest::Client::new();
-        let mut builder = client.get(format!("http://{}{}", self.addr, path));
-        builder = builder.header(reqwest::header::ACCEPT, "text/event-stream");
-        if let Some(jar) = jar
-            && let Some(cookie_header) = jar.header_value()
-        {
-            builder = builder.header(reqwest::header::COOKIE, cookie_header);
+        let mut builder = client
+            .get(format!("http://{}{}", self.addr, path))
+            .header(reqwest::header::ACCEPT, "text/event-stream");
+        if let Some(jar) = jar {
+            builder = attach_jar_cookie(builder, jar);
         }
 
         let res = builder.send().await.unwrap();
@@ -1032,10 +1060,10 @@ impl HiveHarness {
             .serve_handle
             .take()
             .expect("running harness must retain its serve JoinHandle");
-        handle.await.expect("old server task panicked");
-
-        // Record the old generation as completed
-        let completed_generation = self.current_server_generation;
+        let completed_generation = {
+            handle.await.expect("old server task panicked");
+            self.current_server_generation
+        };
         self.last_completed_server_generation = Some(completed_generation);
 
         let HiveHarness {
@@ -1046,12 +1074,28 @@ impl HiveHarness {
             last_completed_server_generation,
             mounted_hive_mocks,
             redirect_mock_paths,
+            retained_asset_dir,
+            retained_database_path,
+            retained_shared_api_base,
+            retained_node_auth,
             ..
         } = self;
         drop(old_deployment);
 
-        // Rebuild deployment on the SAME temp dir
+        restore_harness_env(
+            &retained_asset_dir,
+            &retained_database_path,
+            retained_shared_api_base.as_deref(),
+            retained_node_auth.as_ref(),
+        );
+
         let deployment = LocalDeployment::new().await.unwrap();
+        if let Some(node_auth) = &retained_node_auth {
+            let context = deployment
+                .node_runner_context()
+                .expect("node-auth harness must start the node runner");
+            context.state.write().await.node_id = Some(node_auth.expected_node_id);
+        }
 
         // Serve the new router
         let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel();
@@ -1067,7 +1111,6 @@ impl HiveHarness {
                 .unwrap();
         });
 
-        // Return a new harness with the new server
         HiveHarness {
             temp_dir,
             mock_server,
@@ -1079,6 +1122,10 @@ impl HiveHarness {
             last_completed_server_generation,
             mounted_hive_mocks,
             redirect_mock_paths,
+            retained_asset_dir,
+            retained_database_path,
+            retained_shared_api_base,
+            retained_node_auth,
         }
     }
 
@@ -1100,6 +1147,24 @@ impl HiveHarness {
     /// Path of the credentials file inside the harness temp dir.
     pub fn credentials_path(&self) -> std::path::PathBuf {
         self.temp_dir.path().join("credentials.json")
+    }
+
+    /// Replace this harness's credential file with refresh-token-only credentials so the next
+    /// `RemoteClient::access_token()` call must traverse the real `/v1/tokens/refresh` path.
+    pub async fn write_refresh_only_credentials(&self, refresh_token: &str) {
+        if let Some(handle) = self.deployment.share_sync_handle().lock().await.take() {
+            handle.shutdown().await;
+        }
+        let creds = services::services::oauth_credentials::Credentials {
+            access_token: None,
+            refresh_token: refresh_token.to_string(),
+            expires_at: None,
+        };
+        self.deployment
+            .auth_context()
+            .save_credentials(&creds)
+            .await
+            .expect("refresh-only credentials must persist");
     }
 
     /// A jar holding a REAL live browser session.
@@ -1152,6 +1217,43 @@ fn test_access_token(label: &str) -> String {
         &jsonwebtoken::EncodingKey::from_secret(b"test-secret"),
     )
     .expect("failed to encode test JWT")
+}
+
+fn attach_jar_cookie(builder: reqwest::RequestBuilder, jar: &CookieJar) -> reqwest::RequestBuilder {
+    match jar.header_value() {
+        Some(cookie_header) => builder.header(reqwest::header::COOKIE, cookie_header),
+        None => builder,
+    }
+}
+
+fn restore_harness_env(
+    asset_dir: &std::path::Path,
+    database_path: &std::path::Path,
+    shared_api_base: Option<&str>,
+    node_auth: Option<&RetainedNodeAuth>,
+) {
+    unsafe {
+        std::env::set_var("VK_ASSET_DIR", asset_dir);
+        std::env::set_var("VK_DATABASE_PATH", database_path);
+        std::env::set_var("DISABLE_WORKTREE_ORPHAN_CLEANUP", "1");
+        std::env::set_var("DISABLE_WORKTREE_EXPIRED_CLEANUP", "1");
+        match shared_api_base {
+            Some(url) => std::env::set_var("VK_SHARED_API_BASE", url),
+            None => std::env::remove_var("VK_SHARED_API_BASE"),
+        }
+        match node_auth {
+            Some(auth) => {
+                std::env::set_var("VK_HIVE_URL", &auth.hive_url);
+                std::env::set_var("VK_NODE_API_KEY", &auth.api_key);
+                std::env::set_var("VK_CONNECTION_TOKEN_SECRET", &auth.secret);
+            }
+            None => {
+                std::env::remove_var("VK_HIVE_URL");
+                std::env::remove_var("VK_NODE_API_KEY");
+                std::env::remove_var("VK_CONNECTION_TOKEN_SECRET");
+            }
+        }
+    }
 }
 
 fn test_profile(subject: Uuid) -> utils::api::oauth::ProfileResponse {
