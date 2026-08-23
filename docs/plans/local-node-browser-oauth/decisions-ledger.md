@@ -1504,3 +1504,19 @@ breaks outside the declared file set.**
   recorded here rather than carried forward silently (no-deferred-remediation option 3:
   escalate). Note: neither the task's verification list nor the AGENTS.md frontend gate runs this
   file (gate = lint + tsc only), so nothing gated is red — but it is reported, not hidden.
+
+### Escalation adjudication — useAvailableNodes.test.ts fixture repair
+
+Adjudicated REAL and repaired in-session (plan amendment `1f4e906f`, source follow-up commit):
+`frontend/src/hooks/useAvailableNodes.test.ts` embeds a `useNodeLogStream on a node with no hive`
+describe block whose two renderHook fixtures pinned the pre-013 single-ID fetch premise. The locked
+required `execution_process_id` contract makes single-ID fetching unreachable (the hook now gates
+on BOTH ids before fetching, `useNodeLogStream.ts:252`), so the "still surfaces a real failure
+(500)" assertion failed vacuously (fetch never fired; error stayed null). The repair is
+fixture-only: both renderHook calls now pass `('assignment-1', 'process-1')`, every assertion
+byte-identical, the tests' discriminating purpose (hive-absent swallow vs real-failure surfacing)
+preserved and again exercising the fetch path. The hook's second parameter was also tightened from
+optional (`executionProcessId?: string`) to the required-argument form
+(`executionProcessId: string | undefined`) per the amended contract, so tsc enforces both-ID call
+sites. Verification: vitest 7/7 across both hook test files, `tsc --noEmit` clean, `npm run lint`
+clean, `git diff --check` clean.

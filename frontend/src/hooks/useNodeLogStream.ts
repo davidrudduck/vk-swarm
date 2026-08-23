@@ -62,7 +62,7 @@ interface UseNodeLogStreamResult {
  */
 export const useNodeLogStream = (
   assignmentId: string | undefined,
-  executionProcessId?: string
+  executionProcessId: string | undefined
 ): UseNodeLogStreamResult => {
   const [logs, setLogs] = useState<NodeLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
