@@ -288,7 +288,7 @@ Declared decision points (from the spec; do not edit here):
 
 ## Manual verification (record in decisions-ledger)
 1. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p server --test browser_oauth" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 011` exits 0.
-2. `cargo test -p server --test browser_oauth` — 9 tests green; `cargo test -p services` still green.
+2. `cargo test -p server --test browser_oauth` — 12 tests green (8 carried over from tasks 009/010 + the three above + the invalid-candidate-token test); `cargo test -p services` still green.
 3. TS2 walk-through recorded in the ledger: name the test covering each TS2 clause (public/protected routing -> 008's suite; browser-A isolation, callback copying/replay -> 010's suite; cookie attributes, same-owner and different-owner redemption -> this suite; browser logout and explicit disconnect -> 012's suite).
 4. SC5 restart clause: note that it is proven by task 015 (TS4), not here.
 
