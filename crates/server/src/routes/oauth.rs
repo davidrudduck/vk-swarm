@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Json as ResponseJson},
     routing::{get, post},
 };
-use db::models::browser_auth::create_handoff;
+use db::models::browser_auth::{claim_handoff, create_handoff};
 use deployment::Deployment;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use utils::{
 };
 use uuid::Uuid;
 
-use crate::auth::cookies::binding_set_cookie;
+use crate::auth::cookies::{BINDING_COOKIE, binding_set_cookie, read_cookie};
 use crate::auth::seams::{Clock, OsTokenSource, SystemClock, TokenSource, hash_token};
 use crate::{DeploymentImpl, error::ApiError};
 
@@ -115,6 +115,7 @@ struct HandoffCompleteQuery {
 
 async fn handoff_complete(
     State(deployment): State<DeploymentImpl>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<HandoffCompleteQuery>,
 ) -> Result<Response<String>, ApiError> {
     if let Some(error) = query.error {
@@ -131,19 +132,45 @@ async fn handoff_complete(
         ));
     };
 
-    let (provider, app_verifier) = match deployment.take_oauth_handoff(&query.handoff_id).await {
-        Some(state) => state,
+    // Claim BEFORE any hive I/O. One conditional UPDATE decides the single consumer: a
+    // wrong-browser, expired or replayed attempt matches no row and therefore consumes nothing,
+    // leaving a rightful pending handoff exactly as it was (SC3/SC4).
+    let binding_hash = match read_cookie(&headers, BINDING_COOKIE) {
+        Some(raw) => hash_token(&raw),
         None => {
-            tracing::warn!(
-                handoff_id = %query.handoff_id,
-                "received callback for unknown handoff"
-            );
+            tracing::warn!(handoff_id = %query.handoff_id, "callback without a binding cookie");
             return Ok(simple_html_response(
                 StatusCode::BAD_REQUEST,
-                "OAuth handoff not found or already completed".to_string(),
+                "This browser did not start this sign-in. Start again from the app.".to_string(),
             ));
         }
     };
+
+    // Claim and epoch capture are one short linearization section. Disconnect cannot fit between
+    // them and make a stale callback appear current at commit time. No Hive I/O runs under it.
+    let epoch_guard = deployment.browser_auth_epoch().lock().await;
+    let _epoch_at_claim = *epoch_guard;
+    let claimed = claim_handoff(
+        &deployment.db().pool,
+        query.handoff_id,
+        &binding_hash,
+        SystemClock.now_millis(),
+    )
+    .await
+    .map_err(ApiError::Database)?;
+    drop(epoch_guard);
+
+    let Some(handoff) = claimed else {
+        // Deliberately ONE message for unknown / wrong-browser / expired / already-claimed: the
+        // distinction is not the browser's business, and a claimed row is terminal either way --
+        // recovery is a fresh initiation, never a re-claim.
+        tracing::warn!(handoff_id = %query.handoff_id, "handoff not claimable");
+        return Ok(simple_html_response(
+            StatusCode::BAD_REQUEST,
+            "OAuth handoff not found, expired, or already completed".to_string(),
+        ));
+    };
+    let (provider, app_verifier) = (handoff.provider, handoff.app_verifier);
 
     let client = deployment.remote_client()?;
 

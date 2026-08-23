@@ -167,3 +167,114 @@ async fn initiation_persists_the_handoff_behind_the_epoch_fence() {
             .unwrap();
     assert_eq!(state, "pending");
 }
+
+/// Drive initiation in `jar` and return (handoff_id, callback_path).
+async fn start_login(
+    h: &common::HiveHarness,
+    jar: &mut common::CookieJar,
+    handoff_id: uuid::Uuid,
+) -> String {
+    let res = h
+        .post_with(
+            "/api/auth/handoff/init",
+            serde_json::json!({"provider":"github","return_to":"/"}),
+            jar,
+        )
+        .await;
+    assert_eq!(res.status, 200, "body: {}", res.body);
+    format!("/api/auth/handoff/complete?handoff_id={handoff_id}&app_code=code-1")
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_copied_callback_url_cannot_be_completed_in_another_browser() {
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let mut b = common::CookieJar::fresh();
+    let cb = start_login(&h, &mut a, id).await;
+
+    // Browser B copies the URL. B has no binding cookie at all.
+    let stolen = h.get_with(&cb, &mut b).await;
+    assert_eq!(stolen.status, 400, "body: {}", stolen.body);
+    assert!(
+        stolen
+            .set_cookie
+            .iter()
+            .all(|c| !c.starts_with("vks_browser_session=")),
+        "a wrong-browser callback must not mint a session"
+    );
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        state, "pending",
+        "the rightful handoff must NOT have been consumed"
+    );
+
+    // The rightful browser still completes.
+    let ok = h.get_with(&cb, &mut a).await;
+    assert_eq!(ok.status, 200, "body: {}", ok.body);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_forged_binding_cookie_does_not_consume_the_handoff() {
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    let mut forged = common::CookieJar::fresh();
+    forged.insert("vks_browser_binding", "not-the-real-secret");
+    assert_eq!(h.get_with(&cb, &mut forged).await.status, 400);
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert_eq!(state, "pending");
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn replaying_a_completed_callback_is_rejected() {
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    assert_eq!(h.get_with(&cb, &mut a).await.status, 200);
+    let replay = h.get_with(&cb, &mut a).await;
+    assert_eq!(
+        replay.status, 400,
+        "a claimed handoff is terminal: {}",
+        replay.body
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn an_expired_handoff_cannot_be_completed() {
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    // Age the row past its TTL through the DB rather than by sleeping.
+    sqlx::query("UPDATE browser_oauth_handoffs SET expires_at = created_at WHERE handoff_id = ?")
+        .bind(id)
+        .execute(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(h.get_with(&cb, &mut a).await.status, 400);
+}

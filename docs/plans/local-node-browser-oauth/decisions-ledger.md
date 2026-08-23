@@ -651,3 +651,46 @@ Stage-2 round 1 (parallel, range 91ac6483..e58946c3): subagent-kimi CONFORMS (fi
 Remediation: plan `eb999901` + test-only source `07ad0dac`. Two-browser test now mounts two mocks, asserts both statuses 200, expects both cookies. New `initiation_persists_the_handoff_behind_the_epoch_fence` holds `browser_auth_epoch` from outside via `h.deployment()`, proves Hive I/O completed (`hive_request_count("POST","/v1/oauth/web/init") >= 1`), asserts the row cannot appear while the fence is held, then opens the fence and asserts 200 + state pending. Mutation evidence (ledger ## Task 009 decisions, decisions-ledger.md:629-639): (a) single-mock revert → two-browser FAILED "browser B initiation failed … left: 404 right: 200"; (b) create_handoff moved above the epoch lock → fence FAILED "handoff row appeared while the epoch fence was held". Both restored; oauth.rs byte-identical after (git checkout --). Fence test 5/5 stable; browser_oauth 3 green.
 
 Focused re-review by the dissenting seat (subagent-gpt) over eb999901..07ad0dac: both prior findings verified closed, no new functional issues, flakiness hazards checked (current-thread scheduling safe; 200ms window 5/5 stable); one SHOULD-FIX doc defect — plan line 247 still said "2 tests green". Fixed in `a6204f31` (plan-lint PASS). All remediation converged in-session.
+
+## Task 010 decisions
+
+Mechanical deviation (sanctioned by the dispatch instruction): the plan's After block binds
+`let epoch_at_claim = *epoch_guard;`, which is unused until task 011. rustc emitted
+`warning: unused variable: epoch_at_claim` (crates/server/src/routes/oauth.rs:152), which
+`cargo clippy -p server --all-targets --all-features -- -D warnings` promotes to an error — a
+deadlock between the plan text and the clippy gate. Applied the underscore binding
+`let _epoch_at_claim = *epoch_guard;`. Same value, same guard scope; task 011 renames it back
+when it consumes the epoch. No other deviation from the plan text; imports were extended in
+place (`browser_auth::{claim_handoff, create_handoff}`, `cookies::{BINDING_COOKIE,
+binding_set_cookie, read_cookie}`) rather than duplicated.
+
+RED evidence (observed, verbatim mechanism): the dispatch brief predicted "wrong-browser
+completion currently succeeds via the in-memory take_oauth_handoff which ignores binding
+cookies"; the observed baseline differs — since task 009, nothing calls `store_oauth_handoff`,
+so the in-memory map is always empty and EVERY callback fail-closed with 400 "OAuth handoff not
+found or already completed". Observed RED run: 5 passed / 2 failed.
+- `a_copied_callback_url_cannot_be_completed_in_another_browser` FAILED at
+  crates/server/tests/browser_oauth.rs:219 — rightful browser A got 400 (body: "OAuth handoff
+  not found or already completed") instead of 200.
+- `replaying_a_completed_callback_is_rejected` FAILED at crates/server/tests/browser_oauth.rs:253
+  — first (rightful) completion got 400 instead of 200.
+The two 400-expecting tests (`a_forged_binding_cookie_does_not_consume_the_handoff`,
+`an_expired_handoff_cannot_be_completed`) passed vacuously in RED because everything 400'd;
+they are discriminating in GREEN (a claim that ignored the binding hash or expires_at would
+return 200 and flip the row to 'claimed', failing them).
+
+Verification run (dispatch instructed NOT to run task-gate.sh; equivalent gates run directly):
+`cargo test -p server --test browser_oauth` → 7 passed / 0 failed (3 from task 009 + 4 new);
+`cargo fmt --all` then `-- --check` clean; `cargo clippy -p server --all-targets --all-features
+-- -D warnings` clean; `git grep -n 'take_oauth_handoff' crates/server/` empty (exit 1, no
+matches); `git diff --check` clean.
+
+SC3/SC4 walk-through (manual-verification item 4):
+- SC3 copied URL: `a_copied_callback_url_cannot_be_completed_in_another_browser` proves browser
+  B (no binding cookie) gets 400, no `vks_browser_session=` is minted, the row stays 'pending',
+  and rightful browser A still completes 200. Single consumer: task 004's
+  `concurrent_claim_has_exactly_one_consumer` proves exactly one claimant wins the conditional
+  UPDATE.
+- SC4 expiry: `an_expired_handoff_cannot_be_completed` (row DB-aged past TTL → 400).
+- SC4 replay: `replaying_a_completed_callback_is_rejected` (a claimed row is terminal → second
+  callback 400).
