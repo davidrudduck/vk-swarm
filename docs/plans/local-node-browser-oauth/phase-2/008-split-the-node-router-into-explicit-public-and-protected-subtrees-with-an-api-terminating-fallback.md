@@ -188,6 +188,24 @@ Handler bodies are NOT touched in this task.
         .fallback(api_not_found)
         .with_state(deployment);
 ```
+
+**Axum reality (correction, verified empirically on axum 0.8.8):** a nested custom `fallback` is
+filed under the PARENT router's fallback router, and the outer `/{*path}` SPA catch-all is a REAL
+route — real routes win over fallbacks, so `.fallback(api_not_found)` alone is SHADOWED and the
+test stays RED (observed). The JSON 404 must ALSO be registered as a catch-all route inside the
+nest, immediately after the two subtrees are merged and BEFORE `.with_state`:
+
+```rust
+    let base_routes = public_routes
+        .merge(protected_routes)
+        .route("/{*path}", any(api_not_found))
+        .fallback(api_not_found)
+        .with_state(deployment);
+```
+
+(`any` = `axum::routing::any`. The catch-all sits outside `protected_routes`, so it is public JSON
+404 — it must not leak an auth distinction. Mutation check: removing only the `.route(...)`
+line makes `unknown_api_paths_terminate_inside_the_api_boundary` fail with SPA HTML.)
 **Anchor 3:** add, after `pub async fn router`:
 ```rust
 /// 404 for any unmatched path under `/api`, as JSON, so the SPA catch-all can never answer for
@@ -250,6 +268,7 @@ Nothing else in `harness_smoke.rs` changes: task 006 already repointed its prote
   "Split routes/oauth.rs's router() into public_router() and protected_router(); move NO handler code.",
   "Create routes/browser_auth.rs with exactly the state struct, public_router() and the auth_state handler.",
   "Regroup the existing merge chain in routes/mod.rs into public_routes/protected_routes, add the layer, the fallback and api_not_found. Every merge entry must survive, in the same relative order.",
+  "Register the JSON 404 both as a catch-all route inside the nest (`.route(\"/{*path}\", any(api_not_found))`) and as the nested fallback — the outer `/{*path}` SPA route shadows fallback-only registration (axum 0.8.8).",
   "Regenerate shared/types.ts via `npm run generate-types`.",
   "Append the four tests to the new crates/server/tests/browser_auth_routes.rs."
 ]
