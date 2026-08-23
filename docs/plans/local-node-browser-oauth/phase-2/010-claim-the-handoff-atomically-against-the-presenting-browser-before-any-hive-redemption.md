@@ -191,7 +191,7 @@ Declared decision points (from the spec; do not edit here):
 
 ## Manual verification (record in decisions-ledger)
 1. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p server --test browser_oauth" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 010` exits 0.
-2. `cargo test -p server --test browser_oauth` — 6 tests green.
+2. `cargo test -p server --test browser_oauth` — 7 tests green (3 from task 009 + 4 new).
 3. `git grep -n 'take_oauth_handoff' crates/server/` returns nothing.
 4. SC3/SC4 walk-through recorded in the ledger: name the test that proves each clause — expiry (an_expired_handoff_cannot_be_completed), single consumer (concurrent claim, task 004), copied URL (a_copied_callback_url_cannot_be_completed_in_another_browser), replay (replaying_a_completed_callback_is_rejected).
 
