@@ -1095,7 +1095,7 @@ mod lifecycle_event_tests {
         );
     }
 
-    /// Calibration control for the test above (attempt 3, F18-4: relabelled — the previous name
+    /// Deterministic hazard control (attempt 3, F18-4: relabelled — the previous name
     /// and docstring claimed this reconstructs "attempt 1's REJECTED shape." **That was false.**
     /// `update_completion`'s attempt-1 code was ALREADY write-first (UPDATE first, owner SELECT
     /// after — THE CONFLICT section, task file), so it never had this hazard; the shape below is
@@ -1145,7 +1145,7 @@ mod lifecycle_event_tests {
 
         assert!(
             is_busy_snapshot(&error),
-            "calibration control must reproduce SQLITE_BUSY_SNAPSHOT, got {error}"
+            "hazard control must reproduce SQLITE_BUSY_SNAPSHOT, got {error}"
         );
     }
 }

@@ -252,8 +252,9 @@ GATE_FAIL_CHECK=none
   focused services/local-deployment clippy were green after implementation.
 - The review also enforced the previously promised scope split
   `sqlite-busy-snapshot-calibration-stability`. The pre-existing calibration failure reproduced at
-  `crates/db/src/models/execution_process/queries.rs:1437` with 0/200
-  `SQLITE_BUSY_SNAPSHOT` observations. It is tracked at
+  `crates/db/src/models/execution_process/queries.rs` in
+  `control_read_then_write_shape_reproduces_busy_snapshot`, with 0/200
+  `SQLITE_BUSY_SNAPSHOT` observations in the old scheduler-sensitive control. It is tracked at
   `dev-docs/workstreams/sqlite-busy-snapshot-calibration-stability/README.md` and fixed in this
   branch by forcing the read-snapshot/intervening-commit/write-upgrade schedule in both calibration
   controls. The two controls passed together in ten consecutive runs; no test was ignored.
@@ -319,3 +320,13 @@ GATE_FAIL_CHECK=none
   already a parsed `Url`; serializing that value yields a parseable URL for the spawn path. The raw
   client base and parsed sync config are independent injected dependencies, so no stronger
   same-bytes invariant is claimed.
+- The phase-1 tests now prove the persistence semantics that the STOP triggers require. Commit
+  `16be3a50` asserts that invalidation preserves the handoff row in terminal `claimed` state;
+  commit `4c80e19e` asserts that revoke-all preserves both session rows, sets the live row's
+  timestamp, and leaves the already-revoked timestamp unchanged. DELETE mutants no longer satisfy
+  these tests.
+- The configured-startup test's node-cache task is runtime-scoped test hygiene, not leaked process
+  state: it uses a private temporary database, the Tokio test runtime aborts remaining tasks at
+  teardown, and no deployment-level node-cache stop API exists. The test explicitly shuts down the
+  RemoteSync handle and event bus; adding a production shutdown surface solely for this isolated
+  fixture would exceed the browser-auth contract.
