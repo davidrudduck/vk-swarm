@@ -19,10 +19,19 @@ use uuid::Uuid;
 
 use crate::{DeploymentImpl, error::ApiError};
 
-pub fn router() -> Router<DeploymentImpl> {
+/// PUBLIC: a browser must be able to start and finish OAuth before it has any session.
+pub fn public_router() -> Router<DeploymentImpl> {
     Router::new()
         .route("/auth/handoff/init", post(handoff_init))
         .route("/auth/handoff/complete", get(handoff_complete))
+}
+
+/// PROTECTED: `/auth/logout` is the explicit daemon/Hive DISCONNECT action (it stops sync and
+/// removes daemon credentials) and `/auth/status` returns the hive profile -- neither may be
+/// reachable without a browser session. The browser-scoped logout is added by task 012 as a
+/// separately named route on this same router.
+pub fn protected_router() -> Router<DeploymentImpl> {
+    Router::new()
         .route("/auth/logout", post(logout))
         .route("/auth/status", get(status))
 }

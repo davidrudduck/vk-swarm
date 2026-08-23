@@ -1,6 +1,7 @@
 use axum::{
     Router,
-    routing::{IntoMakeService, get},
+    middleware::from_fn_with_state,
+    routing::{IntoMakeService, any, get},
 };
 
 use crate::DeploymentImpl;
@@ -9,6 +10,7 @@ pub mod all_tasks;
 pub mod approvals;
 pub mod backups;
 pub mod breakdown;
+pub mod browser_auth;
 pub mod config;
 pub mod containers;
 pub mod dashboard;
@@ -44,10 +46,14 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
     // Create terminal router with its own state
     let terminal_router = terminal::router_with_state(&deployment).await;
 
-    // Create routers with different middleware layers
-    // Note: health check is inside base_routes so it gets the State<DeploymentImpl>
-    let base_routes = Router::new()
+    // Deny-by-default (D1): every route lives in exactly one of these two subtrees, and anything
+    // added to `protected_routes` in future inherits authorization without opting in.
+    let public_routes = Router::new()
         .route("/health", get(health::health_check))
+        .merge(oauth::public_router())
+        .merge(browser_auth::public_router());
+
+    let protected_routes = Router::new()
         .merge(config::router())
         .merge(containers::router(&deployment))
         .merge(dashboard::router(&deployment))
@@ -62,7 +68,7 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(templates::router(&deployment))
         .merge(labels::router(&deployment))
         .merge(task_variables::router(&deployment))
-        .merge(oauth::router())
+        .merge(oauth::protected_router())
         .merge(organizations::router())
         .merge(nodes::router())
         .merge(swarm_projects::router())
@@ -79,6 +85,20 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(webhooks::router(&deployment))
         .merge(terminal_router)
         .nest("/images", images::routes())
+        .layer(from_fn_with_state(
+            deployment.clone(),
+            crate::auth::session::require_browser_session,
+        ));
+
+    let base_routes = public_routes
+        .merge(protected_routes)
+        // An unknown `/api/*` request must terminate INSIDE the API boundary and never reach the
+        // outer `/{*path}` SPA catch-all. axum 0.8's `nest` files a nested custom `fallback`
+        // under the PARENT's fallback router, which the outer `/{*path}` real route shadows, so
+        // the JSON 404 is ALSO registered as a catch-all route inside the nest. See
+        // Resp::is_spa_fallback in crates/server/tests/common/mod.rs.
+        .route("/{*path}", any(api_not_found))
+        .fallback(api_not_found)
         .with_state(deployment);
 
     Router::new()
@@ -86,4 +106,13 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .route("/", get(frontend::serve_frontend_root))
         .route("/{*path}", get(frontend::serve_frontend))
         .into_make_service()
+}
+
+/// 404 for any unmatched path under `/api`, as JSON, so the SPA catch-all can never answer for
+/// an API call.
+async fn api_not_found() -> impl axum::response::IntoResponse {
+    (
+        axum::http::StatusCode::NOT_FOUND,
+        axum::Json(serde_json::json!({"success": false, "message": "unknown api route"})),
+    )
 }

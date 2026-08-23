@@ -50,15 +50,17 @@ async fn harness_detects_an_unregistered_route() {
         ok.content_type
     );
 
-    // A path that is NOT registered. It returns 200 + SPA HTML, NOT 404 — which is
-    // exactly why assert_ne!(404) cannot prove registration in this codebase.
+    // A path that is NOT registered. Since the public/protected split landed, an unmatched
+    // `/api/*` path terminates on the API router's own fallback and NEVER reaches the SPA
+    // catch-all. `is_spa_fallback()` remains the registration oracle for NON-api paths.
     let missing = h.get("/api/definitely-not-a-route").await;
     assert!(
-        missing.is_spa_fallback(),
-        "expected the SPA fallback for an unregistered route, got status {} body {:.80}",
+        !missing.is_spa_fallback(),
+        "unknown /api path fell through to SPA HTML, status {} body {:.80}",
         missing.status,
         missing.body
     );
+    assert_eq!(missing.status, 404);
 }
 
 #[tokio::test]

@@ -499,3 +499,48 @@ Remediation (plan `46fa0e83`, source `6e760955`, only cookies.rs + session.rs te
 Final state: server auth:: 12 passed / 0 failed; services connection_token 9 passed / 0 failed;
 clippy `-p server -p services --all-targets --all-features -D warnings` clean; fmt clean;
 git diff --check clean at 6e760955. Task 007 frontmatter status: passed.
+
+## Task 008 — public/protected router split, API-boundary 404, and two undictated corrections
+
+Two choices the task file did not dictate, both forced:
+
+1. **Test compile fix (mechanical).** The spec's `oauth_initiation_and_callback_stay_public` calls
+   `h.get("/api/auth/handoff/complete?handoff_id="`.to_string() + &uuid…)` but
+   `HiveHarness::get` takes `&str` (common/mod.rs:366). Applied the compiler's minimal fix —
+   wrap the expression in `&(...)` (common/mod.rs:550 `get_with` has the same signature). No
+   assertion or semantic change; identical URL reaches the server.
+
+2. **`api_not_found` is registered as a catch-all ROUTE inside the nest, not only as the nested
+   fallback.** Plan-verbatim `.fallback(api_not_found)` on `base_routes` leaves
+   `unknown_api_paths_terminate_inside_the_api_boundary` RED (observed: `unknown /api/* fell
+   through to SPA HTML (status 200, ct Some("text/html"))`). Mechanism, axum 0.8.8 source:
+   `Router::nest` (routing/mod.rs:225-228) files a nested custom fallback under the PARENT's
+   `fallback_router`, which `PathRouter::call_with_state` consults only when the MAIN matchit
+   tree misses — and the outer `/{*path}` real route (routes/mod.rs SPA catch-all) matches every
+   path, so the nested fallback is unreachable. Fix: keep the plan's `.fallback(api_not_found)`
+   AND add `.route("/{*path}", any(api_not_found))` on `base_routes`, registering
+   `/api/{*path}` in the main tree where the `/api` static prefix outranks the root catch-all.
+   `any` (not `get`) so non-GET methods on unknown `/api/*` paths also terminate as JSON 404
+   inside the boundary instead of 405-ing the SPA route. No route conflicts: the only other
+   `/{*…}` catch-alls are `/{id}/files/{*file_path}` in projects/task_attempts (deeper,
+   param-prefixed) and the outer SPA route itself.
+
+Manual verification item 5 — explicit contents of `public_routes` (routes/mod.rs:51-54):
+- `GET /health` (health::health_check)
+- `POST /auth/handoff/init`, `GET /auth/handoff/complete` (oauth::public_router)
+- `GET /auth/state` (browser_auth::public_router)
+
+Nothing else is in it. Every other merge entry from the original chain survives once, in the same
+relative order, in `protected_routes` behind `require_browser_session`; `oauth::router()` became
+`oauth::protected_router()` in place (position between task_variables and organizations unchanged).
+
+`npm run generate-types` diff on shared/: `shared/types.ts` +2 lines — exactly
+`export type BrowserAuthState = { authorized: boolean, oauth_available: boolean, };` inserted
+after `CheckAgentAvailabilityQuery`. No other type changed, no schema changes, no drift.
+
+Gates at commit: browser_auth_routes 4/4 green (RED first: 3 failed exactly as the task predicted —
+auth/state SPA-fall-through, protected routes 200, unknown /api SPA fallback); `cargo test -p
+server` full suite green (17 ok suites, 0 failures; only consumer change = the plan-dictated
+harness_smoke inversion); `npm run generate-types:check` exit 0; `cargo fmt --all -- --check`
+clean; `cargo clippy -p server --all-targets --all-features -- -D warnings` clean;
+`git diff --check` clean.
