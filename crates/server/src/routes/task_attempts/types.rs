@@ -22,6 +22,8 @@ pub struct TaskAttemptQuery {
 pub struct DiffStreamQuery {
     #[serde(default)]
     pub stats_only: bool,
+    /// Hive connection token used only by the direct attempt-id diff URL.
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

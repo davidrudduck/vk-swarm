@@ -97,7 +97,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .route("/commit-compare", get(compare_commit_to_head))
         .route("/start-dev-server", post(start_dev_server))
         .route("/branch-status", get(get_task_attempt_branch_status))
-        .route("/diff/ws", get(stream_task_attempt_diff_ws))
         .route("/merge", post(merge_task_attempt))
         .route("/push", post(push_task_attempt_branch))
         .route("/push/force", post(force_push_task_attempt_branch))
@@ -211,6 +210,17 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .merge(by_task_id_create_router);
 
     Router::new().nest("/task-attempts", task_attempts_router)
+}
+
+/// The production direct-diff path used by useDiffStream.ts with ?token=<connection token>.
+pub fn direct_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
+    let diff = Router::new()
+        .route("/diff/ws", get(stream_task_attempt_diff_ws))
+        .layer(from_fn_with_state(
+            deployment.clone(),
+            load_task_attempt_middleware,
+        ));
+    Router::new().nest("/task-attempts/{id}", diff)
 }
 
 // Note: Type tests are in types.rs

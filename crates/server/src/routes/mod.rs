@@ -90,8 +90,23 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
             crate::auth::session::require_browser_session,
         ));
 
+    // The three direct stream routes (live logs, raw logs, attempt-id diff) accept
+    // EITHER a live browser session OR a strictly scoped Hive `connection` token.
+    // The middleware sits OUTSIDE each direct router's resource loader so missing,
+    // malformed, wrong-audience and wrong-resource credentials return 401 before
+    // any lookup or protocol upgrade.
+    let connection_stream_routes = Router::new()
+        .merge(logs::direct_router())
+        .merge(execution_processes::direct_router(&deployment))
+        .merge(task_attempts::direct_router(&deployment))
+        .layer(from_fn_with_state(
+            deployment.clone(),
+            crate::auth::node_token::require_session_or_connection_token,
+        ));
+
     let base_routes = public_routes
         .merge(protected_routes)
+        .merge(connection_stream_routes)
         // An unknown `/api/*` request must terminate INSIDE the API boundary and never reach the
         // outer `/{*path}` SPA catch-all. axum 0.8's `nest` files a nested custom `fallback`
         // under the PARENT's fallback router, which the outer `/{*path}` real route shadows, so

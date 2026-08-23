@@ -1277,3 +1277,230 @@ pre-disconnect callback 400, pending handoff terminal, fresh same-owner login re
 syncs, in-flight refresh cannot resurrect) — :240-300 and races 1-6 as listed.
 
 SC7/SC8 delivered at the model/route level; UI separation is task 017, sentinel disclosure task 018.
+
+## Task 013 decisions
+
+**STOP (census trigger) — no code changed; escalation to orchestrator/user.**
+
+Pre-implementation reconnaissance (before writing the failing tests, per the census STOP
+trigger) probed all ten stream registrations against the real harness
+(`HiveHarness::configured()` + `authorized_jar()`, real `ws_probe`/`sse_probe`, scratch test
+deleted after evidence capture). Nine of ten expected statuses match reality exactly:
+
+| # | path (browser, random resource id) | plan expects | actual |
+|---|---|---|---|
+| 1 | `/api/events` (SSE) | 200 + `text/event-stream` | 200 + `text/event-stream` |
+| 2 | `/api/tasks/stream/ws?project_id={id}` | 101 | 101 |
+| 3 | `/api/drafts/stream/ws?project_id={id}` | 101 | 101 |
+| 4 | `/api/task-attempts/{id}/diff/ws` | 404 | **500** |
+| 5 | `/api/task-attempts/by-task-id/{id}/diff/ws` | 404 | 404 |
+| 6 | `/api/execution-processes/stream/ws?task_attempt_id={id}` | 101 | 101 |
+| 7 | `/api/execution-processes/{id}/raw-logs/ws` | 404 | 404 |
+| 8 | `/api/execution-processes/{id}/normalized-logs/ws` | 404 | 404 |
+| 9 | `/api/logs/{id}/live` | 404 | 404 |
+| 10 | `/api/terminal/ws/{id}` | 400 | 400 |
+
+Anonymous probes: all ten rows 401, none upgraded (matches the plan's test 1 both before and
+after the planned route moves).
+
+**Row 4 mechanism (500, not 404):** `load_task_attempt_middleware`
+(crates/server/src/middleware/model_loaders.rs:524 → `load_task_attempt_impl` :545) does not
+404 on an unknown attempt. For a GET request (a WS handshake is a GET) it attempts a Hive
+fallback and then unconditionally inserts `RemoteAttemptNeeded` and calls `next`
+(model_loaders.rs:636-640 — the insert runs even when no hive client exists).
+`stream_task_attempt_diff_ws` (crates/server/src/routes/task_attempts/handlers/worktree.rs:45)
+requires `Extension(task_attempt): Extension<TaskAttempt>` unconditionally, so the missing
+extension becomes axum's `MissingExtension` rejection → HTTP 500. The same handler registered
+via the by-task-id router 404s earlier in its loader (model_loaders.rs:799-806), which is why
+row 5 matches.
+
+**Why this cannot be resolved inside task 013's allowed moves:**
+
+1. Adjusting the census expectation 404→500 is forbidden ("do not adjust expected values"; the
+   plan file is not editable by the implementer).
+2. Editing `model_loaders.rs` is itself a listed STOP trigger ("Editing projects/mod.rs or
+   model_loaders.rs — proxy routing and its browser-session compatibility are task 014").
+3. Changing the diff handler's attempt extraction (e.g. `Option<Extension<TaskAttempt>>` +
+   404) is not in the plan's Change spec for worktree.rs (which adds only the browser/token
+   branch, the `Result` signature, and `Ok(...)` wrap) and would alter the loader contract the
+   plan explicitly preserves ("preserve each existing loader"). The task rules classify this as
+   improvisation on a plan defect, which must be STOPped and reported, not ledgered as a
+   mechanical fix.
+
+The behavior predates the plan: `RemoteAttemptNeeded` landed in 097a04cb ("feat: add
+cross-node task attempt access with Hive reconciliation"); the 013 plan was decomposed later
+(41f55c4b). The census row-4 expectation appears to have been authored assuming the
+execution-process-loader semantics (straight 404) apply to the attempt loader.
+
+**Impact on the plan's failing tests:** test 2
+(`an_authorized_browser_reaches_every_protected_stream`) fails at the row-4 assertion
+(`assert_eq!(res.status, 404)` vs actual 500) both before and after implementing the plan's
+changes — it cannot be made green within scope. Tests 3/4 are unaffected in outcome (their
+row-4 assertions are `!= 401`/`!= 401`, satisfied by 500). Tests 1/5 match today's behavior.
+
+**Disposition:** escalated per the no-deferred-remediation rule (option 3: architecturally
+entangled — the fix belongs to the loader/proxy-routing surface task 014 owns, or requires a
+deliberate plan amendment choosing one of: census 404→500, loader 404-for-diff, or
+handler-Option contract). No source files were modified; the working tree contains only this
+ledger append (uncommitted). All other task-013 work (stream_auth.rs RED, route moves, handler
+token branches, remote predicate + query, frontend hook repair) remains unstarted pending the
+census adjudication.
+
+Scratch-probe transcript (deleted file `crates/server/tests/zz_scratch_census.rs`, run:
+`TMPDIR=$PWD/.cargo-tmp DISABLE_WORKTREE_ORPHAN_CLEANUP=1 cargo test -p server --test
+zz_scratch_census -- --nocapture`, 2 passed):
+
+```
+BROWSER /api/tasks/stream/ws?project_id=98f7281f-... -> 101 upgraded=true
+BROWSER /api/drafts/stream/ws?project_id=98f7281f-... -> 101 upgraded=true
+BROWSER /api/execution-processes/stream/ws?task_attempt_id=98f7281f-... -> 101 upgraded=true
+BROWSER /api/events -> 200 ct=Some("text/event-stream")
+BROWSER /api/task-attempts/d72f9172-.../diff/ws -> 500 upgraded=false
+ANON   /api/task-attempts/d72f9172-.../diff/ws -> 401 upgraded=false
+BROWSER /api/task-attempts/by-task-id/d72f9172-.../diff/ws -> 404 upgraded=false
+ANON   /api/task-attempts/by-task-id/d72f9172-.../diff/ws -> 401 upgraded=false
+BROWSER /api/execution-processes/d72f9172-.../raw-logs/ws -> 404 upgraded=false
+ANON   /api/execution-processes/d72f9172-.../raw-logs/ws -> 401 upgraded=false
+BROWSER /api/execution-processes/d72f9172-.../normalized-logs/ws -> 404 upgraded=false
+ANON   /api/execution-processes/d72f9172-.../normalized-logs/ws -> 401 upgraded=false
+BROWSER /api/logs/d72f9172-.../live -> 404 upgraded=false
+ANON   /api/logs/d72f9172-.../live -> 401 upgraded=false
+BROWSER /api/terminal/ws/d72f9172-... -> 400 upgraded=false
+ANON   /api/terminal/ws/d72f9172-... -> 401 upgraded=false
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+### Task 013 resumption — post-de347b6c implementation (RED → GREEN)
+
+Resumed after the orchestrator verified the census escalation and amended the plan in `de347b6c`
+(row 4 pinned at 500). The escalation note above is retained verbatim; everything below is the
+implementation-session record.
+
+**TDD RED (all failing tests written first, exact observed output):**
+
+1. `cargo test -p server --test stream_auth` → `3 passed; 2 failed`:
+   - `browser_session_wins_over_an_irrelevant_bad_token_on_direct_streams` FAILED at
+     `/api/logs/{id}/live`: `left: 401, right: 404` — the loose `if let Some(token)`
+     handler validation turned a valid browser + garbage query token into 401 (browser-AND-token,
+     the D7 violation). This is REDDER than the dispatch predicted ("1/2/3/5 mostly GREEN"):
+     test 3 was already RED on the raw-logs/live rows for the same mechanism, and green only on
+     the diff row (DiffStreamQuery ignored the unknown `token` field).
+   - `direct_logs_and_direct_diff_accept_only_a_scoped_connection_token` FAILED at
+     `/api/task-attempts/{id}/diff/ws`: `assert_ne! failed ... left: 401, right: 401` — a
+     correctly scoped connection token got 401 because all three direct routes still sat behind
+     `require_browser_session` with no connection-token alternative (the missing mechanism).
+   - Tests 1/2/5 were green pre-change, as predicted (row 4 observed 500 for browser, matching
+     the amended census).
+2. `cargo test -p remote connection_resource_matches` → compile RED:
+   `error[E0425]: cannot find function connection_resource_matches in this scope` ×6
+   (predicate + query type did not exist yet).
+3. `npx vitest run src/hooks/useNodeLogStream.test.ts` → 3/3 failed: fetch URL was
+   `/v1/nodes/assignments/{a}/connection-info` (no `execution_process_id` param; expected the
+   exact param'd URL) and `expected "vi.fn()" to not be called at all, but actually been called
+   1 times` (old hook attempted the remote stream with only the assignment id).
+4. `npx tsc --noEmit` → `TS2554: Expected 1 arguments, but got 2` ×4 (hook still one-param).
+
+**GREEN (final state, every verification command):**
+
+1. `cargo test -p server --test stream_auth`: `5 passed; 0 failed` (re-run post-fmt: same).
+2. `cargo test -p server` (full): every suite ok — 104 unit + browser_auth_routes 14 +
+   browser_oauth 14 + events 11 + harness_smoke 11 + mcp_context 3 + nodes_routes 2 +
+   projects_with_stats 1 + stream_auth 5 + swarm_* 6 + tasks_delete 3 + cleanup 7; 0 failures.
+3. `cargo test -p remote connection_resource_matches`: `5 passed; 0 failed`;
+   `cargo test -p remote generated_connection_token`: `1 passed; 0 failed`;
+   full `cargo test -p remote`: 137 passed, 0 failed.
+4. `cargo clippy -p server -p remote --all-targets --all-features -- -D warnings`: clean.
+5. `cargo fmt --all` then `cargo fmt --all -- --check`: clean (stable-channel option warnings
+   are pre-existing rustfmt config noise).
+6. `cd frontend && npx vitest run src/hooks/useNodeLogStream.test.ts`: 3/3 passed;
+   `npx tsc --noEmit`: clean; `npm run lint` (--max-warnings 0): clean.
+7. `git diff --check`: clean. `git grep -n 'connection_token_validator' crates/server/src/routes/`
+   → exactly the three direct handlers: execution_processes.rs (stream_raw_logs_ws),
+   logs.rs (stream_live_logs_ws), task_attempts/handlers/worktree.rs (stream_task_attempt_diff_ws).
+
+**Manual verification 3 — ten-route census after the change** (fresh
+`git grep -n '\.route(' crates/server/src/routes/ | grep -E 'ws|stream|live'` + `git grep -n 'Sse<'`):
+
+| # | path | registration | credential class |
+|---|---|---|---|
+| 1 | `/api/events` (SSE) | routes/events.rs:141 `Sse<` | browser session only |
+| 2 | `/api/tasks/stream/ws` | routes/tasks/mod.rs:66 | browser session only |
+| 3 | `/api/drafts/stream/ws` | routes/drafts.rs:53 | browser session only |
+| 4 | `/api/task-attempts/{id}/diff/ws` | routes/task_attempts/mod.rs:218 (`direct_router`) | browser OR scoped connection |
+| 5 | `/api/task-attempts/by-task-id/{task_id}/diff/ws` | routes/task_attempts/mod.rs:171 | browser session only |
+| 6 | `/api/execution-processes/stream/ws` | routes/execution_processes.rs:298 | browser session only |
+| 7 | `/api/execution-processes/{id}/raw-logs/ws` | routes/execution_processes.rs:307 (`direct_router`) | browser OR scoped connection |
+| 8 | `/api/execution-processes/{id}/normalized-logs/ws` | routes/execution_processes.rs:291 | browser session only |
+| 9 | `/api/logs/{execution_id}/live` | routes/logs.rs:286 (`direct_router`) | browser OR scoped connection |
+| 10 | `/api/terminal/ws/{session_id}` | routes/terminal.rs:395 (dupe at :377 is pre-existing) | browser session only |
+
+All ten rows' anonymous/token-class behavior is asserted in stream_auth.rs; rows 4/7/9 live in
+`connection_stream_routes` behind `require_session_or_connection_token`, OUTSIDE each loader.
+
+**Manual verification 5 — production-path evidence (read, unchanged by this task):**
+`frontend/src/hooks/useDiffStream.ts:111-139` constructs only
+`wss://{node}/api/task-attempts/${remoteAttemptId}/diff/ws?token=...` with
+`remoteAttemptId = connectionInfo.attempt_id`; `remote/src/routes/tasks.rs:816-852` mints that
+token with `assignment.local_attempt_id` as the resource claim and returns the same id as
+`attempt_id`. So the diff token's resource scope IS the URL's attempt id — the node-side
+`validate_for_resource(token, node_id, task_attempt.id)` binds exactly that. No production code
+constructs the by-task-id diff URL (row 5 stays browser-only). Note the deliberate resource
+asymmetry: diff tokens are attempt-scoped, raw-log tokens are execution-process-scoped; both
+meet in `validate_for_resource` keyed by whatever `{id}` the direct URL carries.
+
+**Manual verification 6/9 — protocol assertion transcripts:** the exact 401-before-lookup rows
+for missing/malformed/wrong-scope/unscoped/wrong-node/proxy tokens and the !=401 scoped positive
+are stream_auth.rs `direct_logs_and_direct_diff_accept_only_a_scoped_connection_token` (all six
+negative classes `assert_eq!(..., 401)` on all three direct paths); the D7 OR-semantics guard is
+`browser_session_wins_over_an_irrelevant_bad_token_on_direct_streams` (browser+garbage and
+browser+proxy-audience tokens keep the browser-only status on all three paths).
+
+**Manual verification 8:** positive URLs carry required query fields (`?project_id=`,
+`?task_attempt_id=`) inside `protected_ws`; token appending uses `&` after an existing query
+(`with_token`); nonexistent terminal expects 400 — all asserted in the census rows.
+
+**Undictated choices (all mechanical or evidence-backed):**
+
+1. `#[allow(dead_code)] mod common;` in stream_auth.rs — first test binary that includes the
+   shared harness without using any `Resp` helper; without it, `Resp::is_spa_fallback` /
+   `assert_registered` (which lack the sibling fields' `#[allow(dead_code)]`) trip `-D warnings`.
+   Scoped to this binary only; tests/common/mod.rs untouched.
+2. `executionProcessId?: string` is an OPTIONAL second hook parameter. A required
+   `(string | undefined)` parameter breaks `npx tsc --noEmit` on the undeclared one-arg caller
+   useAvailableNodes.test.ts (TS2554). Optional keeps tsc green while the runtime guard
+   (`if (!assignmentId || !executionProcessId) return` + disconnected) keeps the locked contract:
+   no fetch, no direct URL, no relay without BOTH ids — no legacy/unscoped fallback is ever minted.
+3. Remote token-construction test decodes into a test-local `DecodedConnectionClaims` struct:
+   `crate::auth::connection_token` is private (auth/mod.rs re-exports only the service) and
+   auth/mod.rs is outside the file set. Decoding into an independent struct is stronger evidence
+   anyway; it also asserts `sub`, `aud == "connection"`, and future `exp` (turning clippy
+   dead-code pressure into assertions).
+4. The three direct handlers keep the pre-existing `is_enabled → Forbidden` guard on the token
+   branch (dispatch-sanctioned; unreachable in tests because the harness sets
+   VK_CONNECTION_TOKEN_SECRET), and the diff handler's loader/mint order is unchanged.
+
+**ESCALATION (plan defect, NOT silently deferred): `frontend/src/hooks/useAvailableNodes.test.ts`
+breaks outside the declared file set.**
+
+- Evidence: `npx vitest run src/hooks/useAvailableNodes.test.ts` → `1 failed | 3 passed`.
+  Failing: `still surfaces a real failure (500 text/plain) as an error, not a swallowed
+  "no stream"` at useAvailableNodes.test.ts:116 (`expect(result.current.error).not.toBeNull()`).
+- Mechanism: that test renders `useNodeLogStream('assignment-1')` — one arg — and pins the
+  PRE-013 behavior (connection-info fetch attempted with only the assignment id; a 500 response
+  surfaces as an error). The locked 013 contract makes Hive's `execution_process_id` REQUIRED and
+  forbids any optional/legacy fallback, so with no process id the hook correctly attempts no
+  remote stream at all and no error can surface. The adjacent test
+  (`treats the SPA fallback (200 text/html) ... as "no stream"`) still passes — disconnected +
+  null error is also the correct post-013 outcome there.
+- Why not fixed in this session: the file is NOT in task 013's `files:` list, the task gate
+  enforces "only declared files changed", and the plan file is not implementer-editable. Both
+  escape hatches (attempting the fetch without the param, or defaulting the param) are explicit
+  STOP triggers ("Making execution_process_id optional, defaulting to assignment/local-attempt
+  IDs, adding a compatibility fallback").
+- Disposition for the orchestrator: amend task 013's `files:` to include
+  `frontend/src/hooks/useAvailableNodes.test.ts` and repair its useNodeLogStream block (pass a
+  process id fixture and keep the 500-surfaces-error assertion; the SPA-fallback test needs no
+  change), or repair it in the plan layer. The repair is a two-line test-fixture change; it is
+  recorded here rather than carried forward silently (no-deferred-remediation option 3:
+  escalate). Note: neither the task's verification list nor the AGENTS.md frontend gate runs this
+  file (gate = lint + tsc only), so nothing gated is red — but it is reported, not hidden.

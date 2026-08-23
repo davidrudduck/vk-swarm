@@ -10,7 +10,7 @@
 //! or by adding tower-http CompressionLayer in a future enhancement.
 
 use axum::{
-    Router,
+    Extension, Router,
     extract::{
         Path, Query, State,
         ws::{WebSocket, WebSocketUpgrade},
@@ -35,6 +35,7 @@ use uuid::Uuid;
 
 use crate::{
     DeploymentImpl,
+    auth::session::BrowserSessionCtx,
     error::ApiError,
     ws_util::{WsKeepAlive, run_ws_stream},
 };
@@ -149,17 +150,21 @@ pub struct LiveLogStreamQuery {
 /// without replaying history. Use the REST endpoint for paginated history.
 ///
 /// # Authentication
-/// Supports two authentication modes:
+/// Supports two authentication modes (D7: browser OR connection token):
 /// 1. Session-based (local access) - no token required
-/// 2. Token-based (external access) - connection token in query param
+/// 2. Token-based (external access) - scoped connection token in query param
 pub async fn stream_live_logs_ws(
     ws: WebSocketUpgrade,
     State(deployment): State<DeploymentImpl>,
     Path(execution_id): Path<Uuid>,
     Query(query): Query<LiveLogStreamQuery>,
+    browser_session: Option<Extension<BrowserSessionCtx>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // If a token is provided, validate it
-    if let Some(token) = &query.token {
+    // A live browser session is a complete authorization alternative; do not
+    // decode an irrelevant query token on that branch (browser OR token, not AND).
+    if browser_session.is_none() {
+        let token = query.token.as_deref().ok_or(ApiError::Unauthorized)?;
+
         let validator = deployment.connection_token_validator();
 
         if !validator.is_enabled() {
@@ -171,7 +176,14 @@ pub async fn stream_live_logs_ws(
             ));
         }
 
-        match validator.validate_for_execution(token, execution_id) {
+        let node_id = deployment
+            .node_runner_context()
+            .ok_or(ApiError::Unauthorized)?
+            .node_id()
+            .await
+            .ok_or(ApiError::Unauthorized)?;
+
+        match validator.validate_for_resource(token, node_id, execution_id) {
             Ok(validated) => {
                 tracing::debug!(
                     user_id = %validated.user_id,
@@ -266,8 +278,12 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
     let _ = deployment; // Reserved for future middleware
     Router::new()
         .route("/logs/{execution_id}", get(get_logs))
-        .route("/logs/{execution_id}/live", get(stream_live_logs_ws))
         .route("/logs/attempt/{attempt_id}", get(get_logs_for_attempt))
+}
+
+/// Direct live logs: browser session OR Hive `connection` token, never `node_proxy`.
+pub fn direct_router() -> Router<DeploymentImpl> {
+    Router::new().route("/logs/{execution_id}/live", get(stream_live_logs_ws))
 }
 
 #[cfg(test)]

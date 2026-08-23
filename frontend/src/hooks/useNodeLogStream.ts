@@ -53,10 +53,16 @@ interface UseNodeLogStreamResult {
  * 2. Try direct WebSocket connection to the node (if public_url available)
  * 3. Fall back to Hive relay if direct connection fails
  *
+ * The direct stream is keyed by the execution process id: the Hive signs the
+ * connection token for exactly that process, and the node's raw-logs URL uses
+ * the same id. The remote stream is only attempted when BOTH ids are defined.
+ *
  * @param assignmentId - The assignment ID to stream logs for
+ * @param executionProcessId - The execution process ID scoping the token and direct URL
  */
 export const useNodeLogStream = (
-  assignmentId: string | undefined
+  assignmentId: string | undefined,
+  executionProcessId?: string
 ): UseNodeLogStreamResult => {
   const [logs, setLogs] = useState<NodeLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -75,10 +81,10 @@ export const useNodeLogStream = (
    * Fetch connection info from the Hive.
    */
   const fetchConnectionInfo = useCallback(
-    async (id: string): Promise<ConnectionInfo | null> => {
+    async (id: string, processId: string): Promise<ConnectionInfo | null> => {
       try {
         const response = await fetch(
-          `/v1/nodes/assignments/${id}/connection-info`
+          `/v1/nodes/assignments/${id}/connection-info?execution_process_id=${encodeURIComponent(processId)}`
         );
 
         if (!response.ok) {
@@ -120,10 +126,11 @@ export const useNodeLogStream = (
         }
 
         try {
-          // Build direct WebSocket URL
+          // Build direct WebSocket URL — keyed by the EXECUTION PROCESS id,
+          // which is the exact resource the connection token is scoped to.
           const directUrl = new URL(info.direct_url);
           const wsProtocol = directUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-          const wsUrl = `${wsProtocol}//${directUrl.host}/api/execution-processes/${assignmentId}/raw-logs/ws?token=${encodeURIComponent(info.connection_token)}`;
+          const wsUrl = `${wsProtocol}//${directUrl.host}/api/execution-processes/${executionProcessId}/raw-logs/ws?token=${encodeURIComponent(info.connection_token)}`;
 
           const ws = new WebSocket(wsUrl);
           const timeout = setTimeout(() => {
@@ -151,7 +158,7 @@ export const useNodeLogStream = (
         }
       });
     },
-    [assignmentId]
+    [executionProcessId]
   );
 
   /**
@@ -242,13 +249,13 @@ export const useNodeLogStream = (
    * Main connection logic.
    */
   const connect = useCallback(async () => {
-    if (!assignmentId) return;
+    if (!assignmentId || !executionProcessId) return;
 
     setConnectionType('connecting');
     setError(null);
 
     // Fetch connection info
-    const info = await fetchConnectionInfo(assignmentId);
+    const info = await fetchConnectionInfo(assignmentId, executionProcessId);
     if (!info) {
       setConnectionType('disconnected');
       return;
@@ -282,6 +289,7 @@ export const useNodeLogStream = (
     setupWebSocketHandlers(ws);
   }, [
     assignmentId,
+    executionProcessId,
     fetchConnectionInfo,
     tryDirectConnection,
     connectToRelay,
@@ -307,7 +315,7 @@ export const useNodeLogStream = (
 
   // Effect to manage connection lifecycle
   useEffect(() => {
-    if (!assignmentId) {
+    if (!assignmentId || !executionProcessId) {
       setLogs([]);
       setError(null);
       setConnectionType('disconnected');
@@ -327,7 +335,7 @@ export const useNodeLogStream = (
         retryTimerRef.current = null;
       }
     };
-  }, [assignmentId, connect]);
+  }, [assignmentId, executionProcessId, connect]);
 
   return { logs, error, connectionType, retry };
 };
