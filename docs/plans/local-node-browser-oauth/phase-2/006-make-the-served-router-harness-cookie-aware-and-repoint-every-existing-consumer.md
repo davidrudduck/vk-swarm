@@ -2,7 +2,7 @@
 id: "006"
 phase: 2
 title: "Make the served-router harness cookie-aware and repoint every existing consumer"
-status: ready
+status: passed
 depends_on: ["001","002","005"]
 parallel: false
 conflicts_with: ["002","008","022"]

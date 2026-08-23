@@ -365,3 +365,59 @@ GATE_FAIL_CHECK=none
   work, so startup latency is unchanged in substance; the ordering guarantees a completed
   constructor cannot later install a node-cache handle after restart/disconnect already observed an
   empty slot. This is the node-cache analogue of task 022's synchronous RemoteSync startup install.
+
+## Task 006 closure — gates, mutation evidence, panel verdicts
+
+Source provenance (plan commits interleave, so gates ran per source commit against the plan state
+of record): `a62162ab`/`3fc19fbf` gated against `c5762b63`, `9d8fbf23` gated against `743ee1bc`,
+`3de79b63` gated against `13fcf4d1`, `364a0e47` gated against `8af96e52`, `737f01ee` gated against
+`364a0e47` — every run `CONFORMS`, `GATE_FAIL_CHECK=none`. Final two gates (verbatim):
+
+```
+WAI gate: topic=local-node-browser-oauth task=006 commit=364a0e47 allowed_change=edit
+  - file-set: only declared files changed (4 paths)
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/server/tests/harness_smoke.rs' ...
+  - tests: scope 'crates/server/tests/harness_smoke.rs' green
+CONFORMS: task 006 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+```
+WAI gate: topic=local-node-browser-oauth task=006 commit=737f01ee allowed_change=edit
+  - file-set: only declared files changed (1 paths)
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/server/tests/harness_smoke.rs' ...
+  - tests: scope 'crates/server/tests/harness_smoke.rs' green
+CONFORMS: task 006 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+Idle-interval mutation evidence for `737f01ee` (strengthened
+`shutdown_interrupts_the_idle_interval_wait` observes the compound DB state — second node cached,
+first node remove_stale-deleted — proving both startup passes completed and the service is parked
+in the five-minute wait before the shutdown timeout): with the interval-wait cancellation arm
+replaced by a plain `interval.tick().await`, the idle test failed with `shutdown must cancel the
+idle interval wait instead of the next tick: Elapsed(())` while
+`shutdown_interrupts_an_in_flight_sync` still passed; restoring the arm made all three lifecycle
+tests green and the idle test green 10/10 consecutive runs. The two tests are mutually
+discriminating: the in-flight test catches the do_sync-arm mutant, the idle test catches the
+tick-arm mutant.
+
+Stage-2 adversarial panel (two independent families) both returned `VERDICT: CONFORMS` over the
+full source range `c0ddf51a..737f01ee`: concurrency soundness verified (biased selects cannot miss
+cancellation; `run()` holding the sender preserves never-cancelled semantics including the
+immediate first tick and stop-flag path; slot-fill vs shutdown race closed by the slot mutex;
+`shutdown_node_cache_sync` drops the guard before awaiting; no lock cycles among the three
+mutexes); strengthened idle test reasoning verified sound (no await between the terminal
+`remove_stale` commit and the interval select); `from_parts` awaited start adds no network wait;
+harness/restart/helper ordering matches the amended contract; request-count heuristics fully
+removed; consumer repointing intact (14/14 COOKIE builders, `delete_with` everywhere, zero
+assertion drift); full regression sweep green (services node_cache 3/3, local-deployment 43/43,
+harness_smoke 11/11, full server, clippy `-D warnings`, fmt, diff-check). One pre-existing
+observation retained as a non-finding: the harness share-sync `if let Some(h) = …take()` pattern
+holds the share-sync slot guard across `shutdown().await` — no cycle exists because the RemoteSync
+task never re-acquires that lock, and the plan's take-before-await constraint targets the
+node-cache method.
