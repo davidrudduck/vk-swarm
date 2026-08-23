@@ -322,16 +322,21 @@ async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
     let owner = uuid::Uuid::new_v4();
     h.mock_hive_oauth("code-a", "access-a", "refresh-a", owner)
         .await;
-    let reached = h.mock_hive_failure("POST", "/v1/tokens/refresh", 503).await;
     // Force refresh-only persisted credentials, then drive RemoteClient::access_token(). This is
     // the real production refresh path, not a raw reqwest request to the mock URL.
     h.write_refresh_only_credentials("test-refresh-token").await;
+    let refreshes_before = h.hive_request_count("POST", "/v1/tokens/refresh").await;
+    let reached = h.mock_hive_failure("POST", "/v1/tokens/refresh", 503).await;
     let request = spawn_real_refresh_request(&h);
     tokio::time::timeout(std::time::Duration::from_secs(2), reached)
         .await
         .expect("refresh never reached Wiremock")
         .unwrap();
-    assert_eq!(h.hive_request_count("POST", "/v1/tokens/refresh").await, 1);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/tokens/refresh").await,
+        refreshes_before + 1,
+        "exactly the explicit caller may issue the observed refresh request"
+    );
     request.abort();
     let _ = request.await;
 
@@ -362,11 +367,11 @@ async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
     let _ = request.await;
 }
 
-fn spawn_real_refresh_request(h: &common::HiveHarness) -> tokio::task::JoinHandle<()> {
+fn spawn_real_refresh_request(
+    h: &common::HiveHarness,
+) -> tokio::task::JoinHandle<Result<String, services::RemoteClientError>> {
     let client = h.deployment().remote_client().unwrap();
-    tokio::spawn(async move {
-        let _ = client.access_token().await;
-    })
+    tokio::spawn(async move { client.access_token().await })
 }
 
 fn spawn_real_hive_request(
