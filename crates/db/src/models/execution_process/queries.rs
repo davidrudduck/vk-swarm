@@ -1277,8 +1277,9 @@ mod lifecycle_event_tests {
             .unwrap_or(false)
     }
 
-    /// Prod-like pool: WAL + `busy_timeout` + `max_connections(10)`, matching `crates/db/src/lib.rs`
-    /// — 17B's own harness pattern, mirroring `lifecycle.rs`'s identical helper.
+    /// Contention pool: WAL and `max_connections(10)` match production. The explicit five-second
+    /// busy timeout bounds this test; production uses thirty seconds, while shared test-pool
+    /// helpers rely on SQLx's five-second default and cap pools at five connections.
     async fn build_contention_pool() -> (SqlitePool, tempfile::TempDir) {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path().join("contention.db");
@@ -1408,7 +1409,7 @@ mod lifecycle_event_tests {
 
         assert!(
             is_busy_snapshot(&error),
-            "calibration control must reproduce SQLITE_BUSY_SNAPSHOT, got {error}"
+            "hazard control must reproduce SQLITE_BUSY_SNAPSHOT, got {error}"
         );
     }
 }

@@ -330,3 +330,7 @@ GATE_FAIL_CHECK=none
   teardown, and no deployment-level node-cache stop API exists. The test explicitly shuts down the
   RemoteSync handle and event bus; adding a production shutdown surface solely for this isolated
   fixture would exceed the browser-auth contract.
+- Final focused review found the sibling `queries.rs` contention-pool comment still overstated
+  production timeout parity and its assertion still said “calibration control.” Both DB controls
+  now use the same accurate five-second-test/thirty-second-production wording and “deterministic
+  hazard control” terminology.
