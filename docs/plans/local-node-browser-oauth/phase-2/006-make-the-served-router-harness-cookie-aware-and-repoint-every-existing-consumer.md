@@ -5,9 +5,11 @@ title: "Make the served-router harness cookie-aware and repoint every existing c
 status: ready
 depends_on: ["001","002","005"]
 parallel: false
-conflicts_with: ["002","008"]
+conflicts_with: ["002","008","022"]
 files:
   - "Cargo.lock"
+  - "crates/services/src/services/node_cache.rs"
+  - "crates/local-deployment/src/lib.rs"
   - "crates/server/Cargo.toml"
   - "crates/server/tests/common/mod.rs"
   - "crates/server/tests/harness_smoke.rs"
@@ -173,6 +175,8 @@ async fn no_redirect_preserves_location() {
 #[serial_test::serial]
 async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
     let h = common::HiveHarness::configured().await;
+    h.seed_project("refresh-provenance", &[db::models::task::TaskStatus::Todo]).await;
+    let h = h.restart().await;
     let owner = uuid::Uuid::new_v4();
     h.mock_hive_oauth("code-a", "access-a", "refresh-a", owner).await;
     // Force refresh-only persisted credentials, then drive RemoteClient::access_token(). This is
@@ -191,15 +195,14 @@ async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
 }
 ```
 
-`write_refresh_only_credentials()` makes that one-request delta deterministic. It first takes and
-awaits the deployment share-sync handle. It then waits under a two-second diagnostic watchdog for
-the current server generation's two immediate `GET /v1/organizations` node-cache attempts relative
-to a baseline retained by the harness (the service performs its explicit startup sync and then the
-interval's immediate first tick). Only after those background callers are quiescent does it persist
-the requested refresh-only credentials. `configured()` records the initial baseline before
-construction; `restart()` records a fresh baseline immediately before replacement construction.
-The 503 caller remains retrying by production design, so the test proves its first observed attempt
-and then aborts/awaits it rather than waiting through backoff.
+`write_refresh_only_credentials()` makes that one-request delta deterministic through structured
+task ownership, not scheduler inference. It takes and awaits both the deployment share-sync handle
+and the retained node-cache-sync handle, then persists the requested refresh-only credentials. The
+test deliberately seeds an unlinked project and restarts first: replacement RemoteSync therefore
+uses the same `GET /v1/organizations` path as node-cache startup, proving that shutdown ownership —
+not a conflated request-count threshold — removes every background refresh caller. The 503 caller
+remains retrying by production design, so the test proves its first observed attempt and then
+aborts/awaits it rather than waiting through backoff.
 
 The connection-reset and delayed responders receive equivalent self-tests: await the responder's request-arrival signal under a 2-second diagnostic watchdog, assert exact method/path count from `MockServer::received_requests()`, then abort/await the caller. No test sleeps through RemoteClient retry/backoff.
 
@@ -227,13 +230,72 @@ tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 ```
 Add nothing else to this file; the `base64` runtime dependency belongs to task 002.
 
+**File:** `crates/services/src/services/node_cache.rs`
+
+Replace detached lifecycle management with the same owned-handle shape used by RemoteSync while
+preserving the existing `run()` and `stop()` APIs:
+
+```rust
+pub struct NodeCacheSyncHandle {
+    stop: Arc<RwLock<bool>>,
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    join_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl NodeCacheSyncHandle {
+    pub async fn shutdown(mut self) {
+        *self.stop.write().await = true;
+        if let Some(tx) = self.shutdown_tx.take() { let _ = tx.send(()); }
+        if let Some(join) = self.join_handle.take() { let _ = join.await; }
+    }
+}
+
+impl Drop for NodeCacheSyncHandle {
+    fn drop(&mut self) {
+        if let Some(join) = self.join_handle.take() { join.abort(); }
+    }
+}
+```
+
+Add `NodeCacheSyncService::spawn(self) -> NodeCacheSyncHandle`. Its task runs the existing immediate
+sync and interval loop under a one-shot cancellation receiver. Use `tokio::select! { biased; ... }`
+both while awaiting the immediate/periodic `do_sync()` future and while waiting for the next tick,
+so shutdown interrupts an in-flight request or the five-minute idle interval promptly. `run()`
+retains its current never-cancelled behavior by holding the sender while delegating to the same
+private loop; `stop()` retains its existing stop-flag behavior. Do not add a dependency or sleep.
+
+**File:** `crates/local-deployment/src/lib.rs`
+
+Replace `node_cache_sync_started: Arc<Mutex<bool>>` with
+`node_cache_sync_handle: Arc<Mutex<Option<NodeCacheSyncHandle>>>`. `start_node_cache_sync()` remains
+idempotent: return when the slot is `Some`, perform the existing client/credential checks, then set
+the slot to `Some(NodeCacheSyncService::new(pool, client).spawn())`. Add:
+
+```rust
+pub async fn node_cache_sync_is_running(&self) -> bool {
+    self.node_cache_sync_handle.lock().await.is_some()
+}
+
+pub async fn shutdown_node_cache_sync(&self) {
+    let handle = self.node_cache_sync_handle.lock().await.take();
+    if let Some(handle) = handle { handle.shutdown().await; }
+}
+```
+
+The handle slot is clone-shared through `Arc`, just like `share_sync_handle`. Taking the handle
+before awaiting prevents holding the slot lock across shutdown. A final deployment drop aborts a
+still-owned node-cache task through `NodeCacheSyncHandle::drop`; a planned restart/disconnect uses
+the awaited shutdown method.
+
 **File:** `crates/server/tests/common/mod.rs`
 
 `configured()` preserves the existing harness startup contract exactly: its refresh-only
 `credentials.json` fixture is written **before** `LocalDeployment::new()`. Do not move credential
 persistence after deployment/server construction to suppress startup traffic. Outage tests quiesce
-the current generation's startup callers, then prove the intended first attempt with an arrival
-signal and one-request count delta before aborting retries.
+the current generation's owned share-sync and node-cache tasks, then prove the intended first
+attempt with an arrival signal and one-request count delta before aborting retries. Remove the
+`node_cache_request_baseline` field and every baseline/count-wait branch; request counts cannot
+distinguish RemoteSync migration from node-cache traffic because both call `/v1/organizations`.
 
 **Anchor 1 — `pub struct Resp` (L24-30).**
 **Before:**
@@ -398,7 +460,9 @@ pub async fn hive_request_count(&self, method: &str, path: &str) -> usize;
 /// `last_completed_server_generation: Option<u64>`. Signal shutdown and await the old serve
 /// JoinHandle. ONLY after that await succeeds, record the old generation as completed; then drop
 /// its deployment/router state, rebuild, increment the generation, and bind the replacement
-/// listener. Immediately before `LocalDeployment::new()`, restore this harness's retained
+/// listener. After the old serve handle completes, await both old-generation share-sync and
+/// node-cache shutdown before dropping the old deployment. Immediately before
+/// `LocalDeployment::new()`, restore this harness's retained
 /// `VK_ASSET_DIR`, `VK_DATABASE_PATH`, `VK_SHARED_API_BASE`, and node-auth env state: another live
 /// harness may have overwritten process globals since construction. The OS may reuse the same
 /// ephemeral port, so socket-address inequality is never a
@@ -414,7 +478,8 @@ pub fn pool(&self) -> &sqlx::SqlitePool { &self.deployment.db().pool }
 /// Path of the credentials file inside the harness temp dir (for disconnect assertions).
 pub fn credentials_path(&self) -> std::path::PathBuf;
 /// Replace this harness's credential file with refresh-token-only credentials so the next
-/// `RemoteClient::access_token()` call must traverse the real `/v1/tokens/refresh` path.
+/// `RemoteClient::access_token()` call must traverse the real `/v1/tokens/refresh` path. First
+/// take/await share sync and call `deployment.shutdown_node_cache_sync().await`; only then save.
 pub async fn write_refresh_only_credentials(&self, refresh_token: &str);
 
 /// A jar holding a REAL live browser session, created straight through the db model (never
@@ -443,6 +508,11 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
 
 **Symbol grounding:** This task introduces the harness methods `get_with()`, `post_with()`, `delete_with()`, `get_with_headers()`, `get_no_redirect()`, `ws_probe()`, `ws_probe_with_headers()`, `sse_probe()`, `mock_hive_oauth()`, `profile_subject_for()`, `configured_with_node_auth()`, `hive_mock_registered()`, `mock_hive_failure()`, `restart()`, `server_generation()`, `last_completed_server_generation()`, `pool()`, `credentials_path()`, `write_refresh_only_credentials()` and `authorized_jar()` on `HiveHarness`, plus the `CookieJar` and `ProtocolProbe` types. `up_to_n_times()` is NOT introduced here: it is an existing wiremock 0.6 `MockBuilder` method, verified in the vendored dependency source alongside `MountedMockSet::handle_request`'s first-match-wins resolution. `hash_token()` is likewise not introduced here — it is defined by task 002 and merely called by `authorized_jar()`.
 
+This task also introduces `NodeCacheSyncHandle`, `NodeCacheSyncService::spawn()`,
+`LocalDeployment::node_cache_sync_is_running()`, and
+`LocalDeployment::shutdown_node_cache_sync()` as the production lifecycle seam used by the harness
+and task 012's explicit-disconnect implementation.
+
 **OAuth JWT construction (mandatory).** Replace the existing zero-argument `test_access_token()` helper with `test_access_token(label: &str)`. Serialize `{ exp: 4_102_444_800_i64, test_label: label }` and encode deterministically. The exact signature is test-only and unverified by `extract_expiration`; the stable full compact JWT string is the contract. `mock_hive_oauth`, `access_token_for_label`, `redeemed_access_token`, and `profile_subject_for` MUST all call the same derivation/memoization path. The harness self-test calls production `utils::jwt::extract_expiration` and proves the result is future-dated.
 
 **Wiremock outage grounding.** Wiremock 0.6.5 provides `Mock::with_priority(1)`, `MockBuilder::respond_with`, `MockBuilder::respond_with_err`, `Respond`, `RespondErr`, `ResponseTemplate::set_delay`, and `MockServer::received_requests()`. Lower numeric priority wins; every outage override is priority 1 so the default successful refresh/profile/init mock cannot shadow it. Custom responders hold `Mutex<Option<oneshot::Sender<()>>>` (or equivalent one-shot state), signal exactly once from `respond`/`respond_err`, and then return the failure/delay. Do not claim a nonexistent async responder API.
@@ -462,7 +532,8 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
   "Structurally add the authorized cookie header to all 14 cited `/api/events` request builders and repoint the other six consumer files; preserve every assertion.",
   "Retain and await the old serve JoinHandle, record generation completion only after await, reuse persisted paths, and permit OS port reuse.",
   "Retain constructor environment values and restore this harness's own values immediately before restart reconstruction, even when another live harness overwrote process globals.",
-  "Keep configured()'s refresh-only credentials fixture before LocalDeployment::new(); quiesce current-generation share/node-cache startup traffic before forcing refresh-only credentials, then prove the explicit first attempt by signal plus a one-request delta.",
+  "Own node-cache background work through a cancellation-plus-join handle retained by LocalDeployment; planned restart/disconnect awaits shutdown and final drop aborts as a safety net.",
+  "Keep configured()'s refresh-only credentials fixture before LocalDeployment::new(); quiesce current-generation share/node-cache tasks through their owned handles before forcing refresh-only credentials, then prove the explicit first attempt by signal plus a one-request delta.",
   "Do not change existing configured()/hive_absent()/get()/post()/delete()/seed_* semantics or Resp registration helpers."
 ]
 
@@ -487,7 +558,9 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
   "Consuming a response body before cloning all headers, or allowing get_no_redirect to follow Location.",
   "Cookie deletion based on case-sensitive substring matching rather than a complete, case-insensitive Max-Age attribute parse.",
   "An outage self-test that sends raw reqwest directly to `/v1/tokens/refresh` instead of forcing refresh-only credentials and calling the deployment RemoteClient's real access-token path.",
-  "Moving configured()'s credential seed after LocalDeployment::new(), or forcing refresh-only credentials before share sync is stopped and both current-generation node-cache startup requests are observed — either makes request provenance scheduler-dependent."
+  "Moving configured()'s credential seed after LocalDeployment::new(), or forcing refresh-only credentials before both owned sync handles are shut down and awaited — either makes request provenance scheduler-dependent.",
+  "Inferring node-cache quiescence from `/v1/organizations` request counts — RemoteSync migration uses the same path, so only owned task shutdown proves provenance.",
+  "Detaching the node-cache JoinHandle, awaiting its five-minute interval after cancellation, or holding the LocalDeployment handle-slot mutex while awaiting shutdown."
 ]
 
 
@@ -504,6 +577,8 @@ Declared decision points (from the spec; do not edit here):
 6. Review the 14 cited `events.rs` builders one by one; each carries the authorized Cookie header and every pre-existing assertion remains.
 7. The JWT self-test proves production expiration extraction, exact redeem equality, and profile matching; outage self-tests prove priority-1 method/path observation without retry sleeps.
 8. `Resp` header test proves repeated Set-Cookie and Location survive body consumption.
+9. `cargo test -p server --test harness_smoke priority_one_outage_overrides_signal_and_record_the_exact_request` passes at least 20 consecutive runs with an unlinked project plus restart before the refresh outage.
+10. `cargo clippy -p services -p local-deployment -p server --all-targets --all-features -- -D warnings` passes.
 
 
 ## Done when

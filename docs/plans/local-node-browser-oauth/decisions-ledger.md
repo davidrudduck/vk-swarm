@@ -334,3 +334,29 @@ GATE_FAIL_CHECK=none
   production timeout parity and its assertion still said “calibration control.” Both DB controls
   now use the same accurate five-second-test/thirty-second-production wording and “deterministic
   hazard control” terminology.
+
+## Task 006 structured node-cache lifecycle correction
+
+- The earlier phase-1 dismissal at lines 328-332 is superseded. At that point node-cache shutdown
+  was only test hygiene for an isolated startup fixture. Task 006's restart/outage harness and task
+  012's explicit Hive-disconnect outcome make lifecycle ownership production-relevant: node-cache
+  is authenticated Hive synchronization and must not survive a completed explicit disconnect or a
+  planned deployment restart.
+- Final task-006 review disproved the request-count quiescence heuristic in commit `3de79b63`.
+  Replacement `RemoteSync` migrates unlinked projects through `GET /v1/organizations`, the same
+  path used by node-cache startup, so a `baseline + 2` barrier can count one request from each
+  service and release before node-cache's immediate interval tick. The detached old-generation
+  node-cache task also has no join/stop owner and can outlive `HiveHarness::restart()`.
+- User approved structured lifecycle ownership rather than more scheduler instrumentation.
+  `NodeCacheSyncService::spawn()` therefore returns a cancellation-plus-join
+  `NodeCacheSyncHandle`; `LocalDeployment` retains it in a clone-shared optional slot, exposes an
+  awaited shutdown seam, and takes the slot before awaiting. Cancellation interrupts both
+  in-flight sync I/O and the five-minute interval wait; handle drop aborts only as a final safety
+  net. Existing `run()` and `stop()` behavior remains available to existing callers.
+- Task 006 now proves refresh-request provenance after seeding an unlinked project and restarting:
+  the harness awaits both current-generation RemoteSync and node-cache shutdown, writes
+  refresh-only credentials, observes exactly the explicit caller's first refresh attempt, then
+  aborts/awaits its retrying task. Request counts remain observations, never lifecycle barriers.
+- Task 012 now interprets SC8 “stop synchronization” as both RemoteSync and node-cache. Browser
+  logout leaves both running; explicit Hive disconnect awaits both; a fresh same-owner login can
+  start both again. Task 015 uses the same owned shutdown seam after its seeded restart.

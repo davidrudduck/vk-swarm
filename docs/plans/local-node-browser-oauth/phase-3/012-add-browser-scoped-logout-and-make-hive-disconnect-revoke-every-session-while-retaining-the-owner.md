@@ -49,6 +49,8 @@ async fn browser_logout_revokes_the_presented_raw_token_only_and_keeps_real_sync
     assert_eq!(h.get_with("/api/info", &mut b).await.status, 200);
     assert!(h.deployment().share_sync_handle().lock().await.is_some(),
         "browser logout must leave the real sync handle running");
+    assert!(h.deployment().node_cache_sync_is_running().await,
+        "browser logout must leave node-cache synchronization running");
 }
 
 #[tokio::test]
@@ -65,6 +67,8 @@ async fn hive_disconnect_revokes_all_sessions_stops_real_sync_and_keeps_owner() 
     let res = h.post_with("/api/auth/logout", json!({}), &mut a).await;
     assert!(matches!(res.status, 200 | 204));
     assert!(h.deployment().share_sync_handle().lock().await.is_none());
+    assert!(!h.deployment().node_cache_sync_is_running().await,
+        "explicit Hive disconnect must stop every Hive synchronization task");
     assert_eq!(h.get_with("/api/info", &mut a).await.status, 401);
     assert_eq!(h.get_with("/api/info", &mut b).await.status, 401);
     assert!(!h.credentials_path().exists());
@@ -90,8 +94,9 @@ async { ... })` so a lock regression fails instead of hanging CI:
    no credentials, and persisted handoff state terminal. Mutation proof: remove
    `invalidate_pending_handoffs` and the callback succeeds.
 3. `a_fresh_login_after_disconnect_still_succeeds`: disconnect B, perform a wholly new init and
-   callback for the same pinned owner, and assert 200, one live session, credentials present and
-   sync installed. This prevents the epoch/invalidation fix from permanently locking the node.
+   callback for the same pinned owner, and assert 200, one live session, credentials present,
+   RemoteSync installed, and node-cache sync running. This prevents disconnect from permanently
+   disabling synchronization as well as preventing the epoch/invalidation fix from locking the node.
 4. `disconnect_is_not_undone_by_an_in_flight_token_refresh`: arrange near-expiry credentials,
    install a delayed priority-1 refresh response and await its arrival, then call disconnect. The
    request must finish after the refresh guard becomes available and the final credentials path
@@ -193,8 +198,11 @@ async fn logout(State(deployment): State<DeploymentImpl>) -> Result<StatusCode, 
     tracing::info!(invalidated, revoked,
         "invalidated pending logins and revoked all browser sessions for hive disconnect");
 
-    // Stop remote sync if running
-    ... (existing handle take/shutdown and client.logout remain) ...
+    // Stop every Hive synchronization task if running. Task 006 makes node-cache work owned and
+    // awaitable rather than detached.
+    ... (existing RemoteSync handle take/shutdown) ...
+    deployment.shutdown_node_cache_sync().await;
+    ... (existing client.logout remains) ...
 
     // Serialize only credential clearing against token refresh. Do NOT take this guard before
     // client.logout(): that call may itself refresh and tokio Mutex is not re-entrant.
@@ -209,13 +217,13 @@ Imports to add: `crate::auth::cookies::{SESSION_COOKIE, session_clear_cookie}`, 
 
 **Symbol grounding:** This task introduces the `browser_logout()` handler and adds the `/auth/browser/logout` route to `protected_router()`. `read_cookie()` and `session_clear_cookie()` are defined by task 007, `hash_token()` by task 002, `revoke_session()` / `revoke_all_sessions()` by task 005, and function `invalidate_pending_handoffs()` by corrective task 022; this task only calls them.
 
-**Sync test precondition.** Task 006 already exposes `HiveHarness::deployment()`. Tests construct `ShareConfig::from_env()` from the configured Wiremock base and call the public `deployment.spawn_remote_sync(config)`, then wait boundedly until `share_sync_handle().lock().await` is `Some`. Browser logout must leave that real handle `Some`; Hive disconnect must take/shutdown it and leave `None`. Do not call the private `RemoteSync` constructor and do not install a fake handle.
+**Sync test precondition.** Task 006 already exposes `HiveHarness::deployment()`. Tests construct `ShareConfig::from_env()` from the configured Wiremock base and call the public `deployment.spawn_remote_sync(config)`, then wait boundedly until `share_sync_handle().lock().await` is `Some`. Successful login's existing node-cache block calls `start_node_cache_sync()`. Browser logout must leave both `share_sync_handle()` and `node_cache_sync_is_running()` live; Hive disconnect must await both shutdown paths and leave both false/empty. A fresh same-owner login after disconnect must install both again. Do not call private sync constructors or install fake handles.
 
 
 
 ## Allowed moves
 [
-  "Add one route line and one new handler to routes/oauth.rs; serialize logout with browser_auth_epoch, bump it, invalidate pending handoffs, revoke sessions, stop sync, and clear credentials under refresh_guard.",
+  "Add one route line and one new handler to routes/oauth.rs; serialize logout with browser_auth_epoch, bump it, invalidate pending handoffs, revoke sessions, await RemoteSync and node-cache shutdown, and clear credentials under refresh_guard.",
   "Append the four tests and the login helper to crates/server/tests/browser_auth_routes.rs.",
   "Do not rename /auth/logout, do not change its existing sync-stop or credential-clear steps, and do not touch handoff_init / handoff_complete / status."
 ]
@@ -229,7 +237,8 @@ Imports to add: `crate::auth::cookies::{SESSION_COOKIE, session_clear_cookie}`, 
   "Renaming /api/auth/logout in this task — the backward-compatibility choice is deliberate and its caller (frontend/src/lib/api/oauth.ts) is repointed off it by task 017; a rename here would change behaviour for an unmigrated caller in the same commit.",
   "browser_logout returning 200 for a request with no session — the route is protected and must 401 first.",
   "Using the emptied presenting CookieJar after logout as the sole revocation proof — capture the raw token before logout, prove 200, replay it from a fresh jar for 401, and query revoked_at by its hash.",
-  "Asserting sync scope without first installing a real handle through public spawn_remote_sync(ShareConfig). Browser logout keeps Some; disconnect reaches None.",
+  "Asserting sync scope without real owned handles. Browser logout keeps RemoteSync Some and node-cache running; disconnect awaits both and leaves both stopped; fresh login restarts both.",
+  "Treating 'stop synchronization' as RemoteSync-only — node-cache is also authenticated Hive synchronization and must not survive explicit disconnect.",
   "Releasing browser_auth_epoch before session revocation, sync shutdown and credential clearing complete.",
   "Taking refresh_guard before client.logout — it can re-enter refresh_guard and deadlock.",
   "Disconnect leaving a pre-existing pending handoff claimable."

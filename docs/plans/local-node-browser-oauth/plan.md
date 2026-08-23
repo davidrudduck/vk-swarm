@@ -35,8 +35,8 @@ Coverage ownership: SC1->008, SC2->013, SC3/SC4->010, SC5/SC6->011, SC7/SC8->012
 | 003 | 1 | Add the browser_auth model with an atomic owner pin-or-compare | dep: 001 | conflicts: 004 005 022 |
 | 004 | 1 | Add handoff create and the single-statement atomic claim | dep: 001 003 | conflicts: 003 005 022 |
 | 005 | 1 | Add session create, authenticate-by-hash, revoke-one and revoke-all | dep: 001 003 004 | conflicts: 003 004 022 |
-| 022 | 1 | Fence browser-login commit against explicit disconnect | dep: 004 005 | conflicts: 003 004 005 009 010 011 012 |
-| 006 | 2 | Make the served-router harness cookie-aware and repoint every existing consumer | dep: 001 002 005 | conflicts: 002 008 |
+| 022 | 1 | Fence browser-login commit against explicit disconnect | dep: 004 005 | conflicts: 003 004 005 006 009 010 011 012 |
+| 006 | 2 | Make the served-router harness cookie-aware and repoint every existing consumer | dep: 001 002 005 | conflicts: 002 008 022 |
 | 007 | 2 | Add cookie helpers, the browser-session resolver and THREE route-scoped authorization middlewares | dep: 002 005 | conflicts: 002 011 |
 | 008 | 2 | Split the node router into explicit public and protected subtrees with an API-terminating fallback | dep: 006 007 | conflicts: 006 009 010 011 012 013 014 |
 | 009 | 2 | Bind OAuth initiation to a browser: issue the binding cookie and persist the handoff | dep: 004 007 008 022 | conflicts: 008 010 011 012 022 |

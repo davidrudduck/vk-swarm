@@ -5,7 +5,7 @@ title: "Fence browser-login commit against explicit disconnect"
 status: passed
 depends_on: ["004","005"]
 parallel: false
-conflicts_with: ["003","004","005","009","010","011","012"]
+conflicts_with: ["003","004","005","006","009","010","011","012"]
 files:
   - "crates/db/src/models/browser_auth/handoff.rs"
   - "crates/db/src/models/browser_auth/mod.rs"
