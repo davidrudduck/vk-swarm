@@ -43,6 +43,12 @@ async fn jars_are_independent_and_capture_set_cookie() {
     res.assert_registered();
     assert_eq!(res.status, 200);
     assert!(res.set_cookie.is_empty(), "health sets no cookie: {:?}", res.set_cookie);
+
+    // Attribute names are case-insensitive and values are parsed as complete integers.
+    a.apply(&["vks_probe=gone; max-age=0".to_string()]);
+    assert_eq!(a.get("vks_probe"), None);
+    a.apply(&["vks_probe=kept; Max-Age=01".to_string()]);
+    assert_eq!(a.get("vks_probe"), Some("kept"));
 }
 
 #[tokio::test]
@@ -113,10 +119,14 @@ async fn profile_mocks_are_keyed_by_the_exact_generated_candidate_jwt() {
 #[tokio::test]
 #[serial_test::serial]
 async fn restart_reuses_the_same_assets_dir_and_database() {
-    let h = common::HiveHarness::configured().await;
-    let project_id = h.seed_project("restart-probe", &[]).await;
-    let old_generation = h.server_generation();
-    let h = h.restart().await;
+    let first = common::HiveHarness::configured().await;
+    let project_id = first.seed_project("restart-probe", &[]).await;
+    let old_generation = first.server_generation();
+    // Deliberately overwrite process-global env through a second live harness. restart() must
+    // restore FIRST's retained paths/configuration before reconstruction.
+    let second = common::HiveHarness::configured().await;
+    let second_project_id = second.seed_project("other-harness", &[]).await;
+    let h = first.restart().await;
     assert_eq!(h.last_completed_server_generation(), Some(old_generation),
         "restart must record the old generation only after its serve JoinHandle completes");
     assert_eq!(h.server_generation(), old_generation + 1,
@@ -126,6 +136,8 @@ async fn restart_reuses_the_same_assets_dir_and_database() {
     res.assert_registered();
     assert!(res.body.contains(&project_id.to_string()),
         "restart must reuse the same sqlite file; body: {}", res.body);
+    assert!(!res.body.contains(&second_project_id.to_string()),
+        "restart must not switch to another live harness's sqlite file; body: {}", res.body);
 }
 ```
 
@@ -164,7 +176,9 @@ async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
     let owner = uuid::Uuid::new_v4();
     h.mock_hive_oauth("code-a", "access-a", "refresh-a", owner).await;
     let reached = h.mock_hive_failure("POST", "/v1/tokens/refresh", 503).await;
-    // Drive the real request in a spawned task; the signal fires from Wiremock's responder.
+    // Force refresh-only persisted credentials, then drive RemoteClient::access_token(). This is
+    // the real production refresh path, not a raw reqwest request to the mock URL.
+    h.write_refresh_only_credentials("test-refresh-token").await;
     let request = spawn_real_refresh_request(&h);
     tokio::time::timeout(std::time::Duration::from_secs(2), reached)
         .await.expect("refresh never reached Wiremock").unwrap();
@@ -248,8 +262,9 @@ impl CookieJar {
     pub fn get(&self, name: &str) -> Option<&str>;
     /// The `Cookie:` request-header value, or None when the jar is empty.
     pub fn header_value(&self) -> Option<String>;
-    /// Apply raw `Set-Cookie` lines: store `name=value`, and REMOVE the cookie when the line
-    /// carries `Max-Age=0` (that is how logout is observed).
+    /// Apply raw `Set-Cookie` lines: store `name=value`, and REMOVE the cookie when a
+    /// semicolon-delimited, case-insensitive `Max-Age` attribute parses as integer zero. Complete
+    /// numeric parsing is required: `Max-Age=01` is one second and must not be treated as zero.
     pub fn apply(&mut self, set_cookie: &[String]);
     /// A jar that shares nothing with `self` -- an explicitly clean second browser.
     pub fn fresh() -> Self { Self::default() }
@@ -364,7 +379,10 @@ pub async fn hive_request_count(&self, method: &str, path: &str) -> usize;
 /// `last_completed_server_generation: Option<u64>`. Signal shutdown and await the old serve
 /// JoinHandle. ONLY after that await succeeds, record the old generation as completed; then drop
 /// its deployment/router state, rebuild, increment the generation, and bind the replacement
-/// listener. The OS may reuse the same ephemeral port, so socket-address inequality is never a
+/// listener. Immediately before `LocalDeployment::new()`, restore this harness's retained
+/// `VK_ASSET_DIR`, `VK_DATABASE_PATH`, `VK_SHARED_API_BASE`, and node-auth env state: another live
+/// harness may have overwritten process globals since construction. The OS may reuse the same
+/// ephemeral port, so socket-address inequality is never a
 /// lifecycle assertion. The wiremock server and temp directory are preserved. Merely starting a
 /// second deployment is NOT a restart and cannot produce a completed-generation observation.
 pub async fn restart(mut self) -> Self;
@@ -376,6 +394,9 @@ pub fn last_completed_server_generation(&self) -> Option<u64>;
 pub fn pool(&self) -> &sqlx::SqlitePool { &self.deployment.db().pool }
 /// Path of the credentials file inside the harness temp dir (for disconnect assertions).
 pub fn credentials_path(&self) -> std::path::PathBuf;
+/// Replace this harness's credential file with refresh-token-only credentials so the next
+/// `RemoteClient::access_token()` call must traverse the real `/v1/tokens/refresh` path.
+pub async fn write_refresh_only_credentials(&self, refresh_token: &str);
 
 /// A jar holding a REAL live browser session, created straight through the db model (never
 /// hand-written SQL/DDL). This exists so the seven pre-existing served-router tests can keep
@@ -401,7 +422,7 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
 
 **Sibling alignment (rubric 9).** Read `crates/server/tests/events.rs` before writing the probes — it is the only existing test that consumes a live stream and documents the axum SSE frame format and why a body read must break early; and read `crates/services/Cargo.toml:52` for the exact `tokio-tungstenite` version/feature string to copy.
 
-**Symbol grounding:** This task introduces the harness methods `get_with()`, `post_with()`, `delete_with()`, `get_with_headers()`, `get_no_redirect()`, `ws_probe()`, `ws_probe_with_headers()`, `sse_probe()`, `mock_hive_oauth()`, `profile_subject_for()`, `configured_with_node_auth()`, `hive_mock_registered()`, `mock_hive_failure()`, `restart()`, `server_generation()`, `last_completed_server_generation()`, `pool()`, `credentials_path()` and `authorized_jar()` on `HiveHarness`, plus the `CookieJar` and `ProtocolProbe` types. `up_to_n_times()` is NOT introduced here: it is an existing wiremock 0.6 `MockBuilder` method, verified in the vendored dependency source alongside `MountedMockSet::handle_request`'s first-match-wins resolution. `hash_token()` is likewise not introduced here — it is defined by task 002 and merely called by `authorized_jar()`.
+**Symbol grounding:** This task introduces the harness methods `get_with()`, `post_with()`, `delete_with()`, `get_with_headers()`, `get_no_redirect()`, `ws_probe()`, `ws_probe_with_headers()`, `sse_probe()`, `mock_hive_oauth()`, `profile_subject_for()`, `configured_with_node_auth()`, `hive_mock_registered()`, `mock_hive_failure()`, `restart()`, `server_generation()`, `last_completed_server_generation()`, `pool()`, `credentials_path()`, `write_refresh_only_credentials()` and `authorized_jar()` on `HiveHarness`, plus the `CookieJar` and `ProtocolProbe` types. `up_to_n_times()` is NOT introduced here: it is an existing wiremock 0.6 `MockBuilder` method, verified in the vendored dependency source alongside `MountedMockSet::handle_request`'s first-match-wins resolution. `hash_token()` is likewise not introduced here — it is defined by task 002 and merely called by `authorized_jar()`.
 
 **OAuth JWT construction (mandatory).** Replace the existing zero-argument `test_access_token()` helper with `test_access_token(label: &str)`. Serialize `{ exp: 4_102_444_800_i64, test_label: label }` and encode deterministically. The exact signature is test-only and unverified by `extract_expiration`; the stable full compact JWT string is the contract. `mock_hive_oauth`, `access_token_for_label`, `redeemed_access_token`, and `profile_subject_for` MUST all call the same derivation/memoization path. The harness self-test calls production `utils::jwt::extract_expiration` and proves the result is future-dated.
 
@@ -421,6 +442,7 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
   "Append eight focused harness tests covering jars, successive handoffs, real WS/SSE, exact generated JWT/profile matching, all headers/Location, signalled priority override, and restart generations.",
   "Structurally add the authorized cookie header to all 14 cited `/api/events` request builders and repoint the other six consumer files; preserve every assertion.",
   "Retain and await the old serve JoinHandle, record generation completion only after await, reuse persisted paths, and permit OS port reuse.",
+  "Retain constructor environment values and restore this harness's own values immediately before restart reconstruction, even when another live harness overwrote process globals.",
   "Do not change existing configured()/hive_absent()/get()/post()/delete()/seed_* semantics or Resp registration helpers."
 ]
 
@@ -442,7 +464,9 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
   "Sleeping through RemoteClient retries or a delayed response — await the Wiremock arrival signal under a short diagnostic watchdog, assert exact request observation, then abort/await the caller.",
   "A delayed-profile helper that returns an empty/generic response instead of the same valid subject response as mock_hive_oauth — task 012 must resume the real success path after disconnect.",
   "Using a grep/comment count as proof for events.rs — all 14 cited request-builder expressions must be individually edited while retaining their assertions.",
-  "Consuming a response body before cloning all headers, or allowing get_no_redirect to follow Location."
+  "Consuming a response body before cloning all headers, or allowing get_no_redirect to follow Location.",
+  "Cookie deletion based on case-sensitive substring matching rather than a complete, case-insensitive Max-Age attribute parse.",
+  "An outage self-test that sends raw reqwest directly to `/v1/tokens/refresh` instead of forcing refresh-only credentials and calling the deployment RemoteClient's real access-token path."
 ]
 
 

@@ -21,7 +21,7 @@ File: `crates/server/tests/restart_outage.rs` — create seven `#[serial_test::s
 
 Shared helpers:
 - `login(h, subject, app_code, access_label) -> CookieJar` uses task 006 `mock_hive_oauth`; labels remain readable while the harness returns a real future-expiring JWT.
-- `seed_local_identity(h)` calls `seed_project("continuity", &["local-task"])`, obtains the seeded task UUID from the migrated pool, and returns both IDs.
+- `seed_local_identity(h)` calls `seed_project("continuity", &[db::models::task::TaskStatus::Todo])`, obtains the seeded task UUID from the migrated pool, and returns both IDs.
 - `snapshot_state(h)` captures **exact credential bytes** (`std::fs::read`), pinned owner UUID, and live-session count.
 - `assert_local_seams(h, jar, project_id, task_id)` asserts identity/content through `GET /api/info`, `GET /api/projects`, `GET /api/tasks?project_id=<id>`, `GET /api/auth/state` (`authorized:true`), and `sse_probe("/api/events", Some(jar))` with status 200 and content type beginning `text/event-stream`. Every `/api/events` call uses `sse_probe`, never `ws_probe`.
 - `await_reached(signal)` wraps the Wiremock one-shot in a 2-second diagnostic watchdog. Signals fire in the priority-1 responder when the exact real method/path arrives.
