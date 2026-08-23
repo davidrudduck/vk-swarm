@@ -183,14 +183,23 @@ async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
     let request = spawn_real_refresh_request(&h);
     tokio::time::timeout(std::time::Duration::from_secs(2), reached)
         .await.expect("refresh never reached Wiremock").unwrap();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(2), request)
-        .await.expect("explicit refresh caller did not complete").unwrap();
-    assert!(result.is_err(), "priority-1 503 must reach the explicit RemoteClient caller");
     assert_eq!(h.hive_request_count("POST", "/v1/tokens/refresh").await,
         refreshes_before + 1,
         "exactly the explicit caller may issue the observed refresh request");
+    request.abort();
+    let _ = request.await;
 }
 ```
+
+`write_refresh_only_credentials()` makes that one-request delta deterministic. It first takes and
+awaits the deployment share-sync handle. It then waits under a two-second diagnostic watchdog for
+the current server generation's two immediate `GET /v1/organizations` node-cache attempts relative
+to a baseline retained by the harness (the service performs its explicit startup sync and then the
+interval's immediate first tick). Only after those background callers are quiescent does it persist
+the requested refresh-only credentials. `configured()` records the initial baseline before
+construction; `restart()` records a fresh baseline immediately before replacement construction.
+The 503 caller remains retrying by production design, so the test proves its first observed attempt
+and then aborts/awaits it rather than waiting through backoff.
 
 The connection-reset and delayed responders receive equivalent self-tests: await the responder's request-arrival signal under a 2-second diagnostic watchdog, assert exact method/path count from `MockServer::received_requests()`, then abort/await the caller. No test sleeps through RemoteClient retry/backoff.
 
@@ -222,8 +231,9 @@ Add nothing else to this file; the `base64` runtime dependency belongs to task 0
 
 `configured()` preserves the existing harness startup contract exactly: its refresh-only
 `credentials.json` fixture is written **before** `LocalDeployment::new()`. Do not move credential
-persistence after deployment/server construction to suppress startup traffic. Outage tests prove
-the intended caller by awaiting its result and asserting a one-request count delta.
+persistence after deployment/server construction to suppress startup traffic. Outage tests quiesce
+the current generation's startup callers, then prove the intended first attempt with an arrival
+signal and one-request count delta before aborting retries.
 
 **Anchor 1 — `pub struct Resp` (L24-30).**
 **Before:**
@@ -452,7 +462,7 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
   "Structurally add the authorized cookie header to all 14 cited `/api/events` request builders and repoint the other six consumer files; preserve every assertion.",
   "Retain and await the old serve JoinHandle, record generation completion only after await, reuse persisted paths, and permit OS port reuse.",
   "Retain constructor environment values and restore this harness's own values immediately before restart reconstruction, even when another live harness overwrote process globals.",
-  "Keep configured()'s refresh-only credentials fixture before LocalDeployment::new(); prove outage-call provenance by awaiting the explicit caller and asserting a one-request delta rather than changing constructor order.",
+  "Keep configured()'s refresh-only credentials fixture before LocalDeployment::new(); quiesce current-generation share/node-cache startup traffic before forcing refresh-only credentials, then prove the explicit first attempt by signal plus a one-request delta.",
   "Do not change existing configured()/hive_absent()/get()/post()/delete()/seed_* semantics or Resp registration helpers."
 ]
 
@@ -477,7 +487,7 @@ This repoint is BEHAVIOR-PRESERVING and green immediately: the authorization bou
   "Consuming a response body before cloning all headers, or allowing get_no_redirect to follow Location.",
   "Cookie deletion based on case-sensitive substring matching rather than a complete, case-insensitive Max-Age attribute parse.",
   "An outage self-test that sends raw reqwest directly to `/v1/tokens/refresh` instead of forcing refresh-only credentials and calling the deployment RemoteClient's real access-token path.",
-  "Moving configured()'s credential seed after LocalDeployment::new(), or aborting the explicit refresh caller before proving its result and exact one-request delta — either makes request provenance scheduler-dependent."
+  "Moving configured()'s credential seed after LocalDeployment::new(), or forcing refresh-only credentials before share sync is stopped and both current-generation node-cache startup requests are observed — either makes request provenance scheduler-dependent."
 ]
 
 
