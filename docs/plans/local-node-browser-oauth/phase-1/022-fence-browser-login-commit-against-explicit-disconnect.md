@@ -2,7 +2,7 @@
 id: "022"
 phase: 1
 title: "Fence browser-login commit against explicit disconnect"
-status: passed
+status: ready
 depends_on: ["004","005"]
 parallel: false
 conflicts_with: ["003","004","005","009","010","011","012"]
@@ -11,6 +11,7 @@ files:
   - "crates/db/src/models/browser_auth/mod.rs"
   - "crates/deployment/src/lib.rs"
   - "crates/local-deployment/src/lib.rs"
+  - "crates/services/src/services/oauth_credentials.rs"
 irreversible: false
 scope_test: "crates/db/src/models/browser_auth/handoff.rs"
 allowed_change: edit
@@ -103,6 +104,13 @@ by `for_test()` before constructing a `LocalContainerService`. Extract that guar
 test-only helper rather than duplicating its unsafe environment write. A focused constructor test
 must never make the real worktree base eligible for cleanup.
 
+In `crates/services/src/services/oauth_credentials.rs`, append a focused async test that constructs
+credentials through a new explicit file-backed constructor, saves a test refresh token, and proves
+the supplied path exists. This must be platform-independent: on macOS it must not consult
+`OAUTH_CREDENTIALS_BACKEND` or select the fixed production Keychain entry. The startup regression
+test in `crates/local-deployment/src/lib.rs` must use this explicit constructor before saving its
+test token. The test is not allowed to mutate `OAUTH_CREDENTIALS_BACKEND` process-wide.
+
 ## Change
 **File:** `crates/db/src/models/browser_auth/handoff.rs`
 
@@ -167,6 +175,23 @@ Add `browser_auth_epoch: Arc<Mutex<u64>>` beside `share_sync_handle`, construct 
 `Arc::new(Mutex::new(0))`, store it in the `Self` literal, and implement the trait accessor beside
 `share_sync_handle()`. Clones must share the same `Arc`.
 
+**File:** `crates/services/src/services/oauth_credentials.rs`
+
+Add `OAuthCredentials::new_file_backed()` with signature
+`pub fn new_file_backed(path: PathBuf) -> Self`, constructing
+`Backend::File(FileBackend { path })` directly. Keep `OAuthCredentials::new` and production backend
+detection unchanged. Use the explicit constructor wherever task-022 tests save credentials so no
+test can overwrite the production macOS Keychain slot.
+
+```rust
+pub fn new_file_backed(path: PathBuf) -> Self {
+    Self {
+        backend: Backend::File(FileBackend { path }),
+        inner: RwLock::new(None),
+    }
+}
+```
+
 **Symbol grounding:** This task introduces function `invalidate_pending_handoffs()`,
 `Deployment::browser_auth_epoch()` and `Deployment::install_remote_sync()`. It follows the existing
 `share_sync_handle()` field/accessor pattern in `crates/deployment/src/lib.rs` and
@@ -180,6 +205,7 @@ inside `spawn_remote_sync()`.
   "Add one shared u64 mutex field/accessor and one synchronous sync-install default method.",
   "Refactor from_parts to inject both the raw optional API base and parsed optional ShareConfig, preserve legacy remote-client construction from the raw value, and synchronously install configured startup sync before returning.",
   "Extract and call the existing test-binary orphan-cleanup guard before every direct from_parts test construction.",
+  "Add and test one explicit file-backed OAuthCredentials constructor, then use it for task-022 test credentials without changing production backend detection.",
   "Do not edit any OAuth route in this task; tasks 009-012 consume these primitives."
 ]
 
@@ -190,16 +216,18 @@ inside `spawn_remote_sync()`.
   "Deleting handoffs or sessions instead of preserving observable terminal/revoked state.",
   "Holding the browser-auth epoch inside spawn_remote_sync or changing that existing method; configured startup changes its call site to install_remote_sync instead.",
   "Using a process-global static epoch instead of one Arc owned by each deployment.",
-  "Any route edit or credential operation in this primitive task."
+  "Any route edit or production credential-backend behavior change; the explicit file-backed test constructor must bypass detection without changing OAuthCredentials::new."
 ]
 
 ## Manual verification (record in decisions-ledger)
-1. `WAI_ROOT="$HOME/.agents/wai"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns && cargo test -p local-deployment raw_api_base_remains_available_when_share_sync_config_is_unavailable" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0.
+1. `WAI_ROOT="$HOME/.agents/wai"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p services explicit_file_backend_is_path_scoped && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns && cargo test -p local-deployment raw_api_base_remains_available_when_share_sync_config_is_unavailable" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0.
 2. `cargo test -p db browser_auth` passes.
 3. `cargo clippy -p db -p deployment -p local-deployment --all-targets --all-features -- -D warnings` passes.
 4. Record that this task is the integrated phase-1 review remediation; tasks 009-012 must still wire the epoch/invalidation into real routes before SC8 is complete.
 5. Record the Stage-2 follow-up evidence: dropping an overwritten `RemoteSyncHandle` does abort its task, but detached configured startup could still install after disconnect observed an empty slot; the synchronous startup call closes that remaining race.
 6. Record the Stage-2 remediation evidence: direct constructor tests invoke the shared orphan-cleanup guard, and raw API-base client behavior remains independent from parsed sync configuration.
+7. Record the integrated-review remediation evidence: task-022 tests that save credentials use an
+   explicit file backend and cannot select the fixed production macOS Keychain entry.
 
 ## Done when
-`WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns && cargo test -p local-deployment raw_api_base_remains_available_when_share_sync_config_is_unavailable" bash "$HOME/.agents/wai/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0
+`WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p db browser_auth::handoff && cargo test -p services explicit_file_backend_is_path_scoped && cargo test -p local-deployment browser_auth_epoch_is_shared_by_deployment_clones && cargo test -p local-deployment configured_startup_sync_is_installed_before_constructor_returns && cargo test -p local-deployment raw_api_base_remains_available_when_share_sync_config_is_unavailable" bash "$HOME/.agents/wai/scripts/task-gate.sh" local-node-browser-oauth 022` exits 0
