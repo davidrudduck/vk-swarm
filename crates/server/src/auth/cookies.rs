@@ -84,7 +84,12 @@ mod tests {
     }
     #[test]
     fn clear_cookie_expires_immediately() {
-        assert!(session_clear_cookie().contains("Max-Age=0"));
+        // Byte-exact: a `; Secure` mutant (D9 violation) must fail this assertion, not pass it.
+        assert_eq!(
+            session_clear_cookie(),
+            "vks_browser_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+        );
+        assert!(!session_clear_cookie().contains("Secure"));
     }
     #[test]
     fn read_cookie_picks_the_named_value_from_a_multi_cookie_header() {

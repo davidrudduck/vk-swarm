@@ -124,4 +124,33 @@ mod tests {
             .unwrap();
         assert!(resolve_browser_session(&pool, &h).await.is_none());
     }
+
+    #[tokio::test]
+    async fn resolver_fails_closed_when_the_database_errors() {
+        // A DB failure must surface as None (fail closed), never a panic and never a
+        // fabricated session. Discriminates unwrap/expect mutants on the query result
+        // and any fallback that invents a BrowserSessionCtx on error.
+        let (pool, _t) = db::test_utils::create_test_pool().await;
+        let raw = "raw-session-token";
+        db::models::browser_auth::create_session(
+            &pool,
+            uuid::Uuid::new_v4(),
+            &crate::auth::seams::hash_token(raw),
+            uuid::Uuid::new_v4(),
+            1,
+        )
+        .await
+        .unwrap();
+
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            format!("{}={raw}", crate::auth::cookies::SESSION_COOKIE)
+                .parse()
+                .unwrap(),
+        );
+
+        pool.close().await;
+        assert!(resolve_browser_session(&pool, &h).await.is_none());
+    }
 }
