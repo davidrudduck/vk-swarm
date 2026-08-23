@@ -982,3 +982,112 @@ changes. task-gate.sh NOT run per dispatch instruction.
   git diff --check clean. GPT INFO-5 (Location/log full-header scanning) remains owned by task
   018 per its plan.
 - Status flipped ready → passed.
+
+## Task 012 decisions
+
+### Mechanical deviations (compile/format only)
+
+- The dispatch grounding path `services::services::share::config::ShareConfig` does not compile:
+  `mod config` is private (crates/services/src/services/share.rs:14) and the struct is
+  re-exported as `services::services::share::ShareConfig` (the compiler's own suggestion).
+  Applied the re-export path in both tests; no behavior change.
+- Test-file imports added at top (`deployment::Deployment`, `serde_json::json`, `std::time::Duration`,
+  `uuid::Uuid`) so the plan-verbatim snippets (`Uuid::new_v4()`, `json!({})`) compile as written.
+- `cargo fmt --all` reflowed the plan-verbatim snippets' long lines (login helper's
+  `mock_hive_oauth(...)` call, test 1's `raw_a`/set-cookie lines, the `browser_logout` handler's
+  `revoke_session(...)` call, and `tracing::info!(invalidated, revoked, ...)`) — whitespace only.
+- The existing `let auth_context = deployment.auth_context();` binding was kept (existing code
+  preserved verbatim); the plan's `deployment.auth_context().refresh_guard().await` line is used
+  as written immediately after `client.logout()`.
+
+### Dispatch fixture correction (plan amendment `636cba61`)
+
+Race 4's delayed refresh response was corrected from the valid labeled JWT to an INVALID
+`"not-a-jwt"` access token: the original valid-token body was mutation-false-green for (c)
+because the refresher saves a valid far-future token inside the guard before releasing it, so
+the mutant's queued acquisition lands on valid credentials and never re-enters the guard — the
+deadlock the dispatch predicted cannot occur with that body. The invalid-token body makes the
+refresher error without saving, forcing the mutant's `client.logout()` to re-enter the
+non-reentrant `refresh_guard` on the same task.
+
+### RED evidence (tests written first; `cargo test -p server --test browser_auth_routes`, 6 passed / 6 failed)
+
+- `browser_logout_revokes_the_presented_raw_token_only_and_keeps_real_sync` FAILED at :195
+  `matches!(out.status, 200 | 204)` — POST /api/auth/browser/logout answered 404 (route absent).
+- `anonymous_browser_logout_is_rejected_before_the_handler` FAILED at :313 `left: 404 right: 401`
+  (body `{"success":false,"message":"unknown api route"}` — route absent).
+- `hive_disconnect_revokes_all_sessions_stops_real_sync_and_keeps_owner` FAILED at :243
+  "explicit Hive disconnect must stop every Hive synchronization task" — pre-task logout left
+  node-cache running.
+- `disconnect_during_an_in_flight_callback_leaves_no_session_credentials_or_sync` FAILED at :380
+  `left: 200 right: 400` (body "Signed in with github") — pre-task logout never bumped the epoch,
+  so the mid-flight callback committed.
+- `a_pending_callback_from_before_disconnect_is_durably_invalidated` FAILED at :447
+  `left: 200 right: 400` (body "Signed in with github") — no durable pending-handoff
+  invalidation existed.
+- `a_fresh_login_after_disconnect_still_succeeds` FAILED at :478 `left: 2 right: 1` — pre-task
+  logout revoked no sessions, so B's stale session plus C's new one were both live.
+- The six passing were the four task-008 tests, the different-subject test (task-011's owner
+  pin already enforces it — regression guard), and race 4 (the pre-task logout takes no
+  refresh_guard at all, so it cannot deadlock — regression guard).
+
+### GREEN evidence
+
+`cargo test -p server --test browser_auth_routes` → 12 passed / 0 failed.
+
+### Mutation evidence
+
+Each mutant was applied to the uncommitted source, focused-run, then restored from a
+pre-mutation snapshot (task-011 precedent: `git checkout --` cannot serve as restore for
+uncommitted work); byte-identical restore verified by sha256 against the snapshot.
+
+- (a) Deleted the `if *epoch_guard != epoch_at_claim { return Err(Disconnected); }` re-check in
+  `crates/server/src/auth/login.rs` → race 1 FAILED at browser_auth_routes.rs:380
+  `left: 200 right: 400` (body "Signed in with github") — the stale callback committed exactly
+  as the plan predicted. Restored (sha256 dac4378a…9bca8 match).
+- (b) Removed the `invalidate_pending_handoffs(...)` call from `logout` → race 2 FAILED at
+  browser_auth_routes.rs:447 `left: 200 right: 400` (body "Signed in with github") — the
+  pre-disconnect pending handoff stayed claimable. Restored (sha256 885530…09cc2 match).
+- (c) MOVED `refresh_guard` ACQUISITION BEFORE `client.logout()` → with the ORIGINAL
+  dispatch-dictated valid-token body, race 4 PASSED (mutation-false-green) in both mutant
+  placements (before the call, and first statement of the handler; 1.6–3.0s). Mechanism: the
+  refresher acquires the guard BEFORE its HTTP request (remote_client.rs:262), and its delayed
+  response carried a VALID far-future JWT whose credentials `refresh_credentials` saves INSIDE
+  the guard scope (remote_client.rs:261-327) before releasing it — the mutant's queued
+  acquisition landed on valid credentials, so `client.logout()` → `require_token()` returned
+  the saved token without re-entering the refresh path (remote_client.rs:248-252): no deadlock,
+  identical observable state. STOP was invoked (no commit) and escalated. After plan amendment
+  `636cba61` corrected the body to an INVALID `"not-a-jwt"` access token, the re-run of
+  mutation (c) FAILED exactly as required: race 4 panicked at browser_auth_routes.rs:538
+  `disconnect during in-flight token refresh timed out (lock regression?): Elapsed(())`,
+  finished in 30.01s (the 30s wrapper fired — the refresher errors with
+  RemoteClientError::Token without saving, so the mutant's `client.logout()` re-enters the
+  non-reentrant guard on the same task and deadlocks). Correct implementation under the
+  corrected body passed in 3.13s. oauth.rs restored byte-identical (sha256 885530…09cc2 match
+  against the pre-mutation snapshot).
+
+### Verification (all with TMPDIR=$PWD/.cargo-tmp DISABLE_WORKTREE_ORPHAN_CLEANUP=1)
+
+- `cargo test -p server --test browser_auth_routes` → 12 passed.
+- `cargo test -p server --test browser_oauth` → 14 passed (regression).
+- `cargo test -p server --test harness_smoke` → 11 passed (regression).
+- `cargo clippy -p server --all-targets --all-features -- -D warnings` → clean.
+- `cargo fmt --all` then `cargo fmt --all -- --check` → clean (pre-existing nightly-only
+  rustfmt.toml warnings unchanged).
+- `git diff --check` → clean.
+- task-gate.sh NOT run per dispatch instruction.
+
+### SC7/SC8 walk-through (plan manual-verification item 3)
+
+- SC7 scope of revocation: only the presenting browser — raw token captured before logout,
+  replayed from a fresh jar → 401, `revoked_at` set by hash, browser B still 200
+  (`browser_logout_revokes_the_presented_raw_token_only_and_keeps_real_sync`).
+- SC7 credentials/sync untouched: `share_sync_handle().lock().await.is_some()` and
+  `node_cache_sync_is_running()` both asserted true after browser logout (same test).
+- SC8 revoke every session: `live_session_count == 0` plus A and B both 401 afterwards
+  (`hive_disconnect_revokes_all_sessions_stops_real_sync_and_keeps_owner`).
+- SC8 credentials removed: `!h.credentials_path().exists()` (same test, and race 4 asserts it
+  against an in-flight refresh).
+- SC8 sync stopped: sync slot `None` and `!node_cache_sync_is_running()` (same test).
+- SC8/D4 owner retained: `stored_owner_uuid == owner` after disconnect (same test, race 1, and
+  the different-subject test pins that a different subject cannot replace it).

@@ -5,7 +5,9 @@ use axum::{
     response::{IntoResponse, Json as ResponseJson},
     routing::{get, post},
 };
-use db::models::browser_auth::{claim_handoff, create_handoff};
+use db::models::browser_auth::{
+    claim_handoff, create_handoff, invalidate_pending_handoffs, revoke_all_sessions, revoke_session,
+};
 use deployment::Deployment;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -16,7 +18,10 @@ use utils::{
 };
 use uuid::Uuid;
 
-use crate::auth::cookies::{BINDING_COOKIE, binding_set_cookie, read_cookie, session_set_cookie};
+use crate::auth::cookies::{
+    BINDING_COOKIE, SESSION_COOKIE, binding_set_cookie, read_cookie, session_clear_cookie,
+    session_set_cookie,
+};
 use crate::auth::login::{BrowserLoginError, complete_browser_login};
 use crate::auth::seams::{Clock, OsTokenSource, SystemClock, TokenSource, hash_token};
 use crate::{DeploymentImpl, error::ApiError};
@@ -34,6 +39,19 @@ pub fn public_router() -> Router<DeploymentImpl> {
 /// separately named route on this same router.
 pub fn protected_router() -> Router<DeploymentImpl> {
     Router::new()
+        // Browser-scoped: revokes ONLY the presenting browser (SC7).
+        .route("/auth/browser/logout", post(browser_logout))
+        // Daemon/Hive DISCONNECT, kept under its existing name and semantics: revoke every
+        // session, stop sync, remove daemon credentials (SC8).
+        //
+        // Keeping the name is a REVERSIBLE backward-compatibility choice, not a hard constraint:
+        // `frontend/src/lib/api/oauth.ts` already exposes `oauthApi.logout()` bound to
+        // POST /api/auth/logout, and that endpoint already means "disconnect the daemon" (stop
+        // sync, clear credentials). Adding the browser-scoped action under a NEW path leaves
+        // every existing caller correct, whereas renaming would silently change what an
+        // unmigrated caller does. D5 requires only that the two operations be separately NAMED.
+        // If a later workstream prefers /auth/disconnect, it is a one-line route rename plus the
+        // caller update -- fully reversible.
         .route("/auth/logout", post(logout))
         .route("/auth/status", get(status))
 }
@@ -215,7 +233,53 @@ async fn handoff_complete(
     Ok(response)
 }
 
+/// Revoke ONLY the presenting browser's session and expire its cookie.
+///
+/// Does not stop sync, does not touch daemon Hive credentials, does not touch the pinned owner,
+/// and does not affect any other browser. Idempotent: revoking an already-revoked session is a
+/// success, because the operator's intent (this browser is signed out) is satisfied either way.
+async fn browser_logout(
+    State(deployment): State<DeploymentImpl>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    if let Some(raw) = read_cookie(&headers, SESSION_COOKIE) {
+        revoke_session(
+            &deployment.db().pool,
+            &hash_token(&raw),
+            SystemClock.now_millis(),
+        )
+        .await
+        .map_err(ApiError::Database)?;
+    }
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(axum::http::header::SET_COOKIE, session_clear_cookie())],
+    )
+        .into_response())
+}
+
+/// Explicit Hive DISCONNECT (D5/SC8). Order matters and is fixed by O8: SQLite session
+/// revocation and file/Keychain credential deletion cannot share a transaction, so revoke every
+/// browser session FIRST -- if credential removal then fails, the node is at worst
+/// over-locked-out rather than leaving live browsers on a node whose credentials are gone.
+///
+/// The pinned owner is deliberately RETAINED: a disconnected trusted-LAN node must not become
+/// claimable by a different Hive subject through ordinary OAuth (D4).
 async fn logout(State(deployment): State<DeploymentImpl>) -> Result<StatusCode, ApiError> {
+    let mut epoch_guard = deployment.browser_auth_epoch().lock().await;
+    *epoch_guard = epoch_guard.wrapping_add(1);
+    let invalidated = invalidate_pending_handoffs(&deployment.db().pool)
+        .await
+        .map_err(ApiError::Database)?;
+    let revoked = revoke_all_sessions(&deployment.db().pool, SystemClock.now_millis())
+        .await
+        .map_err(ApiError::Database)?;
+    tracing::info!(
+        invalidated,
+        revoked,
+        "invalidated pending logins and revoked all browser sessions for hive disconnect"
+    );
+
     // Stop remote sync if running. Take the handle out of its slot and drop the slot guard
     // BEFORE awaiting shutdown(): the fenced browser-login commit holds `browser_auth_epoch` +
     // `refresh_guard` across `install_remote_sync`, which locks this same slot — holding the
@@ -227,17 +291,24 @@ async fn logout(State(deployment): State<DeploymentImpl>) -> Result<StatusCode, 
         handle.shutdown().await;
     }
 
+    // Stop every Hive synchronization task if running. Task 006 makes node-cache work owned and
+    // awaitable rather than detached.
+    deployment.shutdown_node_cache_sync().await;
+
     let auth_context = deployment.auth_context();
 
     if let Ok(client) = deployment.remote_client() {
         let _ = client.logout().await;
     }
 
+    // Serialize only credential clearing against token refresh. Do NOT take this guard before
+    // client.logout(): that call may itself refresh and tokio Mutex is not re-entrant.
+    let refresh_guard = deployment.auth_context().refresh_guard().await;
     auth_context.clear_credentials().await.map_err(|e| {
         tracing::error!(?e, "failed to clear credentials");
         ApiError::Io(e)
     })?;
-
+    drop(refresh_guard);
     auth_context.clear_profile().await;
 
     Ok(StatusCode::NO_CONTENT)
