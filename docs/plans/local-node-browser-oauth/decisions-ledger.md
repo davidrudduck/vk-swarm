@@ -257,3 +257,21 @@ GATE_FAIL_CHECK=none
   `dev-docs/workstreams/sqlite-busy-snapshot-calibration-stability/README.md` and fixed in this
   branch by forcing the read-snapshot/intervening-commit/write-upgrade schedule in both calibration
   controls. The two controls passed together in ten consecutive runs; no test was ignored.
+- Task 022's post-review source commit `594d531c` passed its explicit deterministic gate:
+
+```text
+WAI gate: topic=local-node-browser-oauth task=022 commit=594d531c allowed_change=edit
+  - file-set: only declared files changed (2 paths)
+  - edit: structural check relaxed — relies on adversarial panel
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/db/src/models/browser_auth/handoff.rs' ...
+  - tests: scope 'crates/db/src/models/browser_auth/handoff.rs' green
+CONFORMS: task 022 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+- After deterministic calibration repair `cargo test -p db` passed: 302 unit tests, 8 bulk
+  operation tests, the emission conformance test, 6 pragma tests, 8 execution-timestamp tests, 8
+  variable-inheritance tests, 5 visibility tests, and 11 live doctests; no failures. Existing
+  selectively ignored deprecated remote-cache and environment-dependent doctests were unchanged.
