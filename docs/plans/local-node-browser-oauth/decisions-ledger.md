@@ -1188,3 +1188,34 @@ installed, node-cache running) are exactly as dispatched.
 
 Committed as `test(auth): discriminate disconnect fence ordering` on top of `57480fb4`.
 task-gate.sh NOT run per dispatch instruction.
+
+### Round-3 adjudication: "epoch released immediately before credential clear" mutant — evidence-backed dismissal
+
+The dissenting seat demanded race 6 deterministically fail under the mutant that drops
+`browser_auth_epoch` after `client.logout()` and immediately before `refresh_guard`/clear. Verdict:
+**dismissed as unprovable-at-route-level; the test is not blind to the harm.** Evidence:
+
+1. Race 6 IS a catcher, not a green guarantee: the mutant's only harmful interleaving is
+   login-commits-(saves-credentials)-then-disconnect-clears, which ends with
+   `credentials_path()` absent and fails race 6's final existence assertion
+   (browser_auth_routes.rs:776-779). The reviewer's own isolated-clone run passed because the
+   benign order manifested — login's save landed after the clear, producing exactly the final
+   state task 012's race 3 sanctions for any post-bump login.
+2. Forcing the harmful order deterministically is impossible without production test hooks: after
+   the release point the disconnect's remaining tail is `refresh_guard` acquisition plus a file
+   delete (microseconds, no Hive I/O to delay, no seam to pause). The login must win the
+   `refresh_guard` race within that window — a scheduler-controlled coin flip a route-level test
+   cannot control. Inserting a stall inside the tail would require moving `clear_credentials`
+   before `client.logout` (deadlock-forbidden) or new harness/production seams outside this task's
+   declared files.
+3. The security property the STOP trigger guards is deterministically protected elsewhere: any
+   login that CLAIMED BEFORE the disconnect is killed by the epoch VALUE re-check
+   (`login.rs:114`, proven by race 1) plus durable handoff invalidation (race 2) — guard-hold
+   duration adds nothing for pre-bump claims. The guard-to-function-end hold is additionally
+   lexical in the correct implementation (single function, guard bound to the final return;
+   oauth.rs:269-315), and the pre-release mutants that ARE deterministically provable — release
+   after revocation and release before sync shutdown — are both killed (mutation (b) transcript
+   above; final credential assertion).
+4. The one undetectable-when-benign case is behaviorally indistinguishable from the sanctioned
+   race-3 outcome (a fully re-authenticated post-bump login completing after disconnect), so no
+   assertion can separate benign-mutant from correct without controlling the scheduler.
