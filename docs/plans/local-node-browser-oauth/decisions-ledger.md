@@ -935,3 +935,50 @@ Verification: `cargo test -p server --test browser_oauth` → 14 passed (12 prio
 nightly-only rustfmt.toml options are pre-existing and cosmetic); `git diff --check` clean;
 `git diff` on login.rs + oauth.rs shows ONLY the intended Display and take-before-await
 changes. task-gate.sh NOT run per dispatch instruction.
+
+## Task 011 closure — gates, panel verdicts, remediation provenance
+
+- Preflight: freshness PASS (spec 680587143dbb2f1cbe74d1f7ef78a250705d5686); plan lint PASS;
+  stale "9 tests" count corrected in `dbab7d08`.
+- Implementation `5391555f` (remote_client.rs + auth/login.rs + auth/mod.rs + oauth.rs +
+  browser_oauth.rs + ledger; RED 8 passed/4 failed incl. the exact ordering defect — intruder
+  creds saved + 200; GREEN 12). Ledgered deviations: wiremock 0.6.5 equal-priority resolution is
+  first-registered-wins (dispatch's LIFO guidance corrected empirically — malformed-redeem
+  override mounts BEFORE mock_hive_oauth); BrowserLoginError::NotConfigured added (RemoteClientNotConfigured cannot flow #[from] RemoteClientError); mechanical Clock import.
+- Stage-1 gate `5391555f` vs `dbab7d08`: CONFORMS, GATE_FAIL_CHECK=none (6 paths; fmt override;
+  browser_oauth scope).
+- Stage-2 round 1: kimi CONFORMS (full ordering trace; edition-2024 cycle claim WRONG — see
+  below; 4 INFO: Disconnected unreachable until 012 wires the epoch bump, Http-body Display
+  note, get_login_status warmup removal equivalent, pre-existing logout ?e io::Error). gpt
+  DEVIATES — all four findings verified against source and adjudicated REAL:
+  1. [BLOCKING] upstream-body leak: RemoteClientError::Http Display `http {status}: {body}` +
+     transparent Remote + route `%e` → sentinel-bearing 5xx body reaches logs; task 018
+     explicitly assigns the fix to the owning task.
+  2. [BLOCKING] reachable deadlock: fenced commit holds epoch+refresh across
+     install_remote_sync's share-sync slot lock; logout held that slot across
+     shutdown().await (join); RemoteSync task can block on refresh_guard mid-authed-call.
+     (kimi's edition-2024 disproof was wrong: the if-let scrutinee-temporary tightening
+     affects the ELSE block, not the THEN block — guard was held across the await.)
+  3. [BLOCKING] epoch-fence mutation-false-green (no claim→commit mismatch test).
+  4. [SHOULD-FIX] save-failure-before-mint untested.
+- Remediation plan `32155a84` ("fence commit fence and sanitize remote display" amended with
+  harness conflict pair): files += common/mod.rs; conflicts_with 006↔011 linked bidirectionally
+  (frontmatters + plan.md); static Remote Display keeping #[from]; logout take-before-await;
+  additive mock_hive_delayed_json(method, path, delay_ms, body) helper; Test A
+  a_stale_callback_cannot_commit_after_the_epoch_moves (delayed-json redeem, arrival signal,
+  external epoch bump, 400 generic + zero sessions + creds unchanged); Test B
+  a_credential_save_failure_mints_no_session (dir at credentials.tmp forces EISDIR). Lint PASS.
+- Remediation source `13107ce0`: all four changes + sentinel Display unit test. Mutation
+  evidence (all restored byte-identical, sha256-verified): (a) epoch check deleted → Test A RED
+  `left: 200 right: 400` (stale login committed); (b) create_session moved before save → Test B
+  RED `left: 1 right: 0`; (c) Display reverted to transparent → sentinel test RED `left: "http
+  500: SENTINEL-ACCESS-8f31c0d2"`.
+- Stage-1 gate `13107ce0` vs `32155a84`: CONFORMS, GATE_FAIL_CHECK=none (5 paths).
+- Stage-2 focused re-review (dissenting seat, gpt): all four findings CLOSED; logout shutdown
+  still idempotent; Test A deterministic (claim guard dropped before redeem; priority-1
+  shadowing correct; no current-thread starvation); VERDICT: APPROVE.
+- Final verification at `13107ce0`: browser_oauth 14; auth::login lib 1; browser_auth_routes 4;
+  harness_smoke 11; clippy -p server --all-targets --all-features -D warnings clean; fmt clean;
+  git diff --check clean. GPT INFO-5 (Location/log full-header scanning) remains owned by task
+  018 per its plan.
+- Status flipped ready → passed.

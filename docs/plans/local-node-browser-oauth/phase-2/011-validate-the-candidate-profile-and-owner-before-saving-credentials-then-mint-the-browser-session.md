@@ -2,7 +2,7 @@
 id: "011"
 phase: 2
 title: "Validate the candidate profile and owner before saving credentials, then mint the browser session"
-status: ready
+status: passed
 depends_on: ["003","005","010"]
 parallel: false
 conflicts_with: ["002","006","007","008","009","010","012","022"]
