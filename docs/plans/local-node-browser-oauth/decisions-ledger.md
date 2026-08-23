@@ -544,3 +544,70 @@ server` full suite green (17 ok suites, 0 failures; only consumer change = the p
 harness_smoke inversion); `npm run generate-types:check` exit 0; `cargo fmt --all -- --check`
 clean; `cargo clippy -p server --all-targets --all-features -- -D warnings` clean;
 `git diff --check` clean.
+
+### Task 008 closure — gates, mutation evidence, panel verdicts
+
+Source commits: `a97eb6d6` (implementation, vs base `0e947ad9`) and `9bab70be` (test-only
+remediation, vs base `d4f6a65e`). Plan amendments: `e5090bf8` (axum fallback correction —
+JSON 404 registered as a real `/{*path}` route inside the nest because the outer SPA catch-all
+shadows fallback-only registration on axum 0.8.8) and `d4f6a65e` (oauth publicness test pinned to
+handler-specific outcomes). Plan lint PASS after both.
+
+Stage-1 gates (verbatim transcripts of the two final runs):
+
+```
+WAI gate: topic=local-node-browser-oauth task=008 commit=a97eb6d6 allowed_change=mixed
+  - file-set: only declared files changed (8 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/server/tests/browser_auth_routes.rs' ...
+  - tests: scope 'crates/server/tests/browser_auth_routes.rs' green
+CONFORMS: task 008 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+```
+WAI gate: topic=local-node-browser-oauth task=008 commit=9bab70be allowed_change=mixed
+  - file-set: only declared files changed (1 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+WAI gate: typecheck (override): cargo fmt --all -- --check ...
+  - typecheck: override command exit 0
+WAI gate: running tests for scope 'crates/server/tests/browser_auth_routes.rs' ...
+  - tests: scope 'crates/server/tests/browser_auth_routes.rs' green
+CONFORMS: task 008 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+Orchestrator mutation check (fallback correction): removing only the
+`.route("/{*path}", any(api_not_found))` line from routes/mod.rs made
+`unknown_api_paths_terminate_inside_the_api_boundary` FAIL (SPA HTML fallback answered);
+restored, 4/4 green. This independently reproduced the implementer's axum finding.
+
+Stage-2 panel (parallel, `0e947ad9..a97eb6d6` against amended plan):
+- subagent-kimi: VERDICT: CONFORMS. 32-entry merge-chain before/after comparison — identical
+  order, no duplicates, oauth swap in place; catch-all public (layer applied before merge);
+  auth-state clean (no hive call, no D8 leaks); all downstream consumers green; mutation
+  reasoning table per STOP trigger; handler-body semantic-edit coverage gap noted as
+  pre-existing, not introduced (diff verifiably touches no handler body).
+- subagent-gpt: VERDICT: DEVIATES with one BLOCKING finding: the plan's own oauth-publicness
+  test snippet used `assert_ne!(status, 401)` (and callback had no assert_registered at all) —
+  false-green to route drops because the JSON-404 catch-all satisfies both. This violated the
+  task's own STOP trigger (status-code-alone proves routing). Plan defect, not implementer drift.
+
+Remediation (`9bab70be`, test-only, subagent-glm): init pinned to `assert_registered()` +
+`assert_eq!(status, 200)` + body contains `handoff_id`; callback pinned to
+`assert_eq!(status, 400)` + body contains `Missing app_code` (no `assert_registered` — the
+handler answers HTML which `is_spa_fallback()` would misread). Mutation evidence recorded:
+dropping `/auth/handoff/init` → init RED (`left: 404, right: 200`); dropping
+`/auth/handoff/complete` → callback RED (`left: 404, right: 400`); both restored → 4/4 green,
+harness_smoke 11/11 unchanged, fmt/clippy/diff-check clean. One mechanical deviation: `&` borrow
+on the String path (E0308 with `&str` parameter), matching the original test's shape.
+
+Focused re-review by the dissenting seat (subagent-gpt, `d4f6a65e..9bab70be`, including its own
+independent mutation spot-check): VERDICT: APPROVE.
+
+Final state: 4/4 browser_auth_routes green, full server suite green, generate-types:check green.
+SC1 delivered: public/protected subtrees, deny-by-default layer, API-terminating JSON-404
+boundary, minimal `/api/auth/state`. Cross-node proxy subtree breakage behind the browser layer
+is INTENDED and is undone by tasks 013/014 (STOP trigger honored).

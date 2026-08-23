@@ -2,7 +2,7 @@
 id: "008"
 phase: 2
 title: "Split the node router into explicit public and protected subtrees with an API-terminating fallback"
-status: ready
+status: passed
 depends_on: ["006","007"]
 parallel: false
 conflicts_with: ["006","009","010","011","012","013","014"]
