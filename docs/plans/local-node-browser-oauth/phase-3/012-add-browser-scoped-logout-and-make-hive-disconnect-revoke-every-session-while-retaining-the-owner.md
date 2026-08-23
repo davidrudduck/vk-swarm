@@ -51,6 +51,10 @@ async fn browser_logout_revokes_the_presented_raw_token_only_and_keeps_real_sync
         "browser logout must leave the real sync handle running");
     assert!(h.deployment().node_cache_sync_is_running().await,
         "browser logout must leave node-cache synchronization running");
+    assert!(h.credentials_path().exists(),
+        "browser logout must leave the daemon's Hive credentials untouched (SC7)");
+    assert_eq!(stored_owner_uuid(h.pool()).await, owner,
+        "browser logout must leave the pinned owner (SC7)");
 }
 
 #[tokio::test]
@@ -79,12 +83,14 @@ async fn hive_disconnect_revokes_all_sessions_stops_real_sync_and_keeps_owner() 
 
 The other two tests retain the different-subject-after-disconnect rejection and anonymous browser-logout 401. `wait_until_sync_slot_is_some` is a short bounded yield/timeout around `share_sync_handle().lock().await.is_some()` because `spawn_remote_sync` installs the real handle asynchronously. It MUST call public `Deployment::spawn_remote_sync(ShareConfig)`; no private `RemoteSync::spawn`, fake handle, or direct slot mutation.
 
-Append four integrated race tests, each wrapped in `tokio::time::timeout(Duration::from_secs(30),
+Append six integrated race tests, each wrapped in `tokio::time::timeout(Duration::from_secs(30),
 async { ... })` so a lock regression fails instead of hanging CI:
 
 1. `disconnect_during_an_in_flight_callback_leaves_no_session_credentials_or_sync`: authorize
-   browser B, initiate browser A with label `delayed-a`, call `delay_hive_profile` for that label,
-   spawn A's callback, and await the arrival signal under a 2-second diagnostic watchdog. While
+   browser B, initiate browser A with label `delayed-a`, call `delay_hive_profile` for that label
+   (delay >= 1.5s — after the arrival signal the disconnect's epoch acquisition must robustly
+   precede the callback's profile response), spawn A's callback, and await the arrival signal
+   under a 2-second diagnostic watchdog. While
    the valid profile response is delayed, B calls `/api/auth/logout`. Await both operations. A's
    callback must return the generic 400; no session row for A exists, all previously live sessions
    are revoked, credentials are absent, sync slot is `None`, and the pinned owner remains. Mutation
@@ -107,7 +113,28 @@ async { ... })` so a lock regression fails instead of hanging CI:
    identical outcome, mutation false-green. With the invalid body the refresher errors without
    saving; the mutant's in-handler refresh re-enters the already-held guard and deadlocks into
    the 30-second timeout, while the correct implementation stays green because `client.logout()`
-   completes (best-effort) before the handler acquires the guard.
+   completes (best-effort) before the handler acquires the guard. The test MUST also assert the
+   spawned refresher's result is an error (the token-error variant, e.g.
+   `RemoteClientError::Token`), so reverting the body to a valid JWT fails the test instead of
+   silently restoring the false-green.
+5. `a_credential_clear_failure_still_leaves_every_session_revoked`: log in, then make the
+   credentials undeletable (remove the file and `create_dir` at `credentials_path()`), and call
+   disconnect. The response must be an error (non-2xx), and the O8 ordering must still hold:
+   every session already revoked (`live_session_count == 0`), the owner retained, and both sync
+   slots stopped. Mutation proof: moving `revoke_all_sessions` after the credential clear makes
+   the clear's failure return early and leaves live sessions — the count assertion fails.
+6. `disconnect_holds_the_epoch_fence_until_fully_complete`: log in, write near-expiry
+   credentials, and mount a delayed invalid-token refresh response (delay ~5s) so disconnect
+   stalls INSIDE `client.logout()` — after revocation, while still holding `browser_auth_epoch`.
+   Await the refresh arrival signal, then during the stall perform a wholly fresh init+claim for
+   the same owner and spawn its completion GET; assert the completion does NOT finish within
+   ~1.5s and `browser_auth_epoch().try_lock()` fails (fence held). After the delay elapses, both
+   complete: disconnect 2xx and the fresh login 200 with credentials present (its commit ran
+   after the clear), exactly one live session, RemoteSync installed, node-cache running.
+   Mutation proofs: (a) releasing the epoch after revocation lets the login complete during the
+   stall — the not-complete assertion fails; (b) releasing it before the credential clear lets
+   the disconnect wipe the login's committed credentials — the credentials-present assertion
+   fails.
 
 The first test is the incident-symptom assertion for the integrated finding: after disconnect has
 returned, an earlier OAuth callback cannot recreate any browser authorization or daemon state.
@@ -258,7 +285,7 @@ Declared decision points (from the spec; do not edit here):
 
 ## Manual verification (record in decisions-ledger)
 1. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p server --test browser_auth_routes" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 012` exits 0.
-2. `cargo test -p server --test browser_auth_routes` — 12 tests green, including raw-token replay, real sync-handle scope and the four barrier-controlled disconnect races.
+2. `cargo test -p server --test browser_auth_routes` — 14 tests green, including raw-token replay, real sync-handle scope, the six barrier-controlled disconnect races/fence tests, the credential-clear-failure ordering proof, and the held-epoch stall proof.
 3. SC7/SC8 walk-through in the ledger: for each clause (scope of revocation, credentials untouched vs removed, sync stopped, owner retained) name the asserting line.
 
 
