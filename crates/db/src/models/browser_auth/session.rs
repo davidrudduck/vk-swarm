@@ -162,6 +162,20 @@ mod tests {
             .unwrap();
         revoke_session(&pool, "hashB", 2).await.unwrap();
         assert_eq!(revoke_all_sessions(&pool, 5).await.unwrap(), 1);
+        let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+            "SELECT token_hash, revoked_at FROM browser_sessions ORDER BY token_hash",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("hashA".to_string(), Some(5)),
+                ("hashB".to_string(), Some(2))
+            ],
+            "revoke-all must preserve terminal rows and existing revoke timestamps"
+        );
         assert!(
             authenticate_session(&pool, "hashA")
                 .await
