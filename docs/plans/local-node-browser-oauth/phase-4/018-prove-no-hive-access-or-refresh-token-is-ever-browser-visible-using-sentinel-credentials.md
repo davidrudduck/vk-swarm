@@ -5,14 +5,15 @@ title: "Prove no Hive access or refresh token is ever browser-visible, using sen
 status: ready
 depends_on: ["011","012","016"]
 parallel: false
-conflicts_with: []
+conflicts_with: ["011"]
 files:
   - "crates/server/tests/token_disclosure.rs"
   - "frontend/src/components/auth/__tests__/tokenDisclosure.test.tsx"
-siblings: ["crates/server/tests/events.rs","crates/server/tests/harness_smoke.rs","crates/server/tests/mcp_context_test.rs","crates/server/tests/browser_auth_routes.rs","crates/server/tests/browser_oauth.rs","crates/server/tests/restart_outage.rs","crates/server/tests/tasks_delete_routes.rs","frontend/src/components/auth/__tests__/AuthBoundary.test.tsx"]
+  - "crates/services/src/services/remote_client.rs"
+siblings: ["crates/server/tests/events.rs","crates/server/tests/harness_smoke.rs","crates/server/tests/mcp_context_test.rs","crates/server/tests/browser_auth_routes.rs","crates/server/tests/browser_oauth.rs","crates/server/tests/restart_outage.rs","crates/server/tests/tasks_delete_routes.rs","frontend/src/components/auth/__tests__/AuthBoundary.test.tsx","crates/server/src/auth/login.rs"]
 irreversible: false
 scope_test: "crates/server/tests/token_disclosure.rs"
-allowed_change: create
+allowed_change: mixed
 covers_criteria: ["SC10"]
 covers_tests: ["TS6"]
 ---
@@ -47,7 +48,7 @@ Never use `JSON.stringify(localStorage/sessionStorage)`. Scan exact complete JWT
 
 
 ## Change
-Create only the two test files listed by this task; no production change is expected.
+Create the two test files. Production change is allowed only in `crates/services/src/services/remote_client.rs` as locked below — task 011 sanitized `BrowserLoginError::Remote` Display but `RemoteClient::send` retry `notify` still interpolates `RemoteClientError` Display (`http {status}: {body}`), which is the SC10 leak the 5xx fixture catches. Do not weaken `scan_logs`. Do not edit `crates/server/tests/common/mod.rs`.
 
 Backend helpers: `assert_clean`, `scan_resp`, `scan_logs`, and local login helpers. They consume task 006's exact generated JWT (`access_token_for_label`), all-header `Resp`, no-redirect Location, and real session harness. Use two sessions so browser logout and protected Hive disconnect are both executed and scanned. A concrete 5xx upstream body carrying sentinels is allowed and desired; transport/timeout/refresh behavior belongs to task 015 and must not be duplicated here.
 
@@ -184,7 +185,34 @@ Four named tests, nothing else:
        serde_json::json!({"access_token": access_jwt, "refresh_token": REFRESH_SENTINEL, "error": "upstream"}),
    ).await;
    ```
-   Fresh jar → POST `/api/auth/handoff/init` → `get_no_redirect` `/api/auth/handoff/complete?handoff_id={handoff_id}&app_code=code-5xx`. `scan_resp(..., logs_contain)` both responses. Do not assert a specific success status (this is a failure fixture). Do not use `post_with` as a Hive-outage oracle.
+   Fresh jar → POST `/api/auth/handoff/init` → `get_no_redirect` `/api/auth/handoff/complete?handoff_id={handoff_id}&app_code=code-5xx`. `scan_resp(..., logs_contain)` both responses. Do not assert a specific success status (this is a failure fixture). Do not use `post_with` as a Hive-outage oracle. Scanning after complete is load-bearing: `scan_logs` must see the redeem-500 retry path. Do not scan init before complete to hide retry logs.
+
+### Locked production (`crates/services/src/services/remote_client.rs`)
+
+Task 011 already makes `BrowserLoginError::Remote` Display the static string `remote service error` (`login.rs:33`). The remaining leak is `RemoteClient::send` retry notify at `remote_client.rs:444-450`, which interpolates `e` via Display. `RemoteClientError::Http` is `http {status}: {body}` (`remote_client.rs:64`). Replace **only** the notify closure. Do not change the `Http` Display, `should_retry`, or any other `send` branch.
+
+```rust
+        .notify(|e, dur| match e {
+            RemoteClientError::Http { status, .. } => {
+                warn!(
+                    status,
+                    path = %path,
+                    "Remote call failed, retrying after {:.2}s",
+                    dur.as_secs_f64()
+                );
+            }
+            other => {
+                warn!(
+                    path = %path,
+                    "Remote call failed, retrying after {:.2}s: {}",
+                    dur.as_secs_f64(),
+                    other
+                );
+            }
+        })
+```
+
+Do not edit `login.rs`. Do not add new files.
 
 ### Locked frontend (`frontend/src/components/auth/__tests__/tokenDisclosure.test.tsx`)
 
@@ -244,8 +272,8 @@ Siblings listed in frontmatter are read-only. Ledger any undictated choice under
 
 ## Allowed moves
 [
-  "Create exactly the two test files.",
-  "No production code changes; no edits to crates/server/tests/common/mod.rs."
+  "Create the two test files and apply the locked notify-only edit in remote_client.rs.",
+  "No other production edits; no edits to crates/server/tests/common/mod.rs or login.rs."
 ]
 
 
@@ -258,6 +286,7 @@ Siblings listed in frontmatter are read-only. Ledger any undictated choice under
   "Using JSON.stringify(Storage), omitting authorized bootstrap, or mocking responses without sentinel-bearing unexpected fields.",
   "A frontend or backend scanner without a deliberate exact-JWT DOM/storage/log mutation self-check.",
   "A sentinel appearing anywhere — fix its owning task in-session; never weaken the assertion.",
+  "Skipping scan_logs on the 5xx fixture, scanning init before complete to hide redeem retry logs, or changing RemoteClientError::Http Display instead of the locked notify closure.",
   "Mounting App, AppContent, or UserSystemProvider, or JSON.stringify-ing the /api/info payload into the DOM.",
   "Using mock_hive_failure, spawn/abort/hive_request_count, or write_refresh_only_credentials — those are task 015."
 ]

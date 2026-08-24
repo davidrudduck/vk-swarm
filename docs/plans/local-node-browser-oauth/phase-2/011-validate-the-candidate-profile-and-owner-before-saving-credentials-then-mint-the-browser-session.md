@@ -5,7 +5,7 @@ title: "Validate the candidate profile and owner before saving credentials, then
 status: passed
 depends_on: ["003","005","010"]
 parallel: false
-conflicts_with: ["002","006","007","008","009","010","012","022"]
+conflicts_with: ["002","006","007","008","009","010","012","018","022"]
 files:
   - "crates/services/src/services/remote_client.rs"
   - "crates/server/src/auth/login.rs"

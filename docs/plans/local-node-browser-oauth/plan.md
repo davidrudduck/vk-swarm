@@ -41,14 +41,14 @@ Coverage ownership: SC1->008, SC2->013, SC3/SC4->010, SC5/SC6->011, SC7/SC8->012
 | 008 | 2 | Split the node router into explicit public and protected subtrees with an API-terminating fallback | dep: 006 007 | conflicts: 006 009 010 011 012 013 014 |
 | 009 | 2 | Bind OAuth initiation to a browser: issue the binding cookie and persist the handoff | dep: 004 007 008 022 | conflicts: 008 010 011 012 022 |
 | 010 | 2 | Claim the handoff atomically against the presenting browser before any Hive redemption | dep: 009 | conflicts: 008 009 011 012 022 |
-| 011 | 2 | Validate the candidate profile and owner before saving credentials, then mint the browser session | dep: 003 005 010 | conflicts: 002 006 007 008 009 010 012 022 |
+| 011 | 2 | Validate the candidate profile and owner before saving credentials, then mint the browser session | dep: 003 005 010 | conflicts: 002 006 007 008 009 010 012 018 022 |
 | 012 | 3 | Add browser-scoped logout and make Hive disconnect revoke every session while retaining the owner | dep: 011 | conflicts: 008 009 010 011 022 |
 | 013 | 3 | Authenticate every node-local WebSocket and SSE route before upgrade, preserving only scoped direct-log and direct-diff connection tokens | dep: 008 011 | conflicts: 008 014 |
 | 014 | 3 | Move node-to-node HTTP proxy routes under the node_proxy alternative while keeping the by-task-id diff browser-only | dep: 013 | conflicts: 008 013 |
 | 015 | 3 | Prove restart persistence and Hive-outage continuity for established sessions | dep: 011 012 013 | conflicts: none |
 | 016 | 4 | Gate the frontend on public auth state and tear down protected traffic on 401 | dep: 008 012 | conflicts: none |
 | 017 | 4 | Make browser sign-out and Hive disconnect visibly distinct actions in the UI | dep: 016 | conflicts: none |
-| 018 | 4 | Prove no Hive access or refresh token is ever browser-visible, using sentinel credentials | dep: 011 012 016 | conflicts: none |
+| 018 | 4 | Prove no Hive access or refresh token is ever browser-visible, using sentinel credentials | dep: 011 012 016 | conflicts: 011 |
 | 019 | 4 | Add the deployed verify script with an executable test that proves its positive and negative cases | dep: 013 014 | conflicts: none |
 | 020 | 4 | Add the trusted-LAN browser-authorization operator document | dep: 012 019 | conflicts: none |
 | 021 | 4 | Run the real trusted-LAN acceptance and the full repository gates, and record the WAI close evidence | dep: 015 017 018 019 020 | conflicts: none |
