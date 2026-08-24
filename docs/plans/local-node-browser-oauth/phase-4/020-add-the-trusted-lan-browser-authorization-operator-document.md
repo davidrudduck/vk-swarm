@@ -2,7 +2,7 @@
 id: "020"
 phase: 4
 title: "Add the trusted-LAN browser-authorization operator document"
-status: ready
+status: passed
 depends_on: ["012","019"]
 parallel: false
 conflicts_with: []

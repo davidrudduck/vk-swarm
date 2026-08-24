@@ -1829,6 +1829,40 @@ crates/server/src/routes/oauth.rs:56:        .route("/auth/status", get(status))
 
 - The cookie source confirms `vks_browser_session` and `vks_browser_binding` use `HttpOnly; SameSite=Lax; Path=/` without `Secure`.
 
+## Task 020 closure
+
+**Stage-1:** `cb85f6fd` vs `59ca551a` CONFORMS (3 paths, mixed, WAI_TYPECHECK_CMD=python3 json.load, no scope_test).
+
+**Stage-2:** gpt DEVIATES (missing ledger items 1/4/5/6). kimi CONFORMS. Page is byte-for-byte the locked snippet (3,556 bytes).
+
+**Adjudication:** missing ledger record REAL (015/018/019 class). This section. Kimi INFO that attempt-id diff also accepts a local browser session is contract-locked wording; DISMISSED (cross-node callers never present a browser session; bullet 4 still pins audience separation).
+
+**Manual verification:**
+1. `python3 -c "import json; json.load(open('docs/docs.json'))"` exits 0. `docs.json:91` is the single added `"configuration-customisation/browser-authorization"` line between network-access and event-journal-retention.
+2. Endpoint grep (already in Task 020 decisions) agrees with the action table: handoff/init POST, handoff/complete GET, browser/logout POST, logout POST. `/auth/state` and `/auth/status` are named only as verifier surfaces, not as table actions.
+3. Cookies match `crates/server/src/auth/cookies.rs:11-54` — names `vks_browser_session` / `vks_browser_binding`, attrs `HttpOnly; SameSite=Lax; Path=/`, no `Secure`.
+4. Verifier transcript provenance: orchestrator ran `bash scripts/verify-local-node-browser-oauth.sh http://127.0.0.1:$PORT` against the task-019 compliant fixture (port-0 node fake) before locking the page at `59ca551a`. Captured output:
+
+```
+PASS health is public
+PASS auth state is public
+PASS auth state has the exact minimal shape
+PASS info is protected
+PASS projects are protected
+PASS status is protected
+PASS events SSE is protected
+PASS live logs are protected
+PASS unknown api path is 404
+PASS unknown api path is not SPA html
+All browser-authorization boundary checks passed
+```
+
+Luna copied that locked block verbatim. `git diff --check 59ca551a..cb85f6fd` clean.
+5. Ownership section (`browser-authorization.mdx:30-34`) states there is no operator-facing owner reset; recovery is recreating the node's database.
+6. Cross-node classification matches 013/014: `node_proxy` HTTP-only (`require_session_or_proxy_token`); connection token for raw/live logs + attempt-id diff WS; by-task-id diff browser-only; neither audience on the other class; `node_proxy` not on either diff.
+
+NO PUSH.
+
 ## Task 019 decisions
 
 No undictated implementation choices were made; the named siblings were read.
