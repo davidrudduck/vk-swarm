@@ -32,6 +32,7 @@ Required tests:
 6. Unmount clears interval/deadline and closes no unrelated window; advancing timers makes no further calls.
 6b. Render under `React.StrictMode`. After the initial `getState` resolves, the login-shell is visible (the live effect must still accept the response). The app entry (`frontend/src/main.tsx:19-26`) wraps `<App />` in StrictMode, which replays setup-cleanup-setup on the same instance.
 6c. If `startLogin` is still awaiting when the component unmounts, the continuation must not call `window.open` and must not install interval/deadline timers.
+6d. Two clicks of `login-start` (first startLogin already resolved so an interval is live) must leave exactly one poll interval. After the second click resolves, advance one `POLL_INTERVAL_MS` and assert `getState` increased by exactly 1 (two live intervals would double-fire).
 7. OAuth unavailable hides `login-start`.
 8. `notifyUnauthorized()` tears down already-mounted children back to login shell.
 9. Existing `makeRequest` 401 notification fires exactly once.
@@ -135,7 +136,7 @@ Declared decision points (from the spec; do not edit here):
 
 
 ## Manual verification (record in decisions-ledger)
-1. `cd frontend && npx vitest run src/components/auth/__tests__/AuthBoundary.test.tsx` — 11 executable tests green (original 9 plus 6b StrictMode and 6c unmount-during-startLogin).
+1. `cd frontend && npx vitest run src/components/auth/__tests__/AuthBoundary.test.tsx` — 12 executable tests green (original 9 plus 6b StrictMode, 6c unmount-during-startLogin, 6d single remaining poll after second click).
 2. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="cd frontend && npx vitest run {scope}" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 016` exits 0. (The runner must be pinned explicitly: a `.test.tsx` scope would otherwise be dispatched to `node --test`, which cannot execute TSX.)
 3. `cd frontend && npm run lint && npx tsc --noEmit && npx vitest run` — all green.
 4. Manual: run the node with an unauthorized browser and confirm the network panel shows exactly one `/api/auth/state` request and no `/api/info`, no SSE, no WS.
