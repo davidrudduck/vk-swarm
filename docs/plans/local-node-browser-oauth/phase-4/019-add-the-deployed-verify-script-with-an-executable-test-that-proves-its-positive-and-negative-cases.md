@@ -2,7 +2,7 @@
 id: "019"
 phase: 4
 title: "Add the deployed verify script with an executable test that proves its positive and negative cases"
-status: ready
+status: passed
 depends_on: ["013","014"]
 parallel: false
 conflicts_with: []

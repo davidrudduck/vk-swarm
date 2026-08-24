@@ -1817,3 +1817,34 @@ NO PUSH.
 No undictated implementation choices were made; the named siblings were read.
 
 `scripts/check-npm-runtime-vulns.mjs` is a false sibling because it is an mjs file, not a house bash verifier.
+
+## Task 019 closure
+
+**Stage-1:** `4eb89a76` vs `eae3b0f8` CONFORMS (3 paths, create, WAI_TYPECHECK_CMD=true, WAI_TEST_CMD="bash {scope}" green).
+
+**Stage-2:** gpt DEVIATES (4 BLOCKING test-strength + missing ledger record). kimi CONFORMS + INFO on the same SPA content-type isolation gap.
+
+**Adjudication — all GPT BLOCKINGs are contract-inherited, not implementation drift.** Both scripts are byte-for-byte the locked fenced snippets (`verify` 68 lines, `test` 91 lines), mode 100755.
+
+- SPA content-type not isolated: the locked `spa_fallback` fixture is 200+text/html — that is the production SPA catch-all signature (`routes/mod.rs` outer `/{*path}`). Status 200 already fails the 404 assertion. STOP #2 requires the *verifier* to check content-type as well (it does, lines 58-63). A 404+html mutant is not the described SPA failure mode. DISMISSED.
+- `open_info` opens info+projects+status together: verbatim fixture. Faithful to `main` (all three sit in `protected_routes`). DISMISSED.
+- Blacklist-of-fixture-names survives: shipped verifier uses exact key sets (`verify` lines 29-37), matching `ApiResponse` (no skip_serializing_if) + `BrowserAuthState {authorized, oauth_available}`. DISMISSED.
+- Missing ledger verification record: REAL. This section.
+
+**Manual verification 1-3 (implementer + orchestrator re-run):**
+```
+$ bash -n scripts/verify-local-node-browser-oauth.sh && bash -n scripts/test-verify-local-node-browser-oauth.sh
+(exit 0)
+$ bash scripts/test-verify-local-node-browser-oauth.sh
+PASS compliant node passes
+PASS NEGATIVE: /api/info returning 200 must FAIL the verifier
+PASS NEGATIVE: unknown /api falling through to SPA html must FAIL
+PASS NEGATIVE: auth state leaking a token field must FAIL
+PASS NEGATIVE: auth state carrying any extra field must FAIL
+ALL VERIFIER TESTS PASSED
+```
+`git diff --check eae3b0f8..4eb89a76` clean. curl 8.21.0 present.
+
+**Manual verification 4-5:** ORCHESTRATOR-ONLY. No listener on 8080/3001/4002 at close. Live feature-branch + main contrast deferred to task 021 (which already requires the deployed verifier transcript). The `open_info` fixture is the automated stand-in for a `main` node with unprotected `/api/info`.
+
+NO PUSH.
