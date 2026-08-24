@@ -27,6 +27,13 @@ File: `frontend/src/components/layout/__tests__/NavbarAuthActions.test.tsx` — 
 
 Use `fireEvent`, `render`, `screen`, `waitFor`, and `MemoryRouter` only. Do not recreate the production provider stack; mocks must be minimal but return every destructured field so failures exercise the handlers rather than missing context.
 
+Locked test fixtures (do not invent others):
+- `browserAuthApi` via `vi.hoisted` + `vi.mock('@/lib/api', () => ({ browserAuthApi }))` (or `vi.mock('@/lib/api/browserAuth', ...)` if the component import is the module path — match the production import `@/lib/api`).
+- Reload: `const reloadSpy = vi.fn()`; `beforeEach` does `Object.defineProperty(window, 'location', { configurable: true, value: { ...window.location, reload: reloadSpy } })`; `afterEach` restores the original descriptor.
+- Navbar mocks: `useUserSystem` → `{ loginStatus: { status: 'loggedin' }, reloadSystem: vi.fn() }`; `useProject` → `{ projectId: 'p1', project: { id: 'p1', name: 'P' } }`; `useSearch` → `{ query: '', setQuery: vi.fn(), active: false, clear: vi.fn(), registerInputRef: vi.fn() }`; `useOpenProjectInEditor` → `vi.fn()`; `useLocation`/`useSearchParams` via `MemoryRouter` (do not mock all of `react-router-dom` — Navbar needs `Link`/`MemoryRouter`). Inert `vi.mock` for `SearchBar`, `ActivityFeed`, `ProjectSwitcher`, `ThemeToggle`, `OpenInIdeButton`, `OAuthDialog`, `VKSLogo`. i18n `t` returns the string default or the key.
+- SwarmSettings mocks: `useAuth` → `{ isSignedIn: true, isLoaded: true }`; `useUserOrganizations` → `{ data: { organizations: [{ id: 'o1', name: 'Org' }] }, isLoading: false, error: null }`; `useOrganizationSelection` → `{ selectedOrgId: 'o1', selectedOrg: { id: 'o1', name: 'Org' }, handleOrgSelect: vi.fn() }`. Inert `() => null` mocks for `SwarmProjectsSection`, `NodeProjectsSection`, `SwarmLabelsSection`, `SwarmTemplatesSection`, `NodeTemplatesSection`, `LoginRequiredPrompt`.
+- Open the navbar menu via `fireEvent.click(screen.getByRole('button', { name: 'Main navigation' }))` then `fireEvent.click(screen.getByTestId('navbar-sign-out'))`.
+
 
 ## Change
 **File:** `frontend/src/components/layout/Navbar.tsx`
@@ -113,7 +120,28 @@ this browser, use Sign out in the menu.')}
   );
 }
 ```
-`handleDisconnect` calls `browserAuthApi.disconnectHive()` behind a `confirm(...)` and then reloads.
+`handleDisconnect` is locked as:
+```ts
+const handleDisconnect = async () => {
+  if (
+    !window.confirm(
+      t(
+        'settings.swarm.disconnectConfirm',
+        "This signs out EVERY browser, stops synchronisation, and removes this node's Hive credentials. Continue?"
+      )
+    )
+  ) {
+    return;
+  }
+  try {
+    await browserAuthApi.disconnectHive();
+    window.location.reload();
+  } catch (err) {
+    console.error('Failed to disconnect from Hive:', err);
+  }
+};
+```
+Import `browserAuthApi` from `@/lib/api` in both files (the 016 barrel export). In Navbar replace `import { oauthApi } from '@/lib/api'` with `import { browserAuthApi } from '@/lib/api'` — `oauthApi` has no other use in Navbar. In SwarmSettings add `import { Button } from '@/components/ui/button'` (not currently imported) and `import { browserAuthApi } from '@/lib/api'`.
 
 **Sibling alignment (rubric 9).** Copy the i18n idiom already used in THIS file — `t('settings.swarm.selectOrgHelper', 'Select the organization ...')`, an inline English default — so no locale JSON file (outside this task's `files:`) needs to change and `scripts/check-i18n.sh` stays happy. Use the `Card`/`CardHeader`/`CardTitle`/`CardDescription`/`CardContent` imports already at the top of the file; add only `Button` if it is not yet imported.
 
@@ -152,7 +180,7 @@ Declared decision points (from the spec; do not edit here):
 
 ## Manual verification (record in decisions-ledger)
 1. `cd frontend && npx vitest run src/components/layout/__tests__/NavbarAuthActions.test.tsx` green.
-2. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="cd frontend && npx vitest run {scope}" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 017` exits 0.
+2. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD='(s={scope}; cd frontend && npx vitest run "${s#frontend/}")' bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 017` exits 0.
 3. `cd frontend && npm run lint && npx tsc --noEmit && npx vitest run` green; `bash scripts/check-i18n.sh` green.
 4. Manual on a running node with two browsers: Sign out in browser A returns A to the login shell while B stays signed in; Settings -> Swarm -> Disconnect from Hive returns BOTH to the login shell.
 
