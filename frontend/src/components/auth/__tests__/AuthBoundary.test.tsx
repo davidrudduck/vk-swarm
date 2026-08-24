@@ -1,3 +1,4 @@
+import React from 'react';
 import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -110,6 +111,9 @@ describe('AuthBoundary', () => {
     });
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(3);
     expect(screen.getByText('protected')).toBeInTheDocument();
+    const callsAfterAuthorization = browserAuthApi.getState.mock.calls.length;
+    await act(async () => vi.advanceTimersByTime(5000));
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(callsAfterAuthorization);
   });
 
   it('stops polling when the popup closes', async () => {
@@ -160,6 +164,37 @@ describe('AuthBoundary', () => {
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(callsAfterUnmount);
     expect(close).not.toHaveBeenCalled();
     expect(window.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps the live auth effect under StrictMode', async () => {
+    render(
+      <React.StrictMode>
+        <AuthBoundary>protected</AuthBoundary>
+      </React.StrictMode>
+    );
+    await flushPromises();
+    expect(screen.getByTestId('login-shell')).toBeInTheDocument();
+  });
+
+  it('does not open a popup or restart polling after unmount during login', async () => {
+    let resolveStartLogin: (value: { handoff_id: string; authorize_url: string }) => void;
+    browserAuthApi.startLogin.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStartLogin = resolve;
+        })
+    );
+    const { unmount } = render(<AuthBoundary>protected</AuthBoundary>);
+    await flushPromises();
+    fireEvent.click(screen.getByTestId('login-start'));
+    unmount();
+
+    resolveStartLogin!({ handoff_id: 'handoff', authorize_url: 'https://hive.test/login' });
+    await flushPromises();
+    expect(window.open).not.toHaveBeenCalled();
+    const callsAfterUnmount = browserAuthApi.getState.mock.calls.length;
+    await act(async () => vi.advanceTimersByTime(10 * 60 * 1000));
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(callsAfterUnmount);
   });
 
   it('hides login-start when OAuth is unavailable', async () => {

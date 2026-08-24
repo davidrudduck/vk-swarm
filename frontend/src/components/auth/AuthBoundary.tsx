@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { BrowserAuthState } from 'shared/types';
 
@@ -15,19 +15,21 @@ export function AuthBoundary({ children }: Props) {
   const intervalRef = useRef<number | undefined>(undefined);
   const deadlineRef = useRef<number | undefined>(undefined);
   const popupRef = useRef<Window | null>(null);
-  const mountedRef = useRef(true);
+  const mountedRef = useRef(false);
+
+  const stopPolling = useCallback(() => {
+    if (intervalRef.current !== undefined) {
+      window.clearInterval(intervalRef.current);
+      intervalRef.current = undefined;
+    }
+    if (deadlineRef.current !== undefined) {
+      window.clearTimeout(deadlineRef.current);
+      deadlineRef.current = undefined;
+    }
+  }, []);
 
   useEffect(() => {
-    const stopPolling = () => {
-      if (intervalRef.current !== undefined) {
-        window.clearInterval(intervalRef.current);
-        intervalRef.current = undefined;
-      }
-      if (deadlineRef.current !== undefined) {
-        window.clearTimeout(deadlineRef.current);
-        deadlineRef.current = undefined;
-      }
-    };
+    mountedRef.current = true;
 
     const unsubscribe = onUnauthorized(() => {
       stopPolling();
@@ -55,28 +57,20 @@ export function AuthBoundary({ children }: Props) {
       stopPolling();
       unsubscribe();
     };
-  }, []);
+  }, [stopPolling]);
 
   const startLogin = async () => {
     const returnTo = `${window.location.origin}/api/auth/handoff/complete`;
     const { authorize_url } = await browserAuthApi.startLogin('github', returnTo);
+    if (!mountedRef.current) return;
+
     const popup = window.open(
       authorize_url,
       'hive-oauth',
       'popup,width=600,height=720'
     );
     popupRef.current = popup;
-
-    const stopPolling = () => {
-      if (intervalRef.current !== undefined) {
-        window.clearInterval(intervalRef.current);
-        intervalRef.current = undefined;
-      }
-      if (deadlineRef.current !== undefined) {
-        window.clearTimeout(deadlineRef.current);
-        deadlineRef.current = undefined;
-      }
-    };
+    stopPolling();
 
     const poll = async () => {
       if (!mountedRef.current || popupRef.current?.closed) {

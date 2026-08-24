@@ -1716,4 +1716,5 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ## Task 016 decisions
 
-No undictated implementation choices were made.
+StrictMode remount, unmount-during-await, and no-orphan-interval behavior were locked by plan
+amendment `671b1297` and implemented. No other undictated implementation choices were made.
