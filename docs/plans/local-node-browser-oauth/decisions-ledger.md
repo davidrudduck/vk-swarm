@@ -1811,3 +1811,9 @@ No undictated implementation choices were made.
 **Dismissed:** pre-existing 401/403 `body = %body` warn (`remote_client.rs:415-421`) — Auth path, no retry, not this 5xx fixture.
 
 NO PUSH.
+
+## Task 019 decisions
+
+No undictated implementation choices were made; the named siblings were read.
+
+`scripts/check-npm-runtime-vulns.mjs` is a false sibling because it is an mjs file, not a house bash verifier.
