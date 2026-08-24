@@ -1620,4 +1620,35 @@ Both panels DEVIATES. Orchestrator:
 - **[SHOULD-FIX] inner `validate_proxy_for_node` not discriminated (gpt+kimi F3):** DISMISSED as structural, same class as the task-013 handler-helper dismissal. Outer `require_session_or_proxy_token` already calls `validate_proxy_for_node`; production loaders already use the strict function; a loose inner call fails closed at the outer layer. Discriminating the inner call would need a harness that bypasses the outer middleware.
 - **[SHOULD-FIX] `/create` loader untested (gpt):** REAL coverage; folded into the F1 path list.
 - **[SHOULD-FIX] leftover `VK_CONNECTION_TOKEN_SECRET` (gpt):** REAL; folded into the required RAII hold.
-- **[SHOULD-FIX] missing manual-verification record (gpt):** orchestrator records after the remediating commit lands.
+- **[SHOULD-FIX] missing manual-verification record (gpt):** recorded below after `e934d8fe`.
+
+### Task 014 closure — gates, panels, provenance
+
+**Commits:** source `22b9ff6b` (impl) and `e934d8fe` (prefix + clippy pins) against plan amendment `c0293b0b` (parent nests + unknown-api-route body pin + RAII hold).
+
+**Gate transcript (remediation, verbatim):**
+
+```
+WAI gate: topic=local-node-browser-oauth task=014 commit=e934d8fe allowed_change=mixed
+  - file-set: only declared files changed (3 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+  - typecheck: override command exit 0
+  - tests: scope 'crates/server/tests/proxy_auth.rs' green
+CONFORMS: task 014 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+**Panel:** gpt DEVIATES + kimi DEVIATES on `a6513e69..22b9ff6b` (F1 prefix loss BLOCKING; F2 clippy BLOCKING; inner-strictness SHOULD-FIX dismissed). Remediation re-review `c0293b0b..e934d8fe`: gpt CONFORMS + kimi CONFORMS. F1 killed by `/projects` and `/task-attempts` parent nests plus `unknown api route` body pin. F2 killed by `#[allow(dead_code)] mod common` and held `with_connection_secret`.
+
+**Route census (live):**
+- by-remote-id HTTP: `projects::node_to_node_router` (`projects/mod.rs:123-149`) merged into `node_to_node_routes` behind `require_session_or_proxy_token` (`routes/mod.rs:107-113`). Files inherit `/projects` parent nest (`:143-148`) → `/api/projects/by-remote-id/{id}/files/{*}`.
+- by-task-id HTTP minus diff: `task_attempts::node_to_node_router` (`task_attempts/mod.rs:163-224`) same group. Files/create inherit `/task-attempts` parent nest (`:217-223`).
+- `/task-attempts/by-task-id/{task_id}/diff/ws`: ordinary `router()` (`:142-159`) merged into `protected_routes` behind `require_browser_session` (`routes/mod.rs:56-90`).
+- `/task-attempts/{id}/diff/ws`: `direct_router` (`task_attempts/mod.rs:224-231`) in `connection_stream_routes` (`routes/mod.rs:98-105`).
+- No WebSocket in either `node_to_node_router`. Groups never merged. Router construction succeeded (full `cargo test -p server` exit 0).
+
+**Credential evidence:** `cargo test -p server --test proxy_auth` 4/4 and `--test stream_auth` 5/5. First test: missing/garbage/connection/wrong-target → 401 on all five prefixed paths; valid proxy and browser `status != 401` and body `!contains("unknown api route")`. Second test: proxy query token 401 on all three direct streams. Third test: by-task-id diff 401 for anonymous, connection query, proxy query, proxy bearer; browser 404 after lookup. Fourth test: disabled validator 401 anonymous and token.
+
+**TS3:** proxy HTTP now sits behind `require_session_or_proxy_token`; connection tokens cannot open those routes; proxy tokens cannot open direct streams; by-task-id diff stays browser-only. Task 013 claimed SC2 only; TS3 closes here.
+
+**Full suite:** `cargo test -p server` exit 0 (including 7 doctests; 3 ignored pre-existing). Clippy `-D warnings` and `cargo fmt --all -- --check` green on `e934d8fe`.

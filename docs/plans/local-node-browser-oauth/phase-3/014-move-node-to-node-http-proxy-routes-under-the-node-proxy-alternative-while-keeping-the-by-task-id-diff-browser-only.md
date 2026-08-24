@@ -2,7 +2,7 @@
 id: "014"
 phase: 3
 title: "Move node-to-node HTTP proxy routes under the node_proxy alternative while keeping the by-task-id diff browser-only"
-status: ready
+status: passed
 depends_on: ["013"]
 parallel: false
 conflicts_with: ["008","013"]
