@@ -1652,3 +1652,9 @@ GATE_FAIL_CHECK=none
 **TS3:** proxy HTTP now sits behind `require_session_or_proxy_token`; connection tokens cannot open those routes; proxy tokens cannot open direct streams; by-task-id diff stays browser-only. Task 013 claimed SC2 only; TS3 closes here.
 
 **Full suite:** `cargo test -p server` exit 0 (including 7 doctests; 3 ignored pre-existing). Clippy `-D warnings` and `cargo fmt --all -- --check` green on `e934d8fe`.
+
+## Task 015 decisions
+
+- Plan-lint advisory sibling `browser_auth_routes.rs` was read for login/owner/live-count/logout patterns; it was not added because `allowed_change` is create-only.
+- No real undictated implementation choice was made.
+- `hive_5xx_continuity` uses spawn+await_reached+count+1+abort because RemoteClient retries 5xx; plan amendment b65426f7 locked this.
