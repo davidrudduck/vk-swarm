@@ -2,7 +2,7 @@
 id: "016"
 phase: 4
 title: "Gate the frontend on public auth state and tear down protected traffic on 401"
-status: ready
+status: passed
 depends_on: ["008","012"]
 parallel: false
 conflicts_with: []

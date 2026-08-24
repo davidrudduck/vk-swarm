@@ -1719,3 +1719,30 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 StrictMode remount, unmount-during-await, and no-orphan-interval behavior were locked by plan
 amendment `671b1297` and implemented. No other undictated implementation choices were made.
 Test 6d now pins that a second login click leaves exactly one live poll interval.
+
+### Stage-2 adjudication of `2d014d4a..e0d91164`
+
+First panel on `9392145d`: gpt DEVIATES (StrictMode `mountedRef` stays false; unmount-during-`startLogin`; orphaned interval; tests/ledger gaps). kimi CONFORMS + SHOULD-FIX D-1 (stop-on-authorize unpinned) and D-2 (fetch-spy vacuous).
+
+Adjudication:
+- StrictMode / unmount-during-await / orphan-interval: REAL. Locked in `671b1297`, implemented `7a5b5ec2`.
+- D-1 REAL. Test 3 now freezes `getState` after authorize + 5000ms.
+- D-2 DISMISSED as contract-inherited: the task prescribed mocking `browserAuthApi`, so a `getState` URL mutant cannot be killed without adding an undeclared `browserAuth.test.ts`.
+- App-wrap untested DISMISSED (no App test in `files:`). Production wrap is `App.tsx:258-274` outside `UserSystemProvider`.
+- Ledger close evidence is this section.
+
+Re-review after `7a5b5ec2`: gpt DEVIATES — `stopPolling()` before reinstall survived 11 tests. Locked pin `987f45b1`, test `e0d91164`. Mutating `AuthBoundary.tsx:73` now fails only 6d (`expected 2, got 3`).
+
+Final re-review `671b1297..e0d91164`: gpt CONFORMS + kimi CONFORMS.
+
+### Task 016 closure — gates, panels, provenance
+
+**Commits:** plan `2d014d4a` (poll/deadline/observer); source `9392145d`; plan `671b1297` (StrictMode/re-entry); source `7a5b5ec2`; plan `987f45b1` (6d); source `e0d91164`.
+
+**Stage-1:** `9392145d` vs `2d014d4a` CONFORMS (7 paths) with `WAI_TEST_CMD='(s={scope}; cd frontend && npx vitest run "${s#frontend/}")'` (raw `{scope}` is `frontend/...` and misses vitest include). `7a5b5ec2` vs `671b1297` CONFORMS (3 paths). `e0d91164` vs `987f45b1` CONFORMS (2 paths).
+
+**Verification:** `npx vitest run src/components/auth/__tests__/AuthBoundary.test.tsx` 12/12; `npx tsc --noEmit` 0; `npm run lint` 0; `git diff --check` clean. OAuthDialog sibling 16/16 on first review.
+
+**TS5:** unauthorized bootstrap only `GET /api/auth/state`; authorized then mounts `UserSystemProvider`; `makeRequest` 401 → `notifyUnauthorized` tears down to login-shell.
+
+**INFO (not defects):** test 6b asserts login-shell visibility only (null state also renders it); `startLogin` has no `.catch` (contract snippet).
