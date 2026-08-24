@@ -76,18 +76,24 @@ fn assert_clean(label: &str, haystack: &str, access_jwt: &str) {
     );
 }
 
-fn scan_logs(label: &str, access_jwt: &str) {
+fn scan_logs(label: &str, access_jwt: &str, logs_contain: impl Fn(&str) -> bool) {
     assert!(
-        !tracing_test::logs_contain(access_jwt),
+        !logs_contain(access_jwt),
         "{label} logs leaked access JWT"
     );
     assert!(
-        !tracing_test::logs_contain(REFRESH_SENTINEL),
+        !logs_contain(REFRESH_SENTINEL),
         "{label} logs leaked refresh sentinel"
     );
 }
 
-fn scan_resp(label: &str, resp: &Resp, access_jwt: &str, jar: &CookieJar) {
+fn scan_resp(
+    label: &str,
+    resp: &Resp,
+    access_jwt: &str,
+    jar: &CookieJar,
+    logs_contain: impl Fn(&str) -> bool,
+) {
     assert_clean(&format!("{label} body"), &resp.body, access_jwt);
     for (name, value) in resp.headers.iter() {
         assert_clean(
@@ -102,7 +108,7 @@ fn scan_resp(label: &str, resp: &Resp, access_jwt: &str, jar: &CookieJar) {
     if let Some(cookie) = jar.header_value() {
         assert_clean(&format!("{label} jar"), &cookie, access_jwt);
     }
-    scan_logs(label, access_jwt);
+    scan_logs(label, access_jwt, logs_contain);
 }
 
 async fn login(
@@ -111,6 +117,7 @@ async fn login(
     app_code: &str,
     access_label: &str,
     refresh: &str,
+    logs_contain: impl Fn(&str) -> bool,
 ) -> CookieJar {
     let handoff_id = h
         .mock_hive_oauth(app_code, access_label, refresh, subject)
@@ -125,14 +132,14 @@ async fn login(
         .await;
     assert_eq!(init.status, 200, "init body: {}", init.body);
     let access_jwt = h.access_token_for_label(ACCESS_LABEL);
-    scan_resp(&format!("init {app_code}"), &init, &access_jwt, &jar);
+    scan_resp(&format!("init {app_code}"), &init, &access_jwt, &jar, &logs_contain);
     let complete = h
         .get_no_redirect(
             &format!("/api/auth/handoff/complete?handoff_id={handoff_id}&app_code={app_code}"),
             &mut jar,
         )
         .await;
-    scan_resp(&format!("complete {app_code}"), &complete, &access_jwt, &jar);
+    scan_resp(&format!("complete {app_code}"), &complete, &access_jwt, &jar, &logs_contain);
     assert!(
         matches!(complete.status, 200 | 204 | 302),
         "complete {app_code} status: {} body: {}",
@@ -143,22 +150,22 @@ async fn login(
 }
 ```
 
-If `tracing_test::logs_contain` does not compile, STOP with the compiler error. Do not invent a log scanner.
+`#[tracing_test::traced_test]` injects a **local** `fn logs_contain(val: &str) -> bool` into each test body. There is no `tracing_test::logs_contain`. Pass that injected function into `login` / `scan_resp` / `scan_logs`. Do not call `tracing_test::internal::logs_with_scope_contain` (it needs the per-test span name).
 
 Four named tests, nothing else:
 
-1. `scanner_detects_deliberate_jwt_log_leak` — `let access_jwt = h.access_token_for_label(ACCESS_LABEL); tracing::error!("{access_jwt}"); assert!(tracing_test::logs_contain(&access_jwt));` Do **not** call `scan_logs` after the deliberate leak (the leak would poison later clean asserts in the same capture). This is the backend mutation self-check.
+1. `scanner_detects_deliberate_jwt_log_leak` — `let access_jwt = h.access_token_for_label(ACCESS_LABEL); tracing::error!("{access_jwt}"); assert!(logs_contain(&access_jwt));` Use the injected `logs_contain`, not a crate path. Do **not** call `scan_logs` after the deliberate leak. This is the backend mutation self-check.
 
 2. `sentinel_oauth_surfaces_do_not_disclose_tokens` — F7 ordering:
    - `owner = Uuid::new_v4()`
    - `let access_jwt = h.access_token_for_label(ACCESS_LABEL);` (call this once; never scan `ACCESS_LABEL` plaintext)
-   - `mut other_jar = login(h, owner, "code-a", "other-access", "other-refresh").await` first
-   - `mut sentinel_jar = login(h, owner, "code-1", ACCESS_LABEL, REFRESH_SENTINEL).await` second
-   - With `sentinel_jar`, `get_with` each of `/api/auth/state`, `/api/info`, `/api/auth/status`, `/api/projects` and `scan_resp` each
-   - `POST /api/auth/browser/logout` with `sentinel_jar`; assert `200 | 204`; `scan_resp`
-   - `POST /api/auth/logout` with `other_jar`; assert success **not** 401 (`200 | 204`); `scan_resp` + `scan_logs("disconnect", &access_jwt)`
+   - `mut other_jar = login(h, owner, "code-a", "other-access", "other-refresh", logs_contain).await` first
+   - `mut sentinel_jar = login(h, owner, "code-1", ACCESS_LABEL, REFRESH_SENTINEL, logs_contain).await` second
+   - With `sentinel_jar`, `get_with` each of `/api/auth/state`, `/api/info`, `/api/auth/status`, `/api/projects` and `scan_resp(..., logs_contain)` each
+   - `POST /api/auth/browser/logout` with `sentinel_jar`; assert `200 | 204`; `scan_resp(..., logs_contain)`
+   - `POST /api/auth/logout` with `other_jar`; assert success **not** 401 (`200 | 204`); `scan_resp(..., logs_contain)` + `scan_logs("disconnect", &access_jwt, logs_contain)`
 
-3. `different_owner_complete_does_not_disclose_or_write` — pin owner via `login(h, owner, "code-a", "other-access", "other-refresh")`. Then `mock_hive_oauth("code-intruder", ACCESS_LABEL, REFRESH_SENTINEL, Uuid::new_v4())`, fresh jar, init + `get_no_redirect` complete. Assert status 400 and body contains `owned by a different account`. `scan_resp` init and complete. Assert `node_owner.hive_user_id` still equals `owner` (same SQL as `browser_auth_routes.rs` `stored_owner_uuid`) and `h.credentials_path().exists()`.
+3. `different_owner_complete_does_not_disclose_or_write` — pin owner via `login(h, owner, "code-a", "other-access", "other-refresh", logs_contain)`. Then `mock_hive_oauth("code-intruder", ACCESS_LABEL, REFRESH_SENTINEL, Uuid::new_v4())`, fresh jar, init + `get_no_redirect` complete. Assert status 400 and body contains `owned by a different account`. `scan_resp(..., logs_contain)` init and complete. Assert `node_owner.hive_user_id` still equals `owner` (same SQL as `browser_auth_routes.rs` `stored_owner_uuid`) and `h.credentials_path().exists()`.
 
 4. `upstream_5xx_body_with_sentinels_is_not_forwarded` — do **not** spawn/abort/count/retry. Isolated fixture:
    ```rust
@@ -177,7 +184,7 @@ Four named tests, nothing else:
        serde_json::json!({"access_token": access_jwt, "refresh_token": REFRESH_SENTINEL, "error": "upstream"}),
    ).await;
    ```
-   Fresh jar → POST `/api/auth/handoff/init` → `get_no_redirect` `/api/auth/handoff/complete?handoff_id={handoff_id}&app_code=code-5xx`. `scan_resp` both responses. Do not assert a specific success status (this is a failure fixture). Do not use `post_with` as a Hive-outage oracle.
+   Fresh jar → POST `/api/auth/handoff/init` → `get_no_redirect` `/api/auth/handoff/complete?handoff_id={handoff_id}&app_code=code-5xx`. `scan_resp(..., logs_contain)` both responses. Do not assert a specific success status (this is a failure fixture). Do not use `post_with` as a Hive-outage oracle.
 
 ### Locked frontend (`frontend/src/components/auth/__tests__/tokenDisclosure.test.tsx`)
 
