@@ -214,10 +214,13 @@ pub fn node_to_node_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl
             load_task_by_task_id_middleware,
         ));
 
-    Router::new()
-        .nest("/task-attempts/by-task-id/{task_id}", by_task_id_router)
-        .merge(by_task_id_files_router)
-        .merge(by_task_id_create_router)
+    Router::new().nest(
+        "/task-attempts",
+        Router::new()
+            .nest("/by-task-id/{task_id}", by_task_id_router)
+            .merge(by_task_id_files_router)
+            .merge(by_task_id_create_router),
+    )
 }
 
 /// The production direct-diff path used by useDiffStream.ts with ?token=<connection token>.

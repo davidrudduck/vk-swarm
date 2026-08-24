@@ -1,8 +1,10 @@
+#[allow(dead_code)]
 mod common;
 
 #[tokio::test]
 #[serial_test::serial]
 async fn proxy_http_routes_accept_browser_or_node_proxy_but_reject_missing_and_connection() {
+    let _secret = with_connection_secret(SECRET);
     let node_id = uuid::Uuid::new_v4();
     let h = common::HiveHarness::configured_with_node_auth(SECRET, node_id).await;
     let id = uuid::Uuid::new_v4();
@@ -11,7 +13,10 @@ async fn proxy_http_routes_accept_browser_or_node_proxy_but_reject_missing_and_c
     let conn = mint_connection_token(SECRET, node_id, Some(id));
     let paths = [
         format!("/api/projects/by-remote-id/{id}/branches"),
+        format!("/api/projects/by-remote-id/{id}/files/probe.txt"),
         format!("/api/task-attempts/by-task-id/{id}/branch-status"),
+        format!("/api/task-attempts/by-task-id/{id}/files/probe.txt"),
+        format!("/api/task-attempts/by-task-id/{id}/create"),
     ];
 
     for path in paths {
@@ -44,19 +49,27 @@ async fn proxy_http_routes_accept_browser_or_node_proxy_but_reject_missing_and_c
             401,
             "{path}: wrong target node must stop before lookup"
         );
+        let proxy_ok = h
+            .get_with_headers(&path, &[("authorization", &format!("Bearer {proxy}"))])
+            .await;
         assert_ne!(
-            h.get_with_headers(&path, &[("authorization", &format!("Bearer {proxy}"))])
-                .await
-                .status,
-            401,
+            proxy_ok.status, 401,
             "{path}: valid node_proxy must pass the auth boundary"
+        );
+        assert!(
+            !proxy_ok.body.contains("unknown api route"),
+            "{path}: valid node_proxy must hit the registered /projects or /task-attempts prefix, not api_not_found"
         );
 
         let mut jar = h.authorized_jar().await;
+        let browser_ok = h.get_with(&path, &mut jar).await;
         assert_ne!(
-            h.get_with(&path, &mut jar).await.status,
-            401,
+            browser_ok.status, 401,
             "{path}: browser session must bypass the inner proxy-token requirement"
+        );
+        assert!(
+            !browser_ok.body.contains("unknown api route"),
+            "{path}: browser must hit the registered /projects or /task-attempts prefix, not api_not_found"
         );
     }
 }
@@ -64,6 +77,7 @@ async fn proxy_http_routes_accept_browser_or_node_proxy_but_reject_missing_and_c
 #[tokio::test]
 #[serial_test::serial]
 async fn proxy_tokens_fail_every_direct_log_and_direct_diff_route() {
+    let _secret = with_connection_secret(SECRET);
     let node_id = uuid::Uuid::new_v4();
     let h = common::HiveHarness::configured_with_node_auth(SECRET, node_id).await;
     let id = uuid::Uuid::new_v4();
@@ -86,6 +100,7 @@ async fn proxy_tokens_fail_every_direct_log_and_direct_diff_route() {
 #[tokio::test]
 #[serial_test::serial]
 async fn by_task_id_diff_is_browser_only_not_either_token_alternative() {
+    let _secret = with_connection_secret(SECRET);
     let node_id = uuid::Uuid::new_v4();
     let h = common::HiveHarness::configured_with_node_auth(SECRET, node_id).await;
     let id = uuid::Uuid::new_v4();

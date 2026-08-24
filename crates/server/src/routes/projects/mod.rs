@@ -140,12 +140,12 @@ pub fn node_to_node_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl
             load_project_by_remote_id_middleware,
         ));
 
-    Router::new()
-        .nest(
-            "/projects/by-remote-id/{remote_project_id}",
-            by_remote_id_router,
-        )
-        .merge(by_remote_id_files_router)
+    Router::new().nest(
+        "/projects",
+        Router::new()
+            .nest("/by-remote-id/{remote_project_id}", by_remote_id_router)
+            .merge(by_remote_id_files_router),
+    )
 }
 
 // Note: Type tests are in types.rs
