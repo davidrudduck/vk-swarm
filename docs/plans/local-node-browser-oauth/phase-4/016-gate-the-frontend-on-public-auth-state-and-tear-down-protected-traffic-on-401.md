@@ -38,10 +38,13 @@ Mock `window.open` with a controlled `{ closed }` object and spy on `browserAuth
 
 
 ## Change
-**File:** `frontend/src/lib/api/browserAuth.ts` — create the namespace-object API matching `oauth.ts`:
+**File:** `frontend/src/lib/api/browserAuth.ts` — create the namespace-object API matching `oauth.ts`. Import `BrowserAuthState` from `shared/types`. Each method uses `makeRequest` + `handleApiResponse` (or the `oauthApi.logout` throw-`ApiError`-if-`!ok` pattern for the two POSTs that return void):
 ```ts
 export const browserAuthApi = {
-  getState: async (): Promise<BrowserAuthState> => { /* GET /api/auth/state */ },
+  getState: async (): Promise<BrowserAuthState> => {
+    const response = await makeRequest('/api/auth/state');
+    return handleApiResponse<BrowserAuthState>(response);
+  },
   startLogin: async (provider: string, returnTo: string):
     Promise<{ handoff_id: string; authorize_url: string }> => {
       const response = await makeRequest('/api/auth/handoff/init', {
@@ -49,8 +52,18 @@ export const browserAuthApi = {
       });
       return handleApiResponse(response);
     },
-  logout: async (): Promise<void> => { /* POST /api/auth/browser/logout */ },
-  disconnectHive: async (): Promise<void> => { /* POST /api/auth/logout */ },
+  logout: async (): Promise<void> => {
+    const response = await makeRequest('/api/auth/browser/logout', { method: 'POST' });
+    if (!response.ok) {
+      throw new ApiError(`Logout failed with status ${response.status}`, response.status, response);
+    }
+  },
+  disconnectHive: async (): Promise<void> => {
+    const response = await makeRequest('/api/auth/logout', { method: 'POST' });
+    if (!response.ok) {
+      throw new ApiError(`Logout failed with status ${response.status}`, response.status, response);
+    }
+  },
 };
 ```
 
@@ -60,9 +73,22 @@ const returnTo = `${window.location.origin}/api/auth/handoff/complete`;
 const { authorize_url } = await browserAuthApi.startLogin('github', returnTo);
 const popup = window.open(authorize_url, 'hive-oauth', 'popup,width=600,height=720');
 ```
-Poll **only** public `getState()` on a bounded interval until `authorized === true`, popup closes, deadline expires, or component unmounts. On true, stop polling and mount protected `children`. Popup-close/deadline remain on the login shell and stop polling. Cleanup clears every timer and prevents state updates after unmount. Never call `/api/info` or `/api/auth/status` from the unauthorized shell. The existing protected `OAuthDialog` remains unchanged for already-authorized app workflows.
+Poll **only** public `getState()` on a bounded interval until `authorized === true`, popup closes, deadline expires, or component unmounts. Locked constants (do not invent others): `POLL_INTERVAL_MS = 1000`, `LOGIN_DEADLINE_MS = 10 * 60 * 1000` (spec handoff TTL). Login-shell markup uses `data-testid="login-shell"`; the start button uses `data-testid="login-start"`. On true, stop polling and mount protected `children`. Popup-close/deadline remain on the login shell and stop polling. Cleanup clears every timer and prevents state updates after unmount. Never call `/api/info` or `/api/auth/status` from the unauthorized shell. The existing protected `OAuthDialog` remains unchanged for already-authorized app workflows.
 
-**File:** `frontend/src/lib/api/utils.ts` — retain the central 401 observer contract from the existing plan (`onUnauthorized`/`notifyUnauthorized`) and no other makeRequest behavior change.
+**File:** `frontend/src/lib/api/utils.ts` — add a single module-level unauthorized handler and two exports; change nothing else in this file:
+```ts
+let unauthorizedHandler: (() => void) | null = null;
+export function onUnauthorized(handler: () => void): () => void {
+  unauthorizedHandler = handler;
+  return () => {
+    if (unauthorizedHandler === handler) unauthorizedHandler = null;
+  };
+}
+export function notifyUnauthorized(): void {
+  unauthorizedHandler?.();
+}
+```
+Inside `makeRequest`, after a successful `fetch` (before the `return`), if `response.status === 401` call `notifyUnauthorized()` exactly once for that response, then return the `Response` unchanged. Do not throw. Do not change timeout, headers, signal, or `handleApiResponse`.
 
 **File:** `frontend/src/App.tsx`
 **Anchor:** current `function App()` at **L254-274**, wrapper JSX **L256-272**. Wrap `UserSystemProvider` with `AuthBoundary` directly inside `BrowserRouter`, including matching closing tag. This location is load-bearing because `UserSystemProvider` performs protected bootstrap.
@@ -93,7 +119,9 @@ Poll **only** public `getState()` on a bounded interval until `authorized === tr
   "Polling /api/info or /api/auth/status; the unauthorized loop may call only public /api/auth/state.",
   "Failing to stop polling on authorization, popup close, deadline or unmount.",
   "Editing or replacing the existing protected OAuthDialog; it remains available after authorization.",
-  "Using the stale App L137-156 anchor; current App() is L254-274 and wrapper JSX L256-272."
+  "Using the stale App L137-156 anchor; current App() is L254-274 and wrapper JSX L256-272.",
+  "Inventing poll/deadline constants other than POLL_INTERVAL_MS = 1000 and LOGIN_DEADLINE_MS = 10 * 60 * 1000.",
+  "Throwing from makeRequest on 401, or notifying more than once per 401 response."
 ]
 
 
