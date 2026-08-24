@@ -9,7 +9,7 @@ conflicts_with: []
 files:
   - "docs/configuration-customisation/browser-authorization.mdx"
   - "docs/docs.json"
-siblings: ["docs/configuration-customisation/agent-configurations.mdx","docs/configuration-customisation/network-access.mdx","docs/configuration-customisation/creating-task-tags.mdx"]
+siblings: ["docs/configuration-customisation/agent-configurations.mdx","docs/configuration-customisation/network-access.mdx","docs/configuration-customisation/creating-task-tags.mdx","docs/configuration-customisation/database-performance.mdx"]
 irreversible: false
 scope_test: "N/A"
 allowed_change: mixed
@@ -24,14 +24,77 @@ N/A — this task ships operator prose and one navigation entry; a unit test can
 **File:** `docs/configuration-customisation/browser-authorization.mdx` — create.
 **Anchor:** new page beside `network-access.mdx` in the same directory.
 **Before:** (does not exist)
-**After:** an mdx page whose frontmatter matches its siblings (read `agent-configurations.mdx` for the exact `title`/`description` shape and voice). Required sections:
-- **What changed** — every browser must complete Hive OAuth before it can read or change node data.
-- **Trusted-LAN plaintext risk** — the session cookie is `HttpOnly; SameSite=Lax; Path=/` and deliberately has NO `Secure` attribute so it works on plain HTTP (D9). State plainly: on plain HTTP anyone who can observe LAN traffic can copy the session cookie and act as the owner; run the node only on a network you trust; TLS is future work and out of scope here. Cross-reference `network-access.mdx`, which covers exposing the node beyond loopback, rather than contradicting it.
-- **Sign in / sign out / disconnect** — a table of the three actions, the exact endpoint each uses (`POST /api/auth/handoff/init` + `GET /api/auth/handoff/complete`; `POST /api/auth/browser/logout`; `POST /api/auth/logout`), effect of each action (sign in authorizes only the presenting browser and revokes nothing / sign out revokes only this browser / disconnect revokes every browser plus daemon credentials and stops sync), and where each lives in the UI (navbar Sign out vs Settings -> Swarm -> Disconnect from Hive).
-- **Node ownership** — the first Hive account to sign in is pinned as the owner; a different account is refused; the owner is RETAINED across disconnect so a disconnected node cannot be claimed by someone else; there is deliberately no operator-facing owner reset in this release, and recovery means recreating the node's database.
-- **Hive outages** — established browser sessions and local project/task/execution work keep working through Hive transport, timeout, refresh and 5xx failures; only NEW sign-ins need Hive.
-- **Cross-node streaming** — node-to-node HTTP proxy requests use a Hive-issued `node_proxy` token; direct raw/live logs and the production attempt-id diff WebSocket use only a Hive-issued `connection` token; the by-task-id diff WebSocket is browser-session-only. State that neither audience is accepted by the other route class and no anonymous fallback remains.
-- **Verifying a deployment** — `bash scripts/verify-local-node-browser-oauth.sh http://<node-host>:<port>` with the expected PASS output copied from a real run.
+**After:** create this page **byte-for-byte** (frontmatter is the sibling `title`/`description` shape from `agent-configurations.mdx`; headings are sentence-case like `creating-task-tags.mdx`; do not add `sidebarTitle`/`audience`/`generated` — those belong to the remote-frontend network-access page). Grounded labels: login button is `Log in` (`AuthBoundary.tsx:100`); navbar item is `Sign out` (`frontend/src/i18n/locales/en/common.json:106`); disconnect button default is `Disconnect from Hive` (`SwarmSettings.tsx:205`). Cookies: `vks_browser_session` and `vks_browser_binding` are `HttpOnly; SameSite=Lax; Path=/` with **no** `Secure` (`cookies.rs:32-54`). Verifier transcript is from a real `bash scripts/verify-local-node-browser-oauth.sh` run against the task-019 compliant fixture (not invented; do not start `pnpm run dev`).
+
+```mdx
+---
+title: "Browser Authorization"
+description: "How browsers sign in to a local node over a trusted LAN, and what that means for cookies, ownership, and Hive outages"
+---
+
+Every browser must complete Hive OAuth before it can read or change data on this node.
+
+## What changed
+
+Before this release, a browser on the same network as the node could use it without signing in. Now every browser must finish Hive OAuth first. The node still serves local project, task, and execution work itself; Hive is required only to authorize a new browser or to keep the node's daemon credentials fresh.
+
+This page is about the **local node's** browser session. Binding the node beyond loopback, and Hive's own remote-frontend OAuth, are covered in [Network Access](/configuration-customisation/network-access). Do not mix the two.
+
+## Trusted-LAN plaintext risk
+
+The session cookie is named `vks_browser_session`. The short-lived OAuth binding cookie is named `vks_browser_binding`. Both are set as `HttpOnly; SameSite=Lax; Path=/`. They deliberately have **no `Secure` attribute** so they are sent on plain HTTP (the supported trusted-LAN deployment).
+
+<Warning>
+On plain HTTP, anyone who can observe LAN traffic can copy `vks_browser_session` and act as the owner. Run the node only on a network you trust. TLS is future work and is out of scope here. How to bind the node beyond loopback is in [Network Access](/configuration-customisation/network-access).
+</Warning>
+
+## Sign in / sign out / disconnect
+
+| Action | Endpoints | Effect | Where in the UI |
+|---|---|---|---|
+| Sign in | `POST /api/auth/handoff/init` then `GET /api/auth/handoff/complete` | Authorizes only the presenting browser. Revokes nothing. | Login shell → **Log in** |
+| Sign out | `POST /api/auth/browser/logout` | Revokes only this browser's session. Other browsers and the node's Hive credentials stay. | Navbar menu → **Sign out** |
+| Disconnect | `POST /api/auth/logout` | Revokes every browser session, removes the node's Hive credentials, and stops synchronisation. The owner pin is retained. | Settings → Swarm → **Disconnect from Hive** |
+
+## Node ownership
+
+The first Hive account to sign in is pinned as the owner. A different account is refused. The owner is retained across disconnect, so a disconnected node cannot be claimed by someone else.
+
+There is no operator-facing owner reset in this release. Recovery means recreating the node's database.
+
+## Hive outages
+
+Established browser sessions and local project, task, and execution work keep working through Hive transport, timeout, refresh, and 5xx failures. Only new sign-ins need Hive.
+
+## Cross-node streaming
+
+- Node-to-node HTTP proxy requests use a Hive-issued `node_proxy` token.
+- Direct raw logs, live logs, and the production attempt-id diff WebSocket use only a Hive-issued `connection` token.
+- The by-task-id diff WebSocket is browser-session-only.
+- Neither audience is accepted by the other route class. There is no anonymous fallback. `node_proxy` is not accepted on either diff WebSocket.
+
+## Verifying a deployment
+
+```bash
+bash scripts/verify-local-node-browser-oauth.sh http://<node-host>:<port>
+```
+
+Expected output from a real run of that script:
+
+```
+PASS health is public
+PASS auth state is public
+PASS auth state has the exact minimal shape
+PASS info is protected
+PASS projects are protected
+PASS status is protected
+PASS events SSE is protected
+PASS live logs are protected
+PASS unknown api path is 404
+PASS unknown api path is not SPA html
+All browser-authorization boundary checks passed
+```
+```
 
 **File:** `docs/docs.json`
 **Anchor:** the configuration-customisation page list, L83-91.
@@ -65,7 +128,8 @@ One added line; no other JSON changes.
   "The doc omitting or softening the plaintext-session risk, or implying that an operator-facing owner reset exists.",
   "Any endpoint, cookie name or UI label in the doc that does not match the shipped code — check each against the source before writing it.",
   "Editing any docs.json entry other than the single added page, or leaving docs.json unparseable.",
-  "Documenting cross-node direct diff as browser-only, or documenting node_proxy access to either diff route — task 013 preserves only the attempt-id connection-token path."
+  "Documenting cross-node direct diff as browser-only, or documenting node_proxy access to either diff route — task 013 preserves only the attempt-id connection-token path.",
+  "Inventing verifier output, starting pnpm run dev, or departing from the locked mdx page (including adding sidebarTitle/audience/generated or documenting remote-frontend /oauth/callback as the local-node sign-in)."
 ]
 
 
