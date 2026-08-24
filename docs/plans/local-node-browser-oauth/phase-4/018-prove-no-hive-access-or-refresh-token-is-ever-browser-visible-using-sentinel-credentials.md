@@ -8,7 +8,7 @@ parallel: false
 conflicts_with: ["011"]
 files:
   - "crates/server/tests/token_disclosure.rs"
-  - "frontend/src/components/auth/__tests__/tokenDisclosure.test.tsx"
+  - "frontend/src/components/auth/__tests__/TokenDisclosure.test.tsx"
   - "crates/services/src/services/remote_client.rs"
 siblings: ["crates/server/tests/events.rs","crates/server/tests/harness_smoke.rs","crates/server/tests/mcp_context_test.rs","crates/server/tests/browser_auth_routes.rs","crates/server/tests/browser_oauth.rs","crates/server/tests/restart_outage.rs","crates/server/tests/tasks_delete_routes.rs","frontend/src/components/auth/__tests__/AuthBoundary.test.tsx","crates/server/src/auth/login.rs"]
 irreversible: false
@@ -31,7 +31,7 @@ After `mock_hive_oauth(... ACCESS_LABEL, REFRESH_SENTINEL, ...)`, obtain `let ac
 
 Create two valid local sessions for the successful-disconnect path. The sentinel-login browser performs `/api/auth/browser/logout`. A separate still-valid browser invokes protected `POST /api/auth/logout`; assert success (not 401), then scan disconnect body/all headers/logs. This proves the disconnect handler executed instead of testing middleware rejection. Keep the different-owner rejection and its no-write assertions. General transport/timeout/refresh continuity remains exclusively task 015.
 
-File: `frontend/src/components/auth/__tests__/tokenDisclosure.test.tsx` — create non-vacuous tests. Mock unauthorized auth-state with unexpected sentinel-bearing fields, render the real `AuthBoundary`, and assert the shell/DOM and storage scans reject the exact access JWT and refresh sentinel. Then mock authorized bootstrap, including sentinel-bearing unexpected fields in auth-state and `/api/info`, mount the actual authorized app path (with only required heavy dependencies mocked), and inspect the resulting DOM.
+File: `frontend/src/components/auth/__tests__/TokenDisclosure.test.tsx` — create non-vacuous tests. Mock unauthorized auth-state with unexpected sentinel-bearing fields, render the real `AuthBoundary`, and assert the shell/DOM and storage scans reject the exact access JWT and refresh sentinel. Then mock authorized bootstrap, including sentinel-bearing unexpected fields in auth-state and `/api/info`, mount the actual authorized app path (with only required heavy dependencies mocked), and inspect the resulting DOM.
 
 Enumerate storage correctly:
 ```ts
@@ -214,7 +214,7 @@ Task 011 already makes `BrowserLoginError::Remote` Display the static string `re
 
 Do not edit `login.rs`. Do not add new files.
 
-### Locked frontend (`frontend/src/components/auth/__tests__/tokenDisclosure.test.tsx`)
+### Locked frontend (`frontend/src/components/auth/__tests__/TokenDisclosure.test.tsx`)
 
 Hoist-mock `browserAuthApi` exactly like `AuthBoundary.test.tsx` (`vi.hoisted` + `vi.mock('@/lib/api/browserAuth')`). Import real `AuthBoundary` from `../AuthBoundary` and real `configApi` from `@/lib/api`. Do **not** mount `App`, `AppContent`, or `UserSystemProvider` (Config shape is too large; STOP if you think you must). Do not edit `OAuthDialog`. `fireEvent` only if needed; no `userEvent`.
 
@@ -253,9 +253,9 @@ Three tests:
 
 2. `unauthorized auth-state with unexpected sentinel fields does not disclose` — `browserAuthApi.getState.mockResolvedValue({ authorized: false, oauth_available: true, access_token: ACCESS_JWT, refresh_token: REFRESH_SENTINEL });` render `<AuthBoundary>protected</AuthBoundary>`. Wait for `login-shell`. `scanBrowserSurfaces()`.
 
-3. `authorized bootstrap with unexpected sentinel fields does not disclose` — `getState` resolves `{ authorized: true, oauth_available: true, access_token: ACCESS_JWT, refresh_token: REFRESH_SENTINEL }`. Spy `globalThis.fetch` so a URL containing `/api/info` returns HTTP 200 JSON:
-   `{ analytics_user_id: 'probe-user', access_token: ACCESS_JWT, refresh_token: REFRESH_SENTINEL, config: {}, login_status: { status: 'loggedout' }, environment: {}, executors: {}, capabilities: {} }`
-   and any other URL returns 404. Probe child:
+3. `authorized bootstrap with unexpected sentinel fields does not disclose` — `getState` resolves `{ authorized: true, oauth_available: true, access_token: ACCESS_JWT, refresh_token: REFRESH_SENTINEL }`.    Spy `globalThis.fetch` so a URL containing `/api/info` returns HTTP 200 JSON in the `ApiResponse` envelope `handleApiResponse` unwraps (`utils.ts:229-265`; sibling `breakdown.test.ts` `ok()`):
+   `{ success: true, data: { analytics_user_id: 'probe-user', access_token: ACCESS_JWT, refresh_token: REFRESH_SENTINEL, config: {}, login_status: { status: 'loggedout' }, environment: {}, executors: {}, capabilities: {} }, error_data: null, message: null }`
+   and any other URL returns 404. A raw (unenveloped) body makes `success` falsy and throws `ApiError`, leaving the probe empty. Sentinels must sit on `data` so they survive unwrap. Probe child:
    ```tsx
    function Probe() {
      const [id, setId] = React.useState('');
@@ -288,6 +288,8 @@ Siblings listed in frontmatter are read-only. Ledger any undictated choice under
   "A sentinel appearing anywhere — fix its owning task in-session; never weaken the assertion.",
   "Skipping scan_logs on the 5xx fixture, scanning init before complete to hide redeem retry logs, or changing RemoteClientError::Http Display instead of the locked notify closure.",
   "Mounting App, AppContent, or UserSystemProvider, or JSON.stringify-ing the /api/info payload into the DOM.",
+  "Naming the frontend test tokenDisclosure.test.tsx (camelCase) — eslint PASCAL_CASE on src/**/*.tsx requires TokenDisclosure.test.tsx like AuthBoundary.test.tsx.",
+  "Mocking /api/info as a raw UserSystemInfo body instead of the {success, data, error_data, message} ApiResponse envelope.",
   "Using mock_hive_failure, spawn/abort/hive_request_count, or write_refresh_only_credentials — those are task 015."
 ]
 
@@ -299,7 +301,7 @@ Declared decision points (from the spec; do not edit here):
 ## Manual verification (record in decisions-ledger)
 1. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cargo fmt --all -- --check" WAI_TEST_CMD="cargo test -p server --test token_disclosure" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 018` exits 0.
 2. `cargo test -p server --test token_disclosure` — header-aware backend tests green, including successful two-session disconnect and owner mismatch.
-3. `cd frontend && npx vitest run src/components/auth/__tests__/tokenDisclosure.test.tsx` green.
+3. `cd frontend && npx vitest run src/components/auth/__tests__/TokenDisclosure.test.tsx` green.
 4. Vacuity check recorded in the ledger: run the built-in mutation self-checks that leak the exact generated JWT into captured backend logs and frontend DOM/storage; each scanner must fail, then the clean assertions pass. A non-disclosure test that cannot detect a disclosure is worthless.
 5. SC10 surface walk-through: initiation, completion, normal use, logout, disconnect and failure — name the assertion covering each.
 
