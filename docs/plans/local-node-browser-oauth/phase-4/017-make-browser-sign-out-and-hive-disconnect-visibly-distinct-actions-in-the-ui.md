@@ -2,7 +2,7 @@
 id: "017"
 phase: 4
 title: "Make browser sign-out and Hive disconnect visibly distinct actions in the UI"
-status: ready
+status: passed
 depends_on: ["016"]
 parallel: false
 conflicts_with: []

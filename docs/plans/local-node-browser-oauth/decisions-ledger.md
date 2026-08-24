@@ -1756,3 +1756,19 @@ The locked logout grep is scoped to `frontend/src` by plan amendment; historical
 The i18n check is pre-existing red and is not a blocker for this task.
 
 The EVERY-browser confirm argument is now asserted (plan `3e46c727`).
+
+### Task 017 closure — gates, panels, D5
+
+**Commits:** 808c4f12 handlers+fixtures; 94365ccb scoped grep; d6cfa88f source; a1076425 forbid_after handleOAuthLogout; 3e46c727 EVERY-copy pin; 20761e54 test pin.
+
+**Stage-1:** d6cfa88f vs 94365ccb first REJECT forbid_after (`oauthApi.logout` is tree-global). After a1076425, CONFORMS. 20761e54 vs 3e46c727 CONFORMS (2 paths).
+
+**WAI_TEST_CMD:** `(s={scope}; cd frontend && npx vitest run "${s#frontend/}")`
+
+**Stage-2:** first panel gpt DEVIATES (EVERY-copy unasserted) / kimi CONFORMS+SHOULD-FIX. Re-review 3e46c727..20761e54 gpt CONFORMS + kimi CONFORMS. drop-EVERY mutant now KILLED (expected StringContaining "EVERY browser").
+
+**D5:** Navbar `handleBrowserSignOut` → `browserAuthApi.logout` → POST `/api/auth/browser/logout` then `window.location.reload`. SwarmSettings `handleDisconnect` → `window.confirm` EVERY-browser copy → `browserAuthApi.disconnectHive` → POST `/api/auth/logout` then reload. `git grep -F oauthApi.logout -- frontend/src` empty. `handleOAuthLogout` gone from frontend/src.
+
+**Dismissed:** disconnectHive-reject coverage (contract Navbar-only); tree-global oauthApi.logout forbid_after (hive remote-frontend still uses it).
+
+**Gates on pin:** vitest 4/4, tsc 0, lint 0, diff-check clean. NO PUSH.
