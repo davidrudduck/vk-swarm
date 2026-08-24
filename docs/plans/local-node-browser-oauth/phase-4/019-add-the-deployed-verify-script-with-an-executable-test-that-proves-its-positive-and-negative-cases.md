@@ -9,7 +9,7 @@ conflicts_with: []
 files:
   - "scripts/verify-local-node-browser-oauth.sh"
   - "scripts/test-verify-local-node-browser-oauth.sh"
-siblings: ["scripts/clean-cargo-cache.sh","scripts/check-i18n.sh","scripts/assert-dockerfile-node-match.sh"]
+siblings: ["scripts/clean-cargo-cache.sh","scripts/check-i18n.sh","scripts/assert-dockerfile-node-match.sh","scripts/dev-swarm-setup.sh"]
 irreversible: false
 scope_test: "scripts/test-verify-local-node-browser-oauth.sh"
 allowed_change: create
@@ -232,8 +232,8 @@ Declared decision points (from the spec; do not edit here):
 1. `bash -n scripts/verify-local-node-browser-oauth.sh && bash -n scripts/test-verify-local-node-browser-oauth.sh` exits 0.
 2. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="true" WAI_TEST_CMD="bash {scope}" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 019` exits 0. The runner MUST be pinned: a `.sh` scope_test has no auto-detected runner.
 3. `bash scripts/test-verify-local-node-browser-oauth.sh` — prints five fixture PASS lines and `ALL VERIFIER TESTS PASSED`.
-4. Against the REAL feature-branch node (`pnpm run dev`): `bash scripts/verify-local-node-browser-oauth.sh http://127.0.0.1:<BACKEND_PORT>` exits 0. Paste the output into the ledger.
-5. Against a node built from `main` (no boundary), the same command MUST exit non-zero. Paste that too — the `open_info` fixture is a stand-in for this, and this step confirms the stand-in is faithful.
+4. Against the REAL feature-branch node (`pnpm run dev`): `bash scripts/verify-local-node-browser-oauth.sh http://127.0.0.1:<BACKEND_PORT>` exits 0. Paste the output into the ledger. ORCHESTRATOR-ONLY — the implementer must not start a dev server.
+5. Against a node built from `main` (no boundary), the same command MUST exit non-zero. Paste that too — the `open_info` fixture is a stand-in for this, and this step confirms the stand-in is faithful. ORCHESTRATOR-ONLY.
 
 
 ## Done when
