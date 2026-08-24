@@ -88,6 +88,7 @@
           "configuration-customisation/keyboard-shortcuts",
           "configuration-customisation/database-performance",
           "configuration-customisation/network-access",
+          "configuration-customisation/browser-authorization",
           "configuration-customisation/event-journal-retention"
         ]
       },

@@ -1812,6 +1812,23 @@ No undictated implementation choices were made.
 
 NO PUSH.
 
+## Task 020 decisions
+
+- No undictated implementation choices (the page is the locked snippet).
+- Sibling note: `event-journal-retention.mdx` is the next nav item only (false sibling; unread for voice). `database-performance.mdx` is listed in siblings: and was not used as a voice source (agent-configurations + creating-task-tags + network-access were).
+- Endpoint verification output:
+
+```text
+crates/server/src/routes/browser_auth.rs:20:    Router::new().route("/auth/state", get(auth_state))
+crates/server/src/routes/oauth.rs:32:        .route("/auth/handoff/init", post(handoff_init))
+crates/server/src/routes/oauth.rs:33:        .route("/auth/handoff/complete", get(handoff_complete))
+crates/server/src/routes/oauth.rs:43:        .route("/auth/browser/logout", post(browser_logout))
+crates/server/src/routes/oauth.rs:55:        .route("/auth/logout", post(logout))
+crates/server/src/routes/oauth.rs:56:        .route("/auth/status", get(status))
+```
+
+- The cookie source confirms `vks_browser_session` and `vks_browser_binding` use `HttpOnly; SameSite=Lax; Path=/` without `Secure`.
+
 ## Task 019 decisions
 
 No undictated implementation choices were made; the named siblings were read.
