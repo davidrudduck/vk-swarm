@@ -165,7 +165,7 @@ Import `browserAuthApi` from `@/lib/api` in both files (the 016 barrel export). 
   "The navbar sign-out reaching /api/auth/logout (the disconnect endpoint) by any path — that is the exact confusion D5 exists to prevent.",
   "The disconnect action lacking a confirmation, or its copy failing to say that it affects every browser.",
   "Adding keys to frontend/src/i18n/locales/** — not in files:; use the inline-default t() idiom already in SwarmSettings.tsx.",
-  "`git grep -F 'oauthApi.logout'` still matching after the change (forbid_after enforces this) — the old call site must be gone.",
+  "`git grep -F 'oauthApi.logout' -- frontend/src` still matching after the change — the node-frontend call site must be gone. Historical reports, this task's Before snippet, plan.md, and remote-frontend (hive) callers are out of scope and must remain.",
   "Deleting `logout` from frontend/src/lib/api/oauth.ts — removing a shipped API namespace member is a contract change outside this plan's irreversible budget; leave the definition, remove only the call site.",
   "Leaving render/user interaction as comments or calling handlers directly.",
   "Mounting the full application provider/dependency stack instead of minimal useUserSystem/router/project/search/translation/heavy-child mocks.",
