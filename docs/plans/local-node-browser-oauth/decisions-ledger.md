@@ -1754,3 +1754,5 @@ No undictated implementation choices were made.
 The locked logout grep is scoped to `frontend/src` by plan amendment; historical docs and remote-frontend callers are intentionally excluded.
 
 The i18n check is pre-existing red and is not a blocker for this task.
+
+The EVERY-browser confirm argument is now asserted (plan `3e46c727`).
