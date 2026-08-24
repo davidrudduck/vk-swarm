@@ -1772,3 +1772,7 @@ The EVERY-browser confirm argument is now asserted (plan `3e46c727`).
 **Dismissed:** disconnectHive-reject coverage (contract Navbar-only); tree-global oauthApi.logout forbid_after (hive remote-frontend still uses it).
 
 **Gates on pin:** vitest 4/4, tsc 0, lint 0, diff-check clean. NO PUSH.
+
+## Task 018 decisions
+
+No undictated implementation choices were made.

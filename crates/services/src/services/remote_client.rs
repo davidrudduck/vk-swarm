@@ -441,12 +441,23 @@ impl RemoteClient {
                 .with_jitter(),
         )
         .when(|e: &RemoteClientError| e.should_retry())
-        .notify(|e, dur| {
-            warn!(
-                "Remote call failed, retrying after {:.2}s: {}",
-                dur.as_secs_f64(),
-                e
-            )
+        .notify(|e, dur| match e {
+            RemoteClientError::Http { status, .. } => {
+                warn!(
+                    status,
+                    path = %path,
+                    "Remote call failed, retrying after {:.2}s",
+                    dur.as_secs_f64()
+                );
+            }
+            other => {
+                warn!(
+                    path = %path,
+                    "Remote call failed, retrying after {:.2}s: {}",
+                    dur.as_secs_f64(),
+                    other
+                );
+            }
         })
         .await
     }
