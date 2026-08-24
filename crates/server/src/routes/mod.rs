@@ -104,9 +104,18 @@ pub async fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
             crate::auth::node_token::require_session_or_connection_token,
         ));
 
+    let node_to_node_routes = Router::new()
+        .merge(projects::node_to_node_router(&deployment))
+        .merge(task_attempts::node_to_node_router(&deployment))
+        .layer(from_fn_with_state(
+            deployment.clone(),
+            crate::auth::node_token::require_session_or_proxy_token,
+        ));
+
     let base_routes = public_routes
         .merge(protected_routes)
         .merge(connection_stream_routes)
+        .merge(node_to_node_routes)
         // An unknown `/api/*` request must terminate INSIDE the API boundary and never reach the
         // outer `/{*path}` SPA catch-all. axum 0.8's `nest` files a nested custom `fallback`
         // under the PARENT's fallback router, which the outer `/{*path}` real route shadows, so

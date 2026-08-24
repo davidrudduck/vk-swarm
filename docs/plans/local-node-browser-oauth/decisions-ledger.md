@@ -1602,3 +1602,11 @@ Parameters['length'] === 2.
 **SC2:** every node-local WS/SSE route authenticates before upgrade; only scoped direct-log and
 direct-diff connection tokens survive; by-task-id remains browser-only; Hive mints
 execution_process_id-scoped tokens; frontend keys the direct URL by process id.
+
+## Task 014 decisions
+
+- [Task 014] Retain bearer extraction and strict `validate_proxy_for_node` validation against the receiver's current node ID for every non-browser request — the outer `require_session_or_proxy_token` alternative authenticates the route class, while the loader preserves receiver binding before resource lookup — `crates/server/src/middleware/model_loaders.rs`
+- [Task 014] Retain `ProxyRequestContext { source_node_id }` insertion and source/target validation logging in the remote-project and task-attempt loaders — proxy handlers depend on the existing source context and diagnostics — `crates/server/src/middleware/model_loaders.rs`
+- [Task 014] Retain the task-loader validation/logging match arms without adding `ProxyRequestContext` insertion — this matches the existing loader body — `crates/server/src/middleware/model_loaders.rs`
+- [Task 014] Retain lookup order: authenticate non-browser proxy requests first, then load the remote project; for by-task-id attempt routes load the task, fetch all attempts, select the most recent attempt, insert it, and continue; for create routes load the task, insert it, and continue — browser context skips only redundant proxy validation — `crates/server/src/middleware/model_loaders.rs`
+- [Task 014] Retain the `node_proxy` audience and receiver target-node claim requirement from `ConnectionTokenValidator::validate_proxy_for_node` — proxy credentials must not cross node receivers or connection-token route classes — `crates/services/src/services/connection_token.rs`
