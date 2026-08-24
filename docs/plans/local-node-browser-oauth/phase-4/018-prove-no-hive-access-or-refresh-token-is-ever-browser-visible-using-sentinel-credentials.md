@@ -2,7 +2,7 @@
 id: "018"
 phase: 4
 title: "Prove no Hive access or refresh token is ever browser-visible, using sentinel credentials"
-status: ready
+status: passed
 depends_on: ["011","012","016"]
 parallel: false
 conflicts_with: ["011"]

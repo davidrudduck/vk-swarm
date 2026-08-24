@@ -1776,3 +1776,38 @@ The EVERY-browser confirm argument is now asserted (plan `3e46c727`).
 ## Task 018 decisions
 
 No undictated implementation choices were made.
+
+### Task 018 closure — gates, panel verdicts, SC10 walk-through
+
+**Source:** `b0d51503` task(018): prove sentinel tokens stay off browser surfaces.
+**Plan locks:** `18c48c1e` helpers; `30b03ac9` inject logs_contain; `91630c2d` notify-only sanitization + 011↔018 conflicts; `cdf56b1f` ApiResponse envelope + TokenDisclosure.test.tsx PascalCase.
+
+**Stage-1:** `b0d51503` vs `cdf56b1f` CONFORMS (4 paths, typecheck/fmt 0, `cargo test -p server --test token_disclosure` green).
+
+**Stage-2:** gpt DEVIATES solely for missing ledger verification record. kimi CONFORMS + SHOULD-FIX same record. Implementation CONFORMS on every code lens. This section is the required record.
+
+**Production:** only `RemoteClient::send` retry notify (`remote_client.rs:444-463`). Http arm logs status+path+delay, never body. `RemoteClientError::Http` Display still `http {status}: {body}`. `login.rs` and `tests/common/mod.rs` untouched.
+
+**Vacuity / mutation self-checks (live):**
+- Backend `scanner_detects_deliberate_jwt_log_leak`: `tracing::error!(jwt)` then `assert!(logs_contain(&access_jwt))`.
+- Frontend `scanner detects deliberate JWT leak in DOM and storage`: render+store exact JWT, `assertClean` throws.
+- Panel mutant A: restore old notify Display → `upstream_5xx…` FAILED `5xx init logs leaked access JWT`.
+- Panel mutant B: drop 5xx `scan_logs` → suite green despite the leak (scan after complete is load-bearing).
+- Panel mutant C: scan `ACCESS_LABEL` instead of JWT → access check vacuous (label absent from compact JWT).
+
+**SC10 surface walk-through:**
+- Initiation — `scan_resp("init {app_code}")` inside `login()`.
+- Completion — `get_no_redirect` + `scan_resp("complete {app_code}")` (full HeaderMap + set_cookie + jar + logs).
+- Normal use — `scan_resp` on `/api/auth/state`, `/api/info`, `/api/auth/status`, `/api/projects`.
+- Browser logout — sentinel jar POST `/api/auth/browser/logout` 200|204 + scan.
+- Hive disconnect — other_jar POST `/api/auth/logout` 200|204 and ≠401 + scan_resp + scan_logs.
+- Owner mismatch — 400 "owned by a different account"; owner SQL unchanged; credentials exist.
+- Failure — redeem 500 body carries both sentinels; both responses scanned after complete so retry logs are visible.
+
+**Frontend:** unauthorized unexpected fields → login-shell, scanBrowserSurfaces. Authorized envelope `/api/info` + Probe renders only `analytics_user_id`. storageText via length/key/getItem. File is PascalCase `TokenDisclosure.test.tsx`.
+
+**Gates on source:** token_disclosure 4/4; restart_outage 7/7 (sibling); TokenDisclosure 3/3; AuthBoundary 12/12 (sibling); tsc 0; lint 0; clippy services+server -D warnings clean; fmt check clean; diff-check clean.
+
+**Dismissed:** pre-existing 401/403 `body = %body` warn (`remote_client.rs:415-421`) — Auth path, no retry, not this 5xx fixture.
+
+NO PUSH.
