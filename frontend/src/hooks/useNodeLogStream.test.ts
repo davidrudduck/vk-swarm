@@ -60,6 +60,17 @@ describe('useNodeLogStream direct raw-log URL contract', () => {
     vi.unstubAllGlobals();
   });
 
+  it('requires both hook arguments at the type level', () => {
+    // Optional second param makes Parameters['length'] `1 | 2`; required is `2`.
+    type HookArity = Parameters<typeof useNodeLogStream>['length'];
+    type Equal<X, Y> =
+      (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
+        ? true
+        : false;
+    const secondArgumentIsRequired: Equal<HookArity, 2> = true;
+    expect(secondArgumentIsRequired).toBe(true);
+  });
+
   it('sends execution_process_id on the connection-info request and keys the direct WS by the process id', async () => {
     fetchMock.mockResolvedValue(connectionInfoResponse());
 

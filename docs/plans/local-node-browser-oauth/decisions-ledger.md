@@ -1520,3 +1520,20 @@ optional (`executionProcessId?: string`) to the required-argument form
 (`executionProcessId: string | undefined`) per the amended contract, so tsc enforces both-ID call
 sites. Verification: vitest 7/7 across both hook test files, `tsc --noEmit` clean, `npm run lint`
 clean, `git diff --check` clean.
+
+### Stage-2 coverage remediation
+
+Adjudication of `de347b6c..10bf7940` panel:
+- [SHOULD-FIX] Hive `execution_process_id` required-ness untested (kimi M4; gpt related): REAL. Added
+  `connection_info_query_rejects_missing_execution_process_id` — `Query::<ConnectionInfoQuery>::try_from_uri`
+  must err when the param is absent and succeed when present. Kills the optional-field +
+  `local_attempt_id` fallback mutant.
+- [SHOULD-FIX] Hook second param optional-`?` would still typecheck (gpt): REAL. `expectTypeOf.not.toBeCallableWith`
+  is unusable here (tsc TS2349: `never` has no call signatures). Pin is instead
+  `Parameters<typeof useNodeLogStream>['length']` must equal `2` (optional second arg is `1 | 2`).
+- [SHOULD-FIX] `generated_connection_token_scopes_to_the_execution_process` calls `generate`
+  independently of the handler (gpt): DISMISSED. A shared minting helper would not discriminate
+  "handler ignores helper and passes `assignment.local_attempt_id`". Production mint is
+  `Some(query.execution_process_id)` at nodes.rs:1424; a mis-scoped token fails closed at
+  `validate_for_resource`. An HTTP integration test of get_connection_info is out of this
+  remediation's test-only / no-new-harness scope.

@@ -1600,6 +1600,21 @@ mod tests {
     }
 
     #[test]
+    fn connection_info_query_rejects_missing_execution_process_id() {
+        use axum::extract::Query;
+
+        let missing = Query::<ConnectionInfoQuery>::try_from_uri(&"/x".parse().unwrap());
+        assert!(missing.is_err(), "missing execution_process_id must fail extraction");
+
+        let process_id = Uuid::new_v4();
+        let present = Query::<ConnectionInfoQuery>::try_from_uri(
+            &format!("/x?execution_process_id={process_id}").parse().unwrap(),
+        );
+        assert!(present.is_ok(), "present execution_process_id must extract");
+        assert_eq!(present.unwrap().0.execution_process_id, process_id);
+    }
+
+    #[test]
     fn generated_connection_token_scopes_to_the_execution_process() {
         let secret = test_secret();
         let service = ConnectionTokenService::new(secret.clone());
