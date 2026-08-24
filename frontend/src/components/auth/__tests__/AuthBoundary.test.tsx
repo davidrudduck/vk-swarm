@@ -88,6 +88,26 @@ describe('AuthBoundary', () => {
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps exactly one poll interval after a second login click', async () => {
+    render(<AuthBoundary>protected</AuthBoundary>);
+    await flushPromises();
+    const loginStart = screen.getByTestId('login-start');
+
+    fireEvent.click(loginStart);
+    await flushPromises();
+    fireEvent.click(loginStart);
+    await flushPromises();
+
+    const callsBeforePoll = browserAuthApi.getState.mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(callsBeforePoll + 1);
+  });
+
   it('mounts children only after a successful poll', async () => {
     browserAuthApi.getState.mockImplementation(async () =>
       browserAuthApi.getState.mock.calls.length < 3 ? unauthorized : authorized

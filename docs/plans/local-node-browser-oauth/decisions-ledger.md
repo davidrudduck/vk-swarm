@@ -1718,3 +1718,4 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 StrictMode remount, unmount-during-await, and no-orphan-interval behavior were locked by plan
 amendment `671b1297` and implemented. No other undictated implementation choices were made.
+Test 6d now pins that a second login click leaves exactly one live poll interval.
