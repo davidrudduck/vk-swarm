@@ -2,7 +2,7 @@
 id: "013"
 phase: 3
 title: "Authenticate every node-local WebSocket and SSE route before upgrade, preserving only scoped direct-log and direct-diff connection tokens"
-status: ready
+status: passed
 depends_on: ["008","011"]
 parallel: false
 conflicts_with: ["008","014"]

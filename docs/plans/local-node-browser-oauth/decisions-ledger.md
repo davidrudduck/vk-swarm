@@ -1537,3 +1537,68 @@ Adjudication of `de347b6c..10bf7940` panel:
   `Some(query.execution_process_id)` at nodes.rs:1424; a mis-scoped token fails closed at
   `validate_for_resource`. An HTTP integration test of get_connection_info is out of this
   remediation's test-only / no-new-harness scope.
+
+### Task 013 closure — gates, panels, provenance
+
+**Commits:** source `5f660cbf` (impl) and `10bf7940` (fixture repair) against plans
+`de347b6c` (census row-4 = 500 pin) and `1f4e906f` (add useAvailableNodes.test.ts + required
+second-arg wording); coverage `9cca0ae5` + rustfmt `8835c116`.
+
+**Gate transcripts (verbatim):**
+
+```
+WAI gate: topic=local-node-browser-oauth task=013 commit=5f660cbf allowed_change=mixed
+  - file-set: only declared files changed (12 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+  - typecheck: override command exit 0
+  - tests: scope 'crates/server/tests/stream_auth.rs' green
+CONFORMS: task 013 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+```
+WAI gate: topic=local-node-browser-oauth task=013 commit=10bf7940 allowed_change=mixed
+  - file-set: only declared files changed (3 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+  - typecheck: override command exit 0
+  - tests: scope 'crates/server/tests/stream_auth.rs' green
+CONFORMS: task 013 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+```
+WAI gate: topic=local-node-browser-oauth task=013 commit=9cca0ae5 allowed_change=mixed
+  - file-set: only declared files changed (3 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+  - typecheck: override command exit 0
+  - tests: scope 'crates/server/tests/stream_auth.rs' green
+CONFORMS: task 013 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+```
+WAI gate: topic=local-node-browser-oauth task=013 commit=8835c116 allowed_change=mixed
+  - file-set: only declared files changed (1 paths)
+  - mixed: structural check relaxed — relies on adversarial panel
+  - typecheck: override command exit 0
+  - tests: scope 'crates/server/tests/stream_auth.rs' green
+CONFORMS: task 013 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+**Panel:** gpt DEVIATES round 1 (2 SHOULD-FIX: Hive required-ness untested; hook arity unpinned;
+handler generate() test independence) + kimi CONFORMS round 1 (1 SHOULD-FIX same Hive gap; INFOs
+on structural mutation survivals). Orchestrator: Hive + arity REAL → `9cca0ae5`/`8835c116`;
+handler-helper DISMISSED (ceremonial helper does not pin handler arg; mint at nodes.rs:1424;
+mis-scope fails closed at validate_for_resource). Re-review gpt CONFORMS + kimi CONFORMS
+(both pins discriminate the named mutants; no production runtime change in remediation range).
+
+**Implementer escalations adjudicated:** (1) census row 4 authorized+missing-attempt = 500 not
+404 — RemoteAttemptNeeded GET-fallback + required Extension<TaskAttempt>; pinned `de347b6c`.
+(2) useAvailableNodes.test.ts one-arg fixtures obsolete under required process id — fixture
+repair `1f4e906f`/`10bf7940`. (3) expectTypeOf.not.toBeCallableWith → TS2349; replaced with
+Parameters['length'] === 2.
+
+**SC2:** every node-local WS/SSE route authenticates before upgrade; only scoped direct-log and
+direct-diff connection tokens survive; by-task-id remains browser-only; Hive mints
+execution_process_id-scoped tokens; frontend keys the direct URL by process id.
