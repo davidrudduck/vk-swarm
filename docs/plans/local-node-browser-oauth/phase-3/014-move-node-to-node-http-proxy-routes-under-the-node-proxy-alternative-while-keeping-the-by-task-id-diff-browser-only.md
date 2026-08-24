@@ -23,19 +23,32 @@ covers_tests: ["TS3"]
 File: `crates/server/tests/proxy_auth.rs` — create. Mint real Hive-signed tokens with `jsonwebtoken` and the same base64 secret placed in `VK_CONNECTION_TOKEN_SECRET`. Exercise both proxy subtrees and all three direct connection-stream routes.
 
 ```rust
+// Shared harness HTTP helpers unused by a given probe would otherwise fail
+// `clippy -D warnings` in this test binary (same pattern as stream_auth.rs).
+#[allow(dead_code)]
 mod common;
 
 #[tokio::test]
 #[serial_test::serial]
 async fn proxy_http_routes_accept_browser_or_node_proxy_but_reject_missing_and_connection() {
+    let _secret = with_connection_secret(SECRET);
     let node_id = uuid::Uuid::new_v4();
     let h = common::HiveHarness::configured_with_node_auth(SECRET, node_id).await;
     let id = uuid::Uuid::new_v4();
     let proxy = mint_proxy_token(SECRET, node_id);
     let wrong_target_proxy = mint_proxy_token(SECRET, uuid::Uuid::new_v4());
     let conn = mint_connection_token(SECRET, node_id, Some(id));
-    let paths = [format!("/api/projects/by-remote-id/{id}/branches"),
-                 format!("/api/task-attempts/by-task-id/{id}/branch-status")];
+    // Include the three production-prefixed wildcard/create paths. `assert_ne!(401)`
+    // alone is hollow: an unregistered `/api/projects/.../files/...` falls through
+    // to `api_not_found` (JSON 404), which is not 401. Pin registration by rejecting
+    // the `unknown api route` body after a valid credential.
+    let paths = [
+        format!("/api/projects/by-remote-id/{id}/branches"),
+        format!("/api/projects/by-remote-id/{id}/files/probe.txt"),
+        format!("/api/task-attempts/by-task-id/{id}/branch-status"),
+        format!("/api/task-attempts/by-task-id/{id}/files/probe.txt"),
+        format!("/api/task-attempts/by-task-id/{id}/create"),
+    ];
 
     for path in paths {
         assert_eq!(h.get(&path).await.status, 401,
@@ -49,19 +62,30 @@ async fn proxy_http_routes_accept_browser_or_node_proxy_but_reject_missing_and_c
         assert_eq!(h.get_with_headers(&path,
             &[("authorization", &format!("Bearer {wrong_target_proxy}"))]).await.status, 401,
             "{path}: wrong target node must stop before lookup");
-        assert_ne!(h.get_with_headers(&path,
-            &[("authorization", &format!("Bearer {proxy}"))]).await.status, 401,
+        let proxy_ok = h.get_with_headers(&path,
+            &[("authorization", &format!("Bearer {proxy}"))]).await;
+        assert_ne!(proxy_ok.status, 401,
             "{path}: valid node_proxy must pass the auth boundary");
+        assert!(
+            !proxy_ok.body.contains("unknown api route"),
+            "{path}: valid node_proxy must hit the registered /projects or /task-attempts prefix, not api_not_found"
+        );
 
         let mut jar = h.authorized_jar().await;
-        assert_ne!(h.get_with(&path, &mut jar).await.status, 401,
+        let browser_ok = h.get_with(&path, &mut jar).await;
+        assert_ne!(browser_ok.status, 401,
             "{path}: browser session must bypass the inner proxy-token requirement");
+        assert!(
+            !browser_ok.body.contains("unknown api route"),
+            "{path}: browser must hit the registered /projects or /task-attempts prefix, not api_not_found"
+        );
     }
 }
 
 #[tokio::test]
 #[serial_test::serial]
 async fn proxy_tokens_fail_every_direct_log_and_direct_diff_route() {
+    let _secret = with_connection_secret(SECRET);
     let node_id = uuid::Uuid::new_v4();
     let h = common::HiveHarness::configured_with_node_auth(SECRET, node_id).await;
     let id = uuid::Uuid::new_v4();
@@ -77,6 +101,7 @@ async fn proxy_tokens_fail_every_direct_log_and_direct_diff_route() {
 #[tokio::test]
 #[serial_test::serial]
 async fn by_task_id_diff_is_browser_only_not_either_token_alternative() {
+    let _secret = with_connection_secret(SECRET);
     let node_id = uuid::Uuid::new_v4();
     let h = common::HiveHarness::configured_with_node_auth(SECRET, node_id).await;
     let id = uuid::Uuid::new_v4();
@@ -108,7 +133,7 @@ async fn disabled_validator_has_no_anonymous_or_token_fallback() {
         .await.status, 401);
 }
 ```
-Use task 006's real `ws_probe_with_headers()` for the bearer-token attempt; do not simulate a WebSocket with an ordinary GET. `with_connection_secret`, `mint_connection_token` and `mint_proxy_token` remain local RAII/fixture helpers. The first test's browser assertion is load-bearing: it fails unless the existing model loaders recognize the `BrowserSessionCtx` inserted by the outer alternative middleware.
+Use task 006's real `ws_probe_with_headers()` for the bearer-token attempt; do not simulate a WebSocket with an ordinary GET. `with_connection_secret`, `mint_connection_token` and `mint_proxy_token` remain local RAII/fixture helpers — the three `configured_with_node_auth` tests MUST hold `let _secret = with_connection_secret(SECRET)` so Drop clears `VK_CONNECTION_TOKEN_SECRET` before `disabled_validator_has_no_anonymous_or_token_fallback` (which uses `configured()` and must not inherit a leftover secret). The first test's browser assertion is load-bearing: it fails unless the existing model loaders recognize the `BrowserSessionCtx` inserted by the outer alternative middleware. The `"unknown api route"` body pin is load-bearing: `api_not_found` is a JSON 404, so `assert_ne!(401)` and `assert_registered()` (SPA-html oracle) both stay green when files/create lose their `/projects` or `/task-attempts` parent nest.
 
 
 ## Change
@@ -118,6 +143,15 @@ Use task 006's real `ws_probe_with_headers()` for the bearer-token attempt; do n
 /// Node-to-node project HTTP. Browser session OR node_proxy, never connection.
 pub fn node_to_node_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
     // Existing by_remote_id_router and by_remote_id_files_router, moved without handler changes.
+    // MUST keep the old parent nest so files stay at /projects/by-remote-id/{id}/files/{*}.
+    // Merging the files router at the API root drops the /projects prefix and 404s
+    // crates/server/src/routes/projects/handlers/files.rs:112.
+    Router::new().nest(
+        "/projects",
+        Router::new()
+            .nest("/by-remote-id/{remote_project_id}", by_remote_id_router)
+            .merge(by_remote_id_files_router),
+    )
 }
 ```
 
@@ -129,6 +163,16 @@ pub fn node_to_node_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl
 /// Node-to-node task-attempt HTTP only. Deliberately excludes every WebSocket.
 pub fn node_to_node_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
     // Existing by_task_id_router minus /diff/ws, plus files/create routers, moved verbatim.
+    // MUST keep the old parent nest so files/create stay under /task-attempts/by-task-id/{id}/...
+    // Merging those routers at the API root drops the prefix and 404s
+    // worktree.rs:182 and core.rs:390.
+    Router::new().nest(
+        "/task-attempts",
+        Router::new()
+            .nest("/by-task-id/{task_id}", by_task_id_router)
+            .merge(by_task_id_files_router)
+            .merge(by_task_id_create_router),
+    )
 }
 ```
 The production direct diff `/task-attempts/{id}/diff/ws` was already moved to `connection_stream_routes` by task 013. The unrelated `/by-task-id/{task_id}/diff/ws` has no production direct caller and belongs to neither token group.
@@ -190,7 +234,9 @@ Preserve task 013's direct-route loaders and task 014's browser-versus-node_prox
   "Keep /by-task-id/{task_id}/diff/ws in the ordinary browser-session-only router and keep the attempt-id direct diff in task 013's connection group.",
   "Change only the authentication guards in the three proxy loaders so BrowserSessionCtx skips bearer revalidation while non-browser requests still validate node_proxy against this receiver's current node ID before lookup.",
   "Add node_to_node_routes as a layer separate from connection_stream_routes and create proxy_auth.rs with both proxy subtrees and both cross-class directions covered.",
-  "Do not change proxy handler behavior, resource lookup behavior, or ProxyRequestContext contents; the only claim-validation change is requiring the existing target node claim to equal this receiver."
+  "Do not change proxy handler behavior, resource lookup behavior, or ProxyRequestContext contents; the only claim-validation change is requiring the existing target node claim to equal this receiver.",
+  "Nest each node_to_node_router under the same /projects or /task-attempts parent the old router() used, so wildcard files and create keep their production prefixes.",
+  "Hold with_connection_secret in every configured_with_node_auth test and pin files/create registration with the unknown-api-route body check."
 ]
 
 
@@ -203,7 +249,8 @@ Preserve task 013's direct-route loaders and task 014's browser-versus-node_prox
   "A missing, malformed or connection-audience credential reaching a proxy resource lookup and returning 404 instead of 401.",
   "A valid browser session returning 401 from a proxy route when VK_CONNECTION_TOKEN_SECRET is set — the inner loader guard is still wrong.",
   "Editing crates/server/tests/common/mod.rs; token fixtures remain local to proxy_auth.rs.",
-  "Calling loose validate_proxy_token in a receiving loader — use validate_proxy_for_node so a token minted for another node returns 401."
+  "Calling loose validate_proxy_token in a receiving loader — use validate_proxy_for_node so a token minted for another node returns 401.",
+  "Mounting by-remote-id files or by-task-id files/create at the API root (missing the /projects or /task-attempts parent nest). Production callers construct /api/projects/by-remote-id/{id}/files/{*} and /api/task-attempts/by-task-id/{id}/files|{create}."
 ]
 
 

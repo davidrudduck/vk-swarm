@@ -1610,3 +1610,14 @@ execution_process_id-scoped tokens; frontend keys the direct URL by process id.
 - [Task 014] Retain the task-loader validation/logging match arms without adding `ProxyRequestContext` insertion — this matches the existing loader body — `crates/server/src/middleware/model_loaders.rs`
 - [Task 014] Retain lookup order: authenticate non-browser proxy requests first, then load the remote project; for by-task-id attempt routes load the task, fetch all attempts, select the most recent attempt, insert it, and continue; for create routes load the task, insert it, and continue — browser context skips only redundant proxy validation — `crates/server/src/middleware/model_loaders.rs`
 - [Task 014] Retain the `node_proxy` audience and receiver target-node claim requirement from `ConnectionTokenValidator::validate_proxy_for_node` — proxy credentials must not cross node receivers or connection-token route classes — `crates/services/src/services/connection_token.rs`
+
+### Stage-2 adjudication of `a6513e69..22b9ff6b`
+
+Both panels DEVIATES. Orchestrator:
+
+- **[BLOCKING] F1 prefix loss (kimi):** REAL. `node_to_node_router` merged wildcard files/create at the API root, so production paths `/api/projects/by-remote-id/{id}/files/{*}`, `/api/task-attempts/by-task-id/{id}/files/{*}`, `/api/task-attempts/by-task-id/{id}/create` hit `api_not_found`. Probe with valid proxy returned JSON `unknown api route`. Plan amendment locks the old parent nests (`/projects`, `/task-attempts`) and adds those three paths plus a body pin (`!contains("unknown api route")`). `assert_registered()` does not kill this mutant (api_not_found is JSON 404, not SPA HTML).
+- **[BLOCKING] F2 clippy (gpt+kimi):** REAL. Unused local RAII (`ConnectionSecretEnvGuard` / `with_connection_secret`) plus unused harness `Resp::body` / `is_spa_fallback` / `assert_registered` fail `clippy -D warnings` in the `proxy_auth` test binary. Amendment: `#[allow(dead_code)] mod common;` (same as `stream_auth.rs`) and hold `let _secret = with_connection_secret(SECRET)` in the three `configured_with_node_auth` tests so Drop clears the env before `disabled_validator`.
+- **[SHOULD-FIX] inner `validate_proxy_for_node` not discriminated (gpt+kimi F3):** DISMISSED as structural, same class as the task-013 handler-helper dismissal. Outer `require_session_or_proxy_token` already calls `validate_proxy_for_node`; production loaders already use the strict function; a loose inner call fails closed at the outer layer. Discriminating the inner call would need a harness that bypasses the outer middleware.
+- **[SHOULD-FIX] `/create` loader untested (gpt):** REAL coverage; folded into the F1 path list.
+- **[SHOULD-FIX] leftover `VK_CONNECTION_TOKEN_SECRET` (gpt):** REAL; folded into the required RAII hold.
+- **[SHOULD-FIX] missing manual-verification record (gpt):** orchestrator records after the remediating commit lands.
