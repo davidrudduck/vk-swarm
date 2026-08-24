@@ -1604,11 +1604,16 @@ mod tests {
         use axum::extract::Query;
 
         let missing = Query::<ConnectionInfoQuery>::try_from_uri(&"/x".parse().unwrap());
-        assert!(missing.is_err(), "missing execution_process_id must fail extraction");
+        assert!(
+            missing.is_err(),
+            "missing execution_process_id must fail extraction"
+        );
 
         let process_id = Uuid::new_v4();
         let present = Query::<ConnectionInfoQuery>::try_from_uri(
-            &format!("/x?execution_process_id={process_id}").parse().unwrap(),
+            &format!("/x?execution_process_id={process_id}")
+                .parse()
+                .unwrap(),
         );
         assert!(present.is_ok(), "present execution_process_id must extract");
         assert_eq!(present.unwrap().0.execution_process_id, process_id);
