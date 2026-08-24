@@ -56,6 +56,7 @@ const SystemSettings = lazy(() =>
   }))
 );
 import { UserSystemProvider, useUserSystem } from '@/components/ConfigProvider';
+import { AuthBoundary } from '@/components/auth/AuthBoundary';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import { FontProvider } from '@/components/FontProvider';
 import { SearchProvider } from '@/contexts/SearchContext';
@@ -254,7 +255,8 @@ function AppContent() {
 function App() {
   return (
     <BrowserRouter>
-      <UserSystemProvider>
+      <AuthBoundary>
+        <UserSystemProvider>
         <ClickedElementsProvider>
           <ProjectProvider>
             <FileViewerProvider>
@@ -268,7 +270,8 @@ function App() {
             </FileViewerProvider>
           </ProjectProvider>
         </ClickedElementsProvider>
-      </UserSystemProvider>
+        </UserSystemProvider>
+      </AuthBoundary>
     </BrowserRouter>
   );
 }

@@ -1713,3 +1713,7 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 4–7. Hive transport reset / in-flight delay / post-restart refresh 503 / Hive 5xx: established session still serves info/projects/tasks/auth-state/SSE; snapshot bytes/owner/count unchanged.
 
 **SC9 / TS4:** established browser sessions survive planned restart and remain usable while Hive is reset, delayed, 503-refreshing, or 5xx; revoked sessions stay revoked; the stored hash is not a cookie.
+
+## Task 016 decisions
+
+No undictated implementation choices were made.
