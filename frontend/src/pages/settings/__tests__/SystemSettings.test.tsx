@@ -150,9 +150,8 @@ describe('SystemSettings', () => {
     vi.mocked(useDatabaseStats).mockReturnValue(createQueryMock(mockStats));
 
     // Mock useDatabaseMaintenance to return mutation functions
-    const { useDatabaseMaintenance } = await import(
-      '@/hooks/useDatabaseMaintenance'
-    );
+    const { useDatabaseMaintenance } =
+      await import('@/hooks/useDatabaseMaintenance');
     vi.mocked(useDatabaseMaintenance).mockReturnValue({
       vacuum: {
         ...createMutationMock<VacuumResult>(),
@@ -245,9 +244,8 @@ describe('SystemSettings', () => {
     mockShow.mockResolvedValue('confirmed');
 
     // Mock mutateAsync to return resolved promises
-    const { useDatabaseMaintenance } = await import(
-      '@/hooks/useDatabaseMaintenance'
-    );
+    const { useDatabaseMaintenance } =
+      await import('@/hooks/useDatabaseMaintenance');
     const mockVacuumAsync = vi.fn().mockResolvedValue({});
     const mockAnalyzeAsync = vi.fn().mockResolvedValue({});
 

@@ -256,7 +256,12 @@ export default function ProcessLogsViewer({
 }: ProcessLogsViewerProps) {
   // If an assignment ID is provided, use the node log stream (remote via hive)
   if (assignmentId) {
-    return <NodeProcessLogsViewer assignmentId={assignmentId} processId={processId} />;
+    return (
+      <NodeProcessLogsViewer
+        assignmentId={assignmentId}
+        processId={processId}
+      />
+    );
   }
 
   // Otherwise, use the local log stream

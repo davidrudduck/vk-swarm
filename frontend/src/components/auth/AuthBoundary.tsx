@@ -61,7 +61,10 @@ export function AuthBoundary({ children }: Props) {
 
   const startLogin = async () => {
     const returnTo = `${window.location.origin}/api/auth/handoff/complete`;
-    const { authorize_url } = await browserAuthApi.startLogin('github', returnTo);
+    const { authorize_url } = await browserAuthApi.startLogin(
+      'github',
+      returnTo
+    );
     if (!mountedRef.current) return;
 
     const popup = window.open(
@@ -96,7 +99,11 @@ export function AuthBoundary({ children }: Props) {
   return (
     <div data-testid="login-shell">
       {authState?.oauth_available !== false && (
-        <button type="button" data-testid="login-start" onClick={() => void startLogin()}>
+        <button
+          type="button"
+          data-testid="login-start"
+          onClick={() => void startLogin()}
+        >
           Log in
         </button>
       )}

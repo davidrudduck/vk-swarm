@@ -194,14 +194,25 @@ export function SwarmSettings() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t('settings.swarm.disconnectTitle', 'Disconnect this node from Hive')}</CardTitle>
+          <CardTitle>
+            {t(
+              'settings.swarm.disconnectTitle',
+              'Disconnect this node from Hive'
+            )}
+          </CardTitle>
           <CardDescription>
-            {t('settings.swarm.disconnectHelper',
-              'Signs out EVERY browser, stops synchronisation and removes this node\u2019s Hive credentials. The node stays owned by your account, so no one else can claim it. To sign out just this browser, use Sign out in the menu.')}
+            {t(
+              'settings.swarm.disconnectHelper',
+              'Signs out EVERY browser, stops synchronisation and removes this node\u2019s Hive credentials. The node stays owned by your account, so no one else can claim it. To sign out just this browser, use Sign out in the menu.'
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button variant="destructive" data-testid="hive-disconnect" onClick={handleDisconnect}>
+          <Button
+            variant="destructive"
+            data-testid="hive-disconnect"
+            onClick={handleDisconnect}
+          >
             {t('settings.swarm.disconnectAction', 'Disconnect from Hive')}
           </Button>
         </CardContent>

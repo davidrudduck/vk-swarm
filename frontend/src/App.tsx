@@ -257,19 +257,19 @@ function App() {
     <BrowserRouter>
       <AuthBoundary>
         <UserSystemProvider>
-        <ClickedElementsProvider>
-          <ProjectProvider>
-            <FileViewerProvider>
-              <HotkeysProvider
-                initiallyActiveScopes={['*', 'global', 'kanban']}
-              >
-                <NiceModal.Provider>
-                  <AppContent />
-                </NiceModal.Provider>
-              </HotkeysProvider>
-            </FileViewerProvider>
-          </ProjectProvider>
-        </ClickedElementsProvider>
+          <ClickedElementsProvider>
+            <ProjectProvider>
+              <FileViewerProvider>
+                <HotkeysProvider
+                  initiallyActiveScopes={['*', 'global', 'kanban']}
+                >
+                  <NiceModal.Provider>
+                    <AppContent />
+                  </NiceModal.Provider>
+                </HotkeysProvider>
+              </FileViewerProvider>
+            </ProjectProvider>
+          </ClickedElementsProvider>
         </UserSystemProvider>
       </AuthBoundary>
     </BrowserRouter>

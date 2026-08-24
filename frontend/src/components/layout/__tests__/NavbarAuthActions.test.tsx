@@ -155,7 +155,9 @@ describe('browser auth actions', () => {
     fireEvent.click(screen.getByTestId('hive-disconnect'));
 
     await waitFor(() => expect(reloadSpy).toHaveBeenCalledTimes(1));
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('EVERY browser'));
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('EVERY browser')
+    );
     expect(browserAuthApi.disconnectHive).toHaveBeenCalledTimes(1);
     expect(browserAuthApi.logout).toHaveBeenCalledTimes(0);
   });

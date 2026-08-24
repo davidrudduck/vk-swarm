@@ -40,7 +40,8 @@ function connectionInfoResponse(): Response {
       assignment_id: ASSIGNMENT_ID,
       node_id: '33333333-3333-4333-8333-333333333333',
       direct_url: 'https://node.example.com',
-      relay_url: 'https://hive.example.com/v1/nodes/assignments/11111111-1111-4111-8111-111111111111/logs/ws',
+      relay_url:
+        'https://hive.example.com/v1/nodes/assignments/11111111-1111-4111-8111-111111111111/logs/ws',
       connection_token: CONNECTION_TOKEN,
       expires_at: '2026-08-23T00:00:00Z',
     }),

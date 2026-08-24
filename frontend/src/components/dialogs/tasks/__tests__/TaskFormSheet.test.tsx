@@ -649,9 +649,8 @@ describe('Template Picker Integration', () => {
 
   it('shows loading spinner when templates are loading', async () => {
     // Import TemplatePicker directly to test loading state
-    const { TemplatePicker } = await import(
-      '@/components/tasks/TemplatePicker'
-    );
+    const { TemplatePicker } =
+      await import('@/components/tasks/TemplatePicker');
 
     render(
       <TemplatePicker
@@ -670,9 +669,8 @@ describe('Template Picker Integration', () => {
 
   it('shows error state with retry button when template loading fails', async () => {
     // Import TemplatePicker directly to test error state
-    const { TemplatePicker } = await import(
-      '@/components/tasks/TemplatePicker'
-    );
+    const { TemplatePicker } =
+      await import('@/components/tasks/TemplatePicker');
 
     const mockOnRetry = vi.fn();
 

@@ -56,7 +56,12 @@ describe('token disclosure', () => {
 
   it('scanner detects deliberate JWT leak in DOM and storage', () => {
     localStorage.setItem('leak', ACCESS_JWT);
-    render(<div>{ACCESS_JWT}{REFRESH_SENTINEL}</div>);
+    render(
+      <div>
+        {ACCESS_JWT}
+        {REFRESH_SENTINEL}
+      </div>
+    );
     expect(() => assertClean(document.body.textContent ?? '')).toThrow();
     expect(() => assertClean(storageText(localStorage))).toThrow();
     localStorage.removeItem('leak');
@@ -70,7 +75,9 @@ describe('token disclosure', () => {
       refresh_token: REFRESH_SENTINEL,
     });
     render(<AuthBoundary>protected</AuthBoundary>);
-    await waitFor(() => expect(screen.getByTestId('login-shell')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('login-shell')).toBeInTheDocument()
+    );
     scanBrowserSurfaces();
   });
 
@@ -108,12 +115,22 @@ describe('token disclosure', () => {
     function Probe() {
       const [id, setId] = React.useState('');
       React.useEffect(() => {
-        void configApi.getConfig().then((info) => setId(info.analytics_user_id));
+        void configApi
+          .getConfig()
+          .then((info) => setId(info.analytics_user_id));
       }, []);
       return <div data-testid="authorized-probe">{id}</div>;
     }
-    render(<AuthBoundary><Probe /></AuthBoundary>);
-    await waitFor(() => expect(screen.getByTestId('authorized-probe')).toHaveTextContent('probe-user'));
+    render(
+      <AuthBoundary>
+        <Probe />
+      </AuthBoundary>
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('authorized-probe')).toHaveTextContent(
+        'probe-user'
+      )
+    );
     scanBrowserSurfaces();
   });
 });

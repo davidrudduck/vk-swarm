@@ -1,5 +1,11 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  act,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { browserAuthApi } = vi.hoisted(() => ({
@@ -14,7 +20,11 @@ const { browserAuthApi } = vi.hoisted(() => ({
 vi.mock('@/lib/api/browserAuth', () => ({ browserAuthApi }));
 
 import { AuthBoundary } from '../AuthBoundary';
-import { makeRequest, onUnauthorized, notifyUnauthorized } from '@/lib/api/utils';
+import {
+  makeRequest,
+  onUnauthorized,
+  notifyUnauthorized,
+} from '@/lib/api/utils';
 
 const authorized = { authorized: true, oauth_available: true };
 const unauthorized = { authorized: false, oauth_available: true };
@@ -54,12 +64,22 @@ describe('AuthBoundary', () => {
 
     await flushPromises();
     vi.useRealTimers();
-    await waitFor(() => expect(screen.getByTestId('login-shell')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('login-shell')).toBeInTheDocument()
+    );
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('/api/info'));
-    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('/api/auth/status'));
-    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('/api/projects'));
-    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('/api/events'));
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('/api/info')
+    );
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/status')
+    );
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('/api/projects')
+    );
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('/api/events')
+    );
     expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('ws'));
   });
 
@@ -133,7 +153,9 @@ describe('AuthBoundary', () => {
     expect(screen.getByText('protected')).toBeInTheDocument();
     const callsAfterAuthorization = browserAuthApi.getState.mock.calls.length;
     await act(async () => vi.advanceTimersByTime(5000));
-    expect(browserAuthApi.getState).toHaveBeenCalledTimes(callsAfterAuthorization);
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(
+      callsAfterAuthorization
+    );
   });
 
   it('stops polling when the popup closes', async () => {
@@ -197,7 +219,10 @@ describe('AuthBoundary', () => {
   });
 
   it('does not open a popup or restart polling after unmount during login', async () => {
-    let resolveStartLogin: (value: { handoff_id: string; authorize_url: string }) => void;
+    let resolveStartLogin: (value: {
+      handoff_id: string;
+      authorize_url: string;
+    }) => void;
     browserAuthApi.startLogin.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -209,7 +234,10 @@ describe('AuthBoundary', () => {
     fireEvent.click(screen.getByTestId('login-start'));
     unmount();
 
-    resolveStartLogin!({ handoff_id: 'handoff', authorize_url: 'https://hive.test/login' });
+    resolveStartLogin!({
+      handoff_id: 'handoff',
+      authorize_url: 'https://hive.test/login',
+    });
     await flushPromises();
     expect(window.open).not.toHaveBeenCalled();
     const callsAfterUnmount = browserAuthApi.getState.mock.calls.length;
@@ -218,7 +246,10 @@ describe('AuthBoundary', () => {
   });
 
   it('hides login-start when OAuth is unavailable', async () => {
-    browserAuthApi.getState.mockResolvedValue({ authorized: false, oauth_available: false });
+    browserAuthApi.getState.mockResolvedValue({
+      authorized: false,
+      oauth_available: false,
+    });
     render(<AuthBoundary>protected</AuthBoundary>);
     await flushPromises();
     expect(screen.getByTestId('login-shell')).toBeInTheDocument();
