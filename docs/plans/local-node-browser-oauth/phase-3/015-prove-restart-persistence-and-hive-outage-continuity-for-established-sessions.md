@@ -2,7 +2,7 @@
 id: "015"
 phase: 3
 title: "Prove restart persistence and Hive-outage continuity for established sessions"
-status: ready
+status: passed
 depends_on: ["011","012","013"]
 parallel: false
 conflicts_with: []

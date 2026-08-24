@@ -1658,3 +1658,58 @@ GATE_FAIL_CHECK=none
 - Plan-lint advisory sibling `browser_auth_routes.rs` was read for login/owner/live-count/logout patterns; it was not added because `allowed_change` is create-only.
 - No real undictated implementation choice was made.
 - `hive_5xx_continuity` uses spawn+await_reached+count+1+abort because RemoteClient retries 5xx; plan amendment b65426f7 locked this.
+
+### Stage-2 adjudication of `b65426f7..f11ba888`
+
+gpt DEVIATES solely for missing mandatory ledger evidence (manual verification / SC9 walk-through). kimi CONFORMS on the committed code. Orchestrator: the code finding is empty; the missing record is this close section.
+
+kimi mutation notes (committed code already conforming; not defects):
+- skip-restart-before-refresh SURVIVES because `write_refresh_only_credentials` alone forces refresh; restart remains in the committed test for generation/migration hygiene.
+- ws_probe SURVIVES as a status oracle (tungstenite sees HTTP 200 + event-stream); committed code uses only `sse_probe`.
+- file-exists-only snapshot SURVIVES as a pure guard; committed code compares exact bytes.
+
+### Task 015 closure — gates, panels, provenance
+
+**Commits:** plan amendment `b65426f7` (hive_5xx spawn+abort); source `f11ba888`.
+
+**Gate transcript (verbatim):**
+
+```
+WAI gate: topic=local-node-browser-oauth task=015 commit=f11ba888 allowed_change=create
+  - file-set: only declared files changed (2 paths)
+  - create: addition recorded across b65426f7..f11ba888
+  - typecheck: override command exit 0
+  - tests: scope 'crates/server/tests/restart_outage.rs' green
+CONFORMS: task 015 passed all deterministic gates
+GATE_FAIL_CHECK=none
+```
+
+**Panel:** gpt DEVIATES (ledger evidence only) + kimi CONFORMS. Implementation matches the amended contract; this section closes the evidence gap.
+
+**3× flake (`cargo test -p server --test restart_outage -- --test-threads=1`):**
+```
+=== run 1 ===
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 57.84s
+=== run 2 ===
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 63.80s
+=== run 3 ===
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 69.43s
+```
+
+**SSE census:** every `/api/events` call is `sse_probe` (`restart_outage.rs:72-79`). `ws_probe` is absent from the file. Assertion: status 200 and content-type starts with `text/event-stream`.
+
+**Exact method/path arrival/count (tests 4–7):**
+- transport reset: `mock_hive_connection_reset("POST", "/v1/oauth/web/init")` then `hive_request_count == baseline + 1` (`restart_outage.rs:154-171`).
+- delayed timeout: `mock_hive_delayed("POST", "/v1/oauth/web/init")`; seams while pending; then count+1 (`:185-203`).
+- refresh 503: restart → `write_refresh_only_credentials("post-restart-refresh")` → `mock_hive_failure("POST", "/v1/tokens/refresh", 503)` → spawn `GET /api/organizations` → count+1 (`:213-233`).
+- Hive 5xx: `mock_hive_failure("POST", "/v1/oauth/web/init", 503)` → spawn handoff/init → count+1 → abort (`:247-264`). Blocking `post_with` mutant: left 5 right 2 (kimi).
+
+**RED / mutation self-check:** `restart_rejects_the_stored_hash_presented_as_a_cookie` presents `token_hash` as `vks_browser_session` after restart → 401; unknown token → 401 (`:111-120`).
+
+**SC9 walk-through:**
+1. Planned idle restart: generation+1, seams, exact credential bytes + owner UUID + live count unchanged (`:91-102`).
+2. Stored-hash cookie rejected after restart (`:107-120`).
+3. Logout then restart: raw replay 401, `revoked_at` Some (`:125-144`).
+4–7. Hive transport reset / in-flight delay / post-restart refresh 503 / Hive 5xx: established session still serves info/projects/tasks/auth-state/SSE; snapshot bytes/owner/count unchanged.
+
+**SC9 / TS4:** established browser sessions survive planned restart and remain usable while Hive is reset, delayed, 503-refreshing, or 5xx; revoked sessions stay revoked; the stored hash is not a cookie.
