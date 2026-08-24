@@ -44,7 +44,7 @@ import { OpenInIdeButton } from '@/components/ide/OpenInIdeButton';
 import { useTranslation } from 'react-i18next';
 import { OAuthDialog } from '@/components/dialogs/global/OAuthDialog';
 import { useUserSystem } from '@/components/ConfigProvider';
-import { oauthApi } from '@/lib/api';
+import { browserAuthApi } from '@/lib/api';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import ThemeToggle from '@/components/ThemeToggle';
 
@@ -122,12 +122,15 @@ export function Navbar() {
     }
   };
 
-  const handleOAuthLogout = async () => {
+  // Sign out THIS BROWSER only. The node stays connected to the hive and other browsers keep
+  // their sessions; disconnecting the node is a separate, deliberately harder action in
+  // Settings -> Swarm.
+  const handleBrowserSignOut = async () => {
     try {
-      await oauthApi.logout();
-      await reloadSystem();
+      await browserAuthApi.logout();
+      window.location.reload();
     } catch (err) {
-      console.error('Error logging out:', err);
+      console.error('Failed to sign out of this browser:', err);
     }
   };
 
@@ -318,7 +321,10 @@ export function Navbar() {
                   <DropdownMenuSeparator />
 
                   {isOAuthLoggedIn ? (
-                    <DropdownMenuItem onSelect={handleOAuthLogout}>
+                    <DropdownMenuItem
+                      data-testid="navbar-sign-out"
+                      onSelect={handleBrowserSignOut}
+                    >
                       <LogOut className="mr-2 h-4 w-4" />
                       {t('common:signOut')}
                     </DropdownMenuItem>

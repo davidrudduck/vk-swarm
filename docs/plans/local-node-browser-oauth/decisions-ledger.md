@@ -1746,3 +1746,11 @@ Final re-review `671b1297..e0d91164`: gpt CONFORMS + kimi CONFORMS.
 **TS5:** unauthorized bootstrap only `GET /api/auth/state`; authorized then mounts `UserSystemProvider`; `makeRequest` 401 → `notifyUnauthorized` tears down to login-shell.
 
 **INFO (not defects):** test 6b asserts login-shell visibility only (null state also renders it); `startLogin` has no `.catch` (contract snippet).
+
+## Task 017 decisions
+
+No undictated implementation choices were made.
+
+The locked logout grep is scoped to `frontend/src` by plan amendment; historical docs and remote-frontend callers are intentionally excluded.
+
+The i18n check is pre-existing red and is not a blocker for this task.
