@@ -11,7 +11,11 @@ sources:
 generated: 2026-07-09
 ---
 
-This guide covers configuring Vibe Kanban for network access, including OAuth setup for non-secure origins (plain HTTP on LAN).
+This guide covers configuring the **Hive remote frontend** for network access, including OAuth setup for non-secure origins (plain HTTP on LAN).
+
+<Note>
+The **local node's** browser session is a different origin and a different cookie. Operators of a LAN-bound node should read [Browser Authorization](/configuration-customisation/browser-authorization).
+</Note>
 
 ## Overview
 
@@ -238,7 +242,9 @@ Monitor these endpoints:
 
 ## Related Documentation
 
-- [Non-Loopback Sign-In](/features/non-loopback-signin) - User guide for LAN sign-in
+- [Sign in to a local node](/features/local-node-browser-login) — local **node** browser login (different from this page)
+- [Browser Authorization](/configuration-customisation/browser-authorization) — local-node cookies, ownership, and the deploy verifier
+- [Non-Loopback Sign-In](/features/non-loopback-signin) - User guide for Hive UI LAN sign-in
 - [Swarm/Hive Setup](/swarm-hive-setup) - Full swarm architecture configuration
 - [Authentication Token Management](/architecture/auth-token-management) - Token handling details
 - [Global Settings](/configuration-customisation/global-settings) - Application settings

@@ -1,6 +1,15 @@
 ---
 title: "Browser Authorization"
 description: "How browsers sign in to a local node over a trusted LAN, and what that means for cookies, ownership, and Hive outages"
+sidebarTitle: "Browser Authorization"
+audience: admin
+component: local-node-browser-oauth
+sources:
+  - crates/server/src/auth/cookies.rs
+  - crates/server/src/routes/oauth.rs
+  - crates/server/src/routes/browser_auth.rs
+  - scripts/verify-local-node-browser-oauth.sh
+generated: 2026-08-26
 ---
 
 Every browser must complete Hive OAuth before it can read or change data on this node.
@@ -13,7 +22,7 @@ This page is about the **local node's** browser session. Binding the node beyond
 
 ## Trusted-LAN plaintext risk
 
-The session cookie is named `vks_browser_session`. The short-lived OAuth binding cookie is named `vks_browser_binding`. Both are set as `HttpOnly; SameSite=Lax; Path=/`. They deliberately have **no `Secure` attribute** so they are sent on plain HTTP (the supported trusted-LAN deployment).
+The session cookie is named `vks_browser_session` (`Max-Age` five years). The short-lived OAuth binding cookie is named `vks_browser_binding` (`Max-Age` ten minutes, matching the handoff TTL). Both are set as `HttpOnly; SameSite=Lax; Path=/`. They deliberately have **no `Secure` attribute** so they are sent on plain HTTP (the supported trusted-LAN deployment).
 
 <Warning>
 On plain HTTP, anyone who can observe LAN traffic can copy `vks_browser_session` and act as the owner. Run the node only on a network you trust. TLS is future work and is out of scope here. How to bind the node beyond loopback is in [Network Access](/configuration-customisation/network-access).
@@ -65,3 +74,11 @@ PASS unknown api path is 404
 PASS unknown api path is not SPA html
 All browser-authorization boundary checks passed
 ```
+
+Bind the node on the LAN with `HOST=0.0.0.0` (see [Network Access](/getting-started#network-access)). The verifier must be pointed at that non-loopback URL, not `127.0.0.1`.
+
+## Related
+
+- [Sign in to a local node](/features/local-node-browser-login) — what operators tell users
+- [Local-node browser authorization](/development/browser-authorization) — routes, schema, tests
+- [Network Access](/configuration-customisation/network-access) — Hive remote-frontend LAN OAuth (different origin)

@@ -64,7 +64,8 @@
           "core-features/mobile-experience",
           "core-features/error-resilience",
           "core-features/task-cards",
-          "features/non-loopback-signin"
+          "features/non-loopback-signin",
+          "features/local-node-browser-login"
         ]
       },
       {
@@ -110,6 +111,7 @@
           "development/local-docker-dev",
           "development/remote-frontend",
           "development/pkce-implementation",
+          "development/browser-authorization",
           "architecture/ui-responsive-design",
           "architecture/frontend/file-viewer-components",
           "architecture/storage-paths",
