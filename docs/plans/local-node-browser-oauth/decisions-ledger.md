@@ -1921,7 +1921,7 @@ Every new route/middleware is reached from the served router `crates/server/src/
 | SC6 | 011 | Owner pin; `token_disclosure.rs` different_owner 400; live pin `node_owner.slot=1` retained after disconnect |
 | SC7 | 012 | Browser logout revokes one session; TS7 B4 A login-shell, C still signed in (`D9BE529A` revoked 03:34:49) |
 | SC8 | 012 | Disconnect revoke-all; TS7 B5 three sessions revoked together 03:38:12; owner pin unchanged |
-| SC9 | 015 | `restart_outage.rs` 7/7; TS7 B3 Hive 502, A projects/task still work, B init 502, restore health 200, no outage revokes |
+| SC9 | 015 | `restart_outage.rs` 7/7 (SSE `/api/events` during outage). TS7 B3 Hive 502, A projects/task still work, B init 502, restore health 200, no outage revokes. Live logs/SSE were not separately watched in the live window — automated suite is that sub-observation |
 | SC10 | 018 | `token_disclosure.rs` 4/4 + `TokenDisclosure.test.tsx` 3/3; TS7 B7 cookie/storage/URL clean |
 | TS1 | 004 | Handoff create/claim unit tests |
 | TS2 | 011 | Served-router two-jar OAuth tests |
@@ -1955,4 +1955,3 @@ All browser-authorization boundary checks passed
 ```
 
 VERIFIER_EXIT=0. Sidecar A6 probed: real Hive + non-loopback LAN browsers available. Frozen `.decisions.json` not edited.
-
