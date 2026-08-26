@@ -27,7 +27,8 @@ Required tests:
 1. Unauthorized mount calls only `GET /api/auth/state`, renders `login-shell`, and never calls `/api/info`, `/api/auth/status`, projects, SSE, or WS.
 2. Clicking `login-start` calls `browserAuthApi.startLogin('github', `${window.location.origin}/api/auth/handoff/complete`)` exactly once, opens the returned `authorize_url` in a popup, and polls only public `/api/auth/state`.
 3. Poll responses false,false,true cause protected children to mount only after true; assert no protected request before then. After children mount, advance timers by 5000ms and assert `getState` call count is unchanged (pins "stop polling on authorization").
-4. Popup close while still unauthorized stops polling and keeps the login shell.
+4. Popup close while still unauthorized: the close tick still calls `getState` once (final observation), then stops polling and keeps the login shell. After that tick, advance 1000ms and assert `getState` count is unchanged.
+4e. Popup close after the session cookie exists: `getState` on the close tick returns `authorized: true` and protected children mount with no extra refresh. This pins the TS7 race where OAuth finished in the popup, the popup closed, and the parent aborted before observing `/api/auth/state`.
 5. Deadline expiry stops polling and keeps the login shell.
 6. Unmount clears interval/deadline and closes no unrelated window; advancing timers makes no further calls.
 6b. Render under `React.StrictMode`. After the initial `getState` resolves, the login-shell is visible (the live effect must still accept the response). The app entry (`frontend/src/main.tsx:19-26`) wraps `<App />` in StrictMode, which replays setup-cleanup-setup on the same instance.
@@ -76,7 +77,29 @@ const returnTo = `${window.location.origin}/api/auth/handoff/complete`;
 const { authorize_url } = await browserAuthApi.startLogin('github', returnTo);
 const popup = window.open(authorize_url, 'hive-oauth', 'popup,width=600,height=720');
 ```
-Poll **only** public `getState()` on a bounded interval until `authorized === true`, popup closes, deadline expires, or component unmounts. Locked constants (do not invent others): `POLL_INTERVAL_MS = 1000`, `LOGIN_DEADLINE_MS = 10 * 60 * 1000` (spec handoff TTL). Login-shell markup uses `data-testid="login-shell"`; the start button uses `data-testid="login-start"`. On true, stop polling and mount protected `children`. Popup-close/deadline remain on the login shell and stop polling. Cleanup clears every timer and prevents state updates after unmount. The app runs under `React.StrictMode` (`frontend/src/main.tsx:19-26`). A `mountedRef` that is set `false` in cleanup and never restored is forbidden: StrictMode cleanup+replay is the same instance, so the live effect would ignore `getState` and abort every poll. Locked repair: set `mountedRef.current = true` at the start of the mount effect (before registering `onUnauthorized` or calling `getState`). After `await startLogin(...)`, if `!mountedRef.current`, return without `window.open` and without installing timers. `startLogin` must call the shared `stopPolling` before installing a new interval/deadline so a second click cannot orphan the first interval. Never call `/api/info` or `/api/auth/status` from the unauthorized shell. The existing protected `OAuthDialog` remains unchanged for already-authorized app workflows.
+Poll **only** public `getState()` on a bounded interval until `authorized === true`, popup closes, deadline expires, or component unmounts. Locked constants (do not invent others): `POLL_INTERVAL_MS = 1000`, `LOGIN_DEADLINE_MS = 10 * 60 * 1000` (spec handoff TTL). Login-shell markup uses `data-testid="login-shell"`; the start button uses `data-testid="login-start"`. On true, stop polling and mount protected `children`. Deadline remains on the login shell and stops polling. Popup-close must NOT abort before `getState`: the poll body is locked to:
+
+```ts
+const poll = async () => {
+  if (!mountedRef.current) {
+    stopPolling();
+    return;
+  }
+  const closed = Boolean(popupRef.current?.closed);
+  const state = await browserAuthApi.getState();
+  if (!mountedRef.current) return;
+  if (state.authorized) {
+    stopPolling();
+    setAuthState(state);
+    return;
+  }
+  if (closed) {
+    stopPolling();
+  }
+};
+```
+
+A close-first guard (`if (popupRef.current?.closed) { stopPolling(); return; }` before `getState`) is forbidden — that is the TS7 refresh-after-login bug. Cleanup clears every timer and prevents state updates after unmount. The app runs under `React.StrictMode` (`frontend/src/main.tsx:19-26`). A `mountedRef` that is set `false` in cleanup and never restored is forbidden: StrictMode cleanup+replay is the same instance, so the live effect would ignore `getState` and abort every poll. Locked repair: set `mountedRef.current = true` at the start of the mount effect (before registering `onUnauthorized` or calling `getState`). After `await startLogin(...)`, if `!mountedRef.current`, return without `window.open` and without installing timers. `startLogin` must call the shared `stopPolling` before installing a new interval/deadline so a second click cannot orphan the first interval. Never call `/api/info` or `/api/auth/status` from the unauthorized shell. The existing protected `OAuthDialog` remains unchanged for already-authorized app workflows.
 
 **File:** `frontend/src/lib/api/utils.ts` — add a single module-level unauthorized handler and two exports; change nothing else in this file:
 ```ts
@@ -127,7 +150,8 @@ Inside `makeRequest`, after a successful `fetch` (before the `return`), if `resp
   "Throwing from makeRequest on 401, or notifying more than once per 401 response.",
   "A mountedRef that stays false after StrictMode cleanup+replay, so the live effect ignores getState.",
   "Installing a new login poll interval without first clearing any existing interval (orphaned poll after second click).",
-  "Calling window.open or installing timers after startLogin resolves if the component has unmounted."
+  "Calling window.open or installing timers after startLogin resolves if the component has unmounted.",
+  "Aborting the login poll on popup.closed before a final getState — OAuth that completed in the popup would leave the parent on the login shell until a manual refresh."
 ]
 
 
@@ -136,7 +160,7 @@ Declared decision points (from the spec; do not edit here):
 
 
 ## Manual verification (record in decisions-ledger)
-1. `cd frontend && npx vitest run src/components/auth/__tests__/AuthBoundary.test.tsx` — 12 executable tests green (original 9 plus 6b StrictMode, 6c unmount-during-startLogin, 6d single remaining poll after second click).
+1. `cd frontend && npx vitest run src/components/auth/__tests__/AuthBoundary.test.tsx` — 13 executable tests green (original 9 plus 6b StrictMode, 6c unmount-during-startLogin, 6d single remaining poll after second click, 4e close-then-authorized).
 2. `WAI_ROOT="$HOME/.agents/wai"; test -x "$WAI_ROOT/scripts/task-gate.sh"; WAI_TYPECHECK_CMD="cd frontend && npx tsc --noEmit" WAI_TEST_CMD="cd frontend && npx vitest run {scope}" bash "$WAI_ROOT/scripts/task-gate.sh" local-node-browser-oauth 016` exits 0. (The runner must be pinned explicitly: a `.test.tsx` scope would otherwise be dispatched to `node --test`, which cannot execute TSX.)
 3. `cd frontend && npm run lint && npx tsc --noEmit && npx vitest run` — all green.
 4. Manual: run the node with an unauthorized browser and confirm the network panel shows exactly one `/api/auth/state` request and no `/api/info`, no SSE, no WS.
