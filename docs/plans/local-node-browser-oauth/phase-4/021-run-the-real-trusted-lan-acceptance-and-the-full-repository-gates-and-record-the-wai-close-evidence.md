@@ -2,7 +2,7 @@
 id: "021"
 phase: 4
 title: "Run the real trusted-LAN acceptance and the full repository gates, and record the WAI close evidence"
-status: ready
+status: passed
 depends_on: ["015","017","018","019","020"]
 parallel: false
 conflicts_with: []
