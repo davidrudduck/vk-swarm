@@ -1977,3 +1977,6 @@ Logged from `/wai:close` code-review round 1 (`docs/plans/local-node-browser-oau
 | N13 | `crates/remote/src/routes/tasks.rs:822` | Attempt id in process-scoped token. Pre-existing, unmodified in this range. |
 | N14 | TS7 A3 / B3 / B5 / login-shell / cookie Secure | Already disclosed: flake `F-2026-08-04-02`; B3 SSE not watched; second Hive account unavailable; login-shell UX locked; trusted-LAN cookies have no `Secure`. |
 | N15 | `frontend/node_modules/prettier` 3.7.3 vs lock 3.6.1 | Worktree install drift, not this diff. `pnpm-lock.yaml` still pins 3.6.1; frozen-lockfile install is the fix. |
+| N16 | `AuthBoundary` second `startLogin` overwrites `vks_browser_binding` | SC3/SC4 single-claim + one binding cookie; first popup HTML is "start again". Not a round-2 regression. |
+| N17 | `window.open` after `await startLogin` can lose the user-gesture | Login-shell UX locked (N14); 016 needs `authorize_url` before open. |
+| N18 | Blocked-re-click test uses dynamic `callsAfterClose` | Adjacent-mutant gap; `popupRef = null` mutant still fails. Same class as N8. |
