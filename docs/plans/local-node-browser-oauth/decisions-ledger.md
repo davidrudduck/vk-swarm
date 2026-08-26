@@ -1863,6 +1863,13 @@ Luna copied that locked block verbatim. `git diff --check 59ca551a..cb85f6fd` cl
 
 NO PUSH.
 
+## Task 016 amendment — poll after popup close
+
+- Root cause confirmed: the poll returned on `popup.closed` before calling public `getState`, so a completed OAuth flow that closed its popup left the parent on the login shell.
+- Test-first RED observed in the two amended cases: the close tick made only the mount call, and authorization after popup close did not mount protected children.
+- Replaced the poll body with the locked close-aware ordering. Focused `AuthBoundary` suite passes 13/13; `npx tsc --noEmit`, `npm run lint`, and `git diff --check` pass.
+- Source commit: `test(016): observe auth state after oauth popup close`. No push; `.cargo-tmp/` remains untracked.
+
 ## Task 019 decisions
 
 No undictated implementation choices were made; the named siblings were read.

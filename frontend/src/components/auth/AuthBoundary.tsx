@@ -76,15 +76,20 @@ export function AuthBoundary({ children }: Props) {
     stopPolling();
 
     const poll = async () => {
-      if (!mountedRef.current || popupRef.current?.closed) {
+      if (!mountedRef.current) {
         stopPolling();
         return;
       }
+      const closed = Boolean(popupRef.current?.closed);
       const state = await browserAuthApi.getState();
       if (!mountedRef.current) return;
       if (state.authorized) {
         stopPolling();
         setAuthState(state);
+        return;
+      }
+      if (closed) {
+        stopPolling();
       }
     };
 

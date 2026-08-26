@@ -172,8 +172,34 @@ describe('AuthBoundary', () => {
       vi.advanceTimersByTime(1000);
       await Promise.resolve();
     });
-    expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId('login-shell')).toBeInTheDocument();
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(2);
+  });
+
+  it('mounts children when popup closes after authorization', async () => {
+    const popup = popupStub();
+    window.open = vi.fn(() => popup) as never;
+    browserAuthApi.getState.mockImplementation(async () =>
+      browserAuthApi.getState.mock.calls.length === 2 ? authorized : unauthorized
+    );
+    render(<AuthBoundary>protected</AuthBoundary>);
+    await flushPromises();
+    fireEvent.click(screen.getByTestId('login-start'));
+    await flushPromises();
+    popup.closed = true;
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('protected')).toBeInTheDocument();
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(2);
   });
 
   it('stops polling at the login deadline', async () => {
