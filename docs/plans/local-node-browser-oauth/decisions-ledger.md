@@ -1906,3 +1906,53 @@ ALL VERIFIER TESTS PASSED
 **Manual verification 4-5:** ORCHESTRATOR-ONLY. No listener on 8080/3001/4002 at close. Live feature-branch + main contrast deferred to task 021 (which already requires the deployed verifier transcript). The `open_info` fixture is the automated stand-in for a `main` node with unprotected `/api/info`.
 
 NO PUSH.
+
+## Reachability gate
+
+Every new route/middleware is reached from the served router `crates/server/src/routes/mod.rs` (`router_with_state` / public, protected, `connection_stream_routes`, `node_to_node_routes`). Every new frontend component is reached from `frontend/src/App.tsx` → `AuthBoundary` wrapping `UserSystemProvider` inside `BrowserRouter`.
+
+| Criterion | Owning task | Evidence |
+|---|---|---|
+| SC1 | 008 | Protected `/api` 401 vs public health/auth-state/handoff; `crates/server/tests/browser_auth_routes.rs` + verifier B6 |
+| SC2 | 013 | `stream_auth.rs` 5/5; anonymous WS/SSE 401 before upgrade |
+| SC3 | 010 | Handoff claim isolation; TS7 B1 replay complete URL HTTP 400, B stays unauthorized |
+| SC4 | 010 | Atomic single claim + expiry; claimed handoff replay 400 on 9012 |
+| SC5 | 011 | HttpOnly session cookie, hash-only store; TS7 B2 restart, A still signed in |
+| SC6 | 011 | Owner pin; `token_disclosure.rs` different_owner 400; live pin `node_owner.slot=1` retained after disconnect |
+| SC7 | 012 | Browser logout revokes one session; TS7 B4 A login-shell, C still signed in (`D9BE529A` revoked 03:34:49) |
+| SC8 | 012 | Disconnect revoke-all; TS7 B5 three sessions revoked together 03:38:12; owner pin unchanged |
+| SC9 | 015 | `restart_outage.rs` 7/7; TS7 B3 Hive 502, A projects/task still work, B init 502, restore health 200, no outage revokes |
+| SC10 | 018 | `token_disclosure.rs` 4/4 + `TokenDisclosure.test.tsx` 3/3; TS7 B7 cookie/storage/URL clean |
+| TS1 | 004 | Handoff create/claim unit tests |
+| TS2 | 011 | Served-router two-jar OAuth tests |
+| TS3 | 014 | `proxy_auth.rs` 4/4 + `stream_auth.rs` census |
+| TS4 | 015 | `restart_outage.rs` 7/7 |
+| TS5 | 016 | `AuthBoundary.test.tsx` 13/13 including 4e popup-close authorize |
+| TS6 | 018 | Sentinel scanners |
+| TS7 | 021 | This run: LAN `http://10.69.96.233:9012` commit `b776159b` 2026-08-26 |
+
+D5 UI (017, no covers_criteria): `NavbarAuthActions.test.tsx` 4/4; live B4 vs B5.
+
+VERDICT: PASS
+
+## Deploy verification
+
+Isolated feature-branch node. LAN URL: `http://10.69.96.233:9012`. Build commit: `b776159b`. Branch: `gentle-mongoose`. Date: 2026-08-26. Health: `{"status":"ok","version":"0.0.125","git_commit":"b776159b","git_branch":"gentle-mongoose","database_ready":true}`.
+
+```
+$ bash scripts/verify-local-node-browser-oauth.sh http://10.69.96.233:9012
+PASS health is public
+PASS auth state is public
+PASS auth state has the exact minimal shape
+PASS info is protected
+PASS projects are protected
+PASS status is protected
+PASS events SSE is protected
+PASS live logs are protected
+PASS unknown api path is 404
+PASS unknown api path is not SPA html
+All browser-authorization boundary checks passed
+```
+
+VERIFIER_EXIT=0. Sidecar A6 probed: real Hive + non-loopback LAN browsers available. Frozen `.decisions.json` not edited.
+
