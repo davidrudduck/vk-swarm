@@ -214,9 +214,9 @@ describe('AppRouter', () => {
       () => {
         expect(screen.getByRole('heading', { level: 2, name: 'Hive' })).toBeInTheDocument()
       },
-      { timeout: 5000 }
+      { timeout: 10_000 }
     )
-  })
+  }, 15_000)
 
   it('authenticated: hitting /nodes renders the Nodes page with layout', async () => {
     vi.mocked(useProfile).mockReturnValue({

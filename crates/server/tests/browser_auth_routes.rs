@@ -64,7 +64,11 @@ async fn protected_api_is_denied_by_default() {
         );
         // Frontend `notifyUnauthorized` fires only on non-JSON 401. A JSON body
         // here would silently stop tearing down a dead browser session.
-        let ct = res.content_type.as_deref().unwrap_or("").to_ascii_lowercase();
+        let ct = res
+            .content_type
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
         assert!(
             !ct.contains("application/json"),
             "{path} browser-session 401 must not be application/json (ct {:?}, body: {})",

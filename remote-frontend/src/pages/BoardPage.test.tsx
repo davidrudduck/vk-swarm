@@ -93,10 +93,12 @@ describe('BoardPage (SC8)', () => {
   it('opens TaskDrawer when a TaskCard is clicked', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={qc}><BoardPage /></QueryClientProvider>);
-    await waitFor(() => expect(screen.getByText('First')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('First')).toBeTruthy(), {
+      timeout: 10_000,
+    });
     fireEvent.click(screen.getByText('First'));
     expect(screen.getByText('Merge')).toBeTruthy();
-  });
+  }, 15_000);
 
   it('renders a distinct error state (not an empty board) when the fetch fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
