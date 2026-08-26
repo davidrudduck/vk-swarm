@@ -74,7 +74,8 @@ export function AuthBoundary({ children }: Props) {
         'popup,width=600,height=720'
       );
       if (!popup) {
-        popupRef.current = null;
+        // Do not clobber an already-open popup's ref: a blocked re-click
+        // would otherwise make `closed` permanently false.
         return;
       }
       popupRef.current = popup;

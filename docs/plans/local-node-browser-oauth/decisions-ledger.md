@@ -1976,3 +1976,4 @@ Logged from `/wai:close` code-review round 1 (`docs/plans/local-node-browser-oau
 | N12 | `crates/services/src/services/node_cache.rs:302-360` | `do_sync` cancellation mid-flight not proven. Self-heals next pass. |
 | N13 | `crates/remote/src/routes/tasks.rs:822` | Attempt id in process-scoped token. Pre-existing, unmodified in this range. |
 | N14 | TS7 A3 / B3 / B5 / login-shell / cookie Secure | Already disclosed: flake `F-2026-08-04-02`; B3 SSE not watched; second Hive account unavailable; login-shell UX locked; trusted-LAN cookies have no `Secure`. |
+| N15 | `frontend/node_modules/prettier` 3.7.3 vs lock 3.6.1 | Worktree install drift, not this diff. `pnpm-lock.yaml` still pins 3.6.1; frozen-lockfile install is the fix. |

@@ -189,7 +189,9 @@ describe('AuthBoundary', () => {
     const popup = popupStub();
     window.open = vi.fn(() => popup) as never;
     browserAuthApi.getState.mockImplementation(async () =>
-      browserAuthApi.getState.mock.calls.length === 2 ? authorized : unauthorized
+      browserAuthApi.getState.mock.calls.length === 2
+        ? authorized
+        : unauthorized
     );
     render(<AuthBoundary>protected</AuthBoundary>);
     await flushPromises();
@@ -364,5 +366,41 @@ describe('AuthBoundary', () => {
     const callsAfterReject = browserAuthApi.getState.mock.calls.length;
     await act(async () => vi.advanceTimersByTime(1000));
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(callsAfterReject);
+  });
+
+  it('does not clobber an open popup when a later window.open is blocked', async () => {
+    const popup = popupStub();
+    window.open = vi
+      .fn()
+      .mockReturnValueOnce(popup)
+      .mockReturnValueOnce(null) as never;
+    render(<AuthBoundary>protected</AuthBoundary>);
+    await flushPromises();
+    fireEvent.click(screen.getByTestId('login-start'));
+    await flushPromises();
+    fireEvent.click(screen.getByTestId('login-start'));
+    await flushPromises();
+    popup.closed = true;
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const callsAfterClose = browserAuthApi.getState.mock.calls.length;
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(callsAfterClose);
+  });
+
+  it('stays on the login shell if startLogin rejects', async () => {
+    browserAuthApi.startLogin.mockRejectedValueOnce(new Error('hive down'));
+    render(<AuthBoundary>protected</AuthBoundary>);
+    await flushPromises();
+    fireEvent.click(screen.getByTestId('login-start'));
+    await flushPromises();
+    expect(window.open).not.toHaveBeenCalled();
+    expect(screen.getByTestId('login-shell')).toBeInTheDocument();
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
   });
 });
