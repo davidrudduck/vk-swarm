@@ -60,27 +60,34 @@ describe('AuthBoundary', () => {
 
   it('only checks public auth state on unauthorized mount', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
-    render(<AuthBoundary>protected</AuthBoundary>);
+    function Probe() {
+      React.useEffect(() => {
+        void fetch('/api/info');
+        void fetch('/api/auth/status');
+        void fetch('/api/projects');
+        void fetch('/api/events');
+      }, []);
+      return <span>protected</span>;
+    }
+    render(
+      <AuthBoundary>
+        <Probe />
+      </AuthBoundary>
+    );
 
     await flushPromises();
     vi.useRealTimers();
     await waitFor(() =>
       expect(screen.getByTestId('login-shell')).toBeInTheDocument()
     );
+    expect(screen.queryByText('protected')).not.toBeInTheDocument();
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('/api/info')
-    );
-    expect(fetchSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('/api/auth/status')
-    );
-    expect(fetchSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('/api/projects')
-    );
-    expect(fetchSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('/api/events')
-    );
-    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('ws'));
+    const urls = fetchSpy.mock.calls.map((call) => String(call[0]));
+    expect(urls.some((url) => url.includes('/api/info'))).toBe(false);
+    expect(urls.some((url) => url.includes('/api/auth/status'))).toBe(false);
+    expect(urls.some((url) => url.includes('/api/projects'))).toBe(false);
+    expect(urls.some((url) => url.includes('/api/events'))).toBe(false);
+    expect(urls.some((url) => url.includes('ws'))).toBe(false);
   });
 
   it('starts GitHub login and polls only getState', async () => {
@@ -296,7 +303,7 @@ describe('AuthBoundary', () => {
   });
 
   it('notifies once and returns a 401 response unchanged', async () => {
-    const response = { status: 401, ok: false } as Response;
+    const response = new Response(null, { status: 401 });
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
     const handler = vi.fn();
     const unsubscribe = onUnauthorized(handler);
@@ -304,5 +311,58 @@ describe('AuthBoundary', () => {
     await expect(makeRequest('/any')).resolves.toBe(response);
     expect(handler).toHaveBeenCalledTimes(1);
     unsubscribe();
+  });
+
+  it('does not notify unauthorized on a JSON hive 401', async () => {
+    const response = new Response(
+      JSON.stringify({
+        success: false,
+        data: null,
+        error_data: null,
+        message: 'Unauthorized. Please sign in again.',
+      }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } }
+    );
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(response);
+    const handler = vi.fn();
+    const unsubscribe = onUnauthorized(handler);
+
+    await expect(makeRequest('/any')).resolves.toBe(response);
+    expect(handler).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it('does not start polling when the popup is blocked', async () => {
+    window.open = vi.fn(() => null) as never;
+    render(<AuthBoundary>protected</AuthBoundary>);
+    await flushPromises();
+    fireEvent.click(screen.getByTestId('login-start'));
+    await flushPromises();
+    expect(window.open).toHaveBeenCalled();
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops polling if getState rejects after the popup closes', async () => {
+    const popup = popupStub();
+    window.open = vi.fn(() => popup) as never;
+    render(<AuthBoundary>protected</AuthBoundary>);
+    await flushPromises();
+    fireEvent.click(screen.getByTestId('login-start'));
+    await flushPromises();
+    popup.closed = true;
+    browserAuthApi.getState.mockRejectedValueOnce(new Error('node down'));
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const callsAfterReject = browserAuthApi.getState.mock.calls.length;
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(browserAuthApi.getState).toHaveBeenCalledTimes(callsAfterReject);
   });
 });

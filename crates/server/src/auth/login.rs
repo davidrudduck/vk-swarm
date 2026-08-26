@@ -109,7 +109,7 @@ pub async fn complete_browser_login(
 
     // 4+5. Fenced commit: the epoch re-check happens immediately before the first
     //      credential/session side effect, and both guards stay held across save + mint + the
-    //      synchronous remote-sync installation.
+    //      synchronous remote-sync installation and node-cache start.
     let epoch_guard = deployment.browser_auth_epoch().lock().await;
     if *epoch_guard != epoch_at_claim {
         return Err(BrowserLoginError::Disconnected);
@@ -132,6 +132,9 @@ pub async fn complete_browser_login(
     if let Some(config) = deployment.share_config() {
         deployment.install_remote_sync(config.clone()).await;
     }
+    // Node-cache start stays inside the epoch fence so a concurrent disconnect that already
+    // shut the previous handle cannot race a replacement spawn after this guard drops.
+    deployment.start_node_cache_sync().await;
     drop(refresh_guard);
     drop(epoch_guard);
     Ok(raw_token)

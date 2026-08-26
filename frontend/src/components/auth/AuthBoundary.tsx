@@ -60,43 +60,57 @@ export function AuthBoundary({ children }: Props) {
   }, [stopPolling]);
 
   const startLogin = async () => {
-    const returnTo = `${window.location.origin}/api/auth/handoff/complete`;
-    const { authorize_url } = await browserAuthApi.startLogin(
-      'github',
-      returnTo
-    );
-    if (!mountedRef.current) return;
-
-    const popup = window.open(
-      authorize_url,
-      'hive-oauth',
-      'popup,width=600,height=720'
-    );
-    popupRef.current = popup;
-    stopPolling();
-
-    const poll = async () => {
-      if (!mountedRef.current) {
-        stopPolling();
-        return;
-      }
-      const closed = Boolean(popupRef.current?.closed);
-      const state = await browserAuthApi.getState();
+    try {
+      const returnTo = `${window.location.origin}/api/auth/handoff/complete`;
+      const { authorize_url } = await browserAuthApi.startLogin(
+        'github',
+        returnTo
+      );
       if (!mountedRef.current) return;
-      if (state.authorized) {
-        stopPolling();
-        setAuthState(state);
+
+      const popup = window.open(
+        authorize_url,
+        'hive-oauth',
+        'popup,width=600,height=720'
+      );
+      if (!popup) {
+        popupRef.current = null;
         return;
       }
-      if (closed) {
-        stopPolling();
-      }
-    };
+      popupRef.current = popup;
+      stopPolling();
 
-    intervalRef.current = window.setInterval(() => {
-      void poll();
-    }, POLL_INTERVAL_MS);
-    deadlineRef.current = window.setTimeout(stopPolling, LOGIN_DEADLINE_MS);
+      const poll = async () => {
+        if (!mountedRef.current) {
+          stopPolling();
+          return;
+        }
+        const closed = Boolean(popupRef.current?.closed);
+        try {
+          const state = await browserAuthApi.getState();
+          if (!mountedRef.current) return;
+          if (state.authorized) {
+            stopPolling();
+            setAuthState(state);
+            return;
+          }
+          if (closed) {
+            stopPolling();
+          }
+        } catch {
+          if (!mountedRef.current || closed) {
+            stopPolling();
+          }
+        }
+      };
+
+      intervalRef.current = window.setInterval(() => {
+        void poll();
+      }, POLL_INTERVAL_MS);
+      deadlineRef.current = window.setTimeout(stopPolling, LOGIN_DEADLINE_MS);
+    } catch {
+      // Hive unreachable or startLogin failed: stay on the login shell, no poll.
+    }
   };
 
   if (authState?.authorized) return <>{children}</>;

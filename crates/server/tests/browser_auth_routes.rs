@@ -108,6 +108,26 @@ async fn oauth_initiation_and_callback_stay_public() {
         .await;
     assert_eq!(cb.status, 400, "body: {}", cb.body);
     assert!(cb.body.contains("Missing app_code"), "body: {}", cb.body);
+
+    // Attacker-controlled `error` must be HTML-escaped; a raw <script> in text/html would
+    // execute on the node origin against the victim's session cookie.
+    let xss = h
+        .get(&format!(
+            "/api/auth/handoff/complete?handoff_id={}&error=%3C/h1%3E%3Cscript%3Ealert(1)%3C/script%3E",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    assert_eq!(xss.status, 400, "body: {}", xss.body);
+    assert!(
+        !xss.body.contains("<script"),
+        "raw script leaked: {}",
+        xss.body
+    );
+    assert!(
+        xss.body.contains("&lt;/h1&gt;&lt;script&gt;"),
+        "expected escaped error, body: {}",
+        xss.body
+    );
 }
 
 /// Full browser login for `owner`: mounts a fresh oauth mock for `app_code`, initiates with a

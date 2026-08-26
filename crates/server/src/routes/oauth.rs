@@ -219,9 +219,6 @@ async fn handoff_complete(
         }
     };
 
-    // Start node cache sync to fetch all nodes/projects from other nodes in the org
-    deployment.start_node_cache_sync().await;
-
     let mut response = close_window_response(format!(
         "Signed in with {provider}. You can return to the app."
     ));
@@ -355,11 +352,26 @@ fn hash_sha256_hex(input: &str) -> String {
     output
 }
 
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn simple_html_response(status: StatusCode, message: String) -> Response<String> {
     let body = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>OAuth</title></head>\
          <body style=\"font-family: sans-serif; margin: 3rem;\"><h1>{}</h1></body></html>",
-        message
+        html_escape(&message)
     );
     Response::builder()
         .status(status)
@@ -385,12 +397,12 @@ fn close_window_response(message: String) -> Response<String> {
                body {{ font-family: sans-serif; margin: 3rem; color: #1f2933; }}\
              </style>\
            </head>\
-           <body>\
-             <h1>{}</h1>\
-             <p>If this window does not close automatically, you may close it manually.</p>\
-           </body>\
-         </html>",
-        message
+            <body>\
+              <h1>{}</h1>\
+              <p>If this window does not close automatically, you may close it manually.</p>\
+            </body>\
+          </html>",
+        html_escape(&message)
     );
 
     Response::builder()

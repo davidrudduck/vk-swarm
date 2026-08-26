@@ -1955,3 +1955,24 @@ All browser-authorization boundary checks passed
 ```
 
 VERIFIER_EXIT=0. Sidecar A6 probed: real Hive + non-loopback LAN browsers available. Frozen `.decisions.json` not edited.
+
+## Post-review known issues
+
+Logged from `/wai:close` code-review round 1 (`docs/plans/local-node-browser-oauth/reviews/code-review-round-1.md`). Already-adjudicated; do not re-surface as fresh blockers.
+
+| # | Location | Why non-actionable |
+|---|---|---|
+| N1 | `crates/server/src/auth/cookies.rs:22` | First Cookie header only; fail-closed. HTTP/2 split Cookie is robustness, not a confidentiality hole. |
+| N2 | `crates/server/tests/stream_auth.rs:78` | Missing `ConnectionSecretEnvGuard`; secret leaks for the rest of that test binary. Current assertions are secret-agnostic. |
+| N3 | `crates/server/src/middleware/model_loaders.rs:268-270` | Stale doc vs fail-closed `:284`. Behaviour is correct. |
+| N4 | `crates/services/src/services/connection_token.rs:135-148` | `validate_for_execution` has no production callers after this range. Dead API / widening-risk, not a live hole. |
+| N5 | WS/SSE upgrade sites | Established streams stay up after logout. Spec TS5 assigns teardown to the client; SC9 requires outage survival. |
+| N6 | `crates/server/tests/stream_auth.rs:10` | Nonexistent attempt `/diff/ws` is 500 not 404. Pre-existing loader census. |
+| N7 | `frontend/src/pages/settings/SwarmSettings.tsx` disconnect* keys | Missing from `en/settings.json`; inline defaults are the live copy. |
+| N8 | `NavbarAuthActions.test.tsx` t-mock | `defaultValue ?? key` goes dead if the catalog key is added. Cosmetic with N7. |
+| N9 | Raw `fetch` / WebSocket sites | Bypass `notifyUnauthorized`. Detection gap; 013 authenticates before upgrade. |
+| N10 | `crates/server/src/auth/node_token.rs:55-68` | Bearer scheme only `"Bearer "` / `"bearer "`. No known client sends `BEARER`. |
+| N11 | `crates/deployment/src/lib.rs:107` | `spawn_remote_sync` trait method, test-only callers. Production uses `install_remote_sync`. |
+| N12 | `crates/services/src/services/node_cache.rs:302-360` | `do_sync` cancellation mid-flight not proven. Self-heals next pass. |
+| N13 | `crates/remote/src/routes/tasks.rs:822` | Attempt id in process-scoped token. Pre-existing, unmodified in this range. |
+| N14 | TS7 A3 / B3 / B5 / login-shell / cookie Secure | Already disclosed: flake `F-2026-08-04-02`; B3 SSE not watched; second Hive account unavailable; login-shell UX locked; trusted-LAN cookies have no `Secure`. |

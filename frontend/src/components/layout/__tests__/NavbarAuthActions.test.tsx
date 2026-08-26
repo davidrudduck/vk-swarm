@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { Navbar } from '../Navbar';
 import { SwarmSettings } from '@/pages/settings/SwarmSettings';
+import { useUserSystem } from '@/components/ConfigProvider';
 
 const { browserAuthApi } = vi.hoisted(() => ({
   browserAuthApi: {
@@ -129,6 +130,24 @@ describe('browser auth actions', () => {
     await waitFor(() => expect(reloadSpy).toHaveBeenCalledTimes(1));
     expect(browserAuthApi.logout).toHaveBeenCalledTimes(1);
     expect(browserAuthApi.disconnectHive).toHaveBeenCalledTimes(0);
+  });
+
+  it('keeps Sign out when the node hive login has lapsed', async () => {
+    vi.mocked(useUserSystem).mockReturnValue({
+      loginStatus: { status: 'loggedout' },
+      reloadSystem: vi.fn(),
+    } as never);
+    render(
+      <MemoryRouter>
+        <Navbar />
+      </MemoryRouter>
+    );
+
+    const menuButton = screen.getByRole('button', { name: 'Main navigation' });
+    fireEvent.pointerDown(menuButton);
+    fireEvent.click(menuButton);
+    expect(await screen.findByTestId('navbar-sign-out')).toBeInTheDocument();
+    expect(screen.queryByText('Sign in')).not.toBeInTheDocument();
   });
 
   it('does not reload when browser sign-out fails', async () => {
