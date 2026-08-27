@@ -133,4 +133,44 @@ describe('useNodeLogStream direct raw-log URL contract', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(wsUrls).toHaveLength(0);
   });
+
+  it('drops a stale in-flight connect when the execution process id changes mid-fetch', async () => {
+    // Regression (PR #478): the first connect's connection-info fetch is slow.
+    // While it is pending, the process id changes and a NEW lifecycle starts
+    // and connects. When the stale fetch finally resolves, the generation
+    // guard must bail before it opens a second WebSocket keyed by the OLD
+    // process id and clobbers the new lifecycle's socket.
+    const PROCESS_ID_2 = '44444444-4444-4444-8444-444444444444';
+    let releaseFirst: (value: Response) => void = () => {};
+    const firstFetch = new Promise<Response>((resolve) => {
+      releaseFirst = resolve;
+    });
+    fetchMock.mockImplementationOnce(() => firstFetch);
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(connectionInfoResponse())
+    );
+
+    const { result, rerender } = renderHook(
+      ({ processId }: { processId: string | undefined }) =>
+        useNodeLogStream(ASSIGNMENT_ID, processId),
+      { initialProps: { processId: PROCESS_ID } }
+    );
+
+    // Let the stale connect reach its first await (the pending fetch).
+    await Promise.resolve();
+
+    // Switch lifecycles: the second connect resolves normally and connects.
+    rerender({ processId: PROCESS_ID_2 });
+    await waitFor(() => expect(result.current.connectionType).toBe('direct'));
+
+    // Now the stale fetch completes — its connect must bail on the guard.
+    releaseFirst(connectionInfoResponse());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Exactly one WebSocket, and it is keyed by the NEW process id.
+    expect(wsUrls).toHaveLength(1);
+    expect(wsUrls[0]).toContain(PROCESS_ID_2);
+    expect(wsUrls[0]).not.toContain(PROCESS_ID);
+  });
 });

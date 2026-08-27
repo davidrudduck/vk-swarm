@@ -46,7 +46,10 @@ export function AuthBoundary({ children }: Props) {
       .then((state) => {
         if (mountedRef.current) setAuthState(state);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        // Offline / node-down: fall back to the fail-closed state, but leave a
+        // trace so a blank shell is diagnosable from the console.
+        console.warn('[AuthBoundary] failed to load auth state:', err);
         if (mountedRef.current) {
           setAuthState({ authorized: false, oauth_available: false });
         }
@@ -74,8 +77,11 @@ export function AuthBoundary({ children }: Props) {
         'popup,width=600,height=720'
       );
       if (!popup) {
+        // Popup blocked (disabled popups, gesture lost, ...). Warn — the shell
+        // below offers the button again, so the user can retry deliberately.
         // Do not clobber an already-open popup's ref: a blocked re-click
         // would otherwise make `closed` permanently false.
+        console.warn('[AuthBoundary] login popup was blocked by the browser');
         return;
       }
       popupRef.current = popup;
@@ -98,7 +104,10 @@ export function AuthBoundary({ children }: Props) {
           if (closed) {
             stopPolling();
           }
-        } catch {
+        } catch (err: unknown) {
+          // Transient poll failure (network flap, node restart). Keep polling
+          // while the popup is open — the next tick usually recovers.
+          console.warn('[AuthBoundary] auth state poll failed:', err);
           if (!mountedRef.current || closed) {
             stopPolling();
           }
@@ -109,8 +118,9 @@ export function AuthBoundary({ children }: Props) {
         void poll();
       }, POLL_INTERVAL_MS);
       deadlineRef.current = window.setTimeout(stopPolling, LOGIN_DEADLINE_MS);
-    } catch {
+    } catch (err: unknown) {
       // Hive unreachable or startLogin failed: stay on the login shell, no poll.
+      console.error('[AuthBoundary] login could not start:', err);
     }
   };
 

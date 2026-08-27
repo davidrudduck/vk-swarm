@@ -26,7 +26,7 @@ pub enum BrowserLoginError {
     #[error("this sign-in was interrupted by a disconnect; please start again")]
     Disconnected,
     #[error("failed to persist hive credentials")]
-    CredentialPersistence(#[source] std::io::Error),
+    CredentialPersistence(#[from] std::io::Error),
     /// Static sanitized Display: `RemoteClientError::Http` renders `http {status}: {body}` and an
     /// upstream 5xx body can carry reflected sentinels, while the route logs `error = %e`. The
     /// wrapped source stays reachable for programmatic handling; only the Display is static.
@@ -118,8 +118,7 @@ pub async fn complete_browser_login(
     deployment
         .auth_context()
         .save_credentials(&candidate)
-        .await
-        .map_err(BrowserLoginError::CredentialPersistence)?;
+        .await?;
     let raw_token = OsTokenSource.generate_token();
     create_session(
         &deployment.db().pool,

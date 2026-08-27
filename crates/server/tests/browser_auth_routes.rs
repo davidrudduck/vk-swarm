@@ -597,13 +597,10 @@ async fn disconnect_is_not_undone_by_an_in_flight_token_refresh() {
 /// credential clear — so `live_session_count == 0` during the stall proves revoke-before-clear
 /// (a mutant that revokes after the clear leaves the count at 1 here).
 ///
-/// NOTE on the status assertion: the plan expects the failed clear to surface as non-2xx via
-/// the handler's `map_err(ApiError::Io)` (oauth.rs logout), but `FileBackend::clear` is
-/// best-effort on the file backend — `let _ = std::fs::remove_file(&self.path); Ok(())`
-/// (crates/services/src/services/oauth_credentials.rs) — so the EISDIR never propagates and
-/// the disconnect answers 204 today. Escalated in the decisions-ledger (round-2 remediation);
-/// when `clear` learns to propagate real errors while staying NotFound-idempotent, flip this
-/// to the plan's non-2xx assertion.
+/// NOTE on the status assertion: `FileBackend::clear` propagates real errors
+/// (only `NotFound` stays idempotent — crates/services/src/services/
+/// oauth_credentials.rs), so the EISDIR below surfaces through the handler's
+/// `map_err(ApiError::Io)` (oauth.rs logout) as a non-2xx disconnect.
 #[tokio::test]
 #[serial_test::serial]
 async fn a_credential_clear_failure_still_leaves_every_session_revoked() {
@@ -659,8 +656,11 @@ async fn a_credential_clear_failure_still_leaves_every_session_revoked() {
         );
 
         let out = disconnect.await.expect("disconnect task panicked");
-        // Today the swallowed clear error yields 204 (see the test doc comment above).
-        assert!(matches!(out, 200 | 204), "disconnect status: {out}");
+        // The propagated clear failure must surface as non-2xx (ApiError::Io → 5xx).
+        assert!(
+            (400..600).contains(&out),
+            "disconnect must surface the failed credential clear as non-2xx: {out}"
+        );
         assert_eq!(
             live_session_count(h.pool()).await,
             0,

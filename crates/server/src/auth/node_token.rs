@@ -52,20 +52,21 @@ pub fn proxy_token_is_valid_for_node(
     })
 }
 
-/// Extract the bearer credential from an `Authorization` header (case-tolerant prefix).
+/// Extract the bearer credential from an `Authorization` header.
+/// RFC 9110 §11.1: the auth-scheme is case-insensitive, so `Bearer`,
+/// `bearer`, and `BEARER` are all accepted; the credential itself is not
+/// modified.
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    headers
+    let value = headers
         .get(axum::http::header::AUTHORIZATION)?
         .to_str()
-        .ok()?
-        .strip_prefix("Bearer ")
-        .or_else(|| {
-            headers
-                .get(axum::http::header::AUTHORIZATION)?
-                .to_str()
-                .ok()?
-                .strip_prefix("bearer ")
-        })
+        .ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    if scheme.eq_ignore_ascii_case("Bearer") {
+        Some(token)
+    } else {
+        None
+    }
 }
 
 /// Extract the `token` query parameter (percent-decoded) from the request URI.
@@ -290,16 +291,22 @@ mod tests {
             "bearer tok-lower".parse().unwrap(),
         );
         assert_eq!(bearer_token(&headers), Some("tok-lower"));
+        // RFC 9110: the auth-scheme is case-insensitive.
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "BEARER tok-all-caps".parse().unwrap(),
+        );
+        assert_eq!(bearer_token(&headers), Some("tok-all-caps"));
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "BeArEr tok-mixed".parse().unwrap(),
+        );
+        assert_eq!(bearer_token(&headers), Some("tok-mixed"));
     }
 
     #[test]
-    fn bearer_token_rejects_all_caps_scheme_and_non_bearer() {
+    fn bearer_token_rejects_non_bearer_scheme_and_missing_header() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            "BEARER tok".parse().unwrap(),
-        );
-        assert_eq!(bearer_token(&headers), None);
         headers.insert(
             axum::http::header::AUTHORIZATION,
             "Basic abc".parse().unwrap(),

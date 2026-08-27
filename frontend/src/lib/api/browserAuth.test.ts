@@ -95,7 +95,7 @@ describe('browserAuthApi', () => {
 
     await expect(browserAuthApi.logout()).rejects.toMatchObject({
       status: 500,
-      message: 'Logout failed with status 500',
+      message: 'boom',
     });
   });
 
@@ -126,7 +126,7 @@ describe('browserAuthApi', () => {
 
     await expect(browserAuthApi.disconnectHive()).rejects.toMatchObject({
       status: 502,
-      message: 'Logout failed with status 502',
+      message: 'boom',
     });
   });
 });

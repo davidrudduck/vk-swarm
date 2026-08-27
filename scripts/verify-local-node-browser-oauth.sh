@@ -14,7 +14,7 @@ failures=0
 
 check_status() {   # $1 label, $2 path, $3 expected status
   local got
-  got=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL$2" || echo 000)
+  got=$(curl -s --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' "$BASE_URL$2" || echo 000)
   if [ "$got" = "$3" ]; then echo "PASS $1"; else
     echo "FAIL $1 (expected $3, got $got)"; failures=$((failures + 1)); fi
 }
@@ -24,7 +24,7 @@ check_status 'health is public'      /api/health     200
 check_status 'auth state is public'  /api/auth/state 200
 #    ...and the auth state is structurally MINIMAL. ApiResponse serializes all four wrapper
 #    fields; its data object must contain exactly two Boolean fields and nothing else.
-state=$(curl -s "$BASE_URL/api/auth/state")
+state=$(curl -s --connect-timeout 5 --max-time 15 "$BASE_URL/api/auth/state")
 if printf '%s' "$state" | node -e '
   const body = JSON.parse(require("fs").readFileSync(0, "utf8"));
   const exact = (value, keys) => value && typeof value === "object" &&
@@ -55,8 +55,8 @@ check_status 'live logs are protected' \
 # 4. Unknown API paths terminate INSIDE the api boundary. A status check alone is not enough:
 #    the SPA catch-all answers 200 text/html for anything, so the content-type is the real
 #    signal.
-unknown_status=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/__does_not_exist__")
-unknown_ctype=$(curl -s -o /dev/null -w '%{content_type}' "$BASE_URL/api/__does_not_exist__")
+unknown_status=$(curl -s --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' "$BASE_URL/api/__does_not_exist__")
+unknown_ctype=$(curl -s --connect-timeout 5 --max-time 15 -o /dev/null -w '%{content_type}' "$BASE_URL/api/__does_not_exist__")
 if [ "$unknown_status" = "404" ]; then echo 'PASS unknown api path is 404'; else
   echo "FAIL unknown api path (expected 404, got $unknown_status)"; failures=$((failures + 1)); fi
 case "$unknown_ctype" in text/html*) echo 'FAIL unknown api path fell through to SPA html';

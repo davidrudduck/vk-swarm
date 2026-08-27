@@ -74,6 +74,10 @@ export const useNodeLogStream = (
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isIntentionallyClosed = useRef<boolean>(false);
   const connectionInfoRef = useRef<ConnectionInfo | null>(null);
+  // Generation guard: bumped whenever the connection lifecycle restarts (ids
+  // change or the effect re-runs), so a stale in-flight `connect` bails before
+  // it can clobber the new lifecycle's WebSocket.
+  const lifecycleIdRef = useRef(0);
   // Use a ref to store the connect function to avoid circular dependency
   const connectRef = useRef<() => Promise<void>>();
 
@@ -251,11 +255,16 @@ export const useNodeLogStream = (
   const connect = useCallback(async () => {
     if (!assignmentId || !executionProcessId) return;
 
+    // Snap the current lifecycle generation; if it advances while we await,
+    // this connect is stale and must not touch shared refs or open sockets.
+    const lifecycle = lifecycleIdRef.current;
+
     setConnectionType('connecting');
     setError(null);
 
     // Fetch connection info
     const info = await fetchConnectionInfo(assignmentId, executionProcessId);
+    if (lifecycleIdRef.current !== lifecycle) return;
     if (!info) {
       setConnectionType('disconnected');
       return;
@@ -276,6 +285,13 @@ export const useNodeLogStream = (
         setLogs([]); // Clear logs on new connection
         retryCountRef.current = 0;
       }
+    }
+
+    if (lifecycleIdRef.current !== lifecycle) {
+      // A newer lifecycle took over while we were connecting — drop the
+      // socket we just obtained instead of clobbering the new one.
+      ws?.close();
+      return;
     }
 
     if (!ws) {
@@ -315,6 +331,10 @@ export const useNodeLogStream = (
 
   // Effect to manage connection lifecycle
   useEffect(() => {
+    // Advance the generation FIRST (even for missing ids) so any in-flight
+    // connect from the previous lifecycle becomes stale immediately.
+    lifecycleIdRef.current += 1;
+
     if (!assignmentId || !executionProcessId) {
       setLogs([]);
       setError(null);
@@ -325,6 +345,7 @@ export const useNodeLogStream = (
     void connect();
 
     return () => {
+      lifecycleIdRef.current += 1;
       isIntentionallyClosed.current = true;
       if (wsRef.current) {
         wsRef.current.close();

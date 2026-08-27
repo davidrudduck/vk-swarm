@@ -34,7 +34,7 @@ import {
 export function SwarmSettings() {
   const { t } = useTranslation(['settings', 'common']);
   const { isSignedIn, isLoaded } = useAuth();
-  const [error] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Fetch all organizations
   const {
@@ -65,6 +65,12 @@ export function SwarmSettings() {
       window.location.reload();
     } catch (err) {
       console.error('Failed to disconnect from Hive:', err);
+      setError(
+        t(
+          'settings.swarm.disconnectError',
+          'Failed to disconnect from Hive. Please try again.'
+        )
+      );
     }
   };
 

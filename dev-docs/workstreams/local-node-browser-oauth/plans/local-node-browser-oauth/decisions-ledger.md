@@ -1980,3 +1980,34 @@ Logged from `/wai:close` code-review round 1 (`docs/plans/local-node-browser-oau
 | N16 | `AuthBoundary` second `startLogin` overwrites `vks_browser_binding` | SC3/SC4 single-claim + one binding cookie; first popup HTML is "start again". Not a round-2 regression. |
 | N17 | `window.open` after `await startLogin` can lose the user-gesture | Login-shell UX locked (N14); 016 needs `authorize_url` before open. |
 | N18 | Blocked-re-click test uses dynamic `callsAfterClose` | Adjacent-mutant gap; `popupRef = null` mutant still fails. Same class as N8. |
+
+## CodeRabbit PR-review adjudication (2026-08-27, PR #478)
+
+Every unaddressed CodeRabbit item was triaged; fixes applied in the 2026-08-27 commit (12 files,
++160/-56), rejections recorded below with evidence. Rule: task `.md` files under `phase-*/` and
+`.agents/reports/*` are point-in-time / immutable session records — editing them would falsify
+evidence, so doc-lint findings on them are rejected by policy, not by merit.
+
+### Fixed
+
+| # | Finding | Fix |
+|---|---------|-----|
+| F1 | `browserAuth.ts` logout/disconnectHive manual `!ok` + ApiError | Both now `await handleApiResponse<void>(response)`; ApiError import dropped; both endpoints 204 so short-circuit preserved; server JSON message surfaces on failure (tests expect `'boom'`). |
+| F2 | `AuthBoundary.tsx` 4 swallowed catches | Contextual logs: getState → `console.warn('[AuthBoundary] failed to load auth state:', err)`; popup blocked → `console.warn('[AuthBoundary] login popup was blocked by the browser')`; poll → `console.warn('[AuthBoundary] auth state poll failed:', err)`; startLogin → `console.error('[AuthBoundary] login could not start:', err)`. Tests assert exact strings; new fail-closed-shell test. |
+| F3 | `SwarmSettings.tsx` disconnect error invisible | `const [error, setError]` + catch sets `setError(t('settings.swarm.disconnectError', 'Failed to disconnect from Hive. Please try again.'))` rendered in existing destructive Alert. |
+| F4 | `FileBackend::clear` swallows remove_file errors | Now matches: NotFound → Ok (idempotent), other Err → Err. `browser_auth_routes.rs` clear-failure test flipped to non-2xx (EISDIR propagates via `ApiError::Io` → 5xx) with sessions-revoked/owner-retained/syncs-stopped asserts kept. |
+| F5 | `node_token.rs` Bearer only Bearer/bearer prefixes (= N10) | `split_once(' ')` + `scheme.eq_ignore_ascii_case("Bearer")` per RFC 9110 §11.1; tests cover BEARER/mixed/Basic/missing. |
+| F6 | `login.rs` manual `map_err(CredentialPersistence)` | Variant is `#[from] std::io::Error`; call site plain `.await?`. |
+| F7 | `verify-local-node-browser-oauth.sh` curls unbounded | All 4 curl sites get `--connect-timeout 5 --max-time 15`; verifier self-test (negative+positive) re-run ALL PASS. |
+| F8 | `useNodeLogStream.ts` stale connect after process-id change | `lifecycleIdRef` generation guard: bumped at effect start (even for missing ids) + cleanup; connect snaps generation, re-checks after connection-info await and before committing `wsRef`/handlers (closes a late socket instead). Regression test: stale fetch resolves after rerender → exactly 1 WS keyed by NEW process id. |
+
+### Rejected (with evidence)
+
+| # | Finding | Rationale |
+|---|---------|-----------|
+| R1 | Task-doc nits (016 guard doc, 003/004 asserts, 011 200-assert, 018 scan surfaces, 020 MD040, 019 timeout doc) | Point-in-time plans; executed code passed review rounds 1-3 + WAI panel. Where the doc pointed at real code, the code was checked and fixed (F4/F7/F8 supersede). |
+| R2 | `.agents/reports/2026-08-22-round-2-*` nits | Immutable adversarial-review evidence artifacts; editing them falsifies the record. |
+| R3 | `resolve_browser_session` should add tracing on lookup failure | Already present: `session.rs:43` `tracing::warn!(error = ?e, "browser session lookup failed; failing closed")`. |
+| R4 | `api_not_found` should return the typed ApiResponse envelope | `routes/mod.rs:137-142` returns JSON `{success:false, message:"unknown api route"}` — the only fields any consumer (`handleApiResponse`) reads on a 404; the typed envelope would add null `data`/`error_data` with no reader. Boundary verifier + self-test pin current shape. |
+| R5 | README "Repeat TS7 with a remote LAN browser" | Honest record, not a defect: human browsers A/C were the non-loopback proof; Playwright profile B same-host via LAN IP is disclosed (N14). |
+| R6 | README `cargo test --workspace` exit 101 recorded while 021 marked passed | The 101 was pre-existing flake `F-2026-08-04-02` (normalize_sync_test), isolated re-run passed, remediated in ec59f33b — the README records exactly this; hiding it would weaken the evidence. |

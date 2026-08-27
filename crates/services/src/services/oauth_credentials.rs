@@ -199,8 +199,14 @@ impl FileBackend {
     }
 
     async fn clear(&self) -> std::io::Result<()> {
-        let _ = std::fs::remove_file(&self.path);
-        Ok(())
+        // NotFound is the idempotent success case (nothing stored); every
+        // other failure — EISDIR, EACCES, EIO — propagates so callers can
+        // surface the failed clear instead of silently keeping credentials.
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 }
 

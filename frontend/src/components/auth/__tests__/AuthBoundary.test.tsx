@@ -335,12 +335,16 @@ describe('AuthBoundary', () => {
   });
 
   it('does not start polling when the popup is blocked', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     window.open = vi.fn(() => null) as never;
     render(<AuthBoundary>protected</AuthBoundary>);
     await flushPromises();
     fireEvent.click(screen.getByTestId('login-start'));
     await flushPromises();
     expect(window.open).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[AuthBoundary] login popup was blocked by the browser'
+    );
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
     await act(async () => {
       vi.advanceTimersByTime(1000);
@@ -349,7 +353,21 @@ describe('AuthBoundary', () => {
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
   });
 
+  it('stays on the fail-closed shell and warns when the initial state load fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    browserAuthApi.getState.mockRejectedValueOnce(new Error('node down'));
+    render(<AuthBoundary>protected</AuthBoundary>);
+    await flushPromises();
+    expect(screen.getByTestId('login-shell')).toBeInTheDocument();
+    expect(screen.queryByTestId('login-start')).not.toBeInTheDocument();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[AuthBoundary] failed to load auth state:',
+      expect.any(Error)
+    );
+  });
+
   it('stops polling if getState rejects after the popup closes', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const popup = popupStub();
     window.open = vi.fn(() => popup) as never;
     render(<AuthBoundary>protected</AuthBoundary>);
@@ -366,6 +384,10 @@ describe('AuthBoundary', () => {
     const callsAfterReject = browserAuthApi.getState.mock.calls.length;
     await act(async () => vi.advanceTimersByTime(1000));
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(callsAfterReject);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[AuthBoundary] auth state poll failed:',
+      expect.any(Error)
+    );
   });
 
   it('does not clobber an open popup when a later window.open is blocked', async () => {
@@ -392,12 +414,17 @@ describe('AuthBoundary', () => {
   });
 
   it('stays on the login shell if startLogin rejects', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     browserAuthApi.startLogin.mockRejectedValueOnce(new Error('hive down'));
     render(<AuthBoundary>protected</AuthBoundary>);
     await flushPromises();
     fireEvent.click(screen.getByTestId('login-start'));
     await flushPromises();
     expect(window.open).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[AuthBoundary] login could not start:',
+      expect.any(Error)
+    );
     expect(screen.getByTestId('login-shell')).toBeInTheDocument();
     expect(browserAuthApi.getState).toHaveBeenCalledTimes(1);
     await act(async () => vi.advanceTimersByTime(1000));
