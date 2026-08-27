@@ -276,4 +276,45 @@ mod tests {
         ));
         assert!(!proxy_token_is_valid_for_node(&v, None, expected_node));
     }
+
+    #[test]
+    fn bearer_token_accepts_bearer_and_lowercase_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer tok-upper".parse().unwrap(),
+        );
+        assert_eq!(bearer_token(&headers), Some("tok-upper"));
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "bearer tok-lower".parse().unwrap(),
+        );
+        assert_eq!(bearer_token(&headers), Some("tok-lower"));
+    }
+
+    #[test]
+    fn bearer_token_rejects_all_caps_scheme_and_non_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "BEARER tok".parse().unwrap(),
+        );
+        assert_eq!(bearer_token(&headers), None);
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Basic abc".parse().unwrap(),
+        );
+        assert_eq!(bearer_token(&headers), None);
+        assert_eq!(bearer_token(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn query_token_percent_decodes_and_ignores_other_keys() {
+        let with_token: Uri = "/logs?token=a%2Fb&other=1".parse().unwrap();
+        assert_eq!(query_token(&with_token).as_deref(), Some("a/b"));
+        let no_query: Uri = "/logs".parse().unwrap();
+        assert_eq!(query_token(&no_query), None);
+        let other_only: Uri = "/logs?foo=bar".parse().unwrap();
+        assert_eq!(query_token(&other_only), None);
+    }
 }

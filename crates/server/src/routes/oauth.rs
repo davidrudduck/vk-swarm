@@ -411,3 +411,40 @@ fn close_window_response(message: String) -> Response<String> {
         .body(body)
         .unwrap()
 }
+
+#[cfg(test)]
+mod html_escape_tests {
+    use super::*;
+
+    #[test]
+    fn html_escape_encodes_the_five_html_metacharacters() {
+        assert_eq!(html_escape(r#"&<>"'"#), "&amp;&lt;&gt;&quot;&#39;");
+    }
+
+    #[test]
+    fn html_escape_leaves_plain_and_empty_text_unchanged() {
+        assert_eq!(html_escape(""), "");
+        assert_eq!(html_escape("OAuth complete"), "OAuth complete");
+    }
+
+    #[test]
+    fn simple_html_response_does_not_embed_raw_script_tags() {
+        let response = simple_html_response(
+            StatusCode::BAD_REQUEST,
+            "</h1><script>alert(1)</script>".to_string(),
+        );
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.body();
+        assert!(!body.contains("<script>"));
+        assert!(body.contains("&lt;/h1&gt;&lt;script&gt;"));
+    }
+
+    #[test]
+    fn close_window_response_does_not_embed_raw_markup() {
+        let response = close_window_response("<img src=x onerror=alert(1)>".to_string());
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.body();
+        assert!(!body.contains("<img"));
+        assert!(body.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    }
+}

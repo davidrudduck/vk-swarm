@@ -20,11 +20,10 @@ const BINDING_MAX_AGE_SECS: i64 = 600;
 /// Read one cookie value from a `Cookie:` header. Splits on ';', trims, matches `name=`.
 pub fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     let header = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
-    let prefix = format!("{name}=");
-    header
-        .split(';')
-        .map(str::trim)
-        .find_map(|part| part.strip_prefix(&prefix).map(|value| value.to_string()))
+    header.split(';').map(str::trim).find_map(|part| {
+        let (key, value) = part.split_once('=')?;
+        (key == name).then(|| value.to_string())
+    })
 }
 
 /// `Set-Cookie` for a new authorized session.
@@ -107,5 +106,47 @@ mod tests {
             read_cookie(&axum::http::HeaderMap::new(), SESSION_COOKIE),
             None
         );
+    }
+
+    #[test]
+    fn read_cookie_returns_empty_string_for_an_empty_value() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            "vks_browser_session=".parse().unwrap(),
+        );
+        assert_eq!(read_cookie(&h, SESSION_COOKIE), Some(String::new()));
+    }
+
+    #[test]
+    fn read_cookie_does_not_match_a_longer_name_that_shares_the_prefix() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            "vks_browser_session_extra=wrong; vks_browser_session=right"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(read_cookie(&h, SESSION_COOKIE), Some("right".to_string()));
+    }
+
+    #[test]
+    fn read_cookie_skips_pairs_without_an_equals_sign() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            "flag; vks_browser_session=abc".parse().unwrap(),
+        );
+        assert_eq!(read_cookie(&h, SESSION_COOKIE), Some("abc".to_string()));
+    }
+
+    #[test]
+    fn read_cookie_returns_none_for_a_non_utf8_header() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_bytes(&[0xff, 0xfe, 0xfd]).unwrap(),
+        );
+        assert_eq!(read_cookie(&h, SESSION_COOKIE), None);
     }
 }

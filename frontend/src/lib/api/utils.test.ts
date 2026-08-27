@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ApiError, isHiveNotConfigured, jsonBody } from './utils';
+import {
+  ApiError,
+  isHiveNotConfigured,
+  jsonBody,
+  makeRequest,
+  onUnauthorized,
+} from './utils';
 
 /**
  * These tests exist because HTTP status alone CANNOT identify the hive-absent
@@ -89,5 +95,61 @@ describe('jsonBody', () => {
     expect(jsonBody({ a: 1, b: 'two', c: null, d: [true] })).toBe(
       '{"a":1,"b":"two","c":null,"d":[true]}'
     );
+  });
+});
+
+describe('makeRequest 401 discriminator', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('notifies on a bare (non-JSON) 401', async () => {
+    const notify = vi.fn();
+    const unsubscribe = onUnauthorized(notify);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(null, { status: 401 }))
+    );
+
+    const response = await makeRequest('/api/projects');
+    expect(response.status).toBe(401);
+    expect(notify).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('does not notify on a JSON 401 (hive/proxy forwarded)', async () => {
+    const notify = vi.fn();
+    const unsubscribe = onUnauthorized(notify);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ message: 'Unauthorized. Please sign in again.' }),
+          {
+            status: 401,
+            headers: { 'content-type': 'application/json' },
+          }
+        )
+      )
+    );
+
+    const response = await makeRequest('/api/organizations');
+    expect(response.status).toBe(401);
+    expect(notify).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it('does not notify on a non-401 error status', async () => {
+    const notify = vi.fn();
+    const unsubscribe = onUnauthorized(notify);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(null, { status: 403 }))
+    );
+
+    const response = await makeRequest('/api/projects');
+    expect(response.status).toBe(403);
+    expect(notify).not.toHaveBeenCalled();
+    unsubscribe();
   });
 });
