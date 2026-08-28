@@ -204,8 +204,13 @@ export const useNodeLogStream = (
   /**
    * Handle incoming WebSocket messages.
    */
-  const setupWebSocketHandlers = useCallback((ws: WebSocket) => {
+  const setupWebSocketHandlers = useCallback((ws: WebSocket, lifecycle: number) => {
+    // Events from a retired socket (replaced by a newer lifecycle) must never
+    // touch the active lifecycle's state or schedule retries on its behalf.
+    const isCurrent = () => lifecycleIdRef.current === lifecycle;
+
     ws.onmessage = (event) => {
+      if (!isCurrent()) return;
       try {
         const message = JSON.parse(event.data) as LogStreamMessage;
 
@@ -226,10 +231,12 @@ export const useNodeLogStream = (
     };
 
     ws.onerror = () => {
+      if (!isCurrent()) return;
       setError('WebSocket connection error');
     };
 
     ws.onclose = (event) => {
+      if (!isCurrent()) return;
       if (!isIntentionallyClosed.current && event.code !== 1000) {
         setConnectionType('disconnected');
 
@@ -299,7 +306,7 @@ export const useNodeLogStream = (
     retryCountRef.current = 0;
     wsRef.current = ws;
     isIntentionallyClosed.current = false;
-    setupWebSocketHandlers(ws);
+    setupWebSocketHandlers(ws, lifecycle);
   }, [
     assignmentId,
     executionProcessId,

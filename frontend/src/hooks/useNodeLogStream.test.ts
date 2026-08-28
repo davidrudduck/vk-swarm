@@ -252,4 +252,79 @@ describe('useNodeLogStream direct raw-log URL contract', () => {
       `wss://hive.example.com/v1/nodes/assignments/${ASSIGNMENT_ID}/logs/ws?token=${CONNECTION_TOKEN}`
     );
   });
+
+  it('ignores message, error, and close events from a retired socket', async () => {
+    // Regression (PR #478 follow-up 2): events still queued on a replaced
+    // socket must not mutate the ACTIVE lifecycle's logs/error/connection
+    // state or schedule retries on its behalf once a new lifecycle owns the
+    // stream.
+    const PROCESS_ID_2 = '44444444-4444-4444-8444-444444444444';
+    manualOpen = true;
+    // A fresh Response per fetch: the body of a Response can be read only once.
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(connectionInfoResponse())
+    );
+
+    const { result, rerender } = renderHook(
+      ({ processId }: { processId: string | undefined }) =>
+        useNodeLogStream(ASSIGNMENT_ID, processId),
+      { initialProps: { processId: PROCESS_ID } }
+    );
+
+    // Lifecycle A connects directly.
+    await waitFor(() => expect(sockets).toHaveLength(1));
+    sockets[0].onopen?.();
+    await waitFor(() => expect(result.current.connectionType).toBe('direct'));
+
+    // Replace it: lifecycle B connects directly too.
+    rerender({ processId: PROCESS_ID_2 });
+    await waitFor(() => expect(sockets).toHaveLength(2));
+    sockets[1].onopen?.();
+    await waitFor(() => expect(result.current.connectionType).toBe('direct'));
+
+    // B receives one log entry of its own.
+    sockets[1].onmessage?.({
+      data: JSON.stringify({
+        type: 'logs',
+        entries: [
+          {
+            id: 1,
+            output_type: 'stdout',
+            content: 'hello from the active lifecycle',
+            timestamp: '2026-08-28T00:00:00Z',
+          },
+        ],
+      }),
+    });
+    await waitFor(() => expect(result.current.logs).toHaveLength(1));
+
+    // The RETIRED socket A now delivers queued events. With the generation
+    // guard these are all ignored; without it, A's message pollutes B's log
+    // stream, A's error sets B's error state, and A's abnormal close would
+    // flip B to 'disconnected' and schedule a retry.
+    sockets[0].onmessage?.({
+      data: JSON.stringify({
+        type: 'logs',
+        entries: [
+          {
+            id: 2,
+            output_type: 'stdout',
+            content: 'stale event from the retired lifecycle',
+            timestamp: '2026-08-28T00:00:01Z',
+          },
+        ],
+      }),
+    });
+    sockets[0].onerror?.();
+    sockets[0].onclose?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(result.current.connectionType).toBe('direct');
+    expect(result.current.logs).toHaveLength(1);
+    expect(result.current.logs[0]?.content).toBe(
+      'hello from the active lifecycle'
+    );
+    expect(result.current.error).toBeNull();
+    expect(wsUrls).toHaveLength(2);
+  });
 });

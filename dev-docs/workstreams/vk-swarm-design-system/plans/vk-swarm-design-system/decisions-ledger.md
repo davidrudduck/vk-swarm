@@ -350,7 +350,7 @@ Post-review known issues (accepted/deferred):
 
 Production build + served-asset checks at HEAD (close session, 2026-08-28). Build:
 
-```
+```console
 $ cd remote-frontend && npm run build
 ✓ built in 588ms
 
@@ -365,7 +365,7 @@ BUILD_EXIT=0
 
 Serve (`npx vite preview --port 4173 --strictPort --host 127.0.0.1`) and probe:
 
-```
+```console
 $ curl -sS -m 10 -o index.html -w 'HTTP %{http_code} bytes=%{size_download} type=%{content_type}\n' http://127.0.0.1:4173/
 HTTP 200 bytes=761 type=text/html                      # SPA shell w/ <div id="root"></div>
 $ grep -oE 'assets/index-[A-Za-z0-9_-]+\.js' index.html | head -1

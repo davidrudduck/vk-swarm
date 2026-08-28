@@ -84,7 +84,7 @@ stub. DB counts read via sqlite3 CLI only AFTER graceful node shutdown (K6 proto
 
 SC1 + SC3 — dangling shared id (hive 404) deletes locally, warns:
 
-```
+```console
 $ curl -s -o /dev/null -w '%{http_code}\n' -b jar -c jar \
     -H 'Content-Type: application/json' \
     -d '{"project_id":"<uuid>","title":"cli-free-delete","shared_task_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}' \
@@ -105,7 +105,7 @@ DELETE /v1/tasks/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee body={"version":null}
 
 SC2 — non-not-found hive error (409) aborts and retains:
 
-```
+```console
 (STUB_DELETE_MODE=409, fresh node + fresh DB, task 'sc2-retain-me' with dangling shared id)
 $ curl -s -o /dev/null -w '%{http_code}\n' -b jar -X DELETE http://10.69.96.233:9012/api/tasks/<task_id>
 409

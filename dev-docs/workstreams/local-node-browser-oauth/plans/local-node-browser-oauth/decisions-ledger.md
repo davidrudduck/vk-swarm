@@ -373,7 +373,7 @@ of record): `a62162ab`/`3fc19fbf` gated against `c5762b63`, `9d8fbf23` gated aga
 `3de79b63` gated against `13fcf4d1`, `364a0e47` gated against `8af96e52`, `737f01ee` gated against
 `364a0e47` — every run `CONFORMS`, `GATE_FAIL_CHECK=none`. Final two gates (verbatim):
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=006 commit=364a0e47 allowed_change=edit
   - file-set: only declared files changed (4 paths)
 WAI gate: typecheck (override): cargo fmt --all -- --check ...
@@ -384,7 +384,7 @@ CONFORMS: task 006 passed all deterministic gates
 GATE_FAIL_CHECK=none
 ```
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=006 commit=737f01ee allowed_change=edit
   - file-set: only declared files changed (1 paths)
 WAI gate: typecheck (override): cargo fmt --all -- --check ...
@@ -555,7 +555,7 @@ handler-specific outcomes). Plan lint PASS after both.
 
 Stage-1 gates (verbatim transcripts of the two final runs):
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=008 commit=a97eb6d6 allowed_change=mixed
   - file-set: only declared files changed (8 paths)
   - mixed: structural check relaxed — relies on adversarial panel
@@ -567,7 +567,7 @@ CONFORMS: task 008 passed all deterministic gates
 GATE_FAIL_CHECK=none
 ```
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=008 commit=9bab70be allowed_change=mixed
   - file-set: only declared files changed (1 paths)
   - mixed: structural check relaxed — relies on adversarial panel
@@ -1227,7 +1227,7 @@ The dissenting seat demanded race 6 deterministically fail under the mutant that
 
 **Gate transcripts (verbatim):**
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=012 commit=c02b9643 allowed_change=edit
   - file-set: only declared files changed (3 paths)
   - edit: structural check relaxed — relies on adversarial panel
@@ -1237,7 +1237,7 @@ CONFORMS: task 012 passed all deterministic gates
 GATE_FAIL_CHECK=none
 ```
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=012 commit=06e3920e allowed_change=edit
   - file-set: only declared files changed (2 paths)
   - edit: structural check relaxed — relies on adversarial panel
@@ -1350,7 +1350,7 @@ Scratch-probe transcript (deleted file `crates/server/tests/zz_scratch_census.rs
 `TMPDIR=$PWD/.cargo-tmp DISABLE_WORKTREE_ORPHAN_CLEANUP=1 cargo test -p server --test
 zz_scratch_census -- --nocapture`, 2 passed):
 
-```
+```console
 BROWSER /api/tasks/stream/ws?project_id=98f7281f-... -> 101 upgraded=true
 BROWSER /api/drafts/stream/ws?project_id=98f7281f-... -> 101 upgraded=true
 BROWSER /api/execution-processes/stream/ws?task_attempt_id=98f7281f-... -> 101 upgraded=true
@@ -1546,7 +1546,7 @@ second-arg wording); coverage `9cca0ae5` + rustfmt `8835c116`.
 
 **Gate transcripts (verbatim):**
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=013 commit=5f660cbf allowed_change=mixed
   - file-set: only declared files changed (12 paths)
   - mixed: structural check relaxed — relies on adversarial panel
@@ -1556,7 +1556,7 @@ CONFORMS: task 013 passed all deterministic gates
 GATE_FAIL_CHECK=none
 ```
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=013 commit=10bf7940 allowed_change=mixed
   - file-set: only declared files changed (3 paths)
   - mixed: structural check relaxed — relies on adversarial panel
@@ -1566,7 +1566,7 @@ CONFORMS: task 013 passed all deterministic gates
 GATE_FAIL_CHECK=none
 ```
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=013 commit=9cca0ae5 allowed_change=mixed
   - file-set: only declared files changed (3 paths)
   - mixed: structural check relaxed — relies on adversarial panel
@@ -1576,7 +1576,7 @@ CONFORMS: task 013 passed all deterministic gates
 GATE_FAIL_CHECK=none
 ```
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=013 commit=8835c116 allowed_change=mixed
   - file-set: only declared files changed (1 paths)
   - mixed: structural check relaxed — relies on adversarial panel
@@ -1628,7 +1628,7 @@ Both panels DEVIATES. Orchestrator:
 
 **Gate transcript (remediation, verbatim):**
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=014 commit=e934d8fe allowed_change=mixed
   - file-set: only declared files changed (3 paths)
   - mixed: structural check relaxed — relies on adversarial panel
@@ -1674,7 +1674,7 @@ kimi mutation notes (committed code already conforming; not defects):
 
 **Gate transcript (verbatim):**
 
-```
+```console
 WAI gate: topic=local-node-browser-oauth task=015 commit=f11ba888 allowed_change=create
   - file-set: only declared files changed (2 paths)
   - create: addition recorded across b65426f7..f11ba888
@@ -1687,7 +1687,7 @@ GATE_FAIL_CHECK=none
 **Panel:** gpt DEVIATES (ledger evidence only) + kimi CONFORMS. Implementation matches the amended contract; this section closes the evidence gap.
 
 **3× flake (`cargo test -p server --test restart_outage -- --test-threads=1`):**
-```
+```console
 === run 1 ===
 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 57.84s
 === run 2 ===
@@ -1843,7 +1843,7 @@ crates/server/src/routes/oauth.rs:56:        .route("/auth/status", get(status))
 3. Cookies match `crates/server/src/auth/cookies.rs:11-54` — names `vks_browser_session` / `vks_browser_binding`, attrs `HttpOnly; SameSite=Lax; Path=/`, no `Secure`.
 4. Verifier transcript provenance: orchestrator ran `bash scripts/verify-local-node-browser-oauth.sh http://127.0.0.1:$PORT` against the task-019 compliant fixture (port-0 node fake) before locking the page at `59ca551a`. Captured output:
 
-```
+```console
 PASS health is public
 PASS auth state is public
 PASS auth state has the exact minimal shape
@@ -1890,7 +1890,7 @@ No undictated implementation choices were made; the named siblings were read.
 - Missing ledger verification record: REAL. This section.
 
 **Manual verification 1-3 (implementer + orchestrator re-run):**
-```
+```console
 $ bash -n scripts/verify-local-node-browser-oauth.sh && bash -n scripts/test-verify-local-node-browser-oauth.sh
 (exit 0)
 $ bash scripts/test-verify-local-node-browser-oauth.sh
@@ -1939,7 +1939,7 @@ VERDICT: PASS
 
 Isolated feature-branch node. LAN URL: `http://10.69.96.233:9012`. Build commit: `b776159b`. Branch: `gentle-mongoose`. Date: 2026-08-26. Health: `{"status":"ok","version":"0.0.125","git_commit":"b776159b","git_branch":"gentle-mongoose","database_ready":true}`.
 
-```
+```console
 $ bash scripts/verify-local-node-browser-oauth.sh http://10.69.96.233:9012
 PASS health is public
 PASS auth state is public
@@ -2011,3 +2011,14 @@ evidence, so doc-lint findings on them are rejected by policy, not by merit.
 | R4 | `api_not_found` should return the typed ApiResponse envelope | `routes/mod.rs:137-142` returns JSON `{success:false, message:"unknown api route"}` — the only fields any consumer (`handleApiResponse`) reads on a 404; the typed envelope would add null `data`/`error_data` with no reader. Boundary verifier + self-test pin current shape. |
 | R5 | README "Repeat TS7 with a remote LAN browser" | Honest record, not a defect: human browsers A/C were the non-loopback proof; Playwright profile B same-host via LAN IP is disclosed (N14). |
 | R6 | README `cargo test --workspace` exit 101 recorded while 021 marked passed | The 101 was pre-existing flake `F-2026-08-04-02` (normalize_sync_test), isolated re-run passed, remediated in ec59f33b — the README records exactly this; hiding it would weaken the evidence. |
+
+## CodeRabbit PR-review adjudication, round 3 (2026-08-28, PR #478)
+
+Triage after the close-review pushes. Two new inline threads (review 5047632611), both accepted:
+
+| # | Finding | Disposition |
+|---|---------|-------------|
+| F9 | `useNodeLogStream.ts` — events from a retired WebSocket (queued `message`/`error`/`close` delivered after a newer lifecycle commits) could mutate the active lifecycle's logs/error/connection state or schedule retries on its behalf. | FIXED: `setupWebSocketHandlers(ws, lifecycle)` — every handler bails first on `lifecycleIdRef.current !== lifecycle`. Regression test `ignores message, error, and close events from a retired socket` (red-green verified: without the guard the retired socket's `onclose` reaches `event.code` and throws; with it, 7/7). |
+| F10 | MD040 — unlabeled code fences in the (living) decisions-ledgers. | FIXED: all 21 unlabeled fence openers across the three living workstream ledgers tagged `console` (node-task-delete 87/108 — the flagged file — plus the same class found by sweep in vk-swarm-design-system 353/368 and this ledger's 17). Immutable task .md files and `.agents/reports/` stay untouched per the R1/R2 policy. |
+
+Gates after both fixes: frontend lint 0, tsc 0, full vitest 51 files / 581 tests (580 + F9's regression test), exit 0. No Rust or remote-frontend surface touched.
