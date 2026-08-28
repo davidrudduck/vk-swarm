@@ -16,6 +16,11 @@ const CONNECTION_TOKEN = 'test-connection-token';
 
 let fetchMock: ReturnType<typeof vi.fn>;
 const wsUrls: string[] = [];
+// Sockets created by the hook, in creation order, so tests can drive
+// opens/messages by hand (delayed-open race coverage).
+const sockets: FakeWebSocket[] = [];
+// When true, FakeWebSocket does NOT auto-open; the test calls onopen itself.
+let manualOpen = false;
 
 class FakeWebSocket {
   url: string;
@@ -27,19 +32,25 @@ class FakeWebSocket {
   constructor(url: string) {
     this.url = url;
     wsUrls.push(url);
-    // Resolve as an opened direct connection so no relay fallback fires.
-    queueMicrotask(() => this.onopen?.());
+    sockets.push(this);
+    // Resolve as an opened direct connection so no relay fallback fires —
+    // unless the test asked to open sockets by hand.
+    queueMicrotask(() => {
+      if (!manualOpen) this.onopen?.();
+    });
   }
 
   close(): void {}
 }
 
-function connectionInfoResponse(): Response {
+function connectionInfoResponse(
+  directUrl: string | null = 'https://node.example.com'
+): Response {
   return new Response(
     JSON.stringify({
       assignment_id: ASSIGNMENT_ID,
       node_id: '33333333-3333-4333-8333-333333333333',
-      direct_url: 'https://node.example.com',
+      direct_url: directUrl,
       relay_url:
         'https://hive.example.com/v1/nodes/assignments/11111111-1111-4111-8111-111111111111/logs/ws',
       connection_token: CONNECTION_TOKEN,
@@ -54,6 +65,8 @@ describe('useNodeLogStream direct raw-log URL contract', () => {
     fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     wsUrls.length = 0;
+    sockets.length = 0;
+    manualOpen = false;
     vi.stubGlobal('WebSocket', FakeWebSocket);
   });
 
@@ -172,5 +185,71 @@ describe('useNodeLogStream direct raw-log URL contract', () => {
     expect(wsUrls).toHaveLength(1);
     expect(wsUrls[0]).toContain(PROCESS_ID_2);
     expect(wsUrls[0]).not.toContain(PROCESS_ID);
+  });
+
+  it('ignores a delayed old WebSocket that resolves after the lifecycle changed', async () => {
+    // Regression (PR #478 follow-up): lifecycle A's direct socket can take
+    // seconds to open. If the process id changes while that open is pending,
+    // the stale socket resolving later must NOT flip connectionType or clear
+    // the active lifecycle's logs before it is closed.
+    const PROCESS_ID_2 = '44444444-4444-4444-8444-444444444444';
+    manualOpen = true;
+    // A gets a direct_url; the new lifecycle gets none, so it ends on relay.
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(connectionInfoResponse())
+    );
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(connectionInfoResponse(null))
+    );
+
+    const { result, rerender } = renderHook(
+      ({ processId }: { processId: string | undefined }) =>
+        useNodeLogStream(ASSIGNMENT_ID, processId),
+      { initialProps: { processId: PROCESS_ID } }
+    );
+
+    // Lifecycle A fetches its info and constructs (but does not open) its
+    // direct socket.
+    await waitFor(() => expect(sockets).toHaveLength(1));
+
+    // Switch lifecycles: B has no direct_url, so it connects via relay.
+    rerender({ processId: PROCESS_ID_2 });
+    await waitFor(() => expect(sockets).toHaveLength(2));
+    sockets[1].onopen?.();
+    await waitFor(() => expect(result.current.connectionType).toBe('relay'));
+
+    // B receives one log entry.
+    sockets[1].onmessage?.({
+      data: JSON.stringify({
+        type: 'logs',
+        entries: [
+          {
+            id: 1,
+            output_type: 'stdout',
+            content: 'hello from the active lifecycle',
+            timestamp: '2026-08-27T00:00:00Z',
+          },
+        ],
+      }),
+    });
+    await waitFor(() => expect(result.current.logs).toHaveLength(1));
+
+    // The OLD direct socket finally opens. The stale connect must close it
+    // without touching the active lifecycle's state. The macrotask flush
+    // gives both the stale continuation AND any (buggy) state write time to
+    // land and render — with the bug, connectionType flips to 'direct' and
+    // the received log entry is wiped.
+    sockets[0].onopen?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(result.current.connectionType).toBe('relay');
+    expect(result.current.logs).toHaveLength(1);
+    expect(result.current.error).toBeNull();
+    // Exactly two sockets: A's stale direct (old process id) and B's relay.
+    expect(wsUrls).toHaveLength(2);
+    expect(wsUrls[0]).toContain(PROCESS_ID);
+    expect(wsUrls[1]).toBe(
+      `wss://hive.example.com/v1/nodes/assignments/${ASSIGNMENT_ID}/logs/ws?token=${CONNECTION_TOKEN}`
+    );
   });
 });

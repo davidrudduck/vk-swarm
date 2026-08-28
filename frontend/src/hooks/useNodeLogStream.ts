@@ -271,20 +271,14 @@ export const useNodeLogStream = (
     }
     connectionInfoRef.current = info;
 
-    // Try direct connection first
+    // Try direct connection first, then fall back to the relay. The state
+    // updates deliberately wait until AFTER the generation check below: a
+    // stale attempt's late-resolving socket must not touch the active
+    // lifecycle's connectionType/logs/retry state on its way out.
     let ws = await tryDirectConnection(info);
-    if (ws) {
-      setConnectionType('direct');
-      setLogs([]); // Clear logs on new connection
-      retryCountRef.current = 0;
-    } else {
-      // Fall back to relay
+    const viaDirect = Boolean(ws);
+    if (!ws) {
       ws = await connectToRelay(info);
-      if (ws) {
-        setConnectionType('relay');
-        setLogs([]); // Clear logs on new connection
-        retryCountRef.current = 0;
-      }
     }
 
     if (lifecycleIdRef.current !== lifecycle) {
@@ -300,6 +294,9 @@ export const useNodeLogStream = (
       return;
     }
 
+    setConnectionType(viaDirect ? 'direct' : 'relay');
+    setLogs([]); // Clear logs on new connection
+    retryCountRef.current = 0;
     wsRef.current = ws;
     isIntentionallyClosed.current = false;
     setupWebSocketHandlers(ws);
