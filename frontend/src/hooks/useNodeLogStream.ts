@@ -86,6 +86,10 @@ export const useNodeLogStream = (
    */
   const fetchConnectionInfo = useCallback(
     async (id: string, processId: string): Promise<ConnectionInfo | null> => {
+      // Snap the lifecycle generation this fetch belongs to; if it advances
+      // while we await, a failure here must not write error state onto the
+      // new lifecycle.
+      const lifecycle = lifecycleIdRef.current;
       try {
         const response = await fetch(
           `/v1/nodes/assignments/${id}/connection-info?execution_process_id=${encodeURIComponent(processId)}`
@@ -108,6 +112,9 @@ export const useNodeLogStream = (
 
         return await response.json();
       } catch (e) {
+        // Stale lifecycle: swallow the failure — the active lifecycle owns
+        // error state now.
+        if (lifecycleIdRef.current !== lifecycle) return null;
         console.error('Failed to fetch connection info:', e);
         setError(
           e instanceof Error ? e.message : 'Failed to fetch connection info'

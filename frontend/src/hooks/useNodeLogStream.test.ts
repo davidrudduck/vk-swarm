@@ -327,4 +327,43 @@ describe('useNodeLogStream direct raw-log URL contract', () => {
     expect(result.current.error).toBeNull();
     expect(wsUrls).toHaveLength(2);
   });
+
+  it('ignores a failed stale fetch that completes after the lifecycle changed', async () => {
+    // Regression (PR #478): the first lifecycle's connection-info fetch FAILS
+    // late, after the process id has already changed. The catch in
+    // fetchConnectionInfo must bail on the generation guard instead of
+    // writing its error onto the (healthy) active lifecycle.
+    const PROCESS_ID_2 = '44444444-4444-4444-8444-444444444444';
+    let rejectFirst: (reason: unknown) => void = () => {};
+    const firstFetch = new Promise<Response>((_, reject) => {
+      rejectFirst = reject;
+    });
+    fetchMock.mockImplementationOnce(() => firstFetch);
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(connectionInfoResponse())
+    );
+
+    const { result, rerender } = renderHook(
+      ({ processId }: { processId: string | undefined }) =>
+        useNodeLogStream(ASSIGNMENT_ID, processId),
+      { initialProps: { processId: PROCESS_ID } }
+    );
+
+    // Let the stale connect reach its first await (the pending fetch).
+    await Promise.resolve();
+
+    // Switch lifecycles: the second connect resolves normally and connects.
+    rerender({ processId: PROCESS_ID_2 });
+    await waitFor(() => expect(result.current.connectionType).toBe('direct'));
+
+    // Now the stale fetch fails — its error must be swallowed by the guard.
+    rejectFirst(new Error('stale lifecycle failure'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // The active lifecycle stays healthy: no error, same direct connection.
+    expect(result.current.error).toBeNull();
+    expect(result.current.connectionType).toBe('direct');
+    expect(wsUrls).toHaveLength(1);
+    expect(wsUrls[0]).toContain(PROCESS_ID_2);
+  });
 });
