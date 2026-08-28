@@ -15,11 +15,13 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Network } from 'lucide-react';
 import { useUserOrganizations } from '@/hooks/useUserOrganizations';
 import { useOrganizationSelection } from '@/hooks/useOrganizationSelection';
 import { useAuth } from '@/hooks/auth/useAuth';
+import { browserAuthApi } from '@/lib/api';
 import { LoginRequiredPrompt } from '@/components/dialogs/shared/LoginRequiredPrompt';
 import {
   SwarmProjectsSection,
@@ -32,7 +34,7 @@ import {
 export function SwarmSettings() {
   const { t } = useTranslation(['settings', 'common']);
   const { isSignedIn, isLoaded } = useAuth();
-  const [error] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Fetch all organizations
   const {
@@ -46,6 +48,31 @@ export function SwarmSettings() {
     useOrganizationSelection({
       organizations: orgsResponse,
     });
+
+  const handleDisconnect = async () => {
+    if (
+      !window.confirm(
+        t(
+          'settings.swarm.disconnectConfirm',
+          "This signs out EVERY browser, stops synchronisation, and removes this node's Hive credentials. Continue?"
+        )
+      )
+    ) {
+      return;
+    }
+    try {
+      await browserAuthApi.disconnectHive();
+      window.location.reload();
+    } catch (err) {
+      console.error('Failed to disconnect from Hive:', err);
+      setError(
+        t(
+          'settings.swarm.disconnectError',
+          'Failed to disconnect from Hive. Please try again.'
+        )
+      );
+    }
+  };
 
   if (!isLoaded || orgsLoading) {
     return (
@@ -170,6 +197,32 @@ export function SwarmSettings() {
 
       {/* Node Templates Section - Promote local templates to swarm */}
       {selectedOrg && <NodeTemplatesSection organizationId={selectedOrg.id} />}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            {t(
+              'settings.swarm.disconnectTitle',
+              'Disconnect this node from Hive'
+            )}
+          </CardTitle>
+          <CardDescription>
+            {t(
+              'settings.swarm.disconnectHelper',
+              'Signs out EVERY browser, stops synchronisation and removes this node\u2019s Hive credentials. The node stays owned by your account, so no one else can claim it. To sign out just this browser, use Sign out in the menu.'
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="destructive"
+            data-testid="hive-disconnect"
+            onClick={handleDisconnect}
+          >
+            {t('settings.swarm.disconnectAction', 'Disconnect from Hive')}
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

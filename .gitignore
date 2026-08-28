@@ -129,3 +129,6 @@ docs/plans/*/.wai-test-cmd
 # ts-rs writes these at the worktree root when a test binary is run directly
 /bindings/
 docs/plans/*/.wai-task-base
+
+# cargo TMPDIR for worktree builds (AGENTS.md cargo env); never commit
+.cargo-tmp/

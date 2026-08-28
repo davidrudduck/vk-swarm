@@ -15,36 +15,27 @@ describe('Electric Config', () => {
   });
 
   describe('ELECTRIC_SHAPE_TABLES', () => {
-    it('contains nodes table definition', () => {
-      expect(ELECTRIC_SHAPE_TABLES.nodes).toBeDefined();
-      expect(ELECTRIC_SHAPE_TABLES.nodes.table).toBe('nodes');
-    });
-
-    it('contains projects table definition', () => {
-      expect(ELECTRIC_SHAPE_TABLES.projects).toBeDefined();
-      expect(ELECTRIC_SHAPE_TABLES.projects.table).toBe('projects');
-    });
-
-    it('contains node_projects table definition', () => {
-      expect(ELECTRIC_SHAPE_TABLES.node_projects).toBeDefined();
-      expect(ELECTRIC_SHAPE_TABLES.node_projects.table).toBe('node_projects');
+    it('contains ONLY the table the hive proxy actually serves', () => {
+      // The hive proxy routes exactly one shape: GET /v1/shape/shared_tasks
+      // (crates/remote/src/routes/electric_proxy.rs). Advertising any other
+      // table here would produce 404 shape URLs against the real hive.
+      expect(Object.keys(ELECTRIC_SHAPE_TABLES)).toEqual(['shared_tasks']);
+      expect(ELECTRIC_SHAPE_TABLES.shared_tasks.table).toBe('shared_tasks');
     });
   });
 
   describe('createShapeUrl', () => {
-    it('creates URL for nodes table', () => {
-      const url = createShapeUrl('nodes');
-      expect(url).toBe('/v1/shape/nodes');
+    it('creates URL for the shared_tasks shape', () => {
+      const url = createShapeUrl('shared_tasks');
+      expect(url).toBe('/v1/shape/shared_tasks');
     });
 
-    it('creates URL for projects table', () => {
-      const url = createShapeUrl('projects');
-      expect(url).toBe('/v1/shape/projects');
-    });
-
-    it('creates URL for node_projects table', () => {
-      const url = createShapeUrl('node_projects');
-      expect(url).toBe('/v1/shape/node_projects');
+    it('throws error for tables the proxy does not serve', () => {
+      // 'nodes' was removed at the 2026-08-28 close review: the proxy has no
+      // /v1/shape/nodes route, so this URL would 404 against the real hive.
+      expect(() =>
+        createShapeUrl('nodes' as ElectricShapeTable)
+      ).toThrow('Unknown Electric shape table: nodes');
     });
 
     it('throws error for invalid table name', () => {

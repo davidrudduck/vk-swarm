@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod error;
 pub mod file_logging;
 pub mod mcp;

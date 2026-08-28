@@ -53,10 +53,16 @@ interface UseNodeLogStreamResult {
  * 2. Try direct WebSocket connection to the node (if public_url available)
  * 3. Fall back to Hive relay if direct connection fails
  *
+ * The direct stream is keyed by the execution process id: the Hive signs the
+ * connection token for exactly that process, and the node's raw-logs URL uses
+ * the same id. The remote stream is only attempted when BOTH ids are defined.
+ *
  * @param assignmentId - The assignment ID to stream logs for
+ * @param executionProcessId - The execution process ID scoping the token and direct URL
  */
 export const useNodeLogStream = (
-  assignmentId: string | undefined
+  assignmentId: string | undefined,
+  executionProcessId: string | undefined
 ): UseNodeLogStreamResult => {
   const [logs, setLogs] = useState<NodeLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +74,10 @@ export const useNodeLogStream = (
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isIntentionallyClosed = useRef<boolean>(false);
   const connectionInfoRef = useRef<ConnectionInfo | null>(null);
+  // Generation guard: bumped whenever the connection lifecycle restarts (ids
+  // change or the effect re-runs), so a stale in-flight `connect` bails before
+  // it can clobber the new lifecycle's WebSocket.
+  const lifecycleIdRef = useRef(0);
   // Use a ref to store the connect function to avoid circular dependency
   const connectRef = useRef<() => Promise<void>>();
 
@@ -75,10 +85,14 @@ export const useNodeLogStream = (
    * Fetch connection info from the Hive.
    */
   const fetchConnectionInfo = useCallback(
-    async (id: string): Promise<ConnectionInfo | null> => {
+    async (id: string, processId: string): Promise<ConnectionInfo | null> => {
+      // Snap the lifecycle generation this fetch belongs to; if it advances
+      // while we await, a failure here must not write error state onto the
+      // new lifecycle.
+      const lifecycle = lifecycleIdRef.current;
       try {
         const response = await fetch(
-          `/v1/nodes/assignments/${id}/connection-info`
+          `/v1/nodes/assignments/${id}/connection-info?execution_process_id=${encodeURIComponent(processId)}`
         );
 
         if (!response.ok) {
@@ -98,6 +112,9 @@ export const useNodeLogStream = (
 
         return await response.json();
       } catch (e) {
+        // Stale lifecycle: swallow the failure — the active lifecycle owns
+        // error state now.
+        if (lifecycleIdRef.current !== lifecycle) return null;
         console.error('Failed to fetch connection info:', e);
         setError(
           e instanceof Error ? e.message : 'Failed to fetch connection info'
@@ -120,10 +137,11 @@ export const useNodeLogStream = (
         }
 
         try {
-          // Build direct WebSocket URL
+          // Build direct WebSocket URL — keyed by the EXECUTION PROCESS id,
+          // which is the exact resource the connection token is scoped to.
           const directUrl = new URL(info.direct_url);
           const wsProtocol = directUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-          const wsUrl = `${wsProtocol}//${directUrl.host}/api/execution-processes/${assignmentId}/raw-logs/ws?token=${encodeURIComponent(info.connection_token)}`;
+          const wsUrl = `${wsProtocol}//${directUrl.host}/api/execution-processes/${executionProcessId}/raw-logs/ws?token=${encodeURIComponent(info.connection_token)}`;
 
           const ws = new WebSocket(wsUrl);
           const timeout = setTimeout(() => {
@@ -151,7 +169,7 @@ export const useNodeLogStream = (
         }
       });
     },
-    [assignmentId]
+    [executionProcessId]
   );
 
   /**
@@ -193,8 +211,13 @@ export const useNodeLogStream = (
   /**
    * Handle incoming WebSocket messages.
    */
-  const setupWebSocketHandlers = useCallback((ws: WebSocket) => {
+  const setupWebSocketHandlers = useCallback((ws: WebSocket, lifecycle: number) => {
+    // Events from a retired socket (replaced by a newer lifecycle) must never
+    // touch the active lifecycle's state or schedule retries on its behalf.
+    const isCurrent = () => lifecycleIdRef.current === lifecycle;
+
     ws.onmessage = (event) => {
+      if (!isCurrent()) return;
       try {
         const message = JSON.parse(event.data) as LogStreamMessage;
 
@@ -215,10 +238,12 @@ export const useNodeLogStream = (
     };
 
     ws.onerror = () => {
+      if (!isCurrent()) return;
       setError('WebSocket connection error');
     };
 
     ws.onclose = (event) => {
+      if (!isCurrent()) return;
       if (!isIntentionallyClosed.current && event.code !== 1000) {
         setConnectionType('disconnected');
 
@@ -242,33 +267,39 @@ export const useNodeLogStream = (
    * Main connection logic.
    */
   const connect = useCallback(async () => {
-    if (!assignmentId) return;
+    if (!assignmentId || !executionProcessId) return;
+
+    // Snap the current lifecycle generation; if it advances while we await,
+    // this connect is stale and must not touch shared refs or open sockets.
+    const lifecycle = lifecycleIdRef.current;
 
     setConnectionType('connecting');
     setError(null);
 
     // Fetch connection info
-    const info = await fetchConnectionInfo(assignmentId);
+    const info = await fetchConnectionInfo(assignmentId, executionProcessId);
+    if (lifecycleIdRef.current !== lifecycle) return;
     if (!info) {
       setConnectionType('disconnected');
       return;
     }
     connectionInfoRef.current = info;
 
-    // Try direct connection first
+    // Try direct connection first, then fall back to the relay. The state
+    // updates deliberately wait until AFTER the generation check below: a
+    // stale attempt's late-resolving socket must not touch the active
+    // lifecycle's connectionType/logs/retry state on its way out.
     let ws = await tryDirectConnection(info);
-    if (ws) {
-      setConnectionType('direct');
-      setLogs([]); // Clear logs on new connection
-      retryCountRef.current = 0;
-    } else {
-      // Fall back to relay
+    const viaDirect = Boolean(ws);
+    if (!ws) {
       ws = await connectToRelay(info);
-      if (ws) {
-        setConnectionType('relay');
-        setLogs([]); // Clear logs on new connection
-        retryCountRef.current = 0;
-      }
+    }
+
+    if (lifecycleIdRef.current !== lifecycle) {
+      // A newer lifecycle took over while we were connecting — drop the
+      // socket we just obtained instead of clobbering the new one.
+      ws?.close();
+      return;
     }
 
     if (!ws) {
@@ -277,11 +308,15 @@ export const useNodeLogStream = (
       return;
     }
 
+    setConnectionType(viaDirect ? 'direct' : 'relay');
+    setLogs([]); // Clear logs on new connection
+    retryCountRef.current = 0;
     wsRef.current = ws;
     isIntentionallyClosed.current = false;
-    setupWebSocketHandlers(ws);
+    setupWebSocketHandlers(ws, lifecycle);
   }, [
     assignmentId,
+    executionProcessId,
     fetchConnectionInfo,
     tryDirectConnection,
     connectToRelay,
@@ -307,7 +342,11 @@ export const useNodeLogStream = (
 
   // Effect to manage connection lifecycle
   useEffect(() => {
-    if (!assignmentId) {
+    // Advance the generation FIRST (even for missing ids) so any in-flight
+    // connect from the previous lifecycle becomes stale immediately.
+    lifecycleIdRef.current += 1;
+
+    if (!assignmentId || !executionProcessId) {
       setLogs([]);
       setError(null);
       setConnectionType('disconnected');
@@ -317,6 +356,7 @@ export const useNodeLogStream = (
     void connect();
 
     return () => {
+      lifecycleIdRef.current += 1;
       isIntentionallyClosed.current = true;
       if (wsRef.current) {
         wsRef.current.close();
@@ -327,7 +367,7 @@ export const useNodeLogStream = (
         retryTimerRef.current = null;
       }
     };
-  }, [assignmentId, connect]);
+  }, [assignmentId, executionProcessId, connect]);
 
   return { logs, error, connectionType, retry };
 };

@@ -52,6 +52,13 @@ impl OAuthCredentials {
         }
     }
 
+    pub fn new_file_backed(path: PathBuf) -> Self {
+        Self {
+            backend: Backend::File(FileBackend { path }),
+            inner: RwLock::new(None),
+        }
+    }
+
     pub async fn load(&self) -> std::io::Result<()> {
         let creds = self.backend.load().await?.map(Credentials::from);
         *self.inner.write().await = creds;
@@ -192,8 +199,14 @@ impl FileBackend {
     }
 
     async fn clear(&self) -> std::io::Result<()> {
-        let _ = std::fs::remove_file(&self.path);
-        Ok(())
+        // NotFound is the idempotent success case (nothing stored); every
+        // other failure — EISDIR, EACCES, EIO — propagates so callers can
+        // surface the failed clear instead of silently keeping credentials.
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -241,5 +254,35 @@ impl KeychainBackend {
             Err(e) if e.code() == Self::ERR_SEC_ITEM_NOT_FOUND => Ok(()),
             Err(e) => Err(std::io::Error::other(e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn explicit_file_backend_is_path_scoped() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("credentials.json");
+        let credentials = OAuthCredentials::new_file_backed(path.clone());
+
+        // Inspect before saving so a backend regression cannot touch the production Keychain.
+        match &credentials.backend {
+            Backend::File(backend) => assert_eq!(backend.path, path),
+            #[cfg(target_os = "macos")]
+            Backend::Keychain(_) => panic!("explicit file backend selected the macOS Keychain"),
+        }
+
+        credentials
+            .save(&Credentials {
+                access_token: Some("test-access-token".to_owned()),
+                refresh_token: "test-refresh-token".to_owned(),
+                expires_at: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(path.exists());
     }
 }

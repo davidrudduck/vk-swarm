@@ -15,7 +15,6 @@ import {
   MessageCircleQuestion,
   Menu,
   LogOut,
-  LogIn,
   Archive,
   Activity,
   Search,
@@ -42,9 +41,7 @@ import { useProject } from '@/contexts/ProjectContext';
 import { useOpenProjectInEditor } from '@/hooks/useOpenProjectInEditor';
 import { OpenInIdeButton } from '@/components/ide/OpenInIdeButton';
 import { useTranslation } from 'react-i18next';
-import { OAuthDialog } from '@/components/dialogs/global/OAuthDialog';
-import { useUserSystem } from '@/components/ConfigProvider';
-import { oauthApi } from '@/lib/api';
+import { browserAuthApi } from '@/lib/api';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import ThemeToggle from '@/components/ThemeToggle';
 
@@ -82,7 +79,6 @@ export function Navbar() {
   const { projectId, project } = useProject();
   const { query, setQuery, active, clear, registerInputRef } = useSearch();
   const handleOpenInEditor = useOpenProjectInEditor(project || null);
-  const { loginStatus, reloadSystem } = useUserSystem();
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
   // Archive filter state from URL params
@@ -115,23 +111,17 @@ export function Navbar() {
     handleOpenInEditor();
   };
 
-  const handleOpenOAuth = async () => {
-    const profile = await OAuthDialog.show();
-    if (profile) {
-      await reloadSystem();
-    }
-  };
-
-  const handleOAuthLogout = async () => {
+  // Sign out THIS BROWSER only. Always shown while AuthBoundary has mounted the app
+  // (browser-authorized). Hive loginStatus is a different lifetime and must not hide this.
+  // Disconnecting the node is a separate, deliberately harder action in Settings -> Swarm.
+  const handleBrowserSignOut = async () => {
     try {
-      await oauthApi.logout();
-      await reloadSystem();
+      await browserAuthApi.logout();
+      window.location.reload();
     } catch (err) {
-      console.error('Error logging out:', err);
+      console.error('Failed to sign out of this browser:', err);
     }
   };
-
-  const isOAuthLoggedIn = loginStatus?.status === 'loggedin';
 
   // Persist the active project so the Board tab can route back to it.
   useEffect(() => {
@@ -317,17 +307,13 @@ export function Navbar() {
 
                   <DropdownMenuSeparator />
 
-                  {isOAuthLoggedIn ? (
-                    <DropdownMenuItem onSelect={handleOAuthLogout}>
-                      <LogOut className="mr-2 h-4 w-4" />
-                      {t('common:signOut')}
-                    </DropdownMenuItem>
-                  ) : (
-                    <DropdownMenuItem onSelect={handleOpenOAuth}>
-                      <LogIn className="mr-2 h-4 w-4" />
-                      Sign in
-                    </DropdownMenuItem>
-                  )}
+                  <DropdownMenuItem
+                    data-testid="navbar-sign-out"
+                    onSelect={handleBrowserSignOut}
+                  >
+                    <LogOut className="mr-2 h-4 w-4" />
+                    {t('common:signOut')}
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

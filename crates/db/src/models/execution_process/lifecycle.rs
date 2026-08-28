@@ -999,9 +999,11 @@ mod lifecycle_event_tests {
             .unwrap_or(false)
     }
 
-    /// Prod-like pool: WAL + `busy_timeout` + `max_connections(10)`, matching `crates/db/src/lib.rs`
-    /// (not `test_utils::create_test_pool*`, which set neither `busy_timeout` nor >5 connections) —
-    /// 17B's own harness pattern. A real file (not `:memory:`): WAL requires one.
+    /// Contention pool: WAL + `max_connections(10)`, matching production's journal mode and
+    /// connection cardinality. Its explicit five-second `busy_timeout` bounds this test; production
+    /// uses thirty seconds. The shared test-pool helpers cap pools at five connections and rely on
+    /// SQLx's five-second default busy timeout instead. A real file (not `:memory:`) is required
+    /// for WAL.
     async fn build_contention_pool() -> (SqlitePool, tempfile::TempDir) {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path().join("contention.db");
@@ -1024,12 +1026,12 @@ mod lifecycle_event_tests {
         (pool, temp_dir)
     }
 
-    /// REQUIRED by the attempt-2 amendment: proves the chosen shape does NOT read-then-upgrade.
-    /// 200 independent processes, each transitioned by one real `update_completion` call, while a
-    /// background writer commits to the SAME table every ~200µs (17B's own tight-loop
-    /// methodology) for the whole run. The pre-007 (and pre-attempt-2) shape scored 0/200; this
-    /// must too, because `update_completion`'s first and only write-adjacent statement is the
-    /// UPDATE itself (see its doc comment) — no SELECT ever opens the transaction as a read.
+    /// Scheduler-sensitive stress check for the real write-first `update_completion` shape.
+    /// It transitions 200 independent processes while a background writer commits to the same
+    /// table. A zero-error result is expected because the UPDATE is the transaction's first
+    /// statement, but this timing-driven generator is supplemental evidence rather than a
+    /// deterministic proof against every read-before-write mutation. The control below separately
+    /// forces the hazardous SQLite schedule deterministically.
     #[tokio::test]
     async fn update_completion_does_not_read_then_upgrade() {
         const ITERATIONS: usize = 200;
@@ -1093,95 +1095,57 @@ mod lifecycle_event_tests {
         );
     }
 
-    /// Calibration control for the test above (attempt 3, F18-4: relabelled — the previous name
+    /// Deterministic hazard control (attempt 3, F18-4: relabelled — the previous name
     /// and docstring claimed this reconstructs "attempt 1's REJECTED shape." **That was false.**
     /// `update_completion`'s attempt-1 code was ALREADY write-first (UPDATE first, owner SELECT
     /// after — THE CONFLICT section, task file), so it never had this hazard; the shape below is
     /// 17A's *proposed remediation* (read the prior status before the UPDATE to gate on a real
     /// transition), which is what panel 18 injected into the real function and scored 15/200 on
     /// (ledger). This control hand-reconstructs that SAME hypothetical shape, independently, to
-    /// prove the harness here is capable of reproducing the hazard rather than being silently
-    /// toothless. Panel 18's own injection-into-real-code result (C1) already proves the same
-    /// point more strongly (against production code, not a reconstruction) but was done in its own
-    /// detached worktree and isn't itself a shipped, repeatable test — kept, not deleted, so this
-    /// file also carries a permanent, in-tree regression guard against reintroducing a
-    /// read-before-write shape into `update_completion`.
+    /// force SQLite's hazardous schedule directly. Panel 18's own injection-into-real-code result
+    /// (C1) tested production code in a detached worktree but is not a shipped, repeatable test.
+    /// This in-tree control proves the database failure mode independently; it does not calibrate
+    /// the timing-driven production stress generator above or deterministically mutation-test the
+    /// real function.
     #[tokio::test]
     async fn control_prior_status_read_reproduces_busy_snapshot() {
-        const ITERATIONS: usize = 200;
-
         let (pool, _tmp) = build_contention_pool().await;
         let project_id = seed_project(&pool).await;
         let task_id = seed_task(&pool, project_id).await;
 
-        let mut process_ids = Vec::with_capacity(ITERATIONS);
-        for _ in 0..ITERATIONS {
-            let attempt_id = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
-            process_ids.push(seed_running_process(&pool, attempt_id).await);
-        }
+        let attempt_id = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
+        let process_id = seed_running_process(&pool, attempt_id).await;
         let decoy_attempt = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
         let decoy_process = seed_running_process(&pool, decoy_attempt).await;
 
-        let writer_pool = pool.clone();
-        let writer = tokio::spawn(async move {
-            loop {
-                let _ = sqlx::query(
-                    "UPDATE execution_processes SET pid = COALESCE(pid, 0) + 1 WHERE id = ?",
-                )
-                .bind(decoy_process)
-                .execute(&writer_pool)
-                .await;
-                tokio::time::sleep(std::time::Duration::from_micros(200)).await;
-            }
-        });
+        let mut tx = pool.begin().await.unwrap();
+        // 17A's proposed remediation's shape (NOT attempt 1's — see this fn's docstring,
+        // corrected attempt 4/F19-1): SELECT (read) first...
+        let owner: Option<(Uuid,)> =
+            sqlx::query_as("SELECT task_attempt_id FROM execution_processes WHERE id = ?")
+                .bind(process_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .unwrap();
+        assert!(owner.is_some());
 
-        let mut busy_snapshot_errors = 0usize;
-        for process_id in &process_ids {
-            let mut tx = pool.begin().await.unwrap();
-            // 17A's proposed remediation's shape (NOT attempt 1's — see this fn's docstring,
-            // corrected attempt 4/F19-1): SELECT (read) first...
-            let owner: Option<(Uuid,)> =
-                sqlx::query_as("SELECT task_attempt_id FROM execution_processes WHERE id = ?")
-                    .bind(process_id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .unwrap();
-            assert!(owner.is_some());
+        // Deterministically invalidate that read snapshot from another pooled connection.
+        sqlx::query("UPDATE execution_processes SET pid = 1 WHERE id = ?")
+            .bind(decoy_process)
+            .execute(&pool)
+            .await
+            .unwrap();
 
-            // ...then UPDATE (write — the upgrade).
-            let result =
-                sqlx::query("UPDATE execution_processes SET status = 'completed' WHERE id = ?")
-                    .bind(process_id)
-                    .execute(&mut *tx)
-                    .await;
+        // ...then UPDATE (write — the upgrade).
+        let error = sqlx::query("UPDATE execution_processes SET status = 'completed' WHERE id = ?")
+            .bind(process_id)
+            .execute(&mut *tx)
+            .await
+            .expect_err("the invalidated read snapshot must reject a write upgrade");
 
-            match result {
-                Ok(_) => {
-                    let _ = tx.commit().await;
-                }
-                Err(e) => {
-                    if is_busy_snapshot(&e) {
-                        busy_snapshot_errors += 1;
-                    }
-                    drop(tx);
-                }
-            }
-        }
-        writer.abort();
-
-        // Attempt 4/F19-1: disambiguated from `queries.rs`'s identically-shaped output string —
-        // that one IS attempt 1's actual shape (mark_orphaned_as_failed's), this one is 17A's
-        // proposed-but-never-shipped remediation for update_completion. Previously byte-identical,
-        // making the two controls indistinguishable in test output.
-        eprintln!(
-            "no_read_then_upgrade(control, update_completion, 17A's proposed prior-status-read shape): \
-             {busy_snapshot_errors}/{ITERATIONS} SQLITE_BUSY_SNAPSHOT"
-        );
         assert!(
-            busy_snapshot_errors > 0,
-            "calibration control must reproduce at least one SQLITE_BUSY_SNAPSHOT — 0 here would \
-             mean the harness cannot detect the hazard, and the real test above would be proving \
-             nothing"
+            is_busy_snapshot(&error),
+            "hazard control must reproduce SQLITE_BUSY_SNAPSHOT, got {error}"
         );
     }
 }

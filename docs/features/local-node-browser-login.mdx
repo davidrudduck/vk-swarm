@@ -1,0 +1,54 @@
+---
+title: "Sign in to a local node"
+description: "Every browser must complete Hive OAuth before it can use a local Vibe Kanban node"
+sidebarTitle: "Local node sign-in"
+audience: user
+component: local-node-browser-oauth
+sources:
+  - frontend/src/components/auth/AuthBoundary.tsx
+  - frontend/src/components/layout/Navbar.tsx
+  - frontend/src/pages/settings/SwarmSettings.tsx
+generated: 2026-08-26
+---
+
+Every browser that opens a **local node** must sign in with Hive before it can see projects, tasks, or logs. This is separate from signing in to the Hive UI (the remote frontend).
+
+## First visit
+
+1. Open the node's URL in your browser (the address printed when the node starts, or `http://<lan-ip>:<port>` if it is bound beyond loopback).
+2. You land on a login shell with a single **Log in** button.
+3. Click **Log in**. A Hive OAuth window opens.
+4. Finish sign-in in that window. When it closes, the node UI loads.
+
+If the popup is blocked, allow popups for the node origin and click **Log in** again.
+
+<Note>
+The first Hive account to sign in becomes this node's owner. A different Hive account is refused. There is no in-app owner reset.
+</Note>
+
+## Sign out vs Disconnect
+
+These are different actions. Both appear only after you are signed in.
+
+| Action | Where | What it does |
+|---|---|---|
+| **Sign out** | Navbar menu | Signs **this browser** out. Other browsers on the same node stay signed in. The node keeps its Hive connection. |
+| **Disconnect from Hive** | Settings → Swarm | Signs **every** browser out, removes the node's Hive credentials, and stops synchronisation. The owner pin stays, so nobody else can claim the node. |
+
+## Using the node from another machine
+
+Start the node with `HOST=0.0.0.0` so it listens on the LAN, then open `http://<host-ip>:<port>` from the other device. That browser still has to click **Log in** and complete Hive OAuth. Being on the same network is not enough.
+
+<Warning>
+The node serves this over plain HTTP on a trusted LAN. Do not expose it to the public internet.
+</Warning>
+
+## If Hive is down
+
+If you already signed in, projects, tasks, and local execution keep working. You cannot start a **new** sign-in until Hive is reachable again.
+
+## Related
+
+- [Browser Authorization](/configuration-customisation/browser-authorization) — operator details (cookies, ownership, verification)
+- [Network Access](/configuration-customisation/network-access) — Hive UI (remote frontend) LAN OAuth, not the local node
+- [LAN Sign-In](/features/non-loopback-signin) — signing in to the Hive UI from another device

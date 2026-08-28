@@ -1,0 +1,707 @@
+mod common;
+
+#[tokio::test]
+#[serial_test::serial]
+async fn initiation_issues_a_binding_cookie_and_persists_only_its_hash() {
+    let h = common::HiveHarness::configured().await;
+    let handoff_id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut jar = common::CookieJar::new();
+
+    let res = h
+        .post_with(
+            "/api/auth/handoff/init",
+            serde_json::json!({"provider": "github", "return_to": "/"}),
+            &mut jar,
+        )
+        .await;
+    res.assert_registered();
+    assert_eq!(res.status, 200, "body: {}", res.body);
+
+    let line = res
+        .set_cookie
+        .iter()
+        .find(|c| c.starts_with("vks_browser_binding="))
+        .expect("no binding cookie issued");
+    assert!(line.contains("HttpOnly"), "{line}");
+    assert!(line.contains("SameSite=Lax"), "{line}");
+    assert!(line.contains("Path=/"), "{line}");
+    assert!(line.contains("Max-Age=600"), "{line}");
+    assert!(
+        !line.contains("Secure"),
+        "D9: no Secure on the plain-HTTP LAN boundary: {line}"
+    );
+
+    let raw = jar
+        .get("vks_browser_binding")
+        .expect("jar did not store the cookie")
+        .to_string();
+    assert!(
+        !res.body.contains(&raw),
+        "binding secret leaked into the response body"
+    );
+
+    let (stored, created, expires): (String, i64, i64) = sqlx::query_as(
+        "SELECT binding_hash, created_at, expires_at FROM browser_oauth_handoffs WHERE handoff_id = ?")
+        .bind(handoff_id).fetch_one(h.pool()).await.unwrap();
+    assert_eq!(
+        stored,
+        server::auth::seams::hash_token(&raw),
+        "only the hash may be stored"
+    );
+    assert_ne!(stored, raw);
+    assert_eq!(expires - created, 600_000, "exactly ten minutes");
+
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(handoff_id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert_eq!(state, "pending");
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn two_browsers_get_two_different_binding_secrets() {
+    let h = common::HiveHarness::configured().await;
+    // mock_hive_oauth mounts /v1/oauth/web/init with up_to_n_times(1); a second
+    // initiation would find no mock and fail closed (no cookie, no row). Two
+    // initiations therefore require two mounted mocks.
+    h.mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    h.mock_hive_oauth("code-2", "acc-2", "ref-2", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let mut b = common::CookieJar::fresh();
+    let ra = h
+        .post_with(
+            "/api/auth/handoff/init",
+            serde_json::json!({"provider":"github","return_to":"/"}),
+            &mut a,
+        )
+        .await;
+    assert_eq!(ra.status, 200, "browser A initiation failed: {}", ra.body);
+    let rb = h
+        .post_with(
+            "/api/auth/handoff/init",
+            serde_json::json!({"provider":"github","return_to":"/"}),
+            &mut b,
+        )
+        .await;
+    assert_eq!(rb.status, 200, "browser B initiation failed: {}", rb.body);
+    let a_raw = a
+        .get("vks_browser_binding")
+        .expect("browser A must receive a binding cookie");
+    let b_raw = b
+        .get("vks_browser_binding")
+        .expect("browser B must receive a binding cookie");
+    assert_ne!(a_raw, b_raw);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn initiation_persists_the_handoff_behind_the_epoch_fence() {
+    use deployment::Deployment;
+
+    let h = common::HiveHarness::configured().await;
+    let handoff_id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+
+    // Hold the epoch fence from the outside. The handler may finish its Hive
+    // I/O unfenced, but its create_handoff must queue behind the fence: the
+    // handoff row may not exist while the fence is held, and must exist once
+    // it is released.
+    let epoch = h.deployment().browser_auth_epoch().clone();
+    let fence = epoch.lock().await;
+
+    let addr = h.addr();
+    let pool = h.pool().clone();
+    let request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("http://{addr}/api/auth/handoff/init"))
+            .json(&serde_json::json!({"provider":"github","return_to":"/"}))
+            .send()
+            .await
+            .expect("initiation request must complete")
+    });
+
+    // Wait until the request has certainly passed its Hive I/O (the init mock
+    // was served), then give the handler every opportunity to mis-insert.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2_000);
+    while h.hive_request_count("POST", "/v1/oauth/web/init").await < 1 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "initiation never reached the Hive mock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT binding_hash FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(handoff_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    assert!(
+        row.is_none(),
+        "handoff row appeared while the epoch fence was held"
+    );
+
+    drop(fence);
+    let res = request.await.unwrap();
+    assert_eq!(
+        res.status(),
+        200,
+        "initiation must succeed once the fence opens"
+    );
+
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(handoff_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "pending");
+}
+
+/// Drive initiation in `jar` and return (handoff_id, callback_path).
+async fn start_login(
+    h: &common::HiveHarness,
+    jar: &mut common::CookieJar,
+    handoff_id: uuid::Uuid,
+) -> String {
+    let res = h
+        .post_with(
+            "/api/auth/handoff/init",
+            serde_json::json!({"provider":"github","return_to":"/"}),
+            jar,
+        )
+        .await;
+    assert_eq!(res.status, 200, "body: {}", res.body);
+    format!("/api/auth/handoff/complete?handoff_id={handoff_id}&app_code=code-1")
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_copied_callback_url_cannot_be_completed_in_another_browser() {
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let mut b = common::CookieJar::fresh();
+    let cb = start_login(&h, &mut a, id).await;
+    let redeems = h.hive_request_count("POST", "/v1/oauth/web/redeem").await;
+
+    // Browser B copies the URL. B has no binding cookie at all.
+    let stolen = h.get_with(&cb, &mut b).await;
+    assert_eq!(stolen.status, 400, "body: {}", stolen.body);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems,
+        "a cookieless wrong-browser callback must not reach Hive redemption"
+    );
+    assert!(
+        stolen
+            .set_cookie
+            .iter()
+            .all(|c| !c.starts_with("vks_browser_session=")),
+        "a wrong-browser callback must not mint a session"
+    );
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        state, "pending",
+        "the rightful handoff must NOT have been consumed"
+    );
+
+    // A second stolen attempt smuggles browser A's RAW binding token as a query
+    // parameter. The binding secret is read only from request headers, so even
+    // the genuine secret is inert in the URL.
+    let raw_binding = a
+        .header_value()
+        .expect("browser A must hold a binding cookie")
+        .split(';')
+        .find_map(|part| part.trim().strip_prefix("vks_browser_binding="))
+        .expect("binding cookie missing from browser A's Cookie header")
+        .to_string();
+    let smuggled_url = format!("{cb}&vks_browser_binding={raw_binding}");
+    let smuggled = h.get_with(&smuggled_url, &mut b).await;
+    assert_eq!(
+        smuggled.status, 400,
+        "a query-parameter binding token must not complete the handoff: {}",
+        smuggled.body
+    );
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems,
+        "a query-parameter binding token must not reach Hive redemption"
+    );
+    let state_after_smuggle: String =
+        sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        state_after_smuggle, "pending",
+        "even a raw-token query smuggle must not consume the handoff"
+    );
+
+    // The rightful browser still completes -- exactly one redemption for the pair.
+    let ok = h.get_with(&cb, &mut a).await;
+    assert_eq!(ok.status, 200, "body: {}", ok.body);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems + 1,
+        "only the rightful completion may redeem"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_forged_binding_cookie_does_not_consume_the_handoff() {
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    let mut forged = common::CookieJar::fresh();
+    forged.insert("vks_browser_binding", "not-the-real-secret");
+    let redeems = h.hive_request_count("POST", "/v1/oauth/web/redeem").await;
+    assert_eq!(h.get_with(&cb, &mut forged).await.status, 400);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems,
+        "a forged binding cookie must not burn the one-time Hive code"
+    );
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM browser_oauth_handoffs WHERE handoff_id = ?")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert_eq!(state, "pending");
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn replaying_a_completed_callback_is_rejected() {
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    assert_eq!(h.get_with(&cb, &mut a).await.status, 200);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        1,
+        "one successful completion is exactly one redemption"
+    );
+    let replay = h.get_with(&cb, &mut a).await;
+    assert_eq!(
+        replay.status, 400,
+        "a claimed handoff is terminal: {}",
+        replay.body
+    );
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        1,
+        "a replayed callback must not redeem again"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn an_expired_handoff_cannot_be_completed() {
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    // Age the row past its TTL through the DB rather than by sleeping.
+    sqlx::query("UPDATE browser_oauth_handoffs SET expires_at = created_at WHERE handoff_id = ?")
+        .bind(id)
+        .execute(h.pool())
+        .await
+        .unwrap();
+    let redeems = h.hive_request_count("POST", "/v1/oauth/web/redeem").await;
+    assert_eq!(h.get_with(&cb, &mut a).await.status, 400);
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/oauth/web/redeem").await,
+        redeems,
+        "an expired handoff must not reach Hive redemption"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn successful_login_mints_a_hash_only_persistent_session_cookie() {
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    let id = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    let done = h.get_with(&cb, &mut a).await;
+    assert_eq!(done.status, 200, "body: {}", done.body);
+
+    let line = done
+        .set_cookie
+        .iter()
+        .find(|c| c.starts_with("vks_browser_session="))
+        .expect("no session cookie");
+    assert!(
+        line.contains("HttpOnly")
+            && line.contains("SameSite=Lax")
+            && line.contains("Path=/")
+            && line.contains("Max-Age=157680000"),
+        "{line}"
+    );
+    assert!(!line.contains("Secure"), "{line}");
+
+    let raw = a.get("vks_browser_session").unwrap().to_string();
+    let stored: Vec<String> = sqlx::query_scalar("SELECT token_hash FROM browser_sessions")
+        .fetch_all(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(stored, vec![server::auth::seams::hash_token(&raw)]);
+    assert!(
+        !stored.contains(&raw),
+        "the raw session token must never be stored"
+    );
+    assert!(
+        !done.body.contains(&raw),
+        "session token leaked into the response body"
+    );
+
+    // The authorized browser now reaches protected data; a clean browser still does not.
+    let info = h.get_with("/api/info", &mut a).await;
+    assert_eq!(info.status, 200, "body: {}", info.body);
+    let mut b = common::CookieJar::fresh();
+    assert_eq!(h.get_with("/api/info", &mut b).await.status, 401);
+    let state_b = h.get_with("/api/auth/state", &mut b).await;
+    assert!(
+        state_b.body.contains("\"authorized\":false"),
+        "{}",
+        state_b.body
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn the_same_owner_may_authorize_a_second_browser() {
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    let id1 = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb1 = start_login(&h, &mut a, id1).await;
+    assert_eq!(h.get_with(&cb1, &mut a).await.status, 200);
+
+    let id2 = h.mock_hive_oauth("code-2", "acc2", "ref2", owner).await;
+    let mut b = common::CookieJar::fresh();
+    let cb2 = format!("/api/auth/handoff/complete?handoff_id={id2}&app_code=code-2");
+    h.post_with(
+        "/api/auth/handoff/init",
+        serde_json::json!({"provider":"github","return_to":"/"}),
+        &mut b,
+    )
+    .await;
+    assert_eq!(h.get_with(&cb2, &mut b).await.status, 200);
+
+    assert_eq!(
+        h.get_with("/api/info", &mut a).await.status,
+        200,
+        "first session survived"
+    );
+    assert_eq!(h.get_with("/api/info", &mut b).await.status, 200);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn a_different_subject_is_rejected_without_replacing_credentials_or_sessions() {
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    let id1 = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb1 = start_login(&h, &mut a, id1).await;
+    assert_eq!(h.get_with(&cb1, &mut a).await.status, 200);
+    let creds_before = std::fs::read_to_string(h.credentials_path()).unwrap();
+
+    let intruder = uuid::Uuid::new_v4();
+    let id2 = h
+        .mock_hive_oauth("code-2", "intruder-access", "intruder-refresh", intruder)
+        .await;
+    let mut c = common::CookieJar::fresh();
+    h.post_with(
+        "/api/auth/handoff/init",
+        serde_json::json!({"provider":"github","return_to":"/"}),
+        &mut c,
+    )
+    .await;
+    let res = h
+        .get_with(
+            &format!("/api/auth/handoff/complete?handoff_id={id2}&app_code=code-2"),
+            &mut c,
+        )
+        .await;
+    assert_eq!(res.status, 400, "body: {}", res.body);
+    assert!(
+        res.set_cookie
+            .iter()
+            .all(|l| !l.starts_with("vks_browser_session="))
+    );
+
+    // Owner unchanged, daemon credentials untouched, existing session still authorized.
+    let pinned: Vec<u8> = sqlx::query_scalar("SELECT hive_user_id FROM node_owner")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(uuid::Uuid::from_slice(&pinned).unwrap(), owner);
+    assert_eq!(
+        std::fs::read_to_string(h.credentials_path()).unwrap(),
+        creds_before,
+        "candidate credentials must never be saved on a rejected subject"
+    );
+    assert_eq!(
+        h.get_with("/api/info", &mut a).await.status,
+        200,
+        "a rejected login must not revoke existing sessions"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn an_invalid_candidate_token_yields_a_sanitized_generic_400_with_no_writes() {
+    let h = common::HiveHarness::configured().await;
+    // wiremock 0.6 resolves equal-priority matches by FIRST registration (the harness's own
+    // overrides use .with_priority(1) to beat earlier mounts), so this no-body-matcher redeem
+    // mock is mounted BEFORE mock_hive_oauth to take precedence over its code-1-specific one.
+    h.mock_json(
+        "POST",
+        "/v1/oauth/web/redeem",
+        200,
+        serde_json::json!({"access_token": "not-a-jwt", "refresh_token": "ref-x"}),
+    )
+    .await;
+    let owner = uuid::Uuid::new_v4();
+    let id = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    let creds_before = std::fs::read_to_string(h.credentials_path()).unwrap();
+
+    let res = h.get_with(&cb, &mut a).await;
+    assert_eq!(res.status, 400, "body: {}", res.body);
+    // Sanitized generic 400: no candidate token text, no upstream/decode-error detail, and
+    // never misclassified as the OwnerMismatch message.
+    assert!(!res.body.contains("not-a-jwt"), "body: {}", res.body);
+    assert!(!res.body.contains("ref-x"), "body: {}", res.body);
+    assert!(
+        !res.body.contains("owned by a different account"),
+        "a malformed candidate JWT is InvalidToken, never OwnerMismatch: {}",
+        res.body
+    );
+    assert!(
+        res.body.contains("Sign-in could not be completed"),
+        "must be the generic browser-login failure message: {}",
+        res.body
+    );
+    assert!(
+        res.set_cookie
+            .iter()
+            .all(|l| !l.starts_with("vks_browser_session="))
+    );
+
+    // Nothing was written: no owner pin, no session, credentials file byte-identical.
+    let owners: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM node_owner")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(owners, 0);
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_sessions")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(sessions, 0);
+    assert_eq!(
+        std::fs::read_to_string(h.credentials_path()).unwrap(),
+        creds_before,
+        "a malformed candidate token must never reach credential persistence"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn completion_drops_the_epoch_fence_before_hive_redemption() {
+    use deployment::Deployment;
+
+    let h = common::HiveHarness::configured().await;
+    let id = h
+        .mock_hive_oauth("code-1", "acc", "ref", uuid::Uuid::new_v4())
+        .await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+
+    // Priority-1 delayed responder: signals the moment the redeem request ARRIVES,
+    // then hangs for 60s, so redemption is provably still in flight afterwards.
+    let redeem_arrived = h.mock_hive_delayed("POST", "/v1/oauth/web/redeem").await;
+
+    let addr = h.addr();
+    let cookie = a
+        .header_value()
+        .expect("browser A must hold a binding cookie");
+    let request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .get(format!("http://{addr}{cb}"))
+            .header(reqwest::header::COOKIE, cookie)
+            .send()
+            .await
+            .expect("callback request must be issued")
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), redeem_arrived)
+        .await
+        .expect("redemption never reached the Hive mock")
+        .expect("delayed-responder signal channel closed");
+
+    // Redemption is in flight, so the claim must already be committed and its
+    // epoch guard released: a mutant holding the fence across Hive I/O makes
+    // this try_lock fail while the delayed response is pending.
+    let guard = h
+        .deployment()
+        .browser_auth_epoch()
+        .try_lock()
+        .expect("epoch fence is still held while Hive redemption is in flight");
+    drop(guard);
+
+    request.abort();
+    let _ = request.await;
+}
+
+/// Test A (round-1 remediation): a callback whose claim predates a disconnect (epoch bump)
+/// must be refused at the fenced commit — no credentials saved, no session minted — and the
+/// refusal must be the generic message, never the owner-mismatch wording.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_stale_callback_cannot_commit_after_the_epoch_moves() {
+    use deployment::Deployment;
+
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    // The deterministic JWT is derived BEFORE mounting so the delayed redeem override can
+    // answer with exactly the bearer that mock_hive_oauth's profile mock expects for "stale".
+    let jwt = h.access_token_for_label("stale");
+    // Priority-1 delayed redeem, mounted BEFORE mock_hive_oauth so it shadows the normal
+    // redeem: signals the moment the request ARRIVES, answers 300ms later — a window wide
+    // enough to bump the epoch while the handler is between claim and commit.
+    let redeem_arrived = h
+        .mock_hive_delayed_json(
+            "POST",
+            "/v1/oauth/web/redeem",
+            300,
+            serde_json::json!({"access_token": jwt, "refresh_token": "ref"}),
+        )
+        .await;
+    let id = h.mock_hive_oauth("code-1", "stale", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+    let creds_before = std::fs::read(h.credentials_path()).unwrap();
+
+    let addr = h.addr();
+    let cookie = a
+        .header_value()
+        .expect("browser A must hold a binding cookie");
+    let request = tokio::spawn(async move {
+        let res = reqwest::Client::new()
+            .get(format!("http://{addr}{cb}"))
+            .header(reqwest::header::COOKIE, cookie)
+            .send()
+            .await
+            .expect("callback request must be issued");
+        let status = res.status().as_u16();
+        let body = res.text().await.unwrap();
+        (status, body)
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), redeem_arrived)
+        .await
+        .expect("redemption never reached the Hive mock")
+        .expect("delayed-responder signal channel closed");
+
+    // The claim (and its epoch capture) precedes redemption, so epoch_at_claim is now
+    // captured. Bumping the epoch from the test simulates the disconnect; the fenced
+    // commit must compare and refuse to write anything.
+    let mut g = h.deployment().browser_auth_epoch().lock().await;
+    *g += 1;
+    drop(g);
+
+    let (status, body) = request.await.expect("callback task panicked");
+    assert_eq!(status, 400, "body: {body}");
+    assert!(
+        body.contains("Sign-in could not be completed"),
+        "must be the generic browser-login failure message: {body}"
+    );
+    assert!(
+        !body.contains("owned by a different account"),
+        "a stale callback is a disconnect, never an owner mismatch: {body}"
+    );
+
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_sessions")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(sessions, 0, "a stale callback must not mint a session");
+    assert_eq!(
+        std::fs::read(h.credentials_path()).unwrap(),
+        creds_before,
+        "a stale callback must not save credentials"
+    );
+}
+
+/// Test B (round-1 remediation): a credential-save failure must abort WITHOUT minting a
+/// session. Mutating the order (mint before save) turns this red.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_credential_save_failure_mints_no_session() {
+    let h = common::HiveHarness::configured().await;
+    let owner = uuid::Uuid::new_v4();
+    let id = h.mock_hive_oauth("code-1", "acc", "ref", owner).await;
+    let mut a = common::CookieJar::new();
+    let cb = start_login(&h, &mut a, id).await;
+
+    // Sabotage the file backend deterministically: the temp-file create inside
+    // FileBackend::save now fails with EISDIR regardless of user.
+    let tmp = h.credentials_path().with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::create_dir(&tmp).unwrap();
+
+    let res = h.get_with(&cb, &mut a).await;
+    assert_eq!(res.status, 400, "body: {}", res.body);
+    assert!(
+        res.body.contains("Sign-in could not be completed"),
+        "must be the generic browser-login failure message: {}",
+        res.body
+    );
+    assert!(
+        res.set_cookie
+            .iter()
+            .all(|l| !l.starts_with("vks_browser_session=")),
+        "a failed credential save must not mint a session cookie"
+    );
+
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_sessions")
+        .fetch_one(h.pool())
+        .await
+        .unwrap();
+    assert_eq!(sessions, 0, "no session row may exist when the save failed");
+}

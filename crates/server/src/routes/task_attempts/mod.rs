@@ -97,7 +97,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .route("/commit-compare", get(compare_commit_to_head))
         .route("/start-dev-server", post(start_dev_server))
         .route("/branch-status", get(get_task_attempt_branch_status))
-        .route("/diff/ws", get(stream_task_attempt_diff_ws))
         .route("/merge", post(merge_task_attempt))
         .route("/push", post(push_task_attempt_branch))
         .route("/push/force", post(force_push_task_attempt_branch))
@@ -140,9 +139,28 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
             load_task_attempt_middleware_with_wildcard,
         ));
 
-    // Routes for accessing task attempts by shared_task_id (used for node-to-node proxying).
-    // These routes allow a proxying node to request data using the Hive shared task ID.
-    // The middleware finds the task by shared_task_id and loads its most recent attempt.
+    let by_task_id_diff_router = Router::new()
+        .route(
+            "/task-attempts/by-task-id/{task_id}/diff/ws",
+            get(stream_task_attempt_diff_ws),
+        )
+        .layer(from_fn_with_state(
+            deployment.clone(),
+            load_task_attempt_by_task_id_middleware,
+        ));
+
+    let task_attempts_router = Router::new()
+        .route("/", get(get_task_attempts).post(create_task_attempt))
+        .nest("/{id}", task_attempt_id_router)
+        .merge(task_attempt_files_router);
+
+    Router::new()
+        .nest("/task-attempts", task_attempts_router)
+        .merge(by_task_id_diff_router)
+}
+
+/// Node-to-node task-attempt HTTP only. Deliberately excludes every WebSocket.
+pub fn node_to_node_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
     let by_task_id_router = Router::new()
         .route("/follow-up", post(follow_up))
         .route("/review", post(review_attempt))
@@ -153,7 +171,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .route("/merge", post(merge_task_attempt))
         .route("/rebase", post(rebase_task_attempt))
         .route("/conflicts/abort", post(abort_conflicts_task_attempt))
-        // Stash endpoints for handling uncommitted changes
         .route("/stash/dirty-files", get(get_dirty_files))
         .route("/stash", post(stash_changes))
         .route("/stash/pop", post(pop_stash))
@@ -169,8 +186,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         )
         .route("/draft/queue", post(drafts::set_draft_queue))
         .route("/files", get(list_worktree_files))
-        .route("/diff/ws", get(stream_task_attempt_diff_ws))
-        // These routes were added for node-to-node proxy support
         .route("/children", get(get_task_attempt_children))
         .route("/has-session-error", get(has_session_error))
         .route("/fix-sessions", post(fix_sessions))
@@ -179,7 +194,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
             load_task_attempt_by_task_id_middleware,
         ));
 
-    // Wildcard file path route for by-task-id (file content browsing)
     let by_task_id_files_router = Router::new()
         .route(
             "/by-task-id/{task_id}/files/{*file_path}",
@@ -190,8 +204,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
             load_task_attempt_by_task_id_middleware_with_wildcard,
         ));
 
-    // Route for creating task attempts via shared_task_id (cross-node proxying).
-    // Uses different middleware that only loads Task (not TaskAttempt).
     let by_task_id_create_router = Router::new()
         .route(
             "/by-task-id/{task_id}/create",
@@ -202,15 +214,24 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
             load_task_by_task_id_middleware,
         ));
 
-    let task_attempts_router = Router::new()
-        .route("/", get(get_task_attempts).post(create_task_attempt))
-        .nest("/{id}", task_attempt_id_router)
-        .merge(task_attempt_files_router)
-        .nest("/by-task-id/{task_id}", by_task_id_router)
-        .merge(by_task_id_files_router)
-        .merge(by_task_id_create_router);
+    Router::new().nest(
+        "/task-attempts",
+        Router::new()
+            .nest("/by-task-id/{task_id}", by_task_id_router)
+            .merge(by_task_id_files_router)
+            .merge(by_task_id_create_router),
+    )
+}
 
-    Router::new().nest("/task-attempts", task_attempts_router)
+/// The production direct-diff path used by useDiffStream.ts with ?token=<connection token>.
+pub fn direct_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
+    let diff = Router::new()
+        .route("/diff/ws", get(stream_task_attempt_diff_ws))
+        .layer(from_fn_with_state(
+            deployment.clone(),
+            load_task_attempt_middleware,
+        ));
+    Router::new().nest("/task-attempts/{id}", diff)
 }
 
 // Note: Type tests are in types.rs

@@ -3,6 +3,11 @@
  *
  * This module provides TanStack DB collections backed by Electric SQL shapes.
  * Each collection syncs data from the backend PostgreSQL database in real-time.
+ *
+ * The hive Electric proxy exposes exactly one shape — `shared_tasks`
+ * (crates/remote/src/routes/electric_proxy.rs). Collection factories for
+ * other tables were removed at the 2026-08-28 close review because their
+ * shape URLs 404 against the real hive; see the decisions-ledger.
  */
 
 import { createCollection } from '@tanstack/react-db';
@@ -16,46 +21,16 @@ import { createShapeUrl } from './config';
 type ElectricRow = Record<string, unknown>;
 
 /**
- * Node type for Electric sync.
- * Matches the PostgreSQL nodes table structure.
+ * Shared-task row streamed by the hive Electric proxy.
+ *
+ * The authoritative schema lives in the hive's PostgreSQL `shared_tasks`
+ * table (not this repo's node migrations), so only the columns the proxy
+ * contract guarantees are typed; everything else flows through the
+ * ElectricRow index signature.
  */
-export type ElectricNode = ElectricRow & {
+export type ElectricSharedTask = ElectricRow & {
   id: string;
   organization_id: string;
-  name: string;
-  hostname: string | null;
-  os_info: string | null;
-  status: string;
-  last_heartbeat_at: string | null;
-  public_url: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-/**
- * Project type for Electric sync.
- * Matches the PostgreSQL projects table structure.
- */
-export type ElectricProject = ElectricRow & {
-  id: string;
-  organization_id: string;
-  name: string;
-  repo_url: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-/**
- * Node-Project link type for Electric sync.
- * Shows which projects are available on which nodes.
- */
-export type ElectricNodeProject = ElectricRow & {
-  id: string;
-  node_id: string;
-  project_id: string;
-  local_project_id: string;
-  created_at: string;
-  updated_at: string;
 };
 
 /**
@@ -70,119 +45,16 @@ export interface ElectricCollectionConfig<T> {
 }
 
 /**
- * Create a collection for nodes.
- * Syncs worker nodes connected to the hive.
+ * Create a collection for shared tasks.
+ * Syncs the organization-scoped shared-task rows from the hive.
  *
- * @returns TanStack DB collection for nodes
+ * @returns TanStack DB collection for shared_tasks
  */
-export function createNodesCollection() {
+export function createSharedTasksCollection() {
   return createCollection(
-    electricCollectionOptions<ElectricNode>({
+    electricCollectionOptions<ElectricSharedTask>({
       shapeOptions: {
-        url: createShapeUrl('nodes'),
-      },
-      getKey: (item) => item.id,
-    })
-  );
-}
-
-/**
- * Create a collection for projects.
- * Syncs organization projects from the hive.
- *
- * @returns TanStack DB collection for projects
- */
-export function createProjectsCollection() {
-  return createCollection(
-    electricCollectionOptions<ElectricProject>({
-      shapeOptions: {
-        url: createShapeUrl('projects'),
-      },
-      getKey: (item) => item.id,
-    })
-  );
-}
-
-/**
- * Create a collection for node-project links.
- * Shows which projects are available on which nodes.
- *
- * @returns TanStack DB collection for node-project links
- */
-export function createNodeProjectsCollection() {
-  return createCollection(
-    electricCollectionOptions<ElectricNodeProject>({
-      shapeOptions: {
-        url: createShapeUrl('node_projects'),
-      },
-      getKey: (item) => item.id,
-    })
-  );
-}
-
-export type ElectricTaskAssignment = ElectricRow & {
-  id: string;
-  task_id: string;
-  node_id: string;
-  node_project_id: string;
-  local_task_id: string | null;
-  local_attempt_id: string | null;
-  execution_status: string;
-  assigned_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  created_at: string;
-  lease_expires_at: string | null;
-  fencing_token: number;
-};
-
-export function createTaskAssignmentsCollection() {
-  return createCollection(
-    electricCollectionOptions<ElectricTaskAssignment>({
-      shapeOptions: {
-        url: createShapeUrl('node_task_assignments'),
-      },
-      getKey: (item) => item.id,
-    })
-  );
-}
-
-export type ElectricTaskOutputLog = ElectricRow & {
-  id: string;
-  assignment_id: string;
-  output_type: string;
-  content: string;
-  timestamp: string;
-  created_at: string;
-  execution_process_id: string | null;
-};
-
-export function createTaskOutputLogsCollection() {
-  return createCollection(
-    electricCollectionOptions<ElectricTaskOutputLog>({
-      shapeOptions: {
-        url: createShapeUrl('node_task_output_logs'),
-      },
-      getKey: (item) => item.id,
-    })
-  );
-}
-
-export type ElectricTaskProgressEvent = ElectricRow & {
-  id: string;
-  assignment_id: string;
-  event_type: string;
-  message: string | null;
-  metadata: unknown | null;
-  timestamp: string;
-  created_at: string;
-};
-
-export function createTaskProgressEventsCollection() {
-  return createCollection(
-    electricCollectionOptions<ElectricTaskProgressEvent>({
-      shapeOptions: {
-        url: createShapeUrl('node_task_progress_events'),
+        url: createShapeUrl('shared_tasks'),
       },
       getKey: (item) => item.id,
     })

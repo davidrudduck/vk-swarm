@@ -441,12 +441,23 @@ impl RemoteClient {
                 .with_jitter(),
         )
         .when(|e: &RemoteClientError| e.should_retry())
-        .notify(|e, dur| {
-            warn!(
-                "Remote call failed, retrying after {:.2}s: {}",
-                dur.as_secs_f64(),
-                e
-            )
+        .notify(|e, dur| match e {
+            RemoteClientError::Http { status, .. } => {
+                warn!(
+                    status,
+                    path = %path,
+                    "Remote call failed, retrying after {:.2}s",
+                    dur.as_secs_f64()
+                );
+            }
+            other => {
+                warn!(
+                    path = %path,
+                    "Remote call failed, retrying after {:.2}s: {}",
+                    dur.as_secs_f64(),
+                    other
+                );
+            }
         })
         .await
     }
@@ -530,6 +541,22 @@ impl RemoteClient {
     /// Fetches user profile.
     pub async fn profile(&self) -> Result<ProfileResponse, RemoteClientError> {
         self.get_authed("/v1/profile").await
+    }
+
+    /// Fetches the profile using an EXPLICIT candidate access token, WITHOUT reading or writing
+    /// the stored daemon credentials.
+    ///
+    /// This is what lets the node learn a candidate's identity BEFORE deciding whether to accept
+    /// it as the owner: `profile()` would go through AuthMode::OAuth and use whatever is already
+    /// saved. AuthMode::ApiKey passes the supplied token straight to `bearer_auth` (see
+    /// `require_token`), which is exactly the semantics needed here.
+    pub async fn profile_with_token(
+        &self,
+        access_token: &str,
+    ) -> Result<ProfileResponse, RemoteClientError> {
+        Self::new_with_api_key(self.base.as_str(), access_token.to_string())?
+            .profile()
+            .await
     }
 
     /// Revokes the session associated with the token.

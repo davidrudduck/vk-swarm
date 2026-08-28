@@ -22,6 +22,10 @@ pub enum ConnectionTokenError {
     TokenExpired,
     #[error("execution id mismatch")]
     ExecutionMismatch,
+    #[error("node mismatch")]
+    NodeMismatch,
+    #[error("resource mismatch")]
+    ResourceMismatch,
     #[error("missing secret - connection tokens not configured")]
     MissingSecret,
     #[error("jwt error: {0}")]
@@ -144,6 +148,29 @@ impl ConnectionTokenValidator {
 
         Ok(connection_token)
     }
+
+    /// Strict receiver-side validation: the token must be issued for THIS node AND scoped to
+    /// THIS exact resource.
+    ///
+    /// `execution_process_id: None` is NOT wildcard access to any resource -- an unscoped token
+    /// is rejected. Used by the direct-diff and raw/live-log receiving middleware.
+    pub fn validate_for_resource(
+        &self,
+        token: &str,
+        expected_node_id: Uuid,
+        expected_resource_id: Uuid,
+    ) -> Result<ConnectionToken, ConnectionTokenError> {
+        let connection_token = self.validate(token)?;
+
+        if connection_token.node_id != expected_node_id {
+            return Err(ConnectionTokenError::NodeMismatch);
+        }
+        if connection_token.execution_process_id != Some(expected_resource_id) {
+            return Err(ConnectionTokenError::ResourceMismatch);
+        }
+
+        Ok(connection_token)
+    }
 }
 
 impl Default for ConnectionTokenValidator {
@@ -192,6 +219,23 @@ impl ConnectionTokenValidator {
             target_node_id: claims.node_id,
             expires_at,
         })
+    }
+
+    /// Strict receiver-side validation: the proxy token must target THIS node.
+    ///
+    /// Used by the by-remote-id/by-task-id proxy receiving middleware.
+    pub fn validate_proxy_for_node(
+        &self,
+        token: &str,
+        expected_node_id: Uuid,
+    ) -> Result<ProxyToken, ConnectionTokenError> {
+        let proxy_token = self.validate_proxy_token(token)?;
+
+        if proxy_token.target_node_id != expected_node_id.to_string() {
+            return Err(ConnectionTokenError::NodeMismatch);
+        }
+
+        Ok(proxy_token)
     }
 }
 
@@ -348,5 +392,120 @@ mod tests {
         let validator = ConnectionTokenValidator::disabled();
         let result = validator.validate("some.token.here");
         assert!(matches!(result, Err(ConnectionTokenError::MissingSecret)));
+    }
+
+    #[test]
+    fn test_validate_for_resource_accepts_exact_node_and_resource() {
+        let secret = test_secret();
+        let validator = ConnectionTokenValidator::new(secret.clone());
+
+        let node_id = Uuid::new_v4();
+        let resource_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let claims = ConnectionTokenClaims {
+            sub: Uuid::new_v4(),
+            node_id,
+            assignment_id: Uuid::new_v4(),
+            execution_process_id: Some(resource_id),
+            iat: now.timestamp(),
+            exp: (now + chrono::Duration::minutes(15)).timestamp(),
+            aud: "connection".to_string(),
+        };
+
+        let token = create_test_token(&secret, &claims);
+        let result = validator.validate_for_resource(&token, node_id, resource_id);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_for_resource_rejects_unscoped_wrong_resource_and_wrong_node() {
+        let secret = test_secret();
+        let validator = ConnectionTokenValidator::new(secret.clone());
+
+        let node_id = Uuid::new_v4();
+        let resource_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let claims_for = |node: Uuid, exec: Option<Uuid>| ConnectionTokenClaims {
+            sub: Uuid::new_v4(),
+            node_id: node,
+            assignment_id: Uuid::new_v4(),
+            execution_process_id: exec,
+            iat: now.timestamp(),
+            exp: (now + chrono::Duration::minutes(15)).timestamp(),
+            aud: "connection".to_string(),
+        };
+
+        // execution_process_id: None is NOT wildcard access to any resource.
+        let unscoped = create_test_token(&secret, &claims_for(node_id, None));
+        assert!(matches!(
+            validator.validate_for_resource(&unscoped, node_id, resource_id),
+            Err(ConnectionTokenError::ResourceMismatch)
+        ));
+
+        // Scoped to a different resource.
+        let wrong_resource = create_test_token(&secret, &claims_for(node_id, Some(Uuid::new_v4())));
+        assert!(matches!(
+            validator.validate_for_resource(&wrong_resource, node_id, resource_id),
+            Err(ConnectionTokenError::ResourceMismatch)
+        ));
+
+        // Issued for a different node.
+        let wrong_node = create_test_token(&secret, &claims_for(Uuid::new_v4(), Some(resource_id)));
+        assert!(matches!(
+            validator.validate_for_resource(&wrong_node, node_id, resource_id),
+            Err(ConnectionTokenError::NodeMismatch)
+        ));
+    }
+
+    #[test]
+    fn test_validate_proxy_for_node_accepts_exact_target() {
+        let secret = test_secret();
+        let validator = ConnectionTokenValidator::new(secret.clone());
+
+        let target = Uuid::new_v4();
+        let now = Utc::now();
+
+        let claims = ProxyTokenClaims {
+            sub: Uuid::new_v4().to_string(),
+            node_id: target.to_string(),
+            iat: now.timestamp(),
+            exp: (now + chrono::Duration::minutes(15)).timestamp(),
+            aud: "node_proxy".to_string(),
+        };
+
+        let encoding_key = EncodingKey::from_base64_secret(secret.expose_secret()).unwrap();
+        let token = encode(&Header::new(Algorithm::HS256), &claims, &encoding_key).unwrap();
+
+        let result = validator.validate_proxy_for_node(&token, target);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_proxy_for_node_rejects_wrong_target_node() {
+        let secret = test_secret();
+        let validator = ConnectionTokenValidator::new(secret.clone());
+
+        let target = Uuid::new_v4();
+        let now = Utc::now();
+
+        let claims = ProxyTokenClaims {
+            sub: Uuid::new_v4().to_string(),
+            node_id: Uuid::new_v4().to_string(),
+            iat: now.timestamp(),
+            exp: (now + chrono::Duration::minutes(15)).timestamp(),
+            aud: "node_proxy".to_string(),
+        };
+
+        let encoding_key = EncodingKey::from_base64_secret(secret.expose_secret()).unwrap();
+        let token = encode(&Header::new(Algorithm::HS256), &claims, &encoding_key).unwrap();
+
+        assert!(matches!(
+            validator.validate_proxy_for_node(&token, target),
+            Err(ConnectionTokenError::NodeMismatch)
+        ));
     }
 }

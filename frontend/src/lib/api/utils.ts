@@ -58,6 +58,19 @@ export function isHiveNotConfigured(err: unknown): boolean {
 /** Request timeout in milliseconds (30 seconds) */
 export const REQUEST_TIMEOUT_MS = 30000;
 
+let unauthorizedHandler: (() => void) | null = null;
+
+export function onUnauthorized(handler: () => void): () => void {
+  unauthorizedHandler = handler;
+  return () => {
+    if (unauthorizedHandler === handler) unauthorizedHandler = null;
+  };
+}
+
+export function notifyUnauthorized(): void {
+  unauthorizedHandler?.();
+}
+
 /**
  * Helper to combine multiple AbortSignals (first one to abort wins).
  */
@@ -116,7 +129,7 @@ export const makeRequest = async (url: string, options: RequestInit = {}) => {
   }
 
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...options,
       headers,
       signal: options.signal
@@ -124,6 +137,16 @@ export const makeRequest = async (url: string, options: RequestInit = {}) => {
           anySignal([options.signal, controller.signal])
         : controller.signal,
     });
+    // Browser-session 401 from `require_browser_session` is a bare empty 401 (no JSON
+    // body). Hive/proxy 401s are `application/json`. Status alone is not sufficient —
+    // the same class of bug the 503 path documents above.
+    if (response.status === 401) {
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!contentType.toLowerCase().includes('application/json')) {
+        notifyUnauthorized();
+      }
+    }
+    return response;
   } finally {
     clearTimeout(timeoutId);
   }

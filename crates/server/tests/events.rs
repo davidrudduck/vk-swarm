@@ -113,9 +113,15 @@ async fn events_without_cursor_streams_live_only() {
     }
 
     // Now subscribe to /api/events (no cursor param) — should get live-only
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
     let url = format!("http://{}/api/events", h.addr());
-    let res = client.get(&url).send().await.unwrap();
+    let res = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(res.status(), 200, "SSE endpoint should return 200");
     let mut event_stream = res.bytes_stream();
@@ -191,9 +197,15 @@ async fn events_with_cursor_replays_then_goes_live() {
     );
 
     // Subscribe with cursor=2 (should replay 3,4,5)
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
     let url = format!("http://{}/api/events?cursor=2", h.addr());
-    let res = client.get(&url).send().await.unwrap();
+    let res = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
 
     let mut event_stream = res.bytes_stream();
@@ -264,9 +276,15 @@ async fn each_sse_message_carries_seq() {
     );
 
     // Subscribe from seq 0 to get all three
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
     let url = format!("http://{}/api/events?cursor=0", h.addr());
-    let res = client.get(&url).send().await.unwrap();
+    let res = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
 
     let mut event_stream = res.bytes_stream();
@@ -331,9 +349,15 @@ async fn reconnect_with_last_seen_cursor_skips_nothing() {
     assert_eq!(before, vec![1, 2, 3], "unexpected seeded seqs: {before:?}");
 
     // ---- connection 1 -------------------------------------------------------------------
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
     let url = format!("http://{}/api/events?cursor=0", h.addr());
-    let res = client.get(&url).send().await.unwrap();
+    let res = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
 
     let mut event_stream = res.bytes_stream();
@@ -378,7 +402,12 @@ async fn reconnect_with_last_seen_cursor_skips_nothing() {
 
     // ---- connection 2: resume from the observed cursor ------------------------------------
     let url = format!("http://{}/api/events?cursor={}", h.addr(), last_seen);
-    let res = client.get(&url).send().await.unwrap();
+    let res = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
 
     let mut event_stream = res.bytes_stream();
@@ -456,16 +485,27 @@ async fn removed_record_patch_route_is_gone() {
 
     // (b) Raw bounded read — the harness `get()` helper would hang here, because an SSE body
     // never ends.
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
     let url = format!("http://{}/api/events?cursor=0", h.addr());
-    let res = client.get(&url).send().await.unwrap();
+    let res = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
+        .send()
+        .await
+        .unwrap();
 
     let status = res.status().as_u16();
-    let content_type = res
-        .headers()
+    let headers = res.headers().clone();
+    let content_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
+    let set_cookie = headers
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
+        .collect();
 
     let mut event_stream = res.bytes_stream();
     let mut collected = String::new();
@@ -493,6 +533,8 @@ async fn removed_record_patch_route_is_gone() {
         status,
         body: collected.clone(),
         content_type: content_type.clone(),
+        headers,
+        set_cookie,
     };
     resp.assert_registered();
     assert_eq!(status, 200);
@@ -569,9 +611,15 @@ async fn sse_delivers_an_event_from_a_real_task_write() {
         .expect("failed to create project");
 
     // Subscribe to events BEFORE writing the task
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
     let url = format!("http://{}/api/events", h.addr());
-    let res = client.get(&url).send().await.unwrap();
+    let res = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
 
     let mut event_stream = res.bytes_stream();
@@ -661,9 +709,15 @@ async fn mid_stream_error_emits_terminal_error_frame_then_ends() {
         .await
         .expect("failed to rename event_journal");
 
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
     let url = format!("http://{}/api/events?cursor=0", h.addr());
-    let res = client.get(&url).send().await.unwrap();
+    let res = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
+        .send()
+        .await
+        .unwrap();
 
     // The response head is already on the wire before the stream is first polled, so the failure
     // cannot become a status code — it has to arrive as a frame.
@@ -765,9 +819,14 @@ async fn no_cursor_with_unreadable_journal_returns_500() {
         .await
         .expect("failed to rename event_journal");
 
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
     let url = format!("http://{}/api/events", h.addr());
-    let response = client.get(&url).send().await;
+    let response = client
+        .get(&url)
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
+        .send()
+        .await;
 
     // Restore the table BEFORE any assertion can panic, so harness teardown
     // always sees the schema it expects.
@@ -793,8 +852,10 @@ async fn no_cursor_with_unreadable_journal_returns_500() {
 async fn negative_cursor_returns_400() {
     let h = common::HiveHarness::hive_absent().await;
 
+    let jar = h.authorized_jar().await;
     let res = reqwest::Client::new()
         .get(format!("http://{}/api/events?cursor=-1", h.addr()))
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
         .send()
         .await
         .expect("failed to request /api/events");
@@ -831,11 +892,13 @@ async fn cursor_below_retained_history_returns_410() {
         .await
         .expect("failed to simulate compaction");
 
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
 
     // cursor=1 < low_water - 1 = 2: events at seqs 2..=2 were deleted unseen -> 410.
     let stale = client
         .get(format!("http://{}/api/events?cursor=1", h.addr()))
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
         .send()
         .await
         .expect("failed to request /api/events with stale cursor");
@@ -848,6 +911,7 @@ async fn cursor_below_retained_history_returns_410() {
     // cursor=2 == low_water - 1: resumes gaplessly at seq 3 -> stream starts (200).
     let boundary = client
         .get(format!("http://{}/api/events?cursor=2", h.addr()))
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
         .send()
         .await
         .expect("failed to request /api/events with boundary cursor");
@@ -876,11 +940,13 @@ async fn cursor_above_high_water_returns_410() {
             .expect("failed to seed event_journal");
     }
 
+    let jar = h.authorized_jar().await;
     let client = reqwest::Client::new();
 
     // High-water mark is 3; a cursor of 10 can only come from a pre-regression journal.
     let res = client
         .get(format!("http://{}/api/events?cursor=10", h.addr()))
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
         .send()
         .await
         .expect("failed to request /api/events with regressed-head cursor");
@@ -893,6 +959,7 @@ async fn cursor_above_high_water_returns_410() {
     // A cursor AT the high-water mark is the normal caught-up case and must be accepted.
     let caught_up = client
         .get(format!("http://{}/api/events?cursor=3", h.addr()))
+        .header(reqwest::header::COOKIE, jar.header_value().unwrap())
         .send()
         .await
         .expect("failed to request /api/events with caught-up cursor");

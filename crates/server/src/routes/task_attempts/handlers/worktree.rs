@@ -27,6 +27,7 @@ use sqlx::Error as SqlxError;
 use utils::response::ApiResponse;
 use utils::unified_log::OutputType;
 
+use crate::auth::session::BrowserSessionCtx;
 use crate::routes::task_attempts::types::{DiffStreamQuery, ListFilesQuery, WorktreePathResponse};
 use crate::routes::task_attempts::util::ensure_worktree_path;
 use crate::{
@@ -43,16 +44,35 @@ pub async fn stream_task_attempt_diff_ws(
     ws: WebSocketUpgrade,
     Query(params): Query<DiffStreamQuery>,
     Extension(task_attempt): Extension<TaskAttempt>,
+    browser_session: Option<Extension<BrowserSessionCtx>>,
     State(deployment): State<DeploymentImpl>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
+    // A live browser session is a complete authorization alternative; do not
+    // decode an irrelevant query token on that branch (browser OR token, not AND).
+    // This endpoint-local check is the final guard before upgrade on the token
+    // branch; the outer connection middleware already rejected bad tokens
+    // BEFORE load_task_attempt_middleware ran.
+    if browser_session.is_none() {
+        let token = params.token.as_deref().ok_or(ApiError::Unauthorized)?;
+        let node_id = deployment
+            .node_runner_context()
+            .ok_or(ApiError::Unauthorized)?
+            .node_id()
+            .await
+            .ok_or(ApiError::Unauthorized)?;
+        deployment
+            .connection_token_validator()
+            .validate_for_resource(token, node_id, task_attempt.id)
+            .map_err(|_| ApiError::Unauthorized)?;
+    }
     let stats_only = params.stats_only;
-    ws.on_upgrade(move |socket| async move {
+    Ok(ws.on_upgrade(move |socket| async move {
         if let Err(e) =
             handle_task_attempt_diff_ws(socket, deployment, task_attempt, stats_only).await
         {
             tracing::warn!("diff WS closed: {}", e);
         }
-    })
+    }))
 }
 
 async fn handle_task_attempt_diff_ws(

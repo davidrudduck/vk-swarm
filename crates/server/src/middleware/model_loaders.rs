@@ -11,7 +11,7 @@ use db::models::{
 use deployment::Deployment;
 use uuid::Uuid;
 
-use crate::DeploymentImpl;
+use crate::{DeploymentImpl, auth::session::BrowserSessionCtx};
 
 /// Context for an authenticated proxy request from another node.
 #[derive(Debug, Clone)]
@@ -277,9 +277,11 @@ pub async fn load_project_by_remote_id_middleware(
 ) -> Result<Response, StatusCode> {
     let mut request = request;
 
-    // Validate proxy token if connection token validation is enabled
     let validator = deployment.connection_token_validator();
-    if validator.is_enabled() {
+    // The outer route-class middleware has already authenticated one of two alternatives.
+    // Browser sessions carry BrowserSessionCtx and need no proxy token. Non-browser requests
+    // must still be revalidated here so the existing ProxyRequestContext/binding behavior stays.
+    if request.extensions().get::<BrowserSessionCtx>().is_none() {
         let token = extract_bearer_token(request.headers()).ok_or_else(|| {
             tracing::warn!(
                 remote_project_id = %remote_project_id,
@@ -288,7 +290,14 @@ pub async fn load_project_by_remote_id_middleware(
             StatusCode::UNAUTHORIZED
         })?;
 
-        match validator.validate_proxy_token(token) {
+        let expected_node_id = deployment
+            .node_runner_context()
+            .ok_or(StatusCode::UNAUTHORIZED)?
+            .node_id()
+            .await
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
+        match validator.validate_proxy_for_node(token, expected_node_id) {
             Ok(proxy_token) => {
                 tracing::debug!(
                     source_node_id = %proxy_token.source_node_id,
@@ -757,9 +766,11 @@ async fn load_task_attempt_by_task_id_impl(
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    // Validate proxy token if connection token validation is enabled
     let validator = deployment.connection_token_validator();
-    if validator.is_enabled() {
+    // The outer route-class middleware has already authenticated one of two alternatives.
+    // Browser sessions carry BrowserSessionCtx and need no proxy token. Non-browser requests
+    // must still be revalidated here so the existing ProxyRequestContext/binding behavior stays.
+    if request.extensions().get::<BrowserSessionCtx>().is_none() {
         let token = extract_bearer_token(request.headers()).ok_or_else(|| {
             tracing::warn!(
                 shared_task_id = %shared_task_id,
@@ -768,7 +779,14 @@ async fn load_task_attempt_by_task_id_impl(
             StatusCode::UNAUTHORIZED
         })?;
 
-        match validator.validate_proxy_token(token) {
+        let expected_node_id = deployment
+            .node_runner_context()
+            .ok_or(StatusCode::UNAUTHORIZED)?
+            .node_id()
+            .await
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
+        match validator.validate_proxy_for_node(token, expected_node_id) {
             Ok(proxy_token) => {
                 tracing::debug!(
                     source_node_id = %proxy_token.source_node_id,
@@ -869,9 +887,11 @@ async fn load_task_by_task_id_impl(
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    // Validate proxy token if connection token validation is enabled
     let validator = deployment.connection_token_validator();
-    if validator.is_enabled() {
+    // The outer route-class middleware has already authenticated one of two alternatives.
+    // Browser sessions carry BrowserSessionCtx and need no proxy token. Non-browser requests
+    // must still be revalidated here so the existing ProxyRequestContext/binding behavior stays.
+    if request.extensions().get::<BrowserSessionCtx>().is_none() {
         let token = extract_bearer_token(request.headers()).ok_or_else(|| {
             tracing::warn!(
                 shared_task_id = %shared_task_id,
@@ -880,7 +900,14 @@ async fn load_task_by_task_id_impl(
             StatusCode::UNAUTHORIZED
         })?;
 
-        match validator.validate_proxy_token(token) {
+        let expected_node_id = deployment
+            .node_runner_context()
+            .ok_or(StatusCode::UNAUTHORIZED)?
+            .node_id()
+            .await
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
+        match validator.validate_proxy_for_node(token, expected_node_id) {
             Ok(proxy_token) => {
                 tracing::debug!(
                     source_node_id = %proxy_token.source_node_id,

@@ -137,7 +137,7 @@ describe('TaskFormSheet Component Interface', () => {
     const module = await import('../TaskFormSheet');
     expect(module.TaskFormSheet).toBeDefined();
     expect(typeof module.TaskFormSheet).toBe('function');
-  }, 10000); // Increase timeout for large component with many dependencies
+  }, 30_000); // Dynamic import of a large component; 10s is too tight under CPU contention
 
   it('should have create mode props type', async () => {
     // Type assertion for documentation

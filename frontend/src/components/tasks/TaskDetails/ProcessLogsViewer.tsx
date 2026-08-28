@@ -200,10 +200,16 @@ export function ProcessLogsViewerContent({
  */
 export function NodeProcessLogsViewer({
   assignmentId,
+  processId,
 }: {
   assignmentId: string;
+  /** The execution process scoping the connection token and direct URL */
+  processId: string;
 }) {
-  const { logs, error, connectionType, retry } = useNodeLogStream(assignmentId);
+  const { logs, error, connectionType, retry } = useNodeLogStream(
+    assignmentId,
+    processId
+  );
 
   // Convert NodeLogEntry to LogEntry format
   const convertedLogs: LogEntry[] = logs.map((entry: NodeLogEntry) => ({
@@ -250,7 +256,12 @@ export default function ProcessLogsViewer({
 }: ProcessLogsViewerProps) {
   // If an assignment ID is provided, use the node log stream (remote via hive)
   if (assignmentId) {
-    return <NodeProcessLogsViewer assignmentId={assignmentId} />;
+    return (
+      <NodeProcessLogsViewer
+        assignmentId={assignmentId}
+        processId={processId}
+      />
+    );
   }
 
   // Otherwise, use the local log stream

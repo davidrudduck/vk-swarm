@@ -3,17 +3,8 @@ import {
   ELECTRIC_PROXY_BASE,
   ELECTRIC_SHAPE_TABLES,
   createShapeUrl,
-} from './index';
-import {
-  createNodesCollection,
-  createProjectsCollection,
-  createNodeProjectsCollection,
-  createTaskAssignmentsCollection,
-  createTaskOutputLogsCollection,
-  createTaskProgressEventsCollection,
-  type ElectricTaskAssignment,
-  type ElectricTaskOutputLog,
-  type ElectricTaskProgressEvent,
+  createSharedTasksCollection,
+  type ElectricSharedTask,
 } from './index';
 
 describe('electric config (SC8)', () => {
@@ -21,73 +12,34 @@ describe('electric config (SC8)', () => {
     expect(ELECTRIC_PROXY_BASE).toBe('/v1/shape');
   });
 
-  it('ELECTRIC_SHAPE_TABLES has 6 tables', () => {
+  it('ELECTRIC_SHAPE_TABLES contains exactly the proxied table', () => {
+    // The hive proxy serves one shape route: /v1/shape/shared_tasks
+    // (crates/remote/src/routes/electric_proxy.rs). Tables removed at the
+    // 2026-08-28 close review (nodes, projects, node_projects,
+    // node_task_*, …) had no proxy route — their URLs 404'd.
     const keys = Object.keys(ELECTRIC_SHAPE_TABLES);
-    expect(keys).toHaveLength(6);
-    expect(keys).toContain('node_task_assignments');
-    expect(keys).toContain('node_task_output_logs');
-    expect(keys).toContain('node_task_progress_events');
+    expect(keys).toEqual(['shared_tasks']);
   });
 
   it('createShapeUrl produces hive-proxy URLs', () => {
-    expect(createShapeUrl('nodes')).toBe('/v1/shape/nodes');
-    expect(createShapeUrl('node_task_assignments')).toBe(
-      '/v1/shape/node_task_assignments'
-    );
+    expect(createShapeUrl('shared_tasks')).toBe('/v1/shape/shared_tasks');
   });
 });
 
 describe('electric collections (SC8)', () => {
-  it('all 6 collection factories are functions', () => {
-    expect(typeof createNodesCollection).toBe('function');
-    expect(typeof createProjectsCollection).toBe('function');
-    expect(typeof createNodeProjectsCollection).toBe('function');
-    expect(typeof createTaskAssignmentsCollection).toBe('function');
-    expect(typeof createTaskOutputLogsCollection).toBe('function');
-    expect(typeof createTaskProgressEventsCollection).toBe('function');
+  it('exposes the shared-tasks collection factory', () => {
+    expect(typeof createSharedTasksCollection).toBe('function');
   });
 
-  // NOTE: field shapes below match the schema-aligned types already shipped
-  // in this repo (and consumed by src/pages/Tasks.tsx), NOT the simplified
-  // literals in docs/plans/vk-swarm-design-system/phase-3/306-*.md. See the
-  // decisions-ledger entry for task 306 for why the plan's literal shapes
-  // were not adopted verbatim (they conflict with an existing consumer).
-  it('new types extend ElectricRow', () => {
-    const a: ElectricTaskAssignment = {
-      id: 'a',
-      task_id: 't',
-      node_id: 'n',
-      node_project_id: 'np',
-      local_task_id: null,
-      local_attempt_id: null,
-      execution_status: 'pending',
-      assigned_at: '2026-01-01T00:00:00Z',
-      started_at: null,
-      completed_at: null,
-      created_at: '2026-01-01T00:00:00Z',
-      lease_expires_at: null,
-      fencing_token: 1,
+  it('ElectricSharedTask extends ElectricRow (open schema)', () => {
+    // The authoritative shared_tasks schema lives in the hive's PostgreSQL,
+    // so the type only pins the proxy-guaranteed columns and stays open
+    // for the rest via the ElectricRow index signature.
+    const t: ElectricSharedTask = {
+      id: 't1',
+      organization_id: 'org1',
+      title: 'flowing through the index signature',
     };
-    const o: ElectricTaskOutputLog = {
-      id: 'o',
-      assignment_id: 'a',
-      output_type: 'stdout',
-      content: 'm',
-      timestamp: '2026-01-01T00:00:00Z',
-      created_at: '2026-01-01T00:00:00Z',
-      execution_process_id: null,
-    };
-    const p: ElectricTaskProgressEvent = {
-      id: 'p',
-      assignment_id: 'a',
-      event_type: 'e',
-      message: 'm',
-      metadata: null,
-      timestamp: '2026-01-01T00:00:00Z',
-      created_at: '2026-01-01T00:00:00Z',
-    };
-    expect(a.id).toBe('a');
-    expect(o.id).toBe('o');
-    expect(p.id).toBe('p');
+    expect(t.id).toBe('t1');
   });
 });

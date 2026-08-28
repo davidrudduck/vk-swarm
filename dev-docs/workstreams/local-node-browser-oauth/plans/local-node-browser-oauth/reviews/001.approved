@@ -1,0 +1,5 @@
+task: 001
+approved_at: 2026-08-22T01:32:37+00:00
+approval: explicit human approval
+scope: Apply the additive browser-auth SQLite migration for node_owner, browser_oauth_handoffs, and browser_sessions.
+request: "Create docs/plans/local-node-browser-oauth/reviews/001.approved and then implement the irreversible additive SQLite migration for task"

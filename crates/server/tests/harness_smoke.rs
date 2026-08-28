@@ -11,7 +11,8 @@ async fn harness_serves_a_configured_hive() {
         serde_json::json!({"organizations": []}),
     )
     .await;
-    let res = h.get("/api/organizations").await;
+    let mut jar = h.authorized_jar().await;
+    let res = h.get_with("/api/organizations", &mut jar).await;
     res.assert_registered();
     assert_eq!(res.status, 200, "body: {}", res.body);
     assert!(res.body.contains("\"success\":true"), "body: {}", res.body);
@@ -25,7 +26,8 @@ async fn harness_serves_a_configured_hive() {
 #[serial_test::serial]
 async fn harness_serves_an_absent_hive() {
     let h = common::HiveHarness::hive_absent().await;
-    let res = h.get("/api/organizations").await;
+    let mut jar = h.authorized_jar().await;
+    let res = h.get_with("/api/organizations", &mut jar).await;
     res.assert_registered();
     assert_eq!(
         res.status, 503,
@@ -48,13 +50,351 @@ async fn harness_detects_an_unregistered_route() {
         ok.content_type
     );
 
-    // A path that is NOT registered. It returns 200 + SPA HTML, NOT 404 — which is
-    // exactly why assert_ne!(404) cannot prove registration in this codebase.
+    // A path that is NOT registered. Since the public/protected split landed, an unmatched
+    // `/api/*` path terminates on the API router's own fallback and NEVER reaches the SPA
+    // catch-all. `is_spa_fallback()` remains the registration oracle for NON-api paths.
     let missing = h.get("/api/definitely-not-a-route").await;
     assert!(
-        missing.is_spa_fallback(),
-        "expected the SPA fallback for an unregistered route, got status {} body {:.80}",
+        !missing.is_spa_fallback(),
+        "unknown /api path fell through to SPA HTML, status {} body {:.80}",
         missing.status,
         missing.body
     );
+    assert_eq!(missing.status, 404);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn jars_are_independent_and_capture_set_cookie() {
+    let h = common::HiveHarness::configured().await;
+    let mut a = common::CookieJar::new();
+    let b = common::CookieJar::new();
+    a.insert("vks_probe", "A");
+    assert_eq!(a.header_value().as_deref(), Some("vks_probe=A"));
+    assert_eq!(b.header_value(), None, "jars must not share state");
+
+    let res = h.get_with("/api/health", &mut a).await;
+    res.assert_registered();
+    assert_eq!(res.status, 200);
+    assert!(
+        res.set_cookie.is_empty(),
+        "health sets no cookie: {:?}",
+        res.set_cookie
+    );
+
+    // Attribute names are case-insensitive and values are parsed as complete integers.
+    a.apply(&["vks_probe=gone; max-age=0".to_string()]);
+    assert_eq!(a.get("vks_probe"), None);
+    a.apply(&["vks_probe=kept; Max-Age=01".to_string()]);
+    assert_eq!(a.get("vks_probe"), Some("kept"));
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn hive_oauth_mocks_hand_out_successive_handoff_ids() {
+    let h = common::HiveHarness::configured().await;
+    let sub = uuid::Uuid::new_v4();
+    let first = h.mock_hive_oauth("code-1", "acc-1", "ref-1", sub).await;
+    let second = h.mock_hive_oauth("code-2", "acc-2", "ref-2", sub).await;
+    assert_ne!(first, second);
+    for (m, p) in [
+        ("POST", "/v1/oauth/web/init"),
+        ("POST", "/v1/oauth/web/redeem"),
+        ("GET", "/v1/profile"),
+    ] {
+        assert!(
+            h.hive_mock_registered(m, p).await,
+            "missing mock for {m} {p}"
+        );
+    }
+    // Two successive initiations must receive the two DIFFERENT ids, in order. Without
+    // `.up_to_n_times(1)` on the init mock, wiremock's first-match-wins resolution would return
+    // `first` twice and every two-login test would fail for an unrelated reason.
+    let mut jar = common::CookieJar::new();
+    let r1 = h
+        .post_with(
+            "/api/auth/handoff/init",
+            serde_json::json!({"provider":"github","return_to":"/"}),
+            &mut jar,
+        )
+        .await;
+    let r2 = h
+        .post_with(
+            "/api/auth/handoff/init",
+            serde_json::json!({"provider":"github","return_to":"/"}),
+            &mut jar,
+        )
+        .await;
+    assert!(r1.body.contains(&first.to_string()), "body: {}", r1.body);
+    assert!(r2.body.contains(&second.to_string()), "body: {}", r2.body);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn probes_speak_the_real_protocols() {
+    let h = common::HiveHarness::configured().await;
+    let jar = h.authorized_jar().await;
+
+    // A REAL websocket handshake against a real WS route completes with 101 and an open socket.
+    let ws = h
+        .ws_probe(
+            &format!("/api/tasks/stream/ws?project_id={}", uuid::Uuid::new_v4()),
+            Some(&jar),
+        )
+        .await;
+    assert_eq!(
+        ws.status, 101,
+        "a valid handshake on a real WS route must upgrade"
+    );
+    assert!(
+        ws.upgraded,
+        "tokio-tungstenite must report an established connection"
+    );
+
+    // A REAL SSE request returns 200 + text/event-stream, and the probe must NOT hang on the
+    // endless body.
+    let sse = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        h.sse_probe("/api/events", Some(&jar)),
+    )
+    .await
+    .expect("sse_probe must not consume the endless body");
+    assert_eq!(sse.status, 200);
+    assert_eq!(sse.content_type.as_deref(), Some("text/event-stream"));
+
+    let expected_node_id = uuid::Uuid::new_v4();
+    let node_h = common::HiveHarness::configured_with_node_auth(
+        "0123456789abcdef0123456789abcdef",
+        expected_node_id,
+    )
+    .await;
+    assert_eq!(
+        node_h
+            .deployment()
+            .node_runner_context()
+            .unwrap()
+            .node_id()
+            .await,
+        Some(expected_node_id)
+    );
+    assert!(
+        node_h
+            .deployment()
+            .connection_token_validator()
+            .is_enabled(),
+        "configured_with_node_auth must enable token validation before serving"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn profile_mocks_are_keyed_by_the_exact_generated_candidate_jwt() {
+    let h = common::HiveHarness::configured().await;
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    h.mock_hive_oauth("code-a", "access-a", "refresh-a", first)
+        .await;
+    h.mock_hive_oauth("code-b", "access-b", "refresh-b", second)
+        .await;
+
+    // The access-token argument is a stable LABEL. Every path derives the same complete JWT.
+    let jwt_a = h.access_token_for_label("access-a");
+    let jwt_b = h.access_token_for_label("access-b");
+    assert_ne!(jwt_a, "access-a");
+    assert_ne!(jwt_a, jwt_b);
+    assert!(utils::jwt::extract_expiration(&jwt_a).unwrap() > chrono::Utc::now());
+    assert_eq!(
+        h.redeemed_access_token("code-a").await,
+        jwt_a,
+        "redeem must return the exact JWT used by profile matching"
+    );
+    assert_eq!(h.profile_subject_for("access-a").await, first);
+    assert_eq!(h.profile_subject_for("access-b").await, second);
+
+    let profile_count = h.hive_request_count("GET", "/v1/profile").await;
+    let reached = h
+        .delay_hive_profile("access-a", first, std::time::Duration::from_millis(25))
+        .await;
+    let profile_url = format!(
+        "{}/v1/profile",
+        h.deployment()
+            .remote_client()
+            .unwrap()
+            .base_url()
+            .trim_end_matches('/')
+    );
+    let profile_request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .get(profile_url)
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {jwt_a}"))
+            .send()
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), reached)
+        .await
+        .expect("delayed profile never reached Wiremock")
+        .unwrap();
+    let delayed_profile = profile_request.await.unwrap();
+    assert_eq!(delayed_profile.status(), 200);
+    let delayed_body: utils::api::oauth::ProfileResponse = delayed_profile.json().await.unwrap();
+    assert_eq!(delayed_body.user_id, first);
+    assert_eq!(
+        h.hive_request_count("GET", "/v1/profile").await,
+        profile_count + 1
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn restart_reuses_the_same_assets_dir_and_database() {
+    let first = common::HiveHarness::configured().await;
+    let project_id = first.seed_project("restart-probe", &[]).await;
+    let old_generation = first.server_generation();
+    // Deliberately overwrite process-global env through a second live harness. restart() must
+    // restore FIRST's retained paths/configuration before reconstruction.
+    let second = common::HiveHarness::configured().await;
+    let second_project_id = second.seed_project("other-harness", &[]).await;
+    let h = first.restart().await;
+    assert_eq!(
+        h.last_completed_server_generation(),
+        Some(old_generation),
+        "restart must record the old generation only after its serve JoinHandle completes"
+    );
+    assert_eq!(
+        h.server_generation(),
+        old_generation + 1,
+        "the replacement server is a new generation over the same persisted state"
+    );
+    let mut jar = h.authorized_jar().await;
+    let res = h.get_with("/api/projects", &mut jar).await;
+    res.assert_registered();
+    assert!(
+        res.body.contains(&project_id.to_string()),
+        "restart must reuse the same sqlite file; body: {}",
+        res.body
+    );
+    assert!(
+        !res.body.contains(&second_project_id.to_string()),
+        "restart must not switch to another live harness's sqlite file; body: {}",
+        res.body
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn resp_preserves_all_repeated_headers() {
+    let h = common::HiveHarness::configured().await;
+    h.mock_redirect(
+        "/header-probe",
+        "/target",
+        &["probe=a; HttpOnly", "other=b"],
+    )
+    .await;
+    let mut jar = common::CookieJar::new();
+    let res = h.get_no_redirect("/header-probe", &mut jar).await;
+    assert_eq!(res.status, 302);
+    assert_eq!(
+        res.headers
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .count(),
+        2
+    );
+    assert_eq!(res.set_cookie.len(), 2);
+    assert_eq!(jar.get("probe"), Some("a"));
+    assert_eq!(jar.get("other"), Some("b"));
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn no_redirect_preserves_location() {
+    let h = common::HiveHarness::configured().await;
+    h.mock_redirect("/location-probe", "/target", &[]).await;
+    let mut jar = common::CookieJar::new();
+    let res = h.get_no_redirect("/location-probe", &mut jar).await;
+    assert_eq!(res.status, 302);
+    assert_eq!(res.location(), Some("/target"));
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn priority_one_outage_overrides_signal_and_record_the_exact_request() {
+    let h = common::HiveHarness::configured().await;
+    // Seed an unlinked project (no shared_task_id) and restart: the replacement RemoteSync
+    // therefore walks the same GET /v1/organizations path node-cache startup uses, proving
+    // that owned shutdown — not a request-count threshold — removes background refreshers.
+    h.seed_project("refresh-provenance", &[db::models::task::TaskStatus::Todo])
+        .await;
+    let h = h.restart().await;
+    let owner = uuid::Uuid::new_v4();
+    h.mock_hive_oauth("code-a", "access-a", "refresh-a", owner)
+        .await;
+    // Force refresh-only persisted credentials, then drive RemoteClient::access_token(). This is
+    // the real production refresh path, not a raw reqwest request to the mock URL.
+    h.write_refresh_only_credentials("test-refresh-token").await;
+    let refreshes_before = h.hive_request_count("POST", "/v1/tokens/refresh").await;
+    let reached = h.mock_hive_failure("POST", "/v1/tokens/refresh", 503).await;
+    let request = spawn_real_refresh_request(&h);
+    tokio::time::timeout(std::time::Duration::from_secs(2), reached)
+        .await
+        .expect("refresh never reached Wiremock")
+        .unwrap();
+    assert_eq!(
+        h.hive_request_count("POST", "/v1/tokens/refresh").await,
+        refreshes_before + 1,
+        "exactly the explicit caller may issue the observed refresh request"
+    );
+    request.abort();
+    let _ = request.await;
+
+    let h = common::HiveHarness::configured().await;
+    h.mock_json("POST", "/outage/reset", 200, serde_json::json!({}))
+        .await;
+    let reached = h.mock_hive_connection_reset("POST", "/outage/reset").await;
+    let request = spawn_real_hive_request(&h, "/outage/reset");
+    tokio::time::timeout(std::time::Duration::from_secs(2), reached)
+        .await
+        .expect("connection reset never reached Wiremock")
+        .unwrap();
+    assert_eq!(h.hive_request_count("POST", "/outage/reset").await, 1);
+    request.abort();
+    let _ = request.await;
+
+    let h = common::HiveHarness::configured().await;
+    h.mock_json("POST", "/outage/delayed", 200, serde_json::json!({}))
+        .await;
+    let reached = h.mock_hive_delayed("POST", "/outage/delayed").await;
+    let request = spawn_real_hive_request(&h, "/outage/delayed");
+    tokio::time::timeout(std::time::Duration::from_secs(2), reached)
+        .await
+        .expect("delayed response never reached Wiremock")
+        .unwrap();
+    assert_eq!(h.hive_request_count("POST", "/outage/delayed").await, 1);
+    request.abort();
+    let _ = request.await;
+}
+
+fn spawn_real_refresh_request(
+    h: &common::HiveHarness,
+) -> tokio::task::JoinHandle<Result<String, services::RemoteClientError>> {
+    let client = h.deployment().remote_client().unwrap();
+    tokio::spawn(async move { client.access_token().await })
+}
+
+fn spawn_real_hive_request(
+    h: &common::HiveHarness,
+    path: &'static str,
+) -> tokio::task::JoinHandle<()> {
+    let base_url = h
+        .deployment()
+        .remote_client()
+        .unwrap()
+        .base_url()
+        .trim_end_matches('/')
+        .to_string();
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        let _ = client.post(format!("{base_url}{path}")).send().await;
+    })
 }

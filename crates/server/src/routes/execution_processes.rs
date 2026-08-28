@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     DeploymentImpl,
+    auth::session::BrowserSessionCtx,
     error::ApiError,
     middleware::load_execution_process_middleware,
     ws_util::{WsKeepAlive, run_ws_stream},
@@ -57,21 +58,25 @@ pub async fn get_execution_process_by_id(
 
 /// Stream raw logs via WebSocket.
 ///
-/// This endpoint supports two authentication modes:
+/// This endpoint supports two authentication modes (D7: browser OR connection token):
 /// 1. Session-based (local access) - no token required
-/// 2. Token-based (external access) - connection token in query param
+/// 2. Token-based (external access) - scoped connection token in query param
 ///
-/// When a token is provided, it is validated against the connection token validator.
-/// If validation is disabled (VK_CONNECTION_TOKEN_SECRET not set) or the token is
-/// invalid, the request is rejected with 401 Unauthorized.
+/// On the token branch the token must be scoped to this node AND this exact
+/// execution process. If validation is disabled (VK_CONNECTION_TOKEN_SECRET not
+/// set) or the token is invalid, the request is rejected with 401/403.
 pub async fn stream_raw_logs_ws(
     ws: WebSocketUpgrade,
     State(deployment): State<DeploymentImpl>,
     Path(exec_id): Path<Uuid>,
     Query(query): Query<LogStreamQuery>,
+    browser_session: Option<Extension<BrowserSessionCtx>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // If a token is provided, validate it
-    if let Some(token) = &query.token {
+    // A live browser session is a complete authorization alternative; do not
+    // decode an irrelevant query token on that branch (browser OR token, not AND).
+    if browser_session.is_none() {
+        let token = query.token.as_deref().ok_or(ApiError::Unauthorized)?;
+
         let validator = deployment.connection_token_validator();
 
         if !validator.is_enabled() {
@@ -83,7 +88,14 @@ pub async fn stream_raw_logs_ws(
             ));
         }
 
-        match validator.validate_for_execution(token, exec_id) {
+        let node_id = deployment
+            .node_runner_context()
+            .ok_or(ApiError::Unauthorized)?
+            .node_id()
+            .await
+            .ok_or(ApiError::Unauthorized)?;
+
+        match validator.validate_for_resource(token, node_id, exec_id) {
             Ok(validated) => {
                 tracing::debug!(
                     user_id = %validated.user_id,
@@ -276,7 +288,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .route("/", get(get_execution_process_by_id))
         .route("/stop", post(stop_execution_process))
         .route("/inject-message", post(inject_message))
-        .route("/raw-logs/ws", get(stream_raw_logs_ws))
         .route("/normalized-logs/ws", get(stream_normalized_logs_ws))
         .layer(from_fn_with_state(
             deployment.clone(),
@@ -288,4 +299,15 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .nest("/{id}", task_attempt_id_router);
 
     Router::new().nest("/execution-processes", task_attempts_router)
+}
+
+/// Direct raw logs: browser session OR scoped Hive `connection` token.
+pub fn direct_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
+    let one = Router::new()
+        .route("/raw-logs/ws", get(stream_raw_logs_ws))
+        .layer(from_fn_with_state(
+            deployment.clone(),
+            load_execution_process_middleware,
+        ));
+    Router::new().nest("/execution-processes/{id}", one)
 }

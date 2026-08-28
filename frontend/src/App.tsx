@@ -56,6 +56,7 @@ const SystemSettings = lazy(() =>
   }))
 );
 import { UserSystemProvider, useUserSystem } from '@/components/ConfigProvider';
+import { AuthBoundary } from '@/components/auth/AuthBoundary';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import { FontProvider } from '@/components/FontProvider';
 import { SearchProvider } from '@/contexts/SearchContext';
@@ -254,21 +255,23 @@ function AppContent() {
 function App() {
   return (
     <BrowserRouter>
-      <UserSystemProvider>
-        <ClickedElementsProvider>
-          <ProjectProvider>
-            <FileViewerProvider>
-              <HotkeysProvider
-                initiallyActiveScopes={['*', 'global', 'kanban']}
-              >
-                <NiceModal.Provider>
-                  <AppContent />
-                </NiceModal.Provider>
-              </HotkeysProvider>
-            </FileViewerProvider>
-          </ProjectProvider>
-        </ClickedElementsProvider>
-      </UserSystemProvider>
+      <AuthBoundary>
+        <UserSystemProvider>
+          <ClickedElementsProvider>
+            <ProjectProvider>
+              <FileViewerProvider>
+                <HotkeysProvider
+                  initiallyActiveScopes={['*', 'global', 'kanban']}
+                >
+                  <NiceModal.Provider>
+                    <AppContent />
+                  </NiceModal.Provider>
+                </HotkeysProvider>
+              </FileViewerProvider>
+            </ProjectProvider>
+          </ClickedElementsProvider>
+        </UserSystemProvider>
+      </AuthBoundary>
     </BrowserRouter>
   );
 }

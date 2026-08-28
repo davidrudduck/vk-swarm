@@ -50,7 +50,13 @@ describe('TaskCard (SC5)', () => {
   it('renders up to 2 label badges + a days badge', () => {
     const { container } = render(<TaskCard title="T" status="inreview" labels={['a', 'b', 'c']} days={3} />);
     const badges = container.querySelectorAll('.vks-badge');
-    expect(badges.length).toBeGreaterThanOrEqual(3);
+    // Exactly 2 clamped label badges + 1 days badge — toBe, not >=, so a
+    // regression that renders all three labels (4 badges) fails here.
+    expect(badges.length).toBe(3);
+    // The third label must be clamped away entirely.
+    expect(screen.queryByText('c')).toBeNull();
+    expect(screen.getByText('a')).toBeTruthy();
+    expect(screen.getByText('b')).toBeTruthy();
   });
 
   it('is keyboard-operable when onClick is provided (role=button, tabIndex=0)', () => {

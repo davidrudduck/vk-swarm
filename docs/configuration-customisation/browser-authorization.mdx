@@ -1,0 +1,84 @@
+---
+title: "Browser Authorization"
+description: "How browsers sign in to a local node over a trusted LAN, and what that means for cookies, ownership, and Hive outages"
+sidebarTitle: "Browser Authorization"
+audience: admin
+component: local-node-browser-oauth
+sources:
+  - crates/server/src/auth/cookies.rs
+  - crates/server/src/routes/oauth.rs
+  - crates/server/src/routes/browser_auth.rs
+  - scripts/verify-local-node-browser-oauth.sh
+generated: 2026-08-26
+---
+
+Every browser must complete Hive OAuth before it can read or change data on this node.
+
+## What changed
+
+Before this release, a browser on the same network as the node could use it without signing in. Now every browser must finish Hive OAuth first. The node still serves local project, task, and execution work itself; Hive is required only to authorize a new browser or to keep the node's daemon credentials fresh.
+
+This page is about the **local node's** browser session. Binding the node beyond loopback, and Hive's own remote-frontend OAuth, are covered in [Network Access](/configuration-customisation/network-access). Do not mix the two.
+
+## Trusted-LAN plaintext risk
+
+The session cookie is named `vks_browser_session` (`Max-Age` five years). The short-lived OAuth binding cookie is named `vks_browser_binding` (`Max-Age` ten minutes, matching the handoff TTL). Both are set as `HttpOnly; SameSite=Lax; Path=/`. They deliberately have **no `Secure` attribute** so they are sent on plain HTTP (the supported trusted-LAN deployment).
+
+<Warning>
+On plain HTTP, anyone who can observe LAN traffic can copy `vks_browser_session` and act as the owner. Run the node only on a network you trust. TLS is future work and is out of scope here. How to bind the node beyond loopback is in [Network Access](/configuration-customisation/network-access).
+</Warning>
+
+## Sign in / sign out / disconnect
+
+| Action | Endpoints | Effect | Where in the UI |
+|---|---|---|---|
+| Sign in | `POST /api/auth/handoff/init` then `GET /api/auth/handoff/complete` | Authorizes only the presenting browser. Revokes nothing. | Login shell → **Log in** |
+| Sign out | `POST /api/auth/browser/logout` | Revokes only this browser's session. Other browsers and the node's Hive credentials stay. | Navbar menu → **Sign out** |
+| Disconnect | `POST /api/auth/logout` | Revokes every browser session, removes the node's Hive credentials, and stops synchronisation. The owner pin is retained. | Settings → Swarm → **Disconnect from Hive** |
+
+## Node ownership
+
+The first Hive account to sign in is pinned as the owner. A different account is refused. The owner is retained across disconnect, so a disconnected node cannot be claimed by someone else.
+
+There is no operator-facing owner reset in this release. Recovery means recreating the node's database.
+
+## Hive outages
+
+Established browser sessions and local project, task, and execution work keep working through Hive transport, timeout, refresh, and 5xx failures. Only new sign-ins need Hive.
+
+## Cross-node streaming
+
+- Node-to-node HTTP proxy requests use a Hive-issued `node_proxy` token.
+- Direct raw logs, live logs, and the production attempt-id diff WebSocket use only a Hive-issued `connection` token.
+- The by-task-id diff WebSocket is browser-session-only.
+- Neither audience is accepted by the other route class. There is no anonymous fallback. `node_proxy` is not accepted on either diff WebSocket.
+
+## Verifying a deployment
+
+```bash
+bash scripts/verify-local-node-browser-oauth.sh http://<node-host>:<port>
+```
+
+Expected output from a real run of that script:
+
+```
+PASS health is public
+PASS auth state is public
+PASS auth state has the exact minimal shape
+PASS info is protected
+PASS projects are protected
+PASS status is protected
+PASS events SSE is protected
+PASS live logs are protected
+PASS unknown api path is 404
+PASS unknown api path is not SPA html
+All browser-authorization boundary checks passed
+```
+
+Bind the node on the LAN with `HOST=0.0.0.0` (see [Network Access](/getting-started#network-access)). The verifier must be pointed at that non-loopback URL, not `127.0.0.1`.
+
+## Related
+
+- [Sign in to a local node](/features/local-node-browser-login) — what operators tell users
+- [Local-node browser authorization](/development/browser-authorization) — routes, schema, tests
+- [Network Access](/configuration-customisation/network-access) — Hive remote-frontend LAN OAuth (different origin)

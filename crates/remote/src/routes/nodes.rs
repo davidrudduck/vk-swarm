@@ -1251,6 +1251,27 @@ pub struct ConnectionInfoResponse {
     pub expires_at: String,
 }
 
+/// Required query parameters for the connection-info endpoint.
+#[derive(Debug, Deserialize)]
+pub struct ConnectionInfoQuery {
+    /// The execution process the direct-stream connection token is scoped to.
+    pub execution_process_id: Uuid,
+}
+
+/// Pure relationship check for direct-stream token scoping: the execution
+/// process must belong to the assignment's node, link to the assignment's
+/// attempt, and that attempt must be linked back to the assignment.
+fn connection_resource_matches(
+    assignment_id: Uuid,
+    assignment_node_id: Uuid,
+    process: &NodeExecutionProcess,
+    attempt: &NodeTaskAttempt,
+) -> bool {
+    process.node_id == assignment_node_id
+        && process.attempt_id == attempt.id
+        && attempt.assignment_id == Some(assignment_id)
+}
+
 #[instrument(
     name = "nodes.get_connection_info",
     skip(state, ctx),
@@ -1260,6 +1281,7 @@ pub async fn get_connection_info(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
     Path(assignment_id): Path<Uuid>,
+    Query(query): Query<ConnectionInfoQuery>,
 ) -> Response {
     use crate::db::nodes::NodeRepository;
     use crate::db::task_assignments::TaskAssignmentRepository;
@@ -1335,13 +1357,71 @@ pub async fn get_connection_info(
         }
     };
 
-    // Generate connection token
+    // Load the requested execution process and its attempt; the token's
+    // resource scope must be exactly this process, and it must genuinely
+    // belong to this assignment's node and attempt.
+    use crate::db::node_execution_processes::NodeExecutionProcessRepository;
+    use crate::db::node_task_attempts::NodeTaskAttemptRepository;
+    let process_repo = NodeExecutionProcessRepository::new(pool);
+    let process = match process_repo.find_by_id(query.execution_process_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "execution process not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!(?e, "failed to fetch execution process");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal server error" })),
+            )
+                .into_response();
+        }
+    };
+
+    let attempt_repo = NodeTaskAttemptRepository::new(pool);
+    let attempt = match attempt_repo.find_by_id(process.attempt_id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "task attempt not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!(?e, "failed to fetch task attempt");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal server error" })),
+            )
+                .into_response();
+        }
+    };
+
+    if !connection_resource_matches(assignment_id, assignment.node_id, &process, &attempt) {
+        tracing::warn!(
+            assignment_id = %assignment_id,
+            execution_process_id = %query.execution_process_id,
+            "execution process does not match assignment; refusing connection token"
+        );
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "execution process does not match assignment" })),
+        )
+            .into_response();
+    }
+
+    // Generate connection token scoped to the exact execution process
     let connection_token_service = state.connection_token();
     let token = match connection_token_service.generate(
         ctx.user.id,
         node.id,
         assignment_id,
-        assignment.local_attempt_id,
+        Some(query.execution_process_id),
     ) {
         Ok(t) => t,
         Err(e) => {
@@ -1373,6 +1453,201 @@ pub async fn get_connection_info(
     };
 
     (StatusCode::OK, Json(response)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::ConnectionTokenService;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use secrecy::{ExposeSecret, SecretString};
+    use serde::Deserialize;
+
+    /// Independent mirror of the connection-token claim set: decoding into this
+    /// local struct (not the issuer's own type) proves what is actually signed.
+    #[derive(Debug, Deserialize)]
+    struct DecodedConnectionClaims {
+        sub: Uuid,
+        node_id: Uuid,
+        assignment_id: Uuid,
+        execution_process_id: Option<Uuid>,
+        exp: i64,
+        aud: String,
+    }
+
+    fn test_secret() -> SecretString {
+        SecretString::from(STANDARD.encode([0x42_u8; 32]))
+    }
+
+    fn sample_attempt(assignment_id: Option<Uuid>, node_id: Uuid) -> NodeTaskAttempt {
+        NodeTaskAttempt {
+            id: Uuid::new_v4(),
+            assignment_id,
+            shared_task_id: Uuid::new_v4(),
+            node_id,
+            executor: "CLAUDE_CODE".to_string(),
+            executor_variant: None,
+            branch: "main".to_string(),
+            target_branch: "main".to_string(),
+            container_ref: None,
+            worktree_deleted: false,
+            setup_completed_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            sync_state: "complete".to_string(),
+            sync_requested_at: None,
+            last_full_sync_at: None,
+        }
+    }
+
+    fn sample_process(attempt: &NodeTaskAttempt, node_id: Uuid) -> NodeExecutionProcess {
+        NodeExecutionProcess {
+            id: Uuid::new_v4(),
+            attempt_id: attempt.id,
+            node_id,
+            run_reason: "agent".to_string(),
+            executor_action: None,
+            before_head_commit: None,
+            after_head_commit: None,
+            status: "running".to_string(),
+            exit_code: None,
+            dropped: false,
+            pid: None,
+            started_at: chrono::Utc::now(),
+            completed_at: None,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn connection_resource_matches_accepts_the_exact_relationship_tuple() {
+        let assignment_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let attempt = sample_attempt(Some(assignment_id), node_id);
+        let process = sample_process(&attempt, node_id);
+
+        assert!(connection_resource_matches(
+            assignment_id,
+            node_id,
+            &process,
+            &attempt
+        ));
+    }
+
+    #[test]
+    fn connection_resource_matches_rejects_wrong_assignment_link() {
+        let assignment_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        // Attempt belongs to a DIFFERENT assignment.
+        let attempt = sample_attempt(Some(Uuid::new_v4()), node_id);
+        let process = sample_process(&attempt, node_id);
+
+        assert!(!connection_resource_matches(
+            assignment_id,
+            node_id,
+            &process,
+            &attempt
+        ));
+    }
+
+    #[test]
+    fn connection_resource_matches_rejects_missing_assignment_link() {
+        let assignment_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        // Attempt has not been linked to any assignment yet.
+        let attempt = sample_attempt(None, node_id);
+        let process = sample_process(&attempt, node_id);
+
+        assert!(!connection_resource_matches(
+            assignment_id,
+            node_id,
+            &process,
+            &attempt
+        ));
+    }
+
+    #[test]
+    fn connection_resource_matches_rejects_wrong_node() {
+        let assignment_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let attempt = sample_attempt(Some(assignment_id), node_id);
+        // Process reports a DIFFERENT node than the assignment's node.
+        let process = sample_process(&attempt, Uuid::new_v4());
+
+        assert!(!connection_resource_matches(
+            assignment_id,
+            node_id,
+            &process,
+            &attempt
+        ));
+    }
+
+    #[test]
+    fn connection_resource_matches_rejects_wrong_process_attempt_link() {
+        let assignment_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let attempt = sample_attempt(Some(assignment_id), node_id);
+        let mut process = sample_process(&attempt, node_id);
+        // Process belongs to some OTHER attempt.
+        process.attempt_id = Uuid::new_v4();
+
+        assert!(!connection_resource_matches(
+            assignment_id,
+            node_id,
+            &process,
+            &attempt
+        ));
+    }
+
+    #[test]
+    fn connection_info_query_rejects_missing_execution_process_id() {
+        use axum::extract::Query;
+
+        let missing = Query::<ConnectionInfoQuery>::try_from_uri(&"/x".parse().unwrap());
+        assert!(
+            missing.is_err(),
+            "missing execution_process_id must fail extraction"
+        );
+
+        let process_id = Uuid::new_v4();
+        let present = Query::<ConnectionInfoQuery>::try_from_uri(
+            &format!("/x?execution_process_id={process_id}")
+                .parse()
+                .unwrap(),
+        );
+        assert!(present.is_ok(), "present execution_process_id must extract");
+        assert_eq!(present.unwrap().0.execution_process_id, process_id);
+    }
+
+    #[test]
+    fn generated_connection_token_scopes_to_the_execution_process() {
+        let secret = test_secret();
+        let service = ConnectionTokenService::new(secret.clone());
+        let user_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let assignment_id = Uuid::new_v4();
+        let process_id = Uuid::new_v4();
+
+        let token = service
+            .generate(user_id, node_id, assignment_id, Some(process_id))
+            .unwrap();
+
+        // Decode the JWT independently (not via the issuing service) so the
+        // signed claims themselves are what is asserted.
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.validate_exp = true;
+        validation.set_audience(&["connection"]);
+        let key = jsonwebtoken::DecodingKey::from_base64_secret(secret.expose_secret()).unwrap();
+        let data = jsonwebtoken::decode::<DecodedConnectionClaims>(&token, &key, &validation)
+            .expect("generated token must decode with the issuing secret");
+
+        assert_eq!(data.claims.node_id, node_id);
+        assert_eq!(data.claims.execution_process_id, Some(process_id));
+        assert_eq!(data.claims.assignment_id, assignment_id);
+        assert_eq!(data.claims.sub, user_id);
+        assert_eq!(data.claims.aud, "connection");
+        assert!(data.claims.exp > chrono::Utc::now().timestamp());
+    }
 }
 
 // ============================================================================

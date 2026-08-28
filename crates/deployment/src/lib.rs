@@ -102,6 +102,8 @@ pub trait Deployment: Clone + Send + Sync + 'static {
 
     fn share_sync_handle(&self) -> &Arc<Mutex<Option<RemoteSyncHandle>>>;
 
+    fn browser_auth_epoch(&self) -> &Arc<Mutex<u64>>;
+
     fn spawn_remote_sync(&self, config: ShareConfig) {
         let deployment = self.clone();
         let handle_slot = self.share_sync_handle().clone();
@@ -118,6 +120,18 @@ pub trait Deployment: Clone + Send + Sync + 'static {
                 *guard = Some(remote_sync_handle);
             }
         });
+    }
+
+    async fn install_remote_sync(&self, config: ShareConfig) {
+        let mut slot = self.share_sync_handle().lock().await;
+        if slot.is_none() {
+            tracing::info!("Starting shared task sync");
+            *slot = Some(RemoteSync::spawn(
+                self.db().clone(),
+                config,
+                self.auth_context().clone(),
+            ));
+        }
     }
 
     async fn spawn_pr_monitor_service(&self) -> tokio::task::JoinHandle<()> {

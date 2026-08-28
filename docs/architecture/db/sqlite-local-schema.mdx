@@ -15,13 +15,14 @@ Each Vibe Kanban node maintains a local SQLite database for project management, 
 
 ## Schema Overview
 
-The local database contains 17 tables organized into three categories:
+The local database contains core, sync, supporting, and browser-authorization tables:
 
 | Category | Tables | Purpose |
 |----------|--------|---------|
 | **Core** | projects, tasks, task_attempts, execution_processes, log_entries, merges, executor_sessions | Task execution and history |
 | **Remote Sync** | shared_tasks, shared_activity_cursors, cached_nodes, cached_node_projects, node_sync_cursors | Hive synchronization (deprecated) |
 | **Supporting** | templates, labels, task_variables, activity_dismissals, images | Configuration and metadata |
+| **Browser authorization** | node_owner, browser_oauth_handoffs, browser_sessions | Per-browser Hive OAuth sessions (additive; migration `20260821000000_add_browser_auth.sql`) |
 
 ## Entity Relationship Diagram
 
@@ -426,6 +427,48 @@ Task-associated image metadata.
 
 ---
 
+## Browser authorization {#browser-authorization}
+
+Additive tables from `crates/db/migrations/20260821000000_add_browser_auth.sql`. Timestamps here are INTEGER unix-epoch **milliseconds**, not TEXT `datetime()`. There is no session expiry column: a session is live until `revoked_at` is set.
+
+### node_owner
+
+Exactly one row. `slot` is constrained to `1`. The first Hive subject to complete a handoff is pinned; disconnect does not clear it.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `slot` | INTEGER | Primary key; `CHECK (slot = 1)` |
+| `hive_user_id` | BLOB (UUID) | Stable Hive subject |
+| `pinned_at` | INTEGER | Unix epoch milliseconds |
+
+### browser_oauth_handoffs
+
+One row per in-flight Hive OAuth. `binding_hash` is SHA-256 hex of the binding cookie. `app_verifier` is stored raw (the daemon must present it to Hive). `state` is `pending` or `claimed`; claimed is terminal, including failed redemption.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `handoff_id` | BLOB (UUID) | Hive-issued id |
+| `provider` | TEXT | OAuth provider |
+| `app_verifier` | TEXT | PKCE verifier for Hive redemption |
+| `binding_hash` | TEXT | SHA-256 hex of `vks_browser_binding` |
+| `state` | TEXT | `pending` or `claimed` |
+| `created_at` | INTEGER | Unix epoch milliseconds |
+| `expires_at` | INTEGER | Unix epoch milliseconds; claimable while greater than now |
+
+### browser_sessions
+
+Opaque sessions. Only the token hash is stored. The raw token exists in `vks_browser_session` only.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | BLOB (UUID) | Primary key |
+| `token_hash` | TEXT | SHA-256 hex, unique |
+| `hive_user_id` | BLOB (UUID) | Must match the pinned owner |
+| `created_at` | INTEGER | Unix epoch milliseconds |
+| `revoked_at` | INTEGER | NULL while live |
+
+---
+
 ## Data Type Conventions
 
 | SQLite Type | Rust Type | TypeScript Type | Notes |
@@ -442,3 +485,4 @@ Task-associated image metadata.
 - [Database Overview](./database-overview.mdx) - Architecture overview
 - [PostgreSQL Hive Schema](./postgresql-hive-schema.mdx) - Remote database schema
 - [Database Synchronization](./database-synchronization.mdx) - Sync mechanisms
+- [Local-node browser authorization](/development/browser-authorization) - How these tables are used

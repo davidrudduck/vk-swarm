@@ -302,23 +302,61 @@ impl NodeCacheSyncService {
         self
     }
 
-    /// Run the background sync loop
+    /// Spawn the sync loop on the current runtime, returning an owned handle.
+    ///
+    /// `NodeCacheSyncHandle::shutdown()` interrupts both an in-flight sync and the idle
+    /// interval wait promptly; dropping the handle aborts any remaining task.
+    pub fn spawn(self) -> NodeCacheSyncHandle {
+        let stop = self.stop.clone();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let join_handle = tokio::spawn(self.run_loop(shutdown_rx));
+        NodeCacheSyncHandle {
+            stop,
+            shutdown_tx: Some(shutdown_tx),
+            join_handle: Some(join_handle),
+        }
+    }
+
+    /// Run the background sync loop until `stop()` is observed after a tick.
     pub async fn run(self) {
+        // Holding the sender alive means `shutdown_rx` never fires, preserving run()'s
+        // historical never-cancelled behavior: only the stop flag ends this loop.
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        self.run_loop(shutdown_rx).await;
+    }
+
+    /// The immediate-sync + interval loop shared by `run()` and `spawn()`.
+    ///
+    /// Both the sync future and the interval wait race a biased cancellation arm, so a
+    /// shutdown signal never queues behind an in-flight request or the idle interval.
+    async fn run_loop(self, mut shutdown_rx: tokio::sync::oneshot::Receiver<()>) {
         let mut interval = time::interval(self.sync_interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-        // Sync immediately on startup
-        self.do_sync().await;
-
         loop {
-            interval.tick().await;
+            // Sync immediately on startup, then after every tick.
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => {
+                    info!("node cache sync service stopped");
+                    return;
+                }
+                _ = self.do_sync() => {}
+            }
+
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => {
+                    info!("node cache sync service stopped");
+                    return;
+                }
+                _ = interval.tick() => {}
+            }
 
             if *self.stop.read().await {
                 info!("node cache sync service stopped");
-                break;
+                return;
             }
-
-            self.do_sync().await;
         }
     }
 
@@ -346,6 +384,34 @@ impl NodeCacheSyncService {
     }
 }
 
+/// Owned handle to a spawned [`NodeCacheSyncService`] background task.
+pub struct NodeCacheSyncHandle {
+    stop: Arc<RwLock<bool>>,
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    join_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl NodeCacheSyncHandle {
+    /// Stop the spawned task: set the stop flag, signal cancellation, and await its join.
+    pub async fn shutdown(mut self) {
+        *self.stop.write().await = true;
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(join) = self.join_handle.take() {
+            let _ = join.await;
+        }
+    }
+}
+
+impl Drop for NodeCacheSyncHandle {
+    fn drop(&mut self) {
+        if let Some(join) = self.join_handle.take() {
+            join.abort();
+        }
+    }
+}
+
 /// Statistics from a sync operation
 #[derive(Debug, Default, Clone)]
 pub struct SyncStats {
@@ -362,4 +428,201 @@ pub enum NodeCacheSyncError {
     Remote(#[from] RemoteClientError),
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use db::test_utils::create_test_pool;
+
+    /// Mount `GET /v1/organizations` with an empty organization list. The responder signals
+    /// its first arrival through a one-shot so a test can prove the loop reached Wiremock;
+    /// `delay` optionally holds the response open so only cancellation can end the call.
+    async fn mount_organizations(
+        server: &wiremock::MockServer,
+        delay: Option<Duration>,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let signal = std::sync::Mutex::new(Some(tx));
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/organizations"))
+            .respond_with(move |_: &wiremock::Request| {
+                if let Some(tx) = signal.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                let mut template = wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"organizations": []}));
+                if let Some(delay) = delay {
+                    template = template.set_delay(delay);
+                }
+                template
+            })
+            .mount(server)
+            .await;
+        rx
+    }
+
+    fn api_key_client(server: &wiremock::MockServer) -> RemoteClient {
+        RemoteClient::new_with_api_key(&server.uri(), "test-api-key".to_string()).unwrap()
+    }
+
+    /// Mount `GET /v1/organizations` with exactly one organization, and `GET /v1/sync/nodes`
+    /// (the API-key-auth node path) so the FIRST startup pass serves `first_node` once and
+    /// every later pass serves `second_node`. Wiremock's first-match-wins resolution plus
+    /// `.up_to_n_times(1)` makes the pass-1/pass-2 responses deterministic.
+    async fn mount_two_pass_organization(
+        server: &wiremock::MockServer,
+        org_id: Uuid,
+        first_node: Uuid,
+        second_node: Uuid,
+    ) {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/organizations"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"organizations": [test_organization(org_id)]}),
+                ),
+            )
+            .mount(server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/sync/nodes"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([test_node(
+                    org_id,
+                    first_node,
+                    "first-pass"
+                )])),
+            )
+            .up_to_n_times(1)
+            .mount(server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/sync/nodes"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([test_node(
+                    org_id,
+                    second_node,
+                    "second-pass"
+                )])),
+            )
+            .mount(server)
+            .await;
+    }
+
+    fn test_organization(org_id: Uuid) -> serde_json::Value {
+        serde_json::json!({
+            "id": org_id,
+            "name": "idle-wait-org",
+            "slug": "idle-wait-org",
+            "is_personal": true,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "user_role": "ADMIN",
+        })
+    }
+
+    fn test_node(org_id: Uuid, node_id: Uuid, name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": node_id,
+            "organization_id": org_id,
+            "name": name,
+            "machine_id": format!("machine-{node_id}"),
+            "status": "online",
+            "capabilities": {
+                "executors": [],
+                "max_concurrent_tasks": 1,
+                "os": "linux",
+                "arch": "x86_64",
+                "version": "0.0.0-test"
+            },
+            "public_url": null,
+            "last_heartbeat_at": null,
+            "connected_at": null,
+            "disconnected_at": null,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        })
+    }
+
+    #[tokio::test]
+    async fn shutdown_interrupts_an_in_flight_sync() {
+        let (pool, _temp) = create_test_pool().await;
+        let server = wiremock::MockServer::start().await;
+        let reached = mount_organizations(&server, Some(Duration::from_secs(60))).await;
+
+        let handle = NodeCacheSyncService::new(pool, api_key_client(&server))
+            .with_interval(Duration::from_secs(300))
+            .spawn();
+
+        tokio::time::timeout(Duration::from_secs(2), reached)
+            .await
+            .expect("the immediate startup sync must reach Wiremock")
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), handle.shutdown())
+            .await
+            .expect("shutdown must cancel the in-flight do_sync instead of awaiting its response");
+    }
+
+    #[tokio::test]
+    async fn shutdown_interrupts_the_idle_interval_wait() {
+        let (pool, _temp) = create_test_pool().await;
+        let server = wiremock::MockServer::start().await;
+        let org_id = Uuid::new_v4();
+        let first_node = Uuid::new_v4();
+        let second_node = Uuid::new_v4();
+        mount_two_pass_organization(&server, org_id, first_node, second_node).await;
+
+        let handle = NodeCacheSyncService::new(pool.clone(), api_key_client(&server))
+            .with_interval(Duration::from_secs(300))
+            .spawn();
+
+        // Observe COMPLETED startup sync work, not request arrival: the interval's first
+        // tick fires immediately, so the service runs two startup passes before parking in
+        // the five-minute wait. Pass 1 caches `first_node`; pass 2 caches `second_node` and
+        // its remove_stale deletes `first_node`. Between that remove_stale completing and
+        // the service awaiting the interval tick there are no further await points, so the
+        // compound state below is only observable once the service is parked in the idle
+        // wait — request-arrival signals cannot prove that.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let first_cached = CachedNode::find_by_id(&pool, first_node)
+                    .await
+                    .unwrap()
+                    .is_some();
+                let second_cached = CachedNode::find_by_id(&pool, second_node)
+                    .await
+                    .unwrap()
+                    .is_some();
+                if second_cached && !first_cached {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both startup sync passes must complete their cached-node writes");
+
+        tokio::time::timeout(Duration::from_secs(5), handle.shutdown())
+            .await
+            .expect("shutdown must cancel the idle interval wait instead of the next tick");
+    }
+
+    #[tokio::test]
+    async fn run_stops_after_the_next_tick_when_stop_is_set_first() {
+        let (pool, _temp) = create_test_pool().await;
+        let server = wiremock::MockServer::start().await;
+        let _reached = mount_organizations(&server, None).await;
+
+        let service = NodeCacheSyncService::new(pool, api_key_client(&server))
+            .with_interval(Duration::from_millis(50));
+        service.stop().await;
+        let joined = tokio::spawn(service.run());
+
+        tokio::time::timeout(Duration::from_secs(2), joined)
+            .await
+            .expect("run() must honor the stop flag after the next tick instead of looping forever")
+            .unwrap();
+    }
 }

@@ -19,7 +19,7 @@ use services::services::{
     filesystem::FilesystemService,
     git::GitService,
     image::ImageService,
-    node_cache::NodeCacheSyncService,
+    node_cache::{NodeCacheSyncHandle, NodeCacheSyncService},
     node_proxy_client::NodeProxyClient,
     node_runner::{NodeRunnerConfig, NodeRunnerContext, spawn_node_runner},
     oauth_credentials::OAuthCredentials,
@@ -55,6 +55,7 @@ pub struct LocalDeployment {
     drafts: DraftsService,
     share_publisher: Result<SharePublisher, RemoteClientNotConfigured>,
     share_sync_handle: Arc<Mutex<Option<RemoteSyncHandle>>>,
+    browser_auth_epoch: Arc<Mutex<u64>>,
     share_config: Option<ShareConfig>,
     remote_client: Result<RemoteClient, RemoteClientNotConfigured>,
     /// API key-based client for node operations (available even when not logged in via OAuth)
@@ -67,8 +68,9 @@ pub struct LocalDeployment {
     connection_token_validator: Arc<ConnectionTokenValidator>,
     /// HTTP client for proxying requests to remote nodes
     node_proxy_client: NodeProxyClient,
-    /// Whether the node cache sync has been started
-    node_cache_sync_started: Arc<Mutex<bool>>,
+    /// Owned handle to the background node-cache sync task, clone-shared through `Arc`.
+    /// `Some` means the sync task is running; `shutdown_node_cache_sync()` takes and awaits it.
+    node_cache_sync_handle: Arc<Mutex<Option<NodeCacheSyncHandle>>>,
     /// Timestamp of the last VACUUM operation (for rate limiting)
     last_vacuum_time: Arc<RwLock<Option<std::time::Instant>>>,
     /// The event bus for durable event streaming and replay-to-live subscriptions
@@ -120,6 +122,11 @@ pub(crate) struct StartupTuning {
     compaction: EventCompactionConfig,
 }
 
+struct StartupRemoteConfig {
+    api_base: Option<String>,
+    share_config: Option<ShareConfig>,
+}
+
 impl Default for StartupTuning {
     fn default() -> Self {
         Self {
@@ -154,7 +161,13 @@ impl LocalDeployment {
         events_msg_store: Arc<MsgStore>,
         events_entry_count: Arc<RwLock<usize>>,
         tuning: StartupTuning,
+        remote_config: StartupRemoteConfig,
     ) -> Result<Self, DeploymentError> {
+        let StartupRemoteConfig {
+            api_base,
+            share_config,
+        } = remote_config;
+
         // Generate a unique user ID for this deployment
         let user_id = Uuid::new_v4().to_string();
         let git = GitService::new();
@@ -174,16 +187,10 @@ impl LocalDeployment {
 
         let approvals = Approvals::new(msg_stores.clone());
 
-        let share_config = ShareConfig::from_env();
-
         // oauth_credentials already loaded in parallel at startup
 
         let profile_cache = Arc::new(RwLock::new(None));
         let auth_context = AuthContext::new(oauth_credentials.clone(), profile_cache.clone());
-
-        let api_base = std::env::var("VK_SHARED_API_BASE")
-            .ok()
-            .or_else(|| option_env!("VK_SHARED_API_BASE").map(|s| s.to_string()));
 
         // Create OAuth-based remote client for user-initiated operations (frontend)
         let remote_client = match &api_base {
@@ -227,6 +234,7 @@ impl LocalDeployment {
 
         let oauth_handoffs = Arc::new(RwLock::new(HashMap::new()));
         let share_sync_handle = Arc::new(Mutex::new(None));
+        let browser_auth_epoch = Arc::new(Mutex::new(0u64));
 
         let mut share_sync_config: Option<ShareConfig> = None;
         if let (Some(sc_ref), Ok(_)) = (share_config.as_ref(), &share_publisher)
@@ -443,6 +451,7 @@ impl LocalDeployment {
             drafts,
             share_publisher,
             share_sync_handle: share_sync_handle.clone(),
+            browser_auth_epoch: browser_auth_epoch.clone(),
             share_config: share_config.clone(),
             remote_client,
             node_auth_client,
@@ -451,7 +460,7 @@ impl LocalDeployment {
             node_runner_context,
             connection_token_validator: Arc::new(connection_token_validator),
             node_proxy_client,
-            node_cache_sync_started: Arc::new(Mutex::new(false)),
+            node_cache_sync_handle: Arc::new(Mutex::new(None)),
             last_vacuum_time: Arc::new(RwLock::new(None)),
             event_bus,
             trigger_hook_runner_handles,
@@ -459,7 +468,7 @@ impl LocalDeployment {
         };
 
         // Log startup config summary for debugging connection issues
-        let has_shared_api = std::env::var("VK_SHARED_API_BASE").is_ok();
+        let has_shared_api = api_base.is_some();
         let has_hive_url = std::env::var("VK_HIVE_URL").is_ok();
         let has_api_key = std::env::var("VK_NODE_API_KEY").is_ok();
 
@@ -483,19 +492,34 @@ impl LocalDeployment {
         }
 
         if let Some(sc) = share_sync_config {
-            deployment.spawn_remote_sync(sc);
+            deployment.install_remote_sync(sc).await;
         }
 
         // Start node cache sync if user is already logged in
-        // (runs in background, syncs nodes/projects from all organizations)
-        {
-            let d = deployment.clone();
-            tokio::spawn(async move {
-                d.start_node_cache_sync().await;
-            });
-        }
+        // (runs in background, syncs nodes/projects from all organizations).
+        // Awaited inline so the handle slot is deterministically filled (or skipped)
+        // before construction returns — a later shutdown can never race a detached start.
+        deployment.start_node_cache_sync().await;
 
         Ok(deployment)
+    }
+
+    #[cfg(test)]
+    fn disable_orphan_cleanup_for_tests() {
+        static DISABLE_ORPHAN_CLEANUP: std::sync::Once = std::sync::Once::new();
+        DISABLE_ORPHAN_CLEANUP.call_once(|| {
+            // SAFETY (partial, and stated honestly): this write is ordered before THIS call's
+            // own container construction, so the sweep it spawns always observes it. It is NOT
+            // race-free against sibling tests: `set_var` is unsound against any concurrent
+            // `getenv`, and tests on other threads may be inside `from_parts` calling
+            // `NodeRunnerConfig::from_env` or `database_path()` at this moment. Accepted
+            // deliberately: the value is written once, never unset, never read
+            // for an assertion, and the alternative is a test run that deletes a developer's
+            // worktrees.
+            unsafe {
+                std::env::set_var("DISABLE_WORKTREE_ORPHAN_CLEANUP", "1");
+            }
+        });
     }
 
     /// Construct a REAL deployment over a migrated test pool, through the same
@@ -517,20 +541,7 @@ impl LocalDeployment {
         // exists it would delete real worktrees. The reach is pre-existing (container.rs:169's
         // `new_for_drain_test` already calls the same constructor), but this test module makes it
         // routine, so disable the sweep for the whole test binary before any deployment is built.
-        static DISABLE_ORPHAN_CLEANUP: std::sync::Once = std::sync::Once::new();
-        DISABLE_ORPHAN_CLEANUP.call_once(|| {
-            // SAFETY (partial, and stated honestly): this write is ordered before THIS call's
-            // own container construction, so the sweep it spawns always observes it. It is NOT
-            // race-free against sibling tests: `set_var` is unsound against any concurrent
-            // `getenv`, and tests on other threads may be inside `from_parts` calling
-            // `ShareConfig::from_env`, `NodeRunnerConfig::from_env` or `database_path()` at this
-            // moment. Accepted deliberately: the value is written once, never unset, never read
-            // for an assertion, and the alternative is a test run that deletes a developer's
-            // worktrees.
-            unsafe {
-                std::env::set_var("DISABLE_WORKTREE_ORPHAN_CLEANUP", "1");
-            }
-        });
+        Self::disable_orphan_cleanup_for_tests();
 
         let db = DBService {
             pool,
@@ -547,6 +558,10 @@ impl LocalDeployment {
             Arc::new(MsgStore::new()),
             Arc::new(RwLock::new(0)),
             tuning,
+            StartupRemoteConfig {
+                api_base: None,
+                share_config: None,
+            },
         )
         .await
     }
@@ -637,6 +652,11 @@ impl Deployment for LocalDeployment {
             DBService::new_with_after_connect(hook).await?
         };
 
+        let api_base = std::env::var("VK_SHARED_API_BASE")
+            .ok()
+            .or_else(|| option_env!("VK_SHARED_API_BASE").map(String::from));
+        let share_config = ShareConfig::from_env();
+
         Self::from_parts(
             db,
             config,
@@ -644,6 +664,10 @@ impl Deployment for LocalDeployment {
             events_msg_store,
             events_entry_count,
             StartupTuning::default(),
+            StartupRemoteConfig {
+                api_base,
+                share_config,
+            },
         )
         .await
     }
@@ -698,6 +722,10 @@ impl Deployment for LocalDeployment {
 
     fn share_sync_handle(&self) -> &Arc<Mutex<Option<RemoteSyncHandle>>> {
         &self.share_sync_handle
+    }
+
+    fn browser_auth_epoch(&self) -> &Arc<Mutex<u64>> {
+        &self.browser_auth_epoch
     }
 
     fn auth_context(&self) -> &AuthContext {
@@ -845,8 +873,8 @@ impl LocalDeployment {
     /// from all organizations the user has access to.
     pub async fn start_node_cache_sync(&self) {
         // Only start once
-        let mut started = self.node_cache_sync_started.lock().await;
-        if *started {
+        let mut slot = self.node_cache_sync_handle.lock().await;
+        if slot.is_some() {
             tracing::debug!("node cache sync already started, skipping");
             return;
         }
@@ -867,14 +895,24 @@ impl LocalDeployment {
             db_path = %database_path().display(),
             "starting background node cache sync"
         );
-        *started = true;
 
         let pool = self.db.pool.clone();
-        let sync_service = NodeCacheSyncService::new(pool, client);
+        *slot = Some(NodeCacheSyncService::new(pool, client).spawn());
+    }
 
-        tokio::spawn(async move {
-            sync_service.run().await;
-        });
+    /// True while the background node-cache sync task holds a handle slot.
+    pub async fn node_cache_sync_is_running(&self) -> bool {
+        self.node_cache_sync_handle.lock().await.is_some()
+    }
+
+    /// Shut down the background node-cache sync task, if running.
+    ///
+    /// Takes the handle slot BEFORE awaiting so the slot lock is never held across shutdown.
+    pub async fn shutdown_node_cache_sync(&self) {
+        let handle = self.node_cache_sync_handle.lock().await.take();
+        if let Some(handle) = handle {
+            handle.shutdown().await;
+        }
     }
 }
 
@@ -1268,5 +1306,91 @@ mod tests {
             panic!("shutdown() did not stop the tailer");
         }
         // Expected: timeout or channel closed
+    }
+
+    #[tokio::test]
+    async fn browser_auth_epoch_is_shared_by_deployment_clones() {
+        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool, test_tuning())
+            .await
+            .unwrap();
+        let clone = deployment.clone();
+        assert_eq!(*deployment.browser_auth_epoch().lock().await, 0);
+        *clone.browser_auth_epoch().lock().await += 1;
+        assert_eq!(*deployment.browser_auth_epoch().lock().await, 1);
+        deployment.event_bus().shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn configured_startup_sync_is_installed_before_constructor_returns() {
+        LocalDeployment::disable_orphan_cleanup_for_tests();
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let credentials = Arc::new(OAuthCredentials::new_file_backed(
+            temp_dir.path().join("credentials.json"),
+        ));
+        credentials
+            .save(&services::services::oauth_credentials::Credentials {
+                access_token: Some("test-access-token".to_owned()),
+                refresh_token: "test-refresh-token".to_owned(),
+                expires_at: None,
+            })
+            .await
+            .unwrap();
+
+        let deployment = LocalDeployment::from_parts(
+            DBService {
+                pool,
+                metrics: db::DbMetrics::new(),
+            },
+            Arc::new(RwLock::new(Config::default())),
+            credentials,
+            Arc::new(MsgStore::new()),
+            Arc::new(RwLock::new(0)),
+            test_tuning(),
+            StartupRemoteConfig {
+                api_base: Some("http://127.0.0.1:1".to_owned()),
+                share_config: Some(ShareConfig {
+                    api_base: "http://127.0.0.1:1".parse().unwrap(),
+                    websocket_base: "ws://127.0.0.1:1".parse().unwrap(),
+                    activity_page_limit: 1,
+                    bulk_sync_threshold: 1,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+
+        let sync_handle = deployment.share_sync_handle().lock().await.take();
+        assert!(sync_handle.is_some());
+        sync_handle.unwrap().shutdown().await;
+        deployment.event_bus().shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn raw_api_base_remains_available_when_share_sync_config_is_unavailable() {
+        LocalDeployment::disable_orphan_cleanup_for_tests();
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::from_parts(
+            DBService {
+                pool,
+                metrics: db::DbMetrics::new(),
+            },
+            Arc::new(RwLock::new(Config::default())),
+            Arc::new(OAuthCredentials::new_file_backed(
+                temp_dir.path().join("credentials.json"),
+            )),
+            Arc::new(MsgStore::new()),
+            Arc::new(RwLock::new(0)),
+            test_tuning(),
+            StartupRemoteConfig {
+                api_base: Some("ftp://example.invalid".to_owned()),
+                share_config: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(deployment.remote_client().is_ok());
+        deployment.event_bus().shutdown().await;
     }
 }

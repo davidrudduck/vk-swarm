@@ -174,12 +174,14 @@ export function Navbar({
             </span>
             <input
               className="vks-input"
+              type="search"
+              aria-label="Search tasks"
               placeholder="Search tasks…"
               style={{ height: 34, paddingLeft: 32, fontSize: 'var(--text-sm)' }}
             />
           </div>
         ) : (
-          <NavIcon icon={ICONS.search} title="Search" />
+          <NavIcon icon={ICONS.search} title={`Search — ${NOT_WIRED_TITLE}`} disabled />
         )}
 
         {!mobile && (
@@ -205,7 +207,9 @@ export function Navbar({
           <div style={{ width: 1, height: 22, background: 'var(--border)', margin: '0 2px' }} />
         )}
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-        {!tablet && !mobile && <NavIcon icon={ICONS.activity} title="Activity" />}
+        {!tablet && !mobile && (
+          <NavIcon icon={ICONS.activity} title={`Activity — ${NOT_WIRED_TITLE}`} disabled />
+        )}
         {!mobile && (
           <NavIcon
             icon={ICONS.settings}
@@ -217,7 +221,7 @@ export function Navbar({
         {onLogout && (
           <NavIcon icon={ICONS.logout} title="Logout" ariaLabel="Logout" onClick={onLogout} />
         )}
-        <NavIcon icon={ICONS.menu} title="Menu" />
+        <NavIcon icon={ICONS.menu} title={`Menu — ${NOT_WIRED_TITLE}`} disabled />
       </div>
       <nav style={{ display: 'flex', gap: 2, padding: '0 12px', overflowX: 'auto' }}>
         <NavTab

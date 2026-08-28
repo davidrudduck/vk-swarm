@@ -88,7 +88,9 @@ describe('useNodeLogStream on a node with no hive', () => {
       })
     );
 
-    const { result } = renderHook(() => useNodeLogStream('assignment-1'));
+    const { result } = renderHook(() =>
+      useNodeLogStream('assignment-1', 'process-1')
+    );
 
     await waitFor(() =>
       expect(result.current.connectionType).toBe('disconnected')
@@ -108,7 +110,9 @@ describe('useNodeLogStream on a node with no hive', () => {
       })
     );
 
-    const { result } = renderHook(() => useNodeLogStream('assignment-1'));
+    const { result } = renderHook(() =>
+      useNodeLogStream('assignment-1', 'process-1')
+    );
 
     await waitFor(() =>
       expect(result.current.connectionType).toBe('disconnected')

@@ -44,4 +44,23 @@ describe('TaskDrawer (SC7)', () => {
     expect(screen.getByText('Rebase')).toBeTruthy();
     expect(screen.getByText('Open in IDE')).toBeTruthy();
   });
+
+  // Regression pin (close-review A1): the overlay and aside MUST be position:fixed.
+  // With position:absolute and no positioned ancestor the containing block is the
+  // ICB, so on a scrolled board the drawer opened at document-origin coordinates
+  // lands off-screen (verified empirically: top:-3665px at scrollY 3665).
+  it('anchors the overlay and panel to the viewport (position: fixed), not the document', () => {
+    const { container } = render(<TaskDrawer task={task} status="inprogress" onClose={() => {}} />);
+    const overlay = container.querySelector('div[style*="z-index: 10"]') as HTMLElement | null;
+    const aside = container.querySelector('aside') as HTMLElement | null;
+    expect(overlay).toBeTruthy();
+    expect(aside).toBeTruthy();
+    expect(overlay!.style.position).toBe('fixed');
+    expect(aside!.style.position).toBe('fixed');
+    // Viewport anchoring, not document anchoring
+    expect(overlay!.getAttribute('style')).toContain('inset');
+    expect(aside!.style.top).toBe('0px');
+    expect(aside!.style.right).toBe('0px');
+    expect(aside!.style.bottom).toBe('0px');
+  });
 });

@@ -41,11 +41,11 @@ export function TaskDrawer({ task, status, onClose, diffLines = [], logs = [], a
     <>
       <div
         onClick={onClose}
-        style={{ position: 'absolute', inset: 0, background: 'var(--surface-overlay)', zIndex: 10 }}
+        style={{ position: 'fixed', inset: 0, background: 'var(--surface-overlay)', zIndex: 10 }}
       />
       <aside
         style={{
-          position: 'absolute',
+          position: 'fixed',
           top: 0,
           right: 0,
           bottom: 0,

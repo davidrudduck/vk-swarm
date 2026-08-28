@@ -112,11 +112,15 @@ describe('app integration (SC8 real-seam)', () => {
         </ProfileProvider>
       </QueryClientProvider>
     );
-    await waitFor(() => expect(screen.getByText('Wire OAuth')).toBeTruthy());
+    // First test to hit the lazy Board page; under CPU contention the
+    // default 1000ms waitFor expires before the TaskCard mounts.
+    await waitFor(() => expect(screen.getByText('Wire OAuth')).toBeTruthy(), {
+      timeout: 10_000,
+    });
     expect(screen.getByText('Board')).toBeTruthy(); // Chrome NavTab
     fireEvent.click(screen.getByText('Wire OAuth'));
     expect(screen.getByText('Merge')).toBeTruthy(); // TaskDrawer footer
-  });
+  }, 15_000);
 
   it('/nodes renders Chrome Navbar + NodeCards', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 } } });
@@ -129,8 +133,12 @@ describe('app integration (SC8 real-seam)', () => {
       </QueryClientProvider>
     );
     // Longer timeout: this seam lazy-loads NodesPage and runs a chained
-    // orgs -> nodes query before the NodeCard grid mounts.
-    await waitFor(() => expect(screen.getByText('justX')).toBeTruthy(), { timeout: 5000 });
+    // orgs -> nodes query before the NodeCard grid mounts. waitFor 5000
+    // equals the default testTimeout, so the test dies at the same instant
+    // waitFor would expire — same class as AppRouter.test.tsx.
+    await waitFor(() => expect(screen.getByText('justX')).toBeTruthy(), {
+      timeout: 10_000,
+    });
     expect(screen.getByText('Nodes')).toBeTruthy(); // Chrome NavTab
-  });
+  }, 15_000);
 });

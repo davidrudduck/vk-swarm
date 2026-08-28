@@ -164,4 +164,47 @@ mod tests {
             .await
             .expect("Pool 2 should work");
     }
+
+    #[tokio::test]
+    async fn browser_auth_migration_creates_owner_handoff_and_session_tables() {
+        let (pool, _tmp) = create_test_pool().await;
+
+        for table in ["node_owner", "browser_oauth_handoffs", "browser_sessions"] {
+            let found: Option<String> = sqlx::query_scalar(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            )
+            .bind(table)
+            .fetch_optional(&pool)
+            .await
+            .expect("sqlite_master query failed");
+            assert_eq!(
+                found.as_deref(),
+                Some(table),
+                "migration did not create {table}"
+            );
+        }
+
+        // The singleton is STRUCTURAL, not a convention: slot is CHECK-pinned to 1.
+        let second_slot = sqlx::query(
+            "INSERT INTO node_owner (slot, hive_user_id, pinned_at) VALUES (2, x'aa', 1)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(second_slot.is_err(), "node_owner accepted a second slot");
+
+        // Sessions are revocation-state only (D9/SC5) — a time-based expiry column must NOT exist.
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('browser_sessions')")
+                .fetch_all(&pool)
+                .await
+                .expect("pragma_table_info failed");
+        assert!(
+            !cols.iter().any(|c| c == "expires_at"),
+            "browser_sessions must have no expiry column; got {cols:?}"
+        );
+        assert!(
+            cols.iter().any(|c| c == "revoked_at"),
+            "missing revoked_at; got {cols:?}"
+        );
+    }
 }

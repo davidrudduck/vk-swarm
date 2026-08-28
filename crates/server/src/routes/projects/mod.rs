@@ -105,8 +105,22 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
             load_project_middleware_with_wildcard,
         ));
 
-    // Routes for accessing projects by remote_project_id (used for node-to-node proxying)
-    // These routes allow a proxying node to request data using the Hive project ID
+    let projects_router = Router::new()
+        .route("/", get(get_projects).post(create_project))
+        .route("/with-stats", get(get_projects_with_stats))
+        .route("/scan-config", post(scan_project_config))
+        .route(
+            "/orphaned",
+            get(list_orphaned_projects).delete(delete_orphaned_projects),
+        )
+        .nest("/{id}", project_id_router)
+        .merge(project_files_router);
+
+    Router::new().nest("/projects", projects_router)
+}
+
+/// Node-to-node project HTTP. Browser session OR node_proxy, never connection.
+pub fn node_to_node_router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
     let by_remote_id_router = Router::new()
         .route("/branches", get(get_project_branches))
         .route("/search", get(search_project_files))
@@ -116,7 +130,6 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
             load_project_by_remote_id_middleware,
         ));
 
-    // File content route for by-remote-id (wildcard path parameter)
     let by_remote_id_files_router = Router::new()
         .route(
             "/by-remote-id/{remote_project_id}/files/{*file_path}",
@@ -127,20 +140,12 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
             load_project_by_remote_id_middleware,
         ));
 
-    let projects_router = Router::new()
-        .route("/", get(get_projects).post(create_project))
-        .route("/with-stats", get(get_projects_with_stats))
-        .route("/scan-config", post(scan_project_config))
-        .route(
-            "/orphaned",
-            get(list_orphaned_projects).delete(delete_orphaned_projects),
-        )
-        .nest("/{id}", project_id_router)
-        .merge(project_files_router)
-        .nest("/by-remote-id/{remote_project_id}", by_remote_id_router)
-        .merge(by_remote_id_files_router);
-
-    Router::new().nest("/projects", projects_router)
+    Router::new().nest(
+        "/projects",
+        Router::new()
+            .nest("/by-remote-id/{remote_project_id}", by_remote_id_router)
+            .merge(by_remote_id_files_router),
+    )
 }
 
 // Note: Type tests are in types.rs

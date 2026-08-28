@@ -75,6 +75,7 @@ export { approvalsApi } from './approvals';
 
 // OAuth API
 export { oauthApi } from './oauth';
+export { browserAuthApi } from './browserAuth';
 
 // Organizations API
 export { organizationsApi } from './organizations';

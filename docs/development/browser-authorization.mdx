@@ -1,0 +1,93 @@
+---
+title: "Local-node browser authorization"
+description: "How the local node gates its HTTP API on a per-browser Hive OAuth session"
+sidebarTitle: "Browser authorization"
+audience: developer
+component: local-node-browser-oauth
+sources:
+  - crates/server/src/routes/mod.rs
+  - crates/server/src/routes/oauth.rs
+  - crates/server/src/routes/browser_auth.rs
+  - crates/server/src/auth/cookies.rs
+  - crates/server/src/auth/session.rs
+  - crates/db/migrations/20260821000000_add_browser_auth.sql
+  - frontend/src/components/auth/AuthBoundary.tsx
+  - frontend/src/lib/api/utils.ts
+  - scripts/verify-local-node-browser-oauth.sh
+generated: 2026-08-26
+---
+
+The local node no longer serves its API to any browser on the LAN. A browser must complete a Hive OAuth handoff; the node then issues an HttpOnly session cookie and stores only the SHA-256 of that token.
+
+This page is the **local node**. Hive's remote-frontend OAuth (GitHub/Google on the Hive origin) is [PKCE](/development/pkce-implementation) and [Authentication Token Management](/architecture/auth-token-management).
+
+## Public vs protected
+
+`crates/server/src/routes/mod.rs` builds explicit public and protected routers. Public surfaces:
+
+| Method | Path | Role |
+|---|---|---|
+| GET | `/api/health` | Liveness |
+| GET | `/api/auth/state` | `{ authorized, oauth_available }` only |
+| POST | `/api/auth/handoff/init` | Start Hive OAuth; sets `vks_browser_binding` |
+| GET | `/api/auth/handoff/complete` | Hive callback; claims the handoff; sets `vks_browser_session` |
+| — | static SPA assets | Login shell |
+
+Everything else under `/api/*` requires a live browser session **before** resource loaders or WebSocket/SSE upgrade. Unknown `/api/*` paths return 404 JSON, not SPA HTML.
+
+Protected auth actions:
+
+| Method | Path | Effect |
+|---|---|---|
+| POST | `/api/auth/browser/logout` | Revoke this session; clear this browser's cookie |
+| POST | `/api/auth/logout` | Disconnect: revoke all sessions, drop Hive credentials, stop sync; owner pin retained |
+
+## Cookies
+
+Defined in `crates/server/src/auth/cookies.rs`.
+
+| Name | Lifetime | Attributes |
+|---|---|---|
+| `vks_browser_session` | 5 years (`Max-Age=157680000`) | `HttpOnly; SameSite=Lax; Path=/` — **no `Secure`** |
+| `vks_browser_binding` | 10 minutes (`Max-Age=600`) | same attributes; present only during the handoff |
+
+`SameSite=Lax` is required: Hive's callback is a cross-site top-level GET. `Strict` would withhold the binding cookie and every rightful login would look like a wrong-browser rejection.
+
+The raw session token never hits SQLite. `browser_sessions.token_hash` is SHA-256 hex. Authentication is revocation-only (`revoked_at IS NULL`); there is no session expiry column.
+
+## Owner pin
+
+`node_owner` is a singleton (`slot = 1`). The first Hive `user_id` to complete a handoff wins. A later different subject is refused. Disconnect does not clear the pin.
+
+## Frontend gate
+
+`AuthBoundary` wraps the app inside `BrowserRouter`. It polls `GET /api/auth/state` (public). Protected children mount only when `authorized` is true.
+
+`frontend/src/lib/api/utils.ts` calls `notifyUnauthorized()` on HTTP 401 **only when the response is not `application/json`**. Bare 401 from `require_browser_session` is the browser-session death signal. JSON 401s (`RemoteClientError::Auth`, forwarded Hive/proxy 401s) must not tear the UI down.
+
+Navbar **Sign out** is always shown once the boundary has mounted children. It is not gated on the node's Hive `loginStatus`.
+
+## Schema
+
+Migration `crates/db/migrations/20260821000000_add_browser_auth.sql` adds three tables. Timestamps are INTEGER unix-epoch milliseconds (not TEXT `datetime()`), so handoff expiry cannot fail open on collation.
+
+See [SQLite Local Schema](/architecture/db/sqlite-local-schema#browser-authorization).
+
+## Tests and verifier
+
+| Suite | What it pins |
+|---|---|
+| `crates/server/tests/browser_auth_routes.rs` | Public vs protected, XSS-escaped callback errors, non-JSON 401 content-type, logout vs disconnect |
+| `crates/server/tests/stream_auth.rs` | WS/SSE 401 before upgrade |
+| `crates/server/tests/proxy_auth.rs` | `node_proxy` vs `connection` audiences |
+| `crates/server/tests/restart_outage.rs` | Session survives restart and Hive 5xx |
+| `frontend/src/components/auth/__tests__/AuthBoundary.test.tsx` | Login shell, popup close, 401 discriminator |
+| `scripts/verify-local-node-browser-oauth.sh` | Deployed boundary against a live node URL |
+
+Operator-facing copy of the verifier lives in [Browser Authorization](/configuration-customisation/browser-authorization).
+
+## Related
+
+- [Sign in to a local node](/features/local-node-browser-login) — user
+- [Browser Authorization](/configuration-customisation/browser-authorization) — admin
+- [Testing & Quality Gate](/development/testing)

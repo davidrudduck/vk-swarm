@@ -23,7 +23,8 @@ async fn with_stats_returns_sorted_projects_with_derived_counts() {
     .await;
     h.seed_project("alpha", &[TaskStatus::Todo]).await;
 
-    let res = h.get("/api/projects/with-stats").await;
+    let mut jar = h.authorized_jar().await;
+    let res = h.get_with("/api/projects/with-stats", &mut jar).await;
     res.assert_registered();
     assert_eq!(res.status, 200, "body: {}", res.body);
 

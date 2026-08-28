@@ -1277,8 +1277,9 @@ mod lifecycle_event_tests {
             .unwrap_or(false)
     }
 
-    /// Prod-like pool: WAL + `busy_timeout` + `max_connections(10)`, matching `crates/db/src/lib.rs`
-    /// — 17B's own harness pattern, mirroring `lifecycle.rs`'s identical helper.
+    /// Contention pool: WAL and `max_connections(10)` match production. The explicit five-second
+    /// busy timeout bounds this test; production uses thirty seconds, while shared test-pool
+    /// helpers rely on SQLx's five-second default and cap pools at five connections.
     async fn build_contention_pool() -> (SqlitePool, tempfile::TempDir) {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path().join("contention.db");
@@ -1301,13 +1302,12 @@ mod lifecycle_event_tests {
         (pool, temp_dir)
     }
 
-    /// REQUIRED by the attempt-2 amendment: proves `mark_orphaned_as_failed`'s write-first
-    /// `UPDATE ... RETURNING` shape does NOT read-then-upgrade. 200 iterations, each seeding a
-    /// fresh orphaned 'running' row and calling the real function once, while a background
-    /// writer commits to the SAME table every ~200µs for the whole run (17B's own methodology;
-    /// F17B-1 measured 6/200 for attempt 1's SELECT-then-UPDATE shape and 0/200 for the pre-007
-    /// single-statement shape). This must score 0/200 too, because the UPDATE is now the FIRST
-    /// statement the transaction issues — no prior SELECT ever opens it as a read.
+    /// Scheduler-sensitive stress check for `mark_orphaned_as_failed`'s write-first
+    /// `UPDATE ... RETURNING` shape. It calls the real function 200 times while a background
+    /// writer commits to the same table. A zero-error result is expected because the UPDATE is
+    /// the transaction's first statement, but this timing-driven generator is supplemental
+    /// evidence rather than a deterministic proof against every read-before-write mutation. The
+    /// control below separately forces the hazardous SQLite schedule deterministically.
     #[tokio::test]
     async fn mark_orphaned_as_failed_does_not_read_then_upgrade() {
         const ITERATIONS: usize = 200;
@@ -1361,14 +1361,12 @@ mod lifecycle_event_tests {
         );
     }
 
-    /// Calibration control: reconstructs attempt 1's REJECTED shape (SELECT the orphaned rows,
-    /// then UPDATE, in one deferred transaction — attempt 1's code, hand-rolled here since it is
-    /// gone from the tree) against the IDENTICAL harness, to prove it is capable of reproducing
-    /// F17B-1's finding rather than being silently toothless.
+    /// Deterministic hazard control: reconstructs attempt 1's rejected shape (SELECT the orphaned
+    /// rows, then UPDATE, in one deferred transaction) and explicitly commits another connection's
+    /// write between those statements. This proves SQLite returns `SQLITE_BUSY_SNAPSHOT` for the
+    /// hazardous shape; it does not calibrate the timing-driven stress generator above.
     #[tokio::test]
     async fn control_read_then_write_shape_reproduces_busy_snapshot() {
-        const ITERATIONS: usize = 200;
-
         let (pool, _tmp) = build_contention_pool().await;
         let project_id = seed_project(&pool).await;
         let task_id = seed_task(&pool, project_id).await;
@@ -1377,68 +1375,41 @@ mod lifecycle_event_tests {
         let decoy_process =
             seed_running_process_with(&pool, decoy_attempt, "current-instance", None).await;
 
-        let writer_pool = pool.clone();
-        let writer = tokio::spawn(async move {
-            loop {
-                let _ = sqlx::query(
-                    "UPDATE execution_processes SET pid = COALESCE(pid, 0) + 1 WHERE id = ?",
-                )
-                .bind(decoy_process)
-                .execute(&writer_pool)
-                .await;
-                tokio::time::sleep(std::time::Duration::from_micros(200)).await;
-            }
-        });
+        let attempt_id = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
+        seed_running_process_with(&pool, attempt_id, "stale-instance", None).await;
 
-        let mut busy_snapshot_errors = 0usize;
-        for _ in 0..ITERATIONS {
-            let attempt_id = seed_attempt(&pool, task_id, "CLAUDE_CODE").await;
-            seed_running_process_with(&pool, attempt_id, "stale-instance", None).await;
+        let mut tx = pool.begin().await.unwrap();
+        // Attempt 1's shape: SELECT the orphaned rows (read) first...
+        let orphaned: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM execution_processes \
+             WHERE status = 'running' AND (server_instance_id IS NULL OR server_instance_id != ?)",
+        )
+        .bind("current-instance")
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+        assert!(!orphaned.is_empty());
 
-            let mut tx = pool.begin().await.unwrap();
-            // Attempt 1's shape: SELECT the orphaned rows (read) first...
-            let orphaned: Vec<(Uuid,)> = sqlx::query_as(
-                "SELECT id FROM execution_processes \
-                 WHERE status = 'running' AND (server_instance_id IS NULL OR server_instance_id != ?)",
-            )
-            .bind("current-instance")
-            .fetch_all(&mut *tx)
+        // Deterministically invalidate that read snapshot from another pooled connection.
+        sqlx::query("UPDATE execution_processes SET pid = 1 WHERE id = ?")
+            .bind(decoy_process)
+            .execute(&pool)
             .await
             .unwrap();
-            assert!(!orphaned.is_empty());
 
-            // ...then UPDATE (write — the upgrade).
-            let result = sqlx::query(
-                "UPDATE execution_processes SET status = 'failed' \
-                 WHERE status = 'running' AND (server_instance_id IS NULL OR server_instance_id != ?)",
-            )
-            .bind("current-instance")
-            .execute(&mut *tx)
-            .await;
+        // ...then UPDATE (write — the upgrade).
+        let error = sqlx::query(
+            "UPDATE execution_processes SET status = 'failed' \
+             WHERE status = 'running' AND (server_instance_id IS NULL OR server_instance_id != ?)",
+        )
+        .bind("current-instance")
+        .execute(&mut *tx)
+        .await
+        .expect_err("the invalidated read snapshot must reject a write upgrade");
 
-            match result {
-                Ok(_) => {
-                    let _ = tx.commit().await;
-                }
-                Err(e) => {
-                    if is_busy_snapshot(&e) {
-                        busy_snapshot_errors += 1;
-                    }
-                    drop(tx);
-                }
-            }
-        }
-        writer.abort();
-
-        eprintln!(
-            "no_read_then_upgrade(control, attempt-1 read-then-write shape): \
-             {busy_snapshot_errors}/{ITERATIONS} SQLITE_BUSY_SNAPSHOT"
-        );
         assert!(
-            busy_snapshot_errors > 0,
-            "calibration control must reproduce at least one SQLITE_BUSY_SNAPSHOT — 0 here would \
-             mean the harness cannot detect the hazard, and the real test above would be proving \
-             nothing"
+            is_busy_snapshot(&error),
+            "hazard control must reproduce SQLITE_BUSY_SNAPSHOT, got {error}"
         );
     }
 }
