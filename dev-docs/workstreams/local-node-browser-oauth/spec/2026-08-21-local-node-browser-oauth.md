@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: local-node-browser-oauth
 change_kind: behaviour
 verify_cmd: "bash scripts/verify-local-node-browser-oauth.sh"

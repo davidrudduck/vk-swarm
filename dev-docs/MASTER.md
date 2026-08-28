@@ -20,7 +20,7 @@
 | hive-node-api-key-ui | shipped | Hive node API key management UI — generate/revoke/unblock keys on the Nodes page | - | - | 2 |
 | hive-oauth-sw-bypass | shipped |  | - | - | 2 |
 | local-deployment-test-orphan-cleanup-safety | ready | Prevent local-deployment tests from sweeping real clean worktrees | - | - | 1 |
-| local-node-browser-oauth | draft | local-node-browser-oauth | - | - | 1 |
+| local-node-browser-oauth | shipped | local-node-browser-oauth | - | - | 1 |
 | local-node-first-use | active | Local node first use — usable local execution before further orchestration | - | - | 1 |
 | mcp-server-dev-loop-rebuild | draft | Dev loop never rebuilds or restarts vks-mcp-server | - | - | 1 |
 | node-task-delete-dangling-shared-id | active |  | - | - | 1 |
