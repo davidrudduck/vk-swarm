@@ -421,35 +421,6 @@ impl HiveHarness {
         }
     }
 
-    /// DELETE against the REAL served router over HTTP
-    pub async fn delete(&self, path: &str) -> Resp {
-        let client = reqwest::Client::new();
-        let res = client
-            .delete(format!("http://{}{}", self.addr, path))
-            .send()
-            .await
-            .unwrap();
-        let status = res.status().as_u16();
-        let headers = res.headers().clone();
-        let content_type = headers
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        let set_cookie = headers
-            .get_all(reqwest::header::SET_COOKIE)
-            .iter()
-            .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
-            .collect();
-        let body = res.text().await.unwrap();
-        Resp {
-            status,
-            body,
-            content_type,
-            headers,
-            set_cookie,
-        }
-    }
-
     /// Seed one task carrying a `shared_task_id` under an existing project, inserted through
     /// the deployment's own pool (migrations already applied — never hand-written DDL).
     pub async fn seed_shared_task(&self, project_id: Uuid, shared_task_id: Uuid) -> Uuid {

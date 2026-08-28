@@ -221,8 +221,8 @@ pub(crate) async fn delete_remote_task(
     deployment: &DeploymentImpl,
     task: &Task,
 ) -> Result<(StatusCode, ResponseJson<ApiResponse<()>>), ApiError> {
-    // If task has shared_task_id, delete from Hive
-    // The WebSocket handler will receive the deletion event and clean up locally
+    // Delete from Hive; the WebSocket handler will receive the deletion event and
+    // soft-unlink the shared row (the local record is retained, not deleted).
     if let Some(shared_task_id) = task.shared_task_id {
         let remote_client = deployment.remote_client()?;
         let request = DeleteSharedTaskRequest { version: None };
@@ -234,16 +234,17 @@ pub(crate) async fn delete_remote_task(
                 tracing::info!(
                     task_id = %task.id,
                     shared_task_id = %shared_task_id,
-                    "Deleted remote task via Hive; local cache will be cleaned by WebSocket sync"
+                    "Deleted remote task via Hive; local row retained for WebSocket sync"
                 );
-                // NOTE: Do NOT delete locally here - WebSocket handler will process
-                // the "task.deleted" event and clean up the local cache in a transaction
+                // NOTE: Do NOT delete locally here — the "task.deleted" WS handler
+                // soft-unlinks the shared row and retains the local record
+                // (processor.rs: unlink_by_shared_task_id).
             }
             // Idempotent delete: the hive row is already gone (dangling shared_task_id,
             // e.g. after a hive cutover truncation), so the desired end state is reached
-            // remotely — fall through to the same local deletion the no-shared-id branch
-            // performs. Discriminates on 404 ONLY via RemoteClientError::is_not_found();
-            // auth/transport/timeout/5xx/conflict take the arm below and still abort.
+            // remotely — fall through to local deletion. Discriminates on 404 ONLY via
+            // RemoteClientError::is_not_found(); auth/transport/timeout/5xx/conflict
+            // take the arm below and still abort.
             // (F-2026-08-05-01, ADR-0015)
             Err(e) if e.is_not_found() => {
                 tracing::warn!(
@@ -255,15 +256,6 @@ pub(crate) async fn delete_remote_task(
             }
             Err(e) => return Err(e.into()),
         }
-    } else {
-        // Task is marked remote but has no shared_task_id (sync never completed)
-        // Delete locally since there's no Hive event to sync from
-        let pool = &deployment.db().pool;
-        tracing::warn!(
-            task_id = %task.id,
-            "Deleting remote task that was never synced to Hive (no shared_task_id)"
-        );
-        Task::delete(pool, task.id).await?;
     }
 
     // Return 202 Accepted to match local delete behavior
