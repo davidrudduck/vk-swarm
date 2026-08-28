@@ -315,3 +315,74 @@ redundant standalone tsc removed (deviates from plan-literal test — build alre
 tasks.ts parseOrThrow dedup; TaskDrawer tab union type.
 Declined: colors.css nested-dark-scope redeclaration (byte-identity lock, ledgered round 1);
 fonts.css stylelint import-notation (locked design-source copy; stylelint not a repo gate).
+
+## 2026-08-28 — pre-graduation code review (close gate)
+
+Two parallel finders vs HEAD `108b3c41` (target `3dcdc24c` squash + cb87543f relationship
+check — its fixes verified present in-tree). Rounds 1–3 records in `reviews/code-review-round-{1,2,3}.md`.
+
+Fixed in-session (rounds 1–2):
+- A1 (HIGH) TaskDrawer overlay+aside absolute→fixed — drawer landed off-screen on scrolled
+  boards (empirically top:-3665px at scrollY 3665; jsdom/e2e blind); regression pin added.
+- A2 statusbadge-taskcard labels test tightened (was vacuous >=3).
+- A3 AttemptIndicator svg role="img" (aria-label now exposed).
+- A4 Button defaults type="button" (submit-passthrough still pinned by test).
+- A5 Chrome search input type/aria-label; Search/Activity/Menu NavIcons honest-disabled.
+- A6 electric module contract repair: single shared_tasks table + collection (proxy serves
+  exactly one shape route, crates/remote/src/routes/electric_proxy.rs:28); 6-table/6-factory
+  drift removed; createShapeUrl('nodes') now throws (asserted).
+- A7 deleted e2e/fixtures/mock-electric.ts (zero importers; protocol-wrong ndjson mock).
+  Recreation path: capture from a real /v1/shape/shared_tasks envelope stream.
+- R2-2 docs/development/remote-frontend.mdx de-drifted (mock-electric references, six-collection
+  text, dead /api/electric/v1 path, stale useLiveQuery/Tasks.tsx descriptions, sync-status wording).
+
+Post-review known issues (accepted/deferred):
+- N1 `--ring-hsl` fallback dead token + unconsumed `--ring` (byte-identity design-source lock;
+  upstream design-source item).
+- N2 tailwind.config.js empty theme.extend → shadcn named-color utilities generate no CSS
+  (pre-existing at 3dcdc24c^; promoted to dev-docs/BACKLOG.md as own unit).
+- N3 texture render tests tautological (CSS-string asserts in same file are the real guard).
+- N4 render-parity.test.tsx mount-smoke only (per-component suites carry the contract).
+- N5 unknown-path fallback highlights Processes NavTab on 404 (cosmetic).
+- R2-N1 createShapeStreamOptions test-surface-only (pre-existing).
+
+## Deploy verification
+
+Production build + served-asset checks at HEAD (close session, 2026-08-28). Build:
+
+```
+$ cd remote-frontend && npm run build
+✓ built in 588ms
+
+PWA v1.3.0
+mode      generateSW
+precache  13 entries (522.13 KiB)
+files generated
+  dist/sw.js
+  dist/workbox-07e28819.js
+BUILD_EXIT=0
+```
+
+Serve (`npx vite preview --port 4173 --strictPort --host 127.0.0.1`) and probe:
+
+```
+$ curl -sS -m 10 -o index.html -w 'HTTP %{http_code} bytes=%{size_download} type=%{content_type}\n' http://127.0.0.1:4173/
+HTTP 200 bytes=761 type=text/html                      # SPA shell w/ <div id="root"></div>
+$ grep -oE 'assets/index-[A-Za-z0-9_-]+\.js' index.html | head -1
+assets/index-udwQXfKD.js
+$ curl -sS http://127.0.0.1:4173/tasks -o /dev/null -w 'HTTP %{http_code} type=%{content_type}\n'
+HTTP 200 type=text/html                                  # SPA route fallback
+$ curl -sS http://127.0.0.1:4173/sw.js -o /dev/null -w 'HTTP %{http_code} type=%{content_type}\n'
+HTTP 200 type=text/javascript                            # PWA service worker
+$ curl -sS http://127.0.0.1:4173/manifest.webmanifest -o /dev/null -w 'HTTP %{http_code} type=%{content_type}\n'
+HTTP 200 type=application/manifest+json
+$ curl -sS http://127.0.0.1:4173/assets/index-udwQXfKD.js -o /dev/null -w 'HTTP %{http_code} bytes=%{size_download}\n'
+HTTP 200 bytes=145452                                    # hashed bundle served
+$ curl -sS http://127.0.0.1:4173/assets/nope-DEADBEEF.js -o f.txt -w 'HTTP %{http_code} type=%{content_type}\n'
+HTTP 200 type=text/html                                  # unknown asset → SPA shell fallback
+                                                          # (vite preview SPA routing; shell = 761-byte index.html)
+```
+
+Gates on the same tree: `npm run lint` 0 · `npx tsc --noEmit` 0 · `npx vitest run` 54 files /
+413 tests passed. Live-hive data verification not applicable to this unit (design system; parity
+gate SC9 already recorded); real hive was down at verification time in any case.

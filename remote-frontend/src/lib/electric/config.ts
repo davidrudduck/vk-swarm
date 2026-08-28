@@ -35,59 +35,21 @@ export interface ElectricTableConfig {
 
 /**
  * All tables enabled for Electric SQL sync.
- * These must match the tables added to the PostgreSQL publication
- * in the electric_support migration.
+ *
+ * The hive proxy serves exactly ONE shape route — GET /v1/shape/shared_tasks
+ * (crates/remote/src/routes/electric_proxy.rs, organization-scoped via a
+ * server-injected WHERE clause). Any other table name here would produce a
+ * 404 against the real hive, so this map deliberately contains only the
+ * table the proxy actually forwards.
  */
 export const ELECTRIC_SHAPE_TABLES = {
   /**
-   * Connected worker nodes.
+   * Organization-scoped shared tasks (the hive's canonical task rows).
    * Filtered by organization membership on the server side.
    */
-  nodes: {
-    table: 'nodes',
-    description: 'Worker nodes connected to the hive',
-  },
-
-  /**
-   * Organization projects.
-   * Filtered by organization membership on the server side.
-   */
-  projects: {
-    table: 'projects',
-    description: 'Projects within organizations',
-  },
-
-  /**
-   * Node-project links.
-   * Shows which projects are available on which nodes.
-   */
-  node_projects: {
-    table: 'node_projects',
-    description: 'Links between nodes and projects',
-  },
-
-  /**
-   * Task assignments to nodes.
-   */
-  node_task_assignments: {
-    table: 'node_task_assignments',
-    description: 'Task execution assignments to nodes',
-  },
-
-  /**
-   * Task output logs.
-   */
-  node_task_output_logs: {
-    table: 'node_task_output_logs',
-    description: 'Task execution stdout/stderr logs',
-  },
-
-  /**
-   * Task progress events.
-   */
-  node_task_progress_events: {
-    table: 'node_task_progress_events',
-    description: 'Task execution progress milestones',
+  shared_tasks: {
+    table: 'shared_tasks',
+    description: 'Organization-scoped shared tasks streamed by the hive Electric proxy',
   },
 } as const;
 

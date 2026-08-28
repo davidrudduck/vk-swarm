@@ -43,7 +43,7 @@ function AttemptIndicator({ state }: { state: AttemptState }): ReactElement {
       </>
     );
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" style={{ flexShrink: 0 }} aria-label={state}>
+    <svg width="16" height="16" viewBox="0 0 16 16" style={{ flexShrink: 0 }} role="img" aria-label={state}>
       <circle cx="8" cy="8" r="7" stroke={color} strokeWidth="1.3" fill="none" opacity={0.5} />
       {path}
     </svg>

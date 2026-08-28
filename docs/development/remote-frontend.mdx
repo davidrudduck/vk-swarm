@@ -14,7 +14,6 @@ sources:
   - remote-frontend/src/lib/electric/sync-status.ts
   - remote-frontend/src/lib/mutation-queue.ts
   - remote-frontend/e2e/fixtures/mock-api.ts
-  - remote-frontend/e2e/fixtures/mock-electric.ts
 generated: 2026-07-06
 ---
 
@@ -43,8 +42,8 @@ remote-frontend/
 │   ├── App.tsx               # QueryClientProvider → ProfileProvider → AppRouter
 │   ├── AppRouter.tsx         # Route definitions + AuthGuard wrappers
 │   ├── pages/
-│   │   ├── Tasks.tsx         # Kanban board with live queries + offline overlay
-│   │   └── Nodes.tsx         # Node list (React Query)
+│   │   ├── BoardPage.tsx      # Task board (React Query)
+│   │   └── NodesPage.tsx      # Node list (React Query)
 │   ├── components/
 │   │   ├── ErrorBoundary.tsx  # Class component — catches render crashes
 │   │   ├── AuthGuard.tsx      # Redirects to /login if not signed in
@@ -57,7 +56,7 @@ remote-frontend/
 │   │   ├── electric/
 │   │   │   ├── sync-status.ts # useSyncStatus + markSynced
 │   │   │   ├── config.ts      # Electric shape URLs
-│   │   │   └── collections.ts # 6 TanStack DB collections
+│   │   │   └── collections.ts # shared_tasks TanStack DB collection
 │   │   └── api/              # REST API client modules
 │   └── types/                # Shared type definitions (auto-generated from Rust)
 ├── e2e/
@@ -66,8 +65,7 @@ remote-frontend/
 │   ├── cross-node.spec.ts    # 3 tests — multi-node task display
 │   ├── sc4-guard.spec.ts     # Dev server build guard (globalSetup)
 │   └── fixtures/
-│       ├── mock-api.ts       # Page-route mocks for REST endpoints
-│       └── mock-electric.ts  # Page-route mocks for Electric shape streams
+│       └── mock-api.ts       # Page-route mocks for REST endpoints
 ├── vite.config.ts            # Vite + React + PWA + test config
 └── playwright.config.ts
 ```
@@ -148,13 +146,13 @@ await enqueueMutation({ endpoint, method, body })
 const results = await replayMutations(makeRequest)
 ```
 
-Each mutation retries up to 3 times. Permanent failures (non-retryable status codes) are dropped. The `markSynced` function in `sync-status.ts` tracks the timestamp of the last successful full sync — it monitors assignments, nodes, and projects from the live queries.
+Each mutation retries up to 3 times. Permanent failures (non-retryable status codes) are dropped. The `markSynced` function in `sync-status.ts` records the last successful sync timestamp and derives `synced`/`reconnecting`/`disconnected` from it plus the browser's online/offline events.
 
 ## Electric Shape Streams
 
-Six TanStack DB collections are defined in `lib/electric/collections.ts` for Electric shape streams: nodes, projects, node_projects, task_assignments, task_output_logs, task_progress_events. All stream from `/api/electric/v1/shape/<table>`.
+One TanStack DB collection is defined in `lib/electric/collections.ts`: `shared_tasks`, streaming from the hive Electric proxy at `/v1/shape/shared_tasks`. (`nodes`, `projects`, `node_projects`, … were removed at the 2026-08-28 close review — the proxy serves a single shape route; see the vk-swarm-design-system decisions-ledger.)
 
-The Tasks board uses `useLiveQuery` for reactive data. Optimistic deletions are handled via a local `useRef<Set<string>>` overlay — deleted task IDs are filtered from the live query results until the server confirms the deletion. This avoids cache-layer mismatch between TanStack DB and React Query.
+The board pages (`BoardPage`, `NodesPage`) fetch via React Query (`useQuery`) against the REST API; the Electric collection factory (`createSharedTasksCollection`) is the seam for future live wiring and currently has no page consumer.
 
 ## E2E Tests
 
@@ -171,7 +169,8 @@ npx playwright test --ui     # interactive mode
 ### Mock Fixtures
 
 - **`mock-api.ts`** — `setupApiMocks(page)` mocks `/v1/profile`, `/v1/nodes/*`, `/v1/tasks/*`, `/v1/oauth/*` with default 200 responses
-- **`mock-electric.ts`** — `mockElectricShape(page, tableData)` mocks `/api/electric/v1/shape/*` with SSE-like JSON streams keyed by table name
+
+No Electric shape fixture ships today: the Electric shape protocol is envelope-based (header/operations frames from `@tanstack/electric-db-collection`), so a fixture must be captured from a real `/v1/shape/shared_tasks` stream rather than hand-rolled ndjson.
 
 ### SC4 Guard
 

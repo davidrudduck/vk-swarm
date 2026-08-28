@@ -7,13 +7,13 @@
  *
  * @example
  * ```tsx
- * import { createNodesCollection, createShapeUrl } from '@/lib/electric';
+ * import { createSharedTasksCollection, createShapeUrl } from '@/lib/electric';
  *
- * // Create a collection for nodes
- * const nodesCollection = createNodesCollection();
+ * // Create a collection for shared tasks
+ * const sharedTasksCollection = createSharedTasksCollection();
  *
  * // Or use the raw shape URL
- * const url = createShapeUrl('nodes');
+ * const url = createShapeUrl('shared_tasks');
  * ```
  */
 
@@ -31,17 +31,7 @@ export {
 
 // Collection exports
 export {
-  createNodesCollection,
-  createProjectsCollection,
-  createNodeProjectsCollection,
-  createTaskAssignmentsCollection,
-  createTaskOutputLogsCollection,
-  createTaskProgressEventsCollection,
-  type ElectricNode,
-  type ElectricProject,
-  type ElectricNodeProject,
-  type ElectricTaskAssignment,
-  type ElectricTaskOutputLog,
-  type ElectricTaskProgressEvent,
+  createSharedTasksCollection,
+  type ElectricSharedTask,
   type ElectricCollectionConfig,
 } from './collections';

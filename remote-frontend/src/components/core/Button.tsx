@@ -32,10 +32,10 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * Primary action control for VK-Swarm. Solid cyan primary glows on hover;
  * ghost/icon variants populate dense toolbars.
  */
-export function Button({ variant = 'primary', size = 'md', className, children, ...props }: ButtonProps) {
+export function Button({ variant = 'primary', size = 'md', type = 'button', className, children, ...props }: ButtonProps) {
   const cls = cn('vks-btn', VARIANTS[variant] ?? VARIANTS.primary, SIZES[size] ?? SIZES.md, className);
   return (
-    <button className={cls} {...props}>
+    <button className={cls} type={type} {...props}>
       {children}
     </button>
   );
