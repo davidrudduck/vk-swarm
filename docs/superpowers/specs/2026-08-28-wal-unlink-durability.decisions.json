@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "workstream": "wal-unlink-durability",
+  "decisions": [
+    {
+      "id": "D1",
+      "title": "Fix route",
+      "options": [
+        {
+          "label": "Layered: prevention guard + detection/refuse net, investigation-first",
+          "consequence": "SC1 rests on prevention with the detection net as a bounded backstop; two small subsystems ship instead of one, and the mechanism must be pinned empirically before the guard is trusted.",
+          "chosen": true
+        },
+        {
+          "label": "Prevention-only (guard connection)",
+          "consequence": "If the guard leaks (mechanism other than a lock window, or silent guard death), silent data loss returns and SC2 has no implementation.",
+          "chosen": false
+        },
+        {
+          "label": "Detection + recovery only",
+          "consequence": "Every mid-flow CLI read rides the loss window until detection fires; durability then depends on salvage checkpointing working on an unlinked inode.",
+          "chosen": false
+        }
+      ],
+      "rationale": "US2 contracts a named event and refusal in every path, which prevention-only cannot provide; SC1 contracts durability, which detection-only cannot guarantee. The layered route is the smallest one satisfying both."
+    },
+    {
+      "id": "D2",
+      "title": "Detection home",
+      "options": [
+        {
+          "label": "Revive and extend the dead WalMonitor; wire its spawn at node startup",
+          "consequence": "One background task owns WAL health (size, checkpoint, integrity); existing checkpoint machinery is reused; the currently-unspawned monitor (probe A3) becomes live code.",
+          "chosen": true
+        },
+        {
+          "label": "New standalone integrity watchdog module",
+          "consequence": "A second periodic task duplicates the tick, pool access, and checkpoint plumbing the monitor already has.",
+          "chosen": false
+        },
+        {
+          "label": "Per-write detection hook in the DB layer",
+          "consequence": "Hot-path cost on every write and no coverage while the node is idle — which is when the incident occurred.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The monitor exists, is shaped for this, and is dead only for want of a spawn site; extending it is the smallest live home."
+    },
+    {
+      "id": "D3",
+      "title": "Salvage strategy on detected unlink",
+      "options": [
+        {
+          "label": "Checkpoint via open file descriptors, then refuse writes (stay up)",
+          "consequence": "Committed frames are flushed to the main DB through the surviving connections' fds if A6 holds; the node then holds an exclusive lock so writes fail loudly while reads continue; no in-place heal is claimed.",
+          "chosen": true
+        },
+        {
+          "label": "Hardlink the unlinked WAL back via /proc/self/fd",
+          "consequence": "Probe-refuted at /wai:spec: linkat(AT_SYMLINK_FOLLOW) on a proc-fd symlink of a deleted file fails with ENOENT on the target host, so the path cannot be restored in place.",
+          "chosen": false
+        },
+        {
+          "label": "Byte copy-back of the orphaned WAL to its path",
+          "consequence": "A new inode at the path does not heal the split between old-fd connections and new connections; the bytes become a forensic artifact, not recovery.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The only option whose data-saving half (checkpoint via fd) is verifiable in T1 and whose failure half still satisfies US2 (named event + refusal)."
+    },
+    {
+      "id": "D4",
+      "title": "Prevention mechanism",
+      "options": [
+        {
+          "label": "Dedicated wal-index-holding guard connection",
+          "consequence": "One long-lived connection keeps the wal-index mapped so an external close can never become the last locker able to checkpoint+unlink; adoption is gated on T1 proving it blocks the unlink on the real node, with DP2 as the authorised halt if refuted.",
+          "chosen": true
+        },
+        {
+          "label": "Set SQLITE_FCNTL_PERSIST_WAL on node connections",
+          "consequence": "The flag governs the closing behavior of the node's own connections only; the unlinking close belongs to the external CLI, which cannot be flagged.",
+          "chosen": false
+        },
+        {
+          "label": "Filesystem permissions on the WAL file",
+          "consequence": "The node itself must create, write, and checkpoint the WAL as the same UID; permission games break normal operation or are trivially bypassed.",
+          "chosen": false
+        }
+      ],
+      "rationale": "The incident occurred while min_connections=2 pool connections were alive, showing pooled connections do not reliably hold the wal-index lock; an explicit guard whose only job is holding it is the smallest deterministic prevention."
+    },
+    {
+      "id": "D5",
+      "title": "verify_cmd packaging",
+      "options": [
+        {
+          "label": "One script, two legs: scripts/live/wal-unlink-durability-repro.sh",
+          "consequence": "A single verify_cmd covers the guard-on durability leg (SC1) and the guard-off detection/refusal leg (SC2) plus the SC3 captures.",
+          "chosen": true
+        }
+      ],
+      "single_option_reason": "SC4 contracts exactly one verify_cmd, and the two legs are one flow with an env flag flipped; one script with two legs is the minimal faithful form — any second option would be an invented alternative.",
+      "rationale": "Single-script packaging keeps the ship-flow verify step deterministic."
+    },
+    {
+      "id": "D6",
+      "title": "Post-trip posture",
+      "options": [
+        {
+          "label": "Refuse writes, stay up",
+          "consequence": "Writes fail fast and loudly while reads and the management API stay available for diagnosis; remediation is an operator restart named in the ERROR event.",
+          "chosen": true
+        },
+        {
+          "label": "Checkpoint then exit for supervisor restart",
+          "consequence": "Availability depends on a supervisor existing; manually started nodes go DOWN instead of degraded — worse for exactly the unattended deployments this bug bites.",
+          "chosen": false
+        },
+        {
+          "label": "In-place pool recycle",
+          "consequence": "DBService.pool is shared via Arc across the server; a hot swap risks dangling old connections re-creating the split world it exists to end.",
+          "chosen": false
+        }
+      ],
+      "rationale": "Operator decision Q1 (2026-08-28) selected refuse-writes-stay-up."
+    }
+  ],
+  "obstacles": [
+    {
+      "id": "O1",
+      "criterion": "SC1",
+      "obstacle": "The guard premise fails on the real binary — the unlink mechanism turns out not to be a wal-index lock window (the single-process model did not reproduce, so the real mechanism is still unproven).",
+      "countermeasure": "T1 instrumented investigation on the real node gates D4; DP2 is the authorised halt if the guard is refuted; the detection net still bounds loss to the detection window."
+    },
+    {
+      "id": "O2",
+      "criterion": "SC1",
+      "obstacle": "The salvage checkpoint cannot flush frames from an unlinked WAL (A6 unproven), so writes committed between unlink and trip are lost even with the net.",
+      "countermeasure": "T1 includes a validation leg proving or disproving checkpoint-via-open-fd on the real binary; if refuted, the loss is still NAMED (wal_salvage_checkpoint_failed + refusal) per US2, never silent."
+    },
+    {
+      "id": "O3",
+      "criterion": "SC2",
+      "obstacle": "The event fires but is unnamed or unactionable, failing the 'named, actionable' contract.",
+      "countermeasure": "Fixed event strings (wal_unlinked_externally, wal_write_refusal_active) carrying DB path and remediation text; the guard-off repro leg asserts the exact log line."
+    },
+    {
+      "id": "O4",
+      "criterion": "SC2",
+      "obstacle": "The monitor is never spawned — WalMonitor is dead code today (probe A3), so 'extend the monitor' alone ships nothing.",
+      "countermeasure": "The workstream wires WalMonitor::spawn_default into node startup; a startup INFO log line is asserted in the repro so a missing spawn cannot go green silently."
+    },
+    {
+      "id": "O5",
+      "criterion": "SC3",
+      "obstacle": "The guard connection, inotify watch, and refusal machinery add measurable write-path cost.",
+      "countermeasure": "Guard is one idle connection, the watch is one directory fd, and the trip latch is untouched when untripped; TS4 captures pre/post write-path timings into the decisions-ledger baseline SC3 names."
+    },
+    {
+      "id": "O6",
+      "criterion": "SC3",
+      "obstacle": "The fix accidentally changes the journal mode or checkpoint cadence.",
+      "countermeasure": "The repro asserts PRAGMA journal_mode = wal offline after the run; existing wal_monitor checkpoint intervals are unchanged."
+    },
+    {
+      "id": "O7",
+      "criterion": "SC4",
+      "obstacle": "Repro flakiness: the unlink depends on the node's lock state at CLI close, so a naive script passes/fails nondeterministically.",
+      "countermeasure": "The script polls /proc for the wal-deleted fd state (and retries the CLI-read step on a fresh scratch DB) rather than assuming the unlink landed; the red leg on current code is verified as part of T1."
+    },
+    {
+      "id": "O8",
+      "criterion": "SC4",
+      "obstacle": "Scratch-node port or state collisions with other sessions (the :9012 pattern is shared).",
+      "countermeasure": "Preflight port check plus a fresh mktemp scratch dir per run; cleanup trap kills only the spawned PID (no pkill, per the safe-process rule)."
+    },
+    {
+      "id": "O9",
+      "criterion": "SC1",
+      "obstacle": "The guard connection dies silently (pool recycle, transient error) and prevention is silently off while everything looks green.",
+      "countermeasure": "The monitor health-checks the guard each tick and re-establishes it with a named WARN (wal_guard_reconnected); a guard that cannot be re-established escalates to the same trip path as an unlink."
+    }
+  ],
+  "decision_points": [
+    {
+      "id": "DP1",
+      "trigger": "T1 evidence shows the backup subsystem shares the unlink hazard, crossing this spec's out-of-scope boundary; continuing requires scope renegotiation with the operator, not silent scope growth.",
+      "halt_codes": [
+        "human_gate_required"
+      ]
+    },
+    {
+      "id": "DP2",
+      "trigger": "T1 refutes the guard-connection prevention (an external close still unlinks the WAL while the guard holds the wal-index lock), so D4 cannot be adopted as designed and the route must be re-settled with the operator.",
+      "halt_codes": [
+        "human_gate_required"
+      ]
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "A1",
+      "claim": "Deployment and dev hosts are Linux with inotify and /proc/self available.",
+      "kind": "gate",
+      "probe": "uname -s → Linux; test -d /proc/self/fd succeeded (2026-08-28, this host).",
+      "status": "verified"
+    },
+    {
+      "id": "A2",
+      "claim": "A sqlite3 CLI is available on hosts where the reproduction runs.",
+      "kind": "gate",
+      "probe": "sqlite3 t.sqlite 'select count(*) from items;' executed successfully in the 2026-08-28 mechanism experiment.",
+      "status": "verified"
+    },
+    {
+      "id": "A3",
+      "claim": "WalMonitor (crates/db/src/wal_monitor.rs) has no spawn site in the workspace; detection requires wiring one at node startup.",
+      "kind": "gate",
+      "probe": "Repo-wide grep for WalMonitor::spawn / spawn_default call sites (2026-08-28): only the definition and lib.rs re-export exist.",
+      "status": "verified"
+    },
+    {
+      "id": "A4",
+      "claim": "Node pools run min_connections=2, idle_timeout=600s, WAL mode, synchronous=NORMAL (crates/db/src/lib.rs:46-52 and 392-407), so pooled connections alone did not prevent the incident.",
+      "kind": "contract",
+      "probe": "Read of crates/db/src/lib.rs constant definitions and pool builders.",
+      "status": "verified"
+    },
+    {
+      "id": "A5",
+      "claim": "A live connection holding the WAL wal-index blocks an external close from unlinking the WAL; the guard premise must be revalidated against the real node binary in T1.",
+      "kind": "contract",
+      "probe": "Python WAL-mode experiment (2026-08-28): CLI close left the WAL intact while a WAL-mode connection was open.",
+      "status": "verified"
+    },
+    {
+      "id": "A6",
+      "claim": "PRAGMA wal_checkpoint issued on a surviving connection flushes frames held in an unlinked WAL inode into the main DB; if false, salvage reduces to a named failure plus refusal and US2 is still satisfied.",
+      "kind": "contract",
+      "probe": "T1 validation leg on the real :9012 scratch node (cannot be probed before the instrumented reproduction exists).",
+      "status": "unprobed"
+    }
+  ],
+  "questions": [
+    {
+      "id": "Q1",
+      "asked": "When the detection safety net fires (external unlink detected despite the prevention guard), what should the node do after attempting the checkpoint-via-open-fd salvage: refuse writes and stay up; checkpoint then exit for supervisor restart; or attempt an in-place pool recycle?",
+      "resolves": "D6"
+    }
+  ],
+  "no_decision_points_reason": ""
+}
