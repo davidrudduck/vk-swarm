@@ -6,12 +6,25 @@ change_kind: bugfix
 verify_cmd: "bash scripts/live/wal-unlink-durability-repro.sh"
 ---
 
-# wal-unlink-durability — external sqlite3 reads silently destroy node write durability
+# wal-unlink-durability — external sqlite3 sessions silently destroy node write durability
+
+> **Amendment 2026-08-30 (operator-approved, re-frozen): incident vector corrected.** The
+> original text below describes the trigger as an external read-only `sqlite3` CLI query.
+> Phase-1 empirical evidence (decisions-ledger, `## T1 mechanism evidence (2026-08-30)`)
+> established on the current binary: the read-only flow does NOT reproduce the unlink under
+> any probed condition (`VK_SQLITE_MAX_CONNECTIONS=1`, quiescent delays, CLI
+> `PRAGMA wal_checkpoint(TRUNCATE)`, overlap attempts), while an external **write session**
+> reliably produces `db.sqlite-wal (deleted)` / `db.sqlite-shm (deleted)` in the node's
+> `/proc/<pid>/fd` table. Everywhere this spec says "CLI read mid-flow" (US1, SC1, SC4,
+> Approach, Design §5), the contracted stimulus is now **an external sqlite3 session
+> mid-flow, write-vector confirmed**. The hazard class, layered design (D1-D6), success
+> criteria, and test strategy are vector-agnostic and UNCHANGED; the live 2026-08-28
+> observation (task-delete resurrection, deleted-WAL fd) stands as the incident record.
 
 ## Intent
 When any external process (admin shell, monitor, backup script) opens the node's SQLite DB and closes cleanly while the node server is running, SQLite's close-time recovery unlinks the `db.sqlite-wal` / `db.sqlite-shm` files. The running node keeps writing through its open file descriptors into the now-unlinked inodes. Those writes are silently lost when the node exits. Observed live: a task deleted via the node API returned 200/202 and the API listed it gone, yet after a graceful node stop the row RESURRECTED in the main DB; `/proc/<node-pid>/fd` showed `db.sqlite-wal (deleted)` held by the node mid-flow.
 
-Any deployment where an operator runs `sqlite3 db.sqlite 'select ...'` for a quick check while the node is up is affected. The current workaround (evidence protocol: API reads mid-flow, CLI reads only post-shutdown) is an operational bandage — this workstream makes the node safe (or safely self-healing) by design, with **no silent data loss in any path**.
+Any deployment where an operator or tool opens the node's DB with an external `sqlite3` session while the node is up is affected (2026-08-30 amendment: write sessions confirmed as the trigger; read sessions not reproducible on the current binary). The current workaround (evidence protocol: API reads mid-flow, CLI reads only post-shutdown) is an operational bandage — this workstream makes the node safe (or safely self-healing) by design, with **no silent data loss in any path**.
 
 The design was settled at /wai:spec on 2026-08-28 after a mechanism investigation: a single-process model did NOT reproduce the unlink (a live WAL-mode connection holding the wal-index blocks the external close), which shows the real-node mechanism is a lock-state window the first task of this workstream must pin empirically on the real binary. The fix route is layered (D1): prevention by a dedicated wal-index-holding guard connection (D4, gated on that investigation), plus a detection + named-event + salvage-checkpoint + refuse-writes safety net (D2/D3/D6) so no path loses data silently. If the salvage checkpoint proves unable to recover writes already in an unlinked WAL (A6), the contracted minimum is exactly US2: detect the split-brain state, log loudly, and refuse to keep writing into the void.
 
@@ -19,27 +32,27 @@ The design was settled at /wai:spec on 2026-08-28 after a mechanism investigatio
 
 - `dev-docs/BACKLOG.md` — finding F-2026-08-28-01 (medium, open at promotion time).
 - The node-task-delete-dangling-shared-id workstream's decisions-ledger — `## Post-review known issues` item **K6** (hazard + evidence protocol) and `## Deploy verification` (the live verification transcript on the :9012 scratch pattern). That workstream is unmerged at spec time, so its ledger file is intentionally not path-linked here; the durable on-main record is BACKLOG F-2026-08-28-01.
-- Reproduction (established 2026-08-28): run node on a scratch DB, perform an external `sqlite3` read mid-flow, then write via the node API, stop the node gracefully, re-open with sqlite3 — the API-committed write is gone. Without the mid-flow CLI read, everything is durable.
+- Reproduction (established 2026-08-28, vector corrected 2026-08-30): run node on a scratch DB, perform an external `sqlite3` session mid-flow, then write via the node API, stop the node gracefully, re-open with sqlite3 — the API-committed write is gone. Without the mid-flow external session, everything is durable. Phase-1 evidence (2026-08-30): the deleted-WAL state is confirmed reproducible via an external write session; the read-only flow is not reproducible on the current binary.
 - Mechanism probes run at /wai:spec (2026-08-28, this host): (1) python WAL-mode experiment — a live connection blocks external close-unlink; (2) `linkat` via `/proc/self/fd` on a deleted file fails with ENOENT — in-place WAL relink recovery is NOT viable; (3) repo-wide grep — `WalMonitor` (crates/db/src/wal_monitor.rs) has NO spawn site: it is dead code today.
 
 
 ## User stories
-- **US1:** As a node operator, when a read-only `sqlite3` CLI query runs against my live node's DB mid-flow, I expect every write the node API has already committed to remain durable across a graceful node stop.
+- **US1:** As a node operator, when an external `sqlite3` session runs against my live node's DB mid-flow (write-vector confirmed 2026-08-30), I expect every write the node API has already committed to remain durable across a graceful node stop.
 - **US2:** As a node operator, when an external process invalidates the node's WAL, I expect the node to surface a named, actionable log event — and to refuse to keep writing into the void if recovery is impossible — rather than silently continuing.
 - **US3:** As a node operator, when no external process touches the DB, I expect normal node operation to be unchanged: WAL mode retained and no performance regression.
 
 ## Success criteria
-SC1: With the fix deployed, the scripted reproduction (start scratch node → external `sqlite3` CLI read mid-flow → API-committed write → graceful stop → offline `sqlite3` inspect) leaves the API-committed write durable in the DB (row present offline). → US1
+SC1: With the fix deployed, the scripted reproduction (start scratch node → external `sqlite3` session mid-flow [write-vector stimulus per the 2026-08-30 amendment] → API-committed write → graceful stop → offline `sqlite3` inspect) leaves the API-committed write durable in the DB (row present offline). → US1
 → US1
 SC2: When an external close unlinks the node's WAL (repro leg run with the prevention guard disabled), the node log carries a named, actionable event for the condition (level WARN or above, fixed event name plus the DB path plus remediation text), and subsequent write attempts fail with a distinct integrity error — no silent continuation. → US2
 → US2
 SC3: With no external CLI access, normal node operation is unchanged: an offline `PRAGMA journal_mode;` against the node DB reports `wal` after the run, and the node write path shows no perf cliff against a baseline measurement recorded in the decisions-ledger (WAL mode retained unless the design argues otherwise with measurements). → US3
 → US3
-SC4: A scripted live reproduction exists (`scripts/live/wal-unlink-durability-repro.sh`) that runs the full flow — scratch node on the :9012 pattern → CLI read mid-flow → API write → graceful stop → offline inspect — in two legs (guard-on, guard-off) and is usable as this spec's `verify_cmd`: it exits non-zero on current code (red) and zero after the fix (green). → US1
+SC4: A scripted live reproduction exists (`scripts/live/wal-unlink-durability-repro.sh`) that runs the full flow — scratch node on the :9012 pattern → external session mid-flow (write-vector stimulus) → API write → graceful stop → offline inspect — in two legs (guard-on, guard-off) and is usable as this spec's `verify_cmd`: it exits non-zero on current code (red) and zero after the fix (green). → US1
 → US1
 
 ## Users
-- **Node operators / admins** who run read-only `sqlite3` CLI queries against a live node DB for quick checks, monitoring, or debugging.
+- **Node operators / admins** who run external `sqlite3` sessions against a live node DB for quick checks, monitoring, maintenance, or debugging.
 - **Monitoring / backup automation** that opens the node DB while the node is running.
 - **End users of the node API**, whose committed writes (creates, updates, deletes) can be silently rolled back by such a read — data-integrity loss with no error surfaced anywhere.
 
@@ -62,7 +75,7 @@ SC4: A scripted live reproduction exists (`scripts/live/wal-unlink-durability-re
 ## Approach
 Investigation-first, then a layered fix in four moves:
 
-1. **Instrumented root cause + red repro (SC4).** On the :9012 scratch pattern, run the real node binary, execute the mid-flow CLI read, and capture who unlinks the WAL (fatrace/strace on the scratch dir) plus the node's lock state at that instant (`/proc/<pid>/fd`, `lslocks`). Deliverable: the mechanism paragraph in the decisions-ledger and the red repro script `scripts/live/wal-unlink-durability-repro.sh`. This leg also validates or refutes the guard premise (D4 → DP2 if refuted) and the salvage-checkpoint premise (A6).
+1. **Instrumented root cause + red repro (SC4).** On the :9012 scratch pattern, run the real node binary, execute the mid-flow external session (write-vector stimulus per the 2026-08-30 amendment), and capture who unlinks the WAL (fatrace/strace on the scratch dir) plus the node's lock state at that instant (`/proc/<pid>/fd`, `lslocks`). Deliverable: the mechanism paragraph in the decisions-ledger and the red repro script `scripts/live/wal-unlink-durability-repro.sh`. This leg also validates or refutes the guard premise (D4 → DP2 if refuted) and the salvage-checkpoint premise (A6).
 2. **Prevention (SC1).** A dedicated guard connection whose only job is holding the WAL wal-index mapped, so an external close can never become the last locker able to checkpoint+unlink (D4). Adopted only on T1 evidence; kill-switch `VK_WAL_GUARD=off` exists so the SC2 repro leg can still exercise the net.
 3. **Detection + named event (SC2).** Revive the currently-dead `WalMonitor` (probe A3: no spawn site exists), wire its spawn at node startup, and extend it with an integrity watch: inotify on the DB directory for delete/move events on the WAL basename plus the existing 60s poll comparing WAL path presence and inode identity. An external-unlink transition emits the named WARN `wal_unlinked_externally` with the DB path and remediation; the current NotFound→0 silent swallow in `check_wal_size` is fixed to distinguish external unlink from non-WAL mode (D2).
 4. **Salvage + refuse-writes (US2, SC1 backstop).** On the trip: attempt `PRAGMA wal_checkpoint(TRUNCATE)` through the pool (surviving connections read the orphaned WAL via their open fds), emit a named success/failure event, then hold an exclusive lock on a monitor-owned connection so subsequent writes fail loudly with a distinct integrity error while reads continue; the node stays up and the ERROR event names the operator remediation (restart the node) (D3, D6 per operator Q1).
@@ -81,7 +94,7 @@ All components live in `crates/db` and are wired at node startup; the write path
 
 **4. T1 mechanism validation (real binary).** The first task reproduces on the :9012 scratch node with fatrace/strace and lock-state capture to pin the unlinking process and syscall, proves the guard blocks it (D4; DP2 halt if refuted), and proves or refutes salvage-checkpoint-via-fd (A6). Outcomes are recorded in the decisions-ledger before later tasks proceed.
 
-**5. Repro script.** `scripts/live/wal-unlink-durability-repro.sh` (new): scratch-node lifecycle on the :9012 pattern, mid-flow CLI read, API write, graceful stop, offline inspect; two legs (guard-on, guard-off) plus `PRAGMA journal_mode` and timing capture. This is the spec's `verify_cmd`.
+**5. Repro script.** `scripts/live/wal-unlink-durability-repro.sh` (new): scratch-node lifecycle on the :9012 pattern, mid-flow external session (write-vector stimulus), API write, graceful stop, offline inspect; two legs (guard-on, guard-off) plus `PRAGMA journal_mode` and timing capture. This is the spec's `verify_cmd`.
 
 
 ## Decisions

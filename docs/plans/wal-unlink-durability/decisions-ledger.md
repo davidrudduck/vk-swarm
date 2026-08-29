@@ -277,3 +277,17 @@ established. No script maintenance delta was retained.
   external-write result - the required real-node CLI-read unlink window was not observed, and
   the task requires human re-triage when it cannot be reproduced -
   `docs/plans/wal-unlink-durability/decisions-ledger.md`
+
+## 2026-08-30 — Re-plan: trip stimulus = external write session; 002 rescoped to design-decision experiments (operator-approved)
+- [Task 002 orchestrator] VERDICT 1's evidence hunt (ledger `## T1 mechanism evidence
+  (2026-08-30)`, commit 797665bbf) established: the read-only CLI vector is NOT reproducible
+  on the current binary under any probed condition; an external WRITE session reliably
+  produces the deleted-WAL/deleted-SHM state. Operator approved the 10,000-foot re-plan:
+  the workstream's outcome is "no silent data loss under any external vector", and the
+  guard/monitor/salvage/refusal design is vector-agnostic — so the vector hunt stops here.
+  Spec amended narrowly (incident vector: external session, write-confirmed) and re-frozen;
+  002 rescoped to the three design-decision experiments (unlinker mechanism under the
+  write-vector, guard mode MapOnly-vs-HoldRead, A6 salvage) + harness write-session stimulus;
+  phases 2-4 unchanged. 001 remains passed (its mechanics contract was vector-free).
+  — files: docs/superpowers/specs/2026-08-28-wal-unlink-durability.md,
+  docs/plans/wal-unlink-durability/phase-1/002-*.md, docs/plans/wal-unlink-durability/plan.md
