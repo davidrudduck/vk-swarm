@@ -30,17 +30,18 @@ async fn guard_blocks_external_unlink_hold_read() {
     sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'guard-probe', '/tmp/guard-probe-uniq')").execute(&pool).await.unwrap();
     let mode = ledger_mode(); // see change text — the mode task 002 recorded
     let guard = WalGuard::connect(&db_path, mode).await.unwrap();
-    let out = std::process::Command::new("sqlite3").arg(&db_path).arg("SELECT count(*) FROM projects;").output().unwrap();
+    // 2026-08-30 vector amendment: the unlink trigger is an external WRITE session, not a read.
+    let out = std::process::Command::new("sqlite3").arg(&db_path).arg("PRAGMA user_version=1;").output().unwrap();
     assert!(out.status.success());
     let wal = std::path::PathBuf::from(format!("{}-wal", db_path.display()));
-    assert!(wal.exists(), "external CLI close unlinked the WAL despite the guard");
+    assert!(wal.exists(), "external write-session close unlinked the WAL despite the guard");
     drop(guard);
     pool.close().await;
     // Durability must survive a FULL close: a fresh offline connection sees the pre-CLI row.
     let offline = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
         .connect_with(options_for(&db_path).unwrap()).await.unwrap();
     let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM projects WHERE name='guard-probe'").fetch_one(&offline).await.unwrap();
-    assert_eq!(n, 1, "row not durable after the external CLI read despite the guard");
+    assert_eq!(n, 1, "row not durable after the external write session despite the guard");
 }
 ```
 Gate env: WAI_TYPECHECK_CMD="cargo check -p db" WAI_TEST_CMD="cargo test -p db wal_guard" WAI_LINT_CMD="cargo clippy -p db --all-targets -- -D warnings".

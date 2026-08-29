@@ -54,7 +54,7 @@ SC4: A scripted live reproduction exists (`scripts/live/wal-unlink-durability-re
 ## Users
 - **Node operators / admins** who run external `sqlite3` sessions against a live node DB for quick checks, monitoring, maintenance, or debugging.
 - **Monitoring / backup automation** that opens the node DB while the node is running.
-- **End users of the node API**, whose committed writes (creates, updates, deletes) can be silently rolled back by such a read — data-integrity loss with no error surfaced anywhere.
+- **End users of the node API**, whose committed writes (creates, updates, deletes) can be silently rolled back by such an external session — data-integrity loss with no error surfaced anywhere.
 
 
 ## Constraints
