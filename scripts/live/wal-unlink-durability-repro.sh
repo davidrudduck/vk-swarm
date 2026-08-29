@@ -257,6 +257,25 @@ trip_detector() {
   return 1
 }
 
+refusal_latch_detector() {
+  local legdir="$1" start_ns now_ns elapsed_ms start_seconds
+  start_ns=$(date +%s%N)
+  start_seconds=$SECONDS
+  while (( SECONDS - start_seconds < 30 )); do
+    if grep -q 'wal_write_refusal_active' "$legdir/node.log"; then
+      now_ns=$(date +%s%N)
+      elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
+      log_info "Refusal latch evidence after ${elapsed_ms}ms"
+      return 0
+    fi
+    sleep 0.5
+  done
+  now_ns=$(date +%s%N)
+  elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
+  log_info "Refusal latch detector timeout after ${elapsed_ms}ms"
+  return 1
+}
+
 external_write_session() {
   local legdir="$1" success_sentinel
   success_sentinel="$legdir/.write-session-succeeded"
@@ -392,6 +411,7 @@ run_leg_b_attempt() {
     fi
     check_status "Leg B attempt $attempt wal_unlinked_externally logged" grep -q 'wal_unlinked_externally' "$legdir/node.log"
     check_status "Leg B attempt $attempt unlink log names db path" bash -c "grep 'wal_unlinked_externally' \"\$1\" | grep -qF \"\$2\"" _ "$legdir/node.log" "$legdir/db.sqlite"
+    check_status "Leg B attempt $attempt wal_write_refusal_active latched" refusal_latch_detector "$legdir"
     response=$(api_call POST /api/tasks "$legdir" "{\"project_id\":\"$project_id\",\"title\":\"marker-B-post\"}")
     http_code=$(printf '%s\n' "$response" | head -n 1); resp_body=$(printf '%s\n' "$response" | tail -n 1)
     if auth_drift_stop "$http_code" /api/tasks; then stop_node "$pid" || true; return 1; fi
@@ -402,7 +422,6 @@ run_leg_b_attempt() {
     else
       check_status "Leg B attempt $attempt marker-B-post rejected (HTTP $http_code, success was not false)" false
     fi
-    check_status "Leg B attempt $attempt wal_write_refusal_active logged" grep -q 'wal_write_refusal_active' "$legdir/node.log"
     check_status "Leg B attempt $attempt node remains alive after refusal" kill -0 "$pid"
     check_status "Leg B attempt $attempt stopped gracefully" stop_node "$pid"
     count=$(sqlite3 "$legdir/db.sqlite" "SELECT count(*) FROM tasks WHERE title='marker-B-post';")

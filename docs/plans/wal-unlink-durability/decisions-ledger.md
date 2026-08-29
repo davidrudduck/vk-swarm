@@ -404,3 +404,24 @@ reproducible on this binary; assertions were intentionally left unchanged rather
 - [Task 002] Preserve the post-trip offline-count assertion despite its current-code mismatch;
   the deterministic trip and named-event failures are real, but changing the assertion would
   fabricate the required red-loss evidence - `scripts/live/wal-unlink-durability-repro.sh`
+
+### Amended harness verification
+
+The operator amendment classifies the prior `marker-B-post` offline count `1` as the expected
+current-code RED failure: graceful shutdown checkpoints the write through the still-open fds.
+The assertion remains pinned to the POST-FIX `count = 0` expectation.
+
+`LEGS=AB MODE=baseline bash scripts/live/wal-unlink-durability-repro.sh` exited `0` with
+`Total PASS: 24`, `Total FAIL: 0`; both legs were `PASS=12 FAIL=0 TOTAL=12`.
+
+`LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh` exited `1` as intended.
+Leg A was GREEN (`PASS=17 FAIL=0 TOTAL=17`): the single write session executed and the trip
+detector timed out after 30179ms. Leg B was RED (`PASS=10 FAIL=5 TOTAL=15`): fault injection
+produced deleted-WAL fd evidence after 3ms; `wal_unlinked_externally` and its db-path check were
+absent; the bounded pre-write `wal_write_refusal_active` latch poll timed out after 29609ms;
+`marker-B-post` was accepted with HTTP 200 and success true; its pinned offline `count = 0`
+assertion failed because the observed count was `1`.
+
+- [Task 002] Poll `wal_write_refusal_active` before the post-trip write using the trip detector's
+  30-second bounded polling shape, so post-fix refusal is proven armed before the write can race
+  the salvage checkpoint - `scripts/live/wal-unlink-durability-repro.sh`
