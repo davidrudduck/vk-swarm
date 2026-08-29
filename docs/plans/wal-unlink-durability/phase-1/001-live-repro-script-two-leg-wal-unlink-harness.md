@@ -2,7 +2,7 @@
 id: "001"
 phase: 1
 title: "Live repro script: two-leg WAL-unlink harness (harness mechanics; red proved at 002)"
-status: ready
+status: passed
 depends_on: []
 parallel: false
 conflicts_with: ["002"]
