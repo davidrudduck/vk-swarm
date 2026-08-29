@@ -1,23 +1,22 @@
 ---
 id: "001"
 phase: 1
-title: "Live repro script: two-leg WAL-unlink harness (red on current code)"
+title: "Live repro script: two-leg WAL-unlink harness (harness mechanics; red proved at 002)"
 status: ready
 depends_on: []
 parallel: false
-conflicts_with: []
+conflicts_with: ["002"]
 files:
-  - "create scripts/live/wal-unlink-durability-repro.sh"
+  - "scripts/live/wal-unlink-durability-repro.sh"
 siblings: ["scripts/verify-local-node-browser-oauth.sh"]
 irreversible: false
 scope_test: "N/A"
 allowed_change: create
-red_proof: Script exit code non-zero on current code with leg A 'marker-A-post' offline count = 0 and leg B missing both named events.
-covers_criteria: ["SC4"]
-covers_tests: ["TS4"]
+covers_criteria: []
+covers_tests: []
 ---
 ## Failing test (write first)
-N/A — the deliverable is a bash script; TS4's red half is proved by the manual verification below (the script exits non-zero on current code because the guard-on leg loses the API write). Gate env for this task: WAI_TYPECHECK_CMD="true" WAI_TEST_CMD="true" WAI_LINT_CMD="true".
+N/A — the deliverable is a bash script. Amendment 2026-08-29 (operator-approved re-sequence): the red proof MOVED to task 002, because the incident's lock-state trigger window must be pinned empirically (002 VERDICT 1) before the harness can reliably fire the unlink on current code — on a fresh scratch node the pool holds the wal-index and the external close does NOT unlink (spec line 16 predicted exactly this window). 001's gate is harness MECHANICS only: MODE=baseline green on both legs (lifecycle, two-boot seeding, project/task setup, timings, journal_mode assert all work end-to-end) and a full-mode run that exits 1 with both legs COMPLETED (no ABORTED) and per-leg assertion counts in the summary (legs will report FAIL on current code — expected; not a defect here). Gate env for this task: WAI_TYPECHECK_CMD="true" WAI_TEST_CMD="true" WAI_LINT_CMD="true".
 
 
 ## Change
@@ -37,13 +36,13 @@ PROJECT SETUP (once per leg, after boot2): `REPO_DIR=$(mktemp -d)/repo && git in
 
 TRIP DETECTOR (O7): poll `ls -l /proc/$PID/fd` for `db.sqlite-wal (deleted)` every 0.5s up to 30s (do NOT rely on fixed sleeps).
 
-LEG A — guard-on durability (SC1): leg-A node boots with `VK_WAL_GUARD=on` exported explicitly (guard active once Phase 4 wires it; on current code a no-op). Steps: seed+boot2; api_write "marker-A-pre"; external CLI read `sqlite3 <legdir>/db.sqlite 'SELECT count(*) FROM tasks;'`; wait trip-detector (on current code the WAL unlinks; after the fix the guard prevents the unlink — detector timing out is then EXPECTED, treat as pass-signal); api_write "marker-A-post"; graceful stop; offline: `sqlite3 <legdir>/db.sqlite "SELECT count(*) FROM tasks WHERE title='marker-A-post';"` must be 1, and `PRAGMA journal_mode;` must print `wal`.
+LEG A — guard-on durability (SC1): leg-A node boots with `VK_WAL_GUARD=on` exported explicitly (guard active once Phase 4 wires it; on current code a no-op). Steps: seed+boot2; api_write "marker-A-pre"; external CLI read `sqlite3 <legdir>/db.sqlite 'SELECT count(*) FROM tasks;'`; wait trip-detector (on current code the WAL unlinks ONLY under the VERDICT-1 trigger window that 002 encodes — before that encoding a detector timeout is UNINFORMATIVE, not a pass; after the fix the guard prevents the unlink and a timeout is the EXPECTED pass-signal); api_write "marker-A-post"; graceful stop; offline: `sqlite3 <legdir>/db.sqlite "SELECT count(*) FROM tasks WHERE title='marker-A-post';"` must be 1, and `PRAGMA journal_mode;` must print `wal`.
 
 LEG B — guard-off detection+refusal (SC2): relaunch leg-B node with `VK_WAL_GUARD=off`; seed+boot2; api_write "marker-B-pre"; CLI read; trip-detector MUST fire (fail leg if timeout after O8 retry: one retry of the CLI step on a fresh scratch DB); assert `grep -c 'wal_unlinked_externally' <legdir>/node.log` >= 1 and the log line names the db path; api_write "marker-B-post" MUST be rejected: expect a DB-failure signal — non-2xx status OR `.success==false` envelope (capture BOTH curl %{http_code} and the body); assert `grep -c 'wal_write_refusal_active' <legdir>/node.log` >= 1; assert node process still alive (`kill -0 $PID`); graceful stop; offline: `SELECT count(*) FROM tasks WHERE title='marker-B-post';` MUST be 0 (a post-trip write that 'succeeds' but never lands is the incident's exact failure shape).
 
 TIMINGS (SC3 raw material): in leg A, wrap 5 api_write "timing-N" calls with `date +%s%N` deltas, append `write_latency_ms=<delta>` lines to $SCRATCH_ROOT/timings.txt.
 
-Print a final PASS/FAIL summary per leg; exit 1 if any assertion failed. On CURRENT code: leg A fails (marker-A-post lost), leg B fails (no events, write succeeds) — that is the red state.
+Print a final PASS/FAIL summary per leg; exit 1 if any assertion failed. The summary MUST print per-leg assertion counts (PASS/FAIL/total). A leg that aborts mid-run must be reported as ABORTED (distinct from failed assertions) — for 001's gate an ABORTED leg is a defect: full-mode must exit 1 (assertion failures), never 2 (preflight) and never die silently under set -e. On CURRENT code the legs report failures (that becomes the RED state once 002 encodes the trigger window); 001's gate is: baseline mode exit 0, full-mode exit 1, both legs COMPLETED (no ABORTED) with per-leg assertion counts recorded in the ledger.
 
 
 ## Allowed moves
@@ -51,7 +50,7 @@ Read scripts/verify-local-node-browser-oauth.sh for house style. Create ONLY scr
 
 
 ## STOP triggers
-Port 9012 is occupied by a process you did not spawn — STOP and report (never touch the production node on :9002 either). The two-boot seeding flow cannot produce an authenticated session (API writes return 401/403 despite the seeded cookie) — STOP; the auth contract has drifted from routes/session.rs. The external CLI read never unlinks the WAL on CURRENT code even with the node idle (incident not reproducible at all) — STOP; this refutes the spec's premise and requires human re-triage.
+Port 9012 is occupied by a process you did not spawn — STOP and report (never touch the production node on :9002 either). The two-boot seeding flow cannot produce an authenticated session (API writes return 401/403 despite the seeded cookie) — STOP; the auth contract has drifted from routes/session.rs. (Amendment 2026-08-29: the "external CLI read never unlinks the WAL" STOP trigger MOVED to task 002 — on current code without the VERDICT-1 window the unlink is EXPECTED not to fire; that is 002's evidence hunt, not a 001 halt.)
 
 
 Declared decision points (from the spec; do not edit here):
@@ -60,7 +59,7 @@ Declared decision points (from the spec; do not edit here):
 
 
 ## Manual verification (record in decisions-ledger)
-Build the release binary (`cargo build --release -p server --bin vks-node-server`) and run `bash scripts/live/wal-unlink-durability-repro.sh` on CURRENT code. Expected RED: the script exits non-zero and its summary shows leg A lost the post-trip write and leg B saw no wal_unlinked_externally event. Paste the summary block into the decisions ledger as the TS4 red proof.
+Build the release binary (`cargo build --release -p server --bin vks-node-server`). Run `MODE=baseline bash scripts/live/wal-unlink-durability-repro.sh` — MUST exit 0 (both legs green: boot, seed, 5 timing writes, graceful stop, offline journal_mode=wal). Then run `bash scripts/live/wal-unlink-durability-repro.sh` (full mode) on CURRENT code — expected exit 1 with both legs COMPLETED (no ABORTED); paste the summary block (including per-leg assertion counts) into the decisions ledger. The full-mode red proof against an encoded trigger window is task 002's deliverable, not this task's.
 
 
 ## Done when

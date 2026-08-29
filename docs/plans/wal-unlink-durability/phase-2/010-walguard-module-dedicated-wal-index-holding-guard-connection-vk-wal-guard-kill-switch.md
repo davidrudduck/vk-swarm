@@ -7,8 +7,8 @@ depends_on: ["002"]
 parallel: false
 conflicts_with: []
 files:
-  - "create crates/db/src/wal_guard.rs"
-  - "edit crates/db/src/lib.rs"
+  - "crates/db/src/wal_guard.rs"
+  - "crates/db/src/lib.rs"
 irreversible: false
 scope_test: "crates/db/src/wal_guard.rs"
 allowed_change: mixed

@@ -7,8 +7,8 @@ depends_on: ["020"]
 parallel: false
 conflicts_with: ["020","030","031"]
 files:
-  - "edit crates/db/src/wal_monitor.rs"
-  - "edit crates/db/Cargo.toml"
+  - "crates/db/src/wal_monitor.rs"
+  - "crates/db/Cargo.toml"
 siblings: ["crates/services/src/services/filesystem_watcher.rs"]
 irreversible: false
 scope_test: "crates/db/src/wal_monitor.rs"

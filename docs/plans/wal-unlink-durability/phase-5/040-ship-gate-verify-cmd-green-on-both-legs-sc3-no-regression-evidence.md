@@ -7,12 +7,12 @@ depends_on: ["001","022"]
 parallel: false
 conflicts_with: ["002"]
 files:
-  - "edit docs/plans/wal-unlink-durability/decisions-ledger.md"
+  - "docs/plans/wal-unlink-durability/decisions-ledger.md"
 irreversible: false
 scope_test: "N/A"
 allowed_change: edit
-covers_criteria: ["SC3"]
-covers_tests: []
+covers_criteria: ["SC3","SC4"]
+covers_tests: ["TS4"]
 ---
 ## Failing test (write first)
 N/A — validation task; the frozen verify_cmd IS the test. Gate env: WAI_TYPECHECK_CMD="true" WAI_TEST_CMD="true" WAI_LINT_CMD="true".
@@ -23,7 +23,7 @@ Append a `## Ship-gate evidence (SC3)` section to docs/plans/wal-unlink-durabili
 
 1. GREEN RUN: `cargo build --release -p server --bin vks-node-server` then `bash scripts/live/wal-unlink-durability-repro.sh` (the spec's frozen verify_cmd). Record the exit code (must be 0) and the per-leg PASS summary: leg A (guard-on) — the external CLI read does NOT unlink the WAL (trip detector times out as designed), post-trip API write durable offline, `PRAGMA journal_mode;` prints `wal`; leg B (VK_WAL_GUARD=off) — trip detector fires, wal_unlinked_externally logged with the db path, post-trip write rejected non-2xx, wal_write_refusal_active logged, node still alive.
 
-2. SC3 TIMINGS: build a MAIN-baseline binary without the branch changes: `git worktree add --detach /data/.cache/wal-main-baseline origin/main` (--detach + origin/main: plain `main` FAILS — the branch is already checked out at /data/Code/vk-swarm and git refuses a second checkout; /data/.cache because /tmp is quota-tight for a workspace target dir). Build with an ISOLATED target dir on the same volume: `CARGO_TARGET_DIR=/data/.cache/cargo-target-wal-baseline cargo build --release -p server --manifest-path /data/.cache/wal-main-baseline/Cargo.toml --bin vks-node-server`. Copy the binary out (`cp /data/.cache/cargo-target-wal-baseline/release/vks-node-server /data/.cache/wal-baseline-vks-node-server`), then `git worktree remove /data/.cache/wal-main-baseline`. Run the repro script in BASELINE mode for BOTH binaries — `MODE=baseline BINARY=/data/.cache/wal-baseline-vks-node-server bash scripts/live/wal-unlink-durability-repro.sh` and `MODE=baseline BINARY=target/release/vks-node-server bash scripts/live/wal-unlink-durability-repro.sh` — both runs must COMPLETE successfully (baseline mode carries no fixed-code assertions, so an unfixed binary passes it); collect the 5 `write_latency_ms=` samples from each timings.txt. Record median(main) vs median(branch) and the per-sample table in the ledger. A median regression over 10% is a perf cliff → that is a finding, not a pass: record it and STOP.
+2. SC3 TIMINGS: build a MAIN-baseline binary without the branch changes: `git worktree add --detach /data/.cache/wal-main-baseline origin/main` (--detach + origin/main: plain `main` FAILS — the branch is already checked out at /data/Code/vk-swarm and git refuses a second checkout; /data/.cache because /tmp is quota-tight for a workspace target dir). Build with the worktree's own default target dir (no CARGO_TARGET_DIR override — the worktree lives on /data, which has the space): `cargo build --release -p server --manifest-path /data/.cache/wal-main-baseline/Cargo.toml --bin vks-node-server`. Copy the binary out (`cp /data/.cache/wal-main-baseline/target/release/vks-node-server /data/.cache/wal-baseline-vks-node-server`), then `git worktree remove /data/.cache/wal-main-baseline`. Run the repro script in BASELINE mode for BOTH binaries — `MODE=baseline BINARY=/data/.cache/wal-baseline-vks-node-server bash scripts/live/wal-unlink-durability-repro.sh` and `MODE=baseline BINARY=target/release/vks-node-server bash scripts/live/wal-unlink-durability-repro.sh` — both runs must COMPLETE successfully (baseline mode carries no fixed-code assertions, so an unfixed binary passes it); collect the 5 `write_latency_ms=` samples from each timings.txt. Record median(main) vs median(branch) and the per-sample table in the ledger. A median regression over 10% is a perf cliff → that is a finding, not a pass: record it and STOP.
 
 3. SC3 VERDICT PARAGRAPH: journal_mode observed = wal (unchanged), checkpoint/behaviour path unchanged in the no-external-access case (cite: monitor only logs/checkpoints on its pre-existing thresholds; guard adds one idle connection + one held read-mark), latency delta within tolerance → SC3 satisfied.
 
@@ -31,7 +31,7 @@ Append a `## Ship-gate evidence (SC3)` section to docs/plans/wal-unlink-durabili
 
 
 ## Allowed moves
-Append ONLY to docs/plans/wal-unlink-durability/decisions-ledger.md. Build binaries, run the repro script, add/remove the /tmp/wal-main-baseline worktree. Do not modify the repro script (if it is wrong, that is a finding against task 001 — escalate). Do not edit the spec.
+Append ONLY to docs/plans/wal-unlink-durability/decisions-ledger.md. Build binaries, run the repro script, add/remove the /data/.cache/wal-main-baseline worktree. Do not modify the repro script (if it is wrong, that is a finding against task 002 — escalate). Do not edit the spec.
 
 
 ## STOP triggers

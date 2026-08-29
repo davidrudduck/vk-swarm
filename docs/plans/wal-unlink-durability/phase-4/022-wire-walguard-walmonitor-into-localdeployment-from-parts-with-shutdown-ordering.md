@@ -7,7 +7,7 @@ depends_on: ["010","020","021","030","031"]
 parallel: false
 conflicts_with: []
 files:
-  - "edit crates/local-deployment/src/lib.rs"
+  - "crates/local-deployment/src/lib.rs"
 irreversible: false
 scope_test: "N/A"
 allowed_change: edit

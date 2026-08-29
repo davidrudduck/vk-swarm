@@ -7,7 +7,7 @@ depends_on: ["020"]
 parallel: false
 conflicts_with: ["020","021","031"]
 files:
-  - "edit crates/db/src/wal_monitor.rs"
+  - "crates/db/src/wal_monitor.rs"
 irreversible: false
 scope_test: "crates/db/src/wal_monitor.rs"
 allowed_change: edit
