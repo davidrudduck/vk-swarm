@@ -8,6 +8,20 @@ verify_cmd: "bash scripts/live/wal-unlink-durability-repro.sh"
 
 # wal-unlink-durability — external sqlite3 sessions silently destroy node write durability
 
+> **Amendment v2, 2026-08-30 (operator-approved, re-frozen): fault-injection trip.** Three
+> independent evidence hunts (60+ external write/read probes, `lslocks` captures) established
+> that on the CURRENT binary the node's pool connections persistently hold shared POSIX locks
+> on `db.sqlite` and `db.sqlite-shm`, so NO external sqlite3 session (read or write) can
+> become the last wal-index holder and unlink the WAL — the 2026-08-28 incident predates this
+> pool behavior or hit a rare pool-connection-replacement window. The contracted repro
+> therefore trips the guard-off leg by DETERMINISTIC FAULT INJECTION (`rm` of the WAL/SHM
+> files mid-flow — the identical inode state the incident produced: node fds show
+> `(deleted)`, writes go into the void), the same technique TS5 contracts. SC2's "when an
+> external close unlinks the node's WAL" reads as "when the WAL is unlinked externally
+> (simulated via fault injection in the repro)". The guard-mode decision (D4) is made on
+> lock-persistence evidence (`lslocks`/fcntls), not incident replay. The guard remains
+> justified: it closes the residual pool-replacement window the pool alone leaves open.
+>
 > **Amendment 2026-08-30 (operator-approved, re-frozen): incident vector corrected.** The
 > original text below describes the trigger as an external read-only `sqlite3` CLI query.
 > Phase-1 empirical evidence (decisions-ledger, `## T1 mechanism evidence (2026-08-30)`)
@@ -44,11 +58,11 @@ The design was settled at /wai:spec on 2026-08-28 after a mechanism investigatio
 ## Success criteria
 SC1: With the fix deployed, the scripted reproduction (start scratch node → external `sqlite3` session mid-flow [write-vector stimulus per the 2026-08-30 amendment] → API-committed write → graceful stop → offline `sqlite3` inspect) leaves the API-committed write durable in the DB (row present offline). → US1
 → US1
-SC2: When an external close unlinks the node's WAL (repro leg run with the prevention guard disabled), the node log carries a named, actionable event for the condition (level WARN or above, fixed event name plus the DB path plus remediation text), and subsequent write attempts fail with a distinct integrity error — no silent continuation. → US2
+SC2: When the node's WAL is unlinked externally (repro leg run with the prevention guard disabled; simulated via fault injection per amendment v2), the node log carries a named, actionable event for the condition (level WARN or above, fixed event name plus the DB path plus remediation text), and subsequent write attempts fail with a distinct integrity error — no silent continuation. → US2
 → US2
 SC3: With no external CLI access, normal node operation is unchanged: an offline `PRAGMA journal_mode;` against the node DB reports `wal` after the run, and the node write path shows no perf cliff against a baseline measurement recorded in the decisions-ledger (WAL mode retained unless the design argues otherwise with measurements). → US3
 → US3
-SC4: A scripted live reproduction exists (`scripts/live/wal-unlink-durability-repro.sh`) that runs the full flow — scratch node on the :9012 pattern → external session mid-flow (write-vector stimulus) → API write → graceful stop → offline inspect — in two legs (guard-on, guard-off) and is usable as this spec's `verify_cmd`: it exits non-zero on current code (red) and zero after the fix (green). → US1
+SC4: A scripted live reproduction exists (`scripts/live/wal-unlink-durability-repro.sh`) that runs the full flow — scratch node on the :9012 pattern → external session mid-flow (leg A) / fault-injected WAL unlink (leg B, per amendment v2) → API write → graceful stop → offline inspect — in two legs (guard-on, guard-off) and is usable as this spec's `verify_cmd`: it exits non-zero on current code (red) and zero after the fix (green). → US1
 → US1
 
 ## Users
