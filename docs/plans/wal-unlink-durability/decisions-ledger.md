@@ -295,3 +295,34 @@ established. No script maintenance delta was retained.
   .precheck.passed token (operator-approved amendment; substantive precheck checks —
   anchors vs main, SQL literals, SC coverage — unaffected; plan-lint re-passed;
   freshness gate verified green). ADR-0001 deliberate re-freeze path.
+
+### Task 002 current-code write-stimulus re-confirmation — STOP
+
+Host/tool versions: `sqlite3 3.53.4 2026-07-24`, `Python 3.14.7`, Linux
+`6.8.0-138-generic`; binary `target/release/vks-node-server`, health version
+`0.0.125`, git commit `c31474131`.
+
+The exact mandated changing-value write shape was re-confirmed without re-running the
+closed read vector: after a successful boot-2 health check on a fresh `:9012` scratch
+database, `sqlite3 <db> "PRAGMA user_version=$RANDOM;"` ran and exited 0. Before the
+write, `/proc/3571550/fd` showed live `db.sqlite-wal` and `db.sqlite-shm` descriptors
+(fds 14, 15, 17, 19, 21, 25-27); after the write it showed the same non-deleted
+paths. `lslocks` showed the node holding POSIX READ locks on `db.sqlite` and
+`db.sqlite-shm` both before and after. `strace -f -e trace=unlinkat,renameat2` on
+the sqlite3 write session emitted only `+++ exited with 0 +++`; no unlink or rename
+occurred. The node was then terminated by its exact PID and reaped, and port `9012`
+was free.
+
+This exact write stimulus therefore stops tripping on the current binary. The
+task-authorized harness edit was not made, because substituting another probe would
+violate the task's STOP rule and the read vector is closed. VERDICT 1 mechanism
+identity, VERDICT 2 MapOnly/HoldRead experiments, VERDICT 3 salvage, the script red
+proof, and the guard-mode decision are consequently not established in this run.
+
+STOP: `human_gate_required` — environment drift: the required exact external
+changing-value write no longer produced `db.sqlite-wal (deleted)`.
+
+- [Task 002] Stop before script maintenance or guard/salvage experiments when the exact
+  mandated changing-value write stimulus no longer trips; no alternate vector was used
+  because the task explicitly closes the read-vector hunt and requires operator approval
+  for substitution — `docs/plans/wal-unlink-durability/decisions-ledger.md`
