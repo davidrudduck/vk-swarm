@@ -326,3 +326,16 @@ changing-value write no longer produced `db.sqlite-wal (deleted)`.
   mandated changing-value write stimulus no longer trips; no alternate vector was used
   because the task explicitly closes the read-vector hunt and requires operator approval
   for substitution — `docs/plans/wal-unlink-durability/decisions-ledger.md`
+
+## 2026-08-30 — Re-plan v2: fault-injection trip, lock-semantics guard verdict (operator-approved)
+- [Task 002 orchestrator] Evidence: three hunts + an orchestrator probe (60+ external
+  read/write sessions, lslocks captures) show the pool PERSISTENTLY holds shared POSIX
+  locks on db + shm on the current binary — no external session can become the last
+  wal-index holder; the incident predates this behavior or hit a rare pool-replacement
+  window. Operator approved v2: leg B trips via deterministic fault injection
+  (rm WAL/SHM — identical inode state; TS5 technique); guard mode (D4) decided by
+  lslocks persistence of MapOnly vs HoldRead probes; VERDICT 3 salvage on the injected
+  trip; leg A becomes regression coverage (external sessions provably safe). Spec
+  amended (v2 block, SC2/SC4 wording) and re-frozen; 002 rewritten; 010 TS3 gains the
+  lock-persistence differential assertion; 001/040 wording aligned.
+  — files: spec, 001/002/010 task files, plan ledger

@@ -35,6 +35,19 @@ async fn guard_blocks_external_unlink_hold_read() {
     assert!(out.status.success());
     let wal = std::path::PathBuf::from(format!("{}-wal", db_path.display()));
     assert!(wal.exists(), "external write-session close unlinked the WAL despite the guard");
+    // 2026-08-30 amendment v2: external sessions provably cannot unlink on this binary, so
+    // wal.exists() alone is vacuous-green. The DIFFERENTIAL assertion is lock persistence:
+    // /proc/locks must show a POSIX READ lock on the shm file held by THIS process while the
+    // guard is alive (the lock class that blocks external close-unlink; VERDICT 2 in the
+    // ledger names the mode whose probe held it persistently).
+    let shm = format!("{}-shm", db_path.display());
+    let locks = std::fs::read_to_string("/proc/locks").unwrap();
+    let self_pid = std::process::id().to_string();
+    assert!(locks.lines().any(|l| l.contains("READ") && l.contains(&self_pid) && {
+        // /proc/locks lists device:inode, not paths — resolve the shm inode and match it
+        let ino = std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&shm).unwrap());
+        l.contains(&format!(":{:x}", ino)) || l.contains(&ino.to_string())
+    }), "guard does not hold a persistent READ lock on the shm file");
     drop(guard);
     pool.close().await;
     // Durability must survive a FULL close: a fresh offline connection sees the pre-CLI row.
