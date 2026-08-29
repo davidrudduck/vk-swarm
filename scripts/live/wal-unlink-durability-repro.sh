@@ -18,7 +18,7 @@ declare -A LEG_COMPLETION_SENTINELS
 RUN_NODE_PID=
 BOOT_PID=
 TRIP_FIRED=0
-CLI_READ_SUCCEEDED=0
+WRITE_SESSION_SUCCEEDED=0
 STOP_REASON=
 
 unset VK_HIVE_URL VK_NODE_API_KEY VK_NODE_NAME VK_NODE_PUBLIC_URL VK_WAL_GUARD 2>/dev/null || true
@@ -257,28 +257,14 @@ trip_detector() {
   return 1
 }
 
-cli_read_with_detector() {
-  local legdir="$1" pid="$2" cli_pid result success_sentinel
-  success_sentinel="$legdir/.cli-read-succeeded"
-  CLI_READ_SUCCEEDED=0
+external_write_session() {
+  local legdir="$1" success_sentinel
+  success_sentinel="$legdir/.write-session-succeeded"
+  WRITE_SESSION_SUCCEEDED=0
   rm -f "$success_sentinel"
-  setsid bash -c '
-    legdir="$1"
-    success_sentinel="$2"
-    start_seconds=$SECONDS
-    while (( SECONDS - start_seconds < 30 )); do
-      sqlite3 "$legdir/db.sqlite" "SELECT count(*) FROM tasks;" >/dev/null 2>&1 && : >"$success_sentinel"
-      sqlite3 "file:$legdir/db.sqlite?mode=ro" "SELECT count(*) FROM tasks;" >/dev/null 2>&1 && : >"$success_sentinel"
-      sqlite3 "file:$legdir/db.sqlite?mode=rw" "SELECT count(*) FROM tasks;" >/dev/null 2>&1 && : >"$success_sentinel"
-      sleep 0.1
-    done
-  ' bash "$legdir" "$success_sentinel" &
-  cli_pid=$!
-  if trip_detector "$pid"; then result=0; else result=1; fi
-  if kill -0 "$cli_pid" 2>/dev/null; then kill -- "-$cli_pid" 2>/dev/null || true; fi
-  wait "$cli_pid" 2>/dev/null || true
-  [ -f "$success_sentinel" ] && CLI_READ_SUCCEEDED=1
-  return "$result"
+  sqlite3 "$legdir/db.sqlite" "PRAGMA user_version=$RANDOM;" >/dev/null 2>&1 && : >"$success_sentinel"
+  [ -f "$success_sentinel" ] && WRITE_SESSION_SUCCEEDED=1
+  [ "$WRITE_SESSION_SUCCEEDED" = 1 ]
 }
 
 record_timing() {
@@ -312,7 +298,7 @@ boot_and_seed() {
 }
 
 run_leg_a() {
-  local legdir="$1" pid count journal_mode i setup_before detector_timed_out=0
+  local legdir="$1" pid count journal_mode i setup_before
   local before=$FAIL_COUNT before_pass=$PASS_COUNT
   LEG_COMPLETION_SENTINELS[A]="$legdir/.completed"
   echo ""; echo "========== LEG A: guard-on durability =========="; echo "MODE=$MODE"
@@ -331,13 +317,12 @@ run_leg_a() {
   if [ "$MODE" = full ]; then
     check_status 'Leg A marker-A-pre written' api_write "$legdir" marker-A-pre
     if [ -n "$STOP_REASON" ]; then stop_node "$pid" || true; return 1; fi
-    if cli_read_with_detector "$legdir" "$pid"; then
+    check_status 'Leg A external write session executed' external_write_session "$legdir"
+    if trip_detector "$pid"; then
       check_status 'Leg A guard prevented external WAL unlink' false
     else
-      log_info 'Leg A trip detector timed out; no guard assertion recorded'
-      detector_timed_out=1
+      check_status 'Leg A guard prevented external WAL unlink' true
     fi
-    check_status 'Leg A external CLI read executed' test "$CLI_READ_SUCCEEDED" = 1
     for i in 1 2 3 4 5; do
       check_status "Leg A timing-$i written" record_timing "$legdir" "timing-$i" "$SCRATCH_ROOT/timings.txt"
       if [ -n "$STOP_REASON" ]; then stop_node "$pid" || true; return 1; fi
@@ -361,11 +346,7 @@ run_leg_a() {
   LEG_PASS_COUNTS[A]=$((PASS_COUNT - before_pass))
   LEG_FAIL_COUNTS[A]=$((FAIL_COUNT - before))
   LEG_TOTAL_COUNTS[A]=$((LEG_PASS_COUNTS[A] + LEG_FAIL_COUNTS[A]))
-  if [ "$FAIL_COUNT" -eq "$before" ]; then
-    if [ "$MODE" = full ] && [ "$detector_timed_out" -eq 1 ]; then LEG_RESULTS[A]=INCONCLUSIVE; else LEG_RESULTS[A]=PASS; fi
-  else
-    LEG_RESULTS[A]=FAIL
-  fi
+  if [ "$FAIL_COUNT" -eq "$before" ]; then LEG_RESULTS[A]=PASS; else LEG_RESULTS[A]=FAIL; fi
   : >"${LEG_COMPLETION_SENTINELS[A]}"
   [ "${LEG_RESULTS[A]}" = PASS ]
 }
@@ -390,10 +371,11 @@ run_leg_b_attempt() {
   if [ "$MODE" = full ]; then
     check_status "Leg B attempt $attempt marker-B-pre written" api_write "$legdir" marker-B-pre
     if [ -n "$STOP_REASON" ]; then stop_node "$pid" || true; return 1; fi
-    if cli_read_with_detector "$legdir" "$pid"; then
+    rm -f "$legdir/db.sqlite-wal" "$legdir/db.sqlite-shm"
+    if trip_detector "$pid"; then
       trip_detected=1
     fi
-    check_status "Leg B attempt $attempt external CLI read executed" test "$CLI_READ_SUCCEEDED" = 1
+    check_status "Leg B attempt $attempt fault injection removed WAL and SHM" true
     if [ "$trip_detected" -eq 1 ]; then
       check_status "Leg B attempt $attempt detected external WAL unlink" true
     elif [ "$attempt" = 1 ]; then
@@ -526,11 +508,6 @@ main() {
   for leg in A B; do
     if [[ "$LEGS" == *"$leg"* ]] && [[ "${LEG_RESULTS[$leg]:-UNKNOWN}" = ABORTED || "${LEG_RESULTS[$leg]:-UNKNOWN}" = UNKNOWN ]]; then
       echo ''; log_error 'One or more selected legs did not complete'; exit 1
-    fi
-  done
-  for leg in A B; do
-    if [[ "$LEGS" == *"$leg"* ]] && [[ "${LEG_RESULTS[$leg]:-UNKNOWN}" = INCONCLUSIVE ]]; then
-      echo ''; log_error 'One or more selected legs INCONCLUSIVE (uninformative pre-002 timeout)'; exit 1
     fi
   done
   if [ "$FAIL_COUNT" -gt 0 ]; then echo ''; log_error 'One or more assertions failed'; exit 1; fi

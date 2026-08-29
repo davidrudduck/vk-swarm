@@ -339,3 +339,68 @@ changing-value write no longer produced `db.sqlite-wal (deleted)`.
   amended (v2 block, SC2/SC4 wording) and re-frozen; 002 rewritten; 010 TS3 gains the
   lock-persistence differential assertion; 001/040 wording aligned.
   — files: spec, 001/002/010 task files, plan ledger
+
+## T1 mechanism evidence (2026-08-30)
+
+Host/tool versions: `sqlite3 3.53.4 2026-07-24`, `Python 3.14.7`, Linux
+`6.8.0-138-generic`; binary `target/release/vks-node-server` on `:9012`.
+
+### VERDICT 1 - persistent pool locks
+
+Clean capture root `/tmp/opencode/wal-t1-nVisow`, node PID `4066118`: before and after the
+single external `sqlite3 db.sqlite "PRAGMA user_version=$RANDOM;"` session, `lslocks` showed
+the node's POSIX READ locks on `db.sqlite` (`0..1073742335`) and `db.sqlite-shm` (`128..128`).
+`/proc/4066118/fd` showed live `db.sqlite-wal` and `db.sqlite-shm` descriptors (including fds
+14 and 15) before and after, with no `(deleted)` path.
+
+On the current binary the pool holds the wal-index shared lock continuously, so an external
+close-unlink is impossible in steady state (the clean capture above and the two prior hunts at
+ledger lines 331-338). The incident window is therefore a pool-connection-replacement gap
+(idle reap or connection error) or an older binary; the guard exists to hold exactly that lock
+through those gaps. Fault injection by removing WAL/SHM reproduces the incident post-state
+identically: node fds show `db.sqlite-wal (deleted)` and `db.sqlite-shm (deleted)`.
+
+### VERDICT 2 - MapOnly
+
+MapOnly was the minimal persistent-lock mode. Against a scratch node serving one authenticated
+seeded-cookie API task write per second, PID `4068306` held the same POSIX READ locks on
+`db.sqlite` and `db.sqlite-shm` at every 5-second capture from 0 through 60 seconds (13
+captures; transcript `/tmp/opencode/wal-t1-map.log`). HoldRead also held those locks for the
+same 0--60 second window (PID `4157993`; transcript
+`/tmp/opencode/wal-t1-hold-checkpoint.log`), plus shm byte 124. While HoldRead remained open,
+a stand-in connection's `PRAGMA wal_checkpoint(TRUNCATE)` returned `[(1, 880, 19)]`, confirming
+that it blocks truncation. Select MapOnly: it supplies the required persistent shared lock
+without HoldRead's checkpoint-blocking transaction.
+
+### VERDICT 3 - A6 salvage viable
+
+Fault-injected salvage root `/tmp/opencode/wal-t1-ULlk2F`, node PID `3361`, surviving pre-trip
+Python connection PID `3763`: after an API `marker-salvage-pre` write, `rm -f db.sqlite-wal
+db.sqlite-shm` produced node fd entries for both `db.sqlite-wal (deleted)` and
+`db.sqlite-shm (deleted)`. `PRAGMA wal_checkpoint(TRUNCATE)` through the surviving connection
+returned `[(0, 0, 0)]`; after graceful node stop, offline `marker-salvage-pre` count was `1`.
+Checkpoint via a surviving open fd therefore does flush old-inode frames; A6 salvage is viable.
+
+### Harness delta and red proof
+
+The authorized harness edit replaces the old repeated CLI-read stimulator with one external
+`PRAGMA user_version=$RANDOM` write session in Leg A, where a detector timeout is an asserted
+PASS, and deterministic `rm -f db.sqlite-wal db.sqlite-shm` in Leg B. It removes the
+`INCONCLUSIVE` result/exit/message and renames the read-era success state and labels; existing
+assertion accounting, sentinels, abort handling, auth STOP, PID lifecycle, and timing bounds are
+unchanged.
+
+`LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh` exited nonzero as required.
+Leg A was GREEN (`PASS=17 FAIL=0`): its write session executed and the detector timed out after
+29671ms. Leg B's fault-injection detector fired after 2ms and the named events
+`wal_unlinked_externally` and `wal_write_refusal_active` were absent. However, the current
+binary returned HTTP 200 for `marker-B-post` and its offline count was `1`, not the stipulated
+`0` (`Leg B: PASS=10 FAIL=5`). The red proof's accepted-but-absent post-write condition is not
+reproducible on this binary; assertions were intentionally left unchanged rather than falsified.
+
+- [Task 002] Select MapOnly because it persistently holds the required db/shm shared locks for
+  the complete 60-second API-write probe and avoids HoldRead's observed checkpoint busy result -
+  `docs/plans/wal-unlink-durability/decisions-ledger.md`
+- [Task 002] Preserve the post-trip offline-count assertion despite its current-code mismatch;
+  the deterministic trip and named-event failures are real, but changing the assertion would
+  fabricate the required red-loss evidence - `scripts/live/wal-unlink-durability-repro.sh`
