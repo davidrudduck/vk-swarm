@@ -12,7 +12,7 @@ files:
 irreversible: false
 scope_test: "N/A"
 allowed_change: mixed
-red_proof: After SCRIPT MAINTENANCE encodes the fault-injection trip, the script exits non-zero on current code: leg B trip detector fires (WAL rm'd mid-flow), no named events, the post-trip write is accepted-but-absent offline (marker-B-post offline count = 0). Leg A (external write session) is GREEN on current code AND post-fix — it is regression coverage (external sessions provably cannot unlink the WAL on this binary), not a differential arm.
+red_proof: After SCRIPT MAINTENANCE encodes the fault-injection trip, the script exits non-zero on current code: leg B trip detector fires (WAL rm'd mid-flow), both named events are absent from the log, and the post-trip write is ACCEPTED (HTTP 200 + .success==true) with no refusal — the silent-continuation failure. Empirical correction 2026-08-30 (VERDICT 3 evidence): on the current binary the graceful-stop shutdown checkpoint salvages through the still-open fds, so marker-B-post offline count = 1 on current code; count = 0 is the POST-FIX expectation (the write is refused and never lands). The script's offline-count assertion stays pinned to the POST-FIX expectation (count = 0) and is therefore one of the RED failures on current code; do not branch, soften, or remove it. Leg A (external write session) is GREEN on current code AND post-fix — regression coverage, not a differential arm.
 covers_criteria: ["SC4"]
 covers_tests: ["TS4"]
 ---
@@ -38,6 +38,8 @@ SCRIPT MAINTENANCE (this task is the ONLY one besides 040 that may touch the rep
 - LEG B: replace the CLI-read step with the FAULT INJECTION — after marker-B-pre lands, `rm -f <legdir>/db.sqlite-wal <legdir>/db.sqlite-shm` (inode state identical to the incident: node fds show `(deleted)`), then run the trip detector — it MUST fire immediately (the fd shows (deleted) on the next poll; keep the detector polling loop as the timing-safe check rather than assuming instant visibility).
 - RETIRE the INCONCLUSIVE scaffold entirely (leg A timeout is now a designed PASS, leg B trip is deterministic) — remove the INCONCLUSIVE verdict, its exit path, and the 'uninformative pre-002 timeout' message.
 - Rename the read-era reason strings (authorised): `cli_read_with_detector`, `CLI_READ_SUCCEEDED`, 'external CLI read executed' labels → write-session / fault-injection equivalents.
+- Refusal-latch ordering (authorised): leg B must assert `wal_write_refusal_active` is present in node.log (same bounded-poll shape as the trip detector) BEFORE issuing marker-B-post — the latch must be proven armed before the post-trip write, otherwise the write races the salvage checkpoint (a write landing in the salvage window is accepted and flushed → intermittent post-fix count=1 flake).
+- The offline-count assertion stays pinned at count = 0 (the POST-FIX expectation; one of the current-code RED failures — do not branch or soften).
 - NO other script changes — its mechanics passed 8 adversarial panel rounds (assertion counting, sentinels, ABORTED semantics, auth-drift STOP, PID hygiene, wall-clock bounds); preserve them exactly.
 Then re-prove the red state on current code per this task's red proof (leg B fires + loses the write; leg A green). Record the script delta in the ledger. Amendment 2026-08-29 (operator-approved re-sequence): this task carries 001's original red proof + SC4/TS4 coverage. Amendments 2026-08-30 (operator-approved re-plans): stimulus settled — leg A external write session (regression arm), leg B fault injection (differential arm).
 
