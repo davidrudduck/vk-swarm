@@ -291,3 +291,7 @@ established. No script maintenance delta was retained.
   phases 2-4 unchanged. 001 remains passed (its mechanics contract was vector-free).
   — files: docs/superpowers/specs/2026-08-28-wal-unlink-durability.md,
   docs/plans/wal-unlink-durability/phase-1/002-*.md, docs/plans/wal-unlink-durability/plan.md
+- [Task 002 orchestrator] Spec re-frozen after the 2026-08-30 vector amendment: new
+  .precheck.passed token (operator-approved amendment; substantive precheck checks —
+  anchors vs main, SQL literals, SC coverage — unaffected; plan-lint re-passed;
+  freshness gate verified green). ADR-0001 deliberate re-freeze path.
