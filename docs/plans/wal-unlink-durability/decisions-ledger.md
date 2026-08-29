@@ -246,3 +246,34 @@ one `MODE=baseline` run exited `0` with `24/0`. Port `9012` was free afterwards.
 - [Task 001] Report `INCONCLUSIVE` as a completed-but-uninformative pre-002 timeout, while only
   `ABORTED` and `UNKNOWN` use the did-not-complete reason -
   `scripts/live/wal-unlink-durability-repro.sh`
+
+## T1 mechanism evidence (2026-08-30)
+
+Host/tool versions: `sqlite3 3.53.4 2026-07-24`, `Python 3.14.7`, Linux
+`6.8.0-138-generic`.
+
+### VERDICT 1 - STOP
+
+The required current-code CLI-read trigger window was not reproducible on the real `:9012`
+node. Baseline remained previously verified at `24/0`; the unmodified full harness remained
+non-zero with detector timeouts (`LEGS=B MODE=full`: attempt 1 and retry both timed out, final
+`PASS=9 FAIL=6`). `VK_SQLITE_MAX_CONNECTIONS=1` produced the same result. A five-second
+quiescent delay and a CLI `PRAGMA wal_checkpoint(TRUNCATE); SELECT` also produced no deleted
+WAL. The prescribed overlap experiment (CLI held open while an API write ran) blocked the API
+write and the node exited at the bounded attempt, so it is not valid incident evidence.
+
+The permitted syscall trace did show unlink ownership for other phases: the node process
+(`2436441`) unlinked `db.sqlite-shm`/`db.sqlite-wal` during graceful shutdown, and SQLite client
+processes (`2446304`, `2449714`, `2458678`) unlinked the same files during shutdown/offline
+inspection. In a separate live-node exploratory run, an external SQLite client write caused
+the node's `/proc/<pid>/fd` to retain `db.sqlite-wal (deleted)` and `db.sqlite-shm (deleted)`;
+that was not the required read-only CLI flow and therefore does not establish VERDICT 1.
+
+Decision: STOP with halt code `human_gate_required` under the task's no-reproducible-trigger
+condition. VERDICT 2 and VERDICT 3 were not run because their prerequisite trip was not
+established. No script maintenance delta was retained.
+
+- [Task 002] Stop at VERDICT 1 rather than infer a read-only trigger from the exploratory
+  external-write result - the required real-node CLI-read unlink window was not observed, and
+  the task requires human re-triage when it cannot be reproduced -
+  `docs/plans/wal-unlink-durability/decisions-ledger.md`
