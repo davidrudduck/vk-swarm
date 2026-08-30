@@ -86,6 +86,59 @@ fn get_env_or_default(var: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// WAL file presence and identity state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WalState {
+    Absent,
+    Present(Option<u64>),
+}
+
+/// Cross-platform WAL inode extraction.
+#[cfg(unix)]
+fn wal_identity(md: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(md.ino())
+}
+
+#[cfg(not(unix))]
+fn wal_identity(_md: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+/// WAL state transition classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WalTransition {
+    Unchanged,
+    Appeared,
+    Vanished,
+    Replaced,
+}
+
+fn wal_transition(last: WalState, current: WalState) -> WalTransition {
+    match (last, current) {
+        (WalState::Absent, WalState::Absent) => WalTransition::Unchanged,
+        (WalState::Absent, WalState::Present(_)) => WalTransition::Appeared,
+        (WalState::Present(_), WalState::Absent) => WalTransition::Vanished,
+        (WalState::Present(Some(a)), WalState::Present(Some(b))) if a != b => WalTransition::Replaced,
+        (WalState::Present(_), WalState::Present(_)) => WalTransition::Unchanged,
+    }
+}
+
+/// Construct WAL path by appending `-wal` suffix to database path.
+fn wal_path_for(db_path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}-wal", db_path.display()))
+}
+
+/// Event logged when WAL is unlinked externally.
+#[allow(dead_code)]
+struct UnlinkedEvent {
+    event: &'static str,
+    path: PathBuf,
+    wal_path: PathBuf,
+    last_inode: Option<u64>,
+    remediation: &'static str,
+}
+
 /// Handle for controlling the WAL monitor.
 #[derive(Clone)]
 pub struct WalMonitorHandle {
@@ -99,8 +152,8 @@ enum WalMonitorCommand {
     Checkpoint,
     /// Request immediate TRUNCATE checkpoint (blocks until all WAL is flushed).
     TruncateCheckpoint,
-    /// Shutdown the monitor.
-    Shutdown,
+    /// Shutdown the monitor with acknowledgement.
+    Shutdown(tokio::sync::oneshot::Sender<()>),
 }
 
 impl WalMonitorHandle {
@@ -121,7 +174,12 @@ impl WalMonitorHandle {
 
     /// Shutdown the WAL monitor.
     pub async fn shutdown(&self) {
-        let _ = self.tx.send(WalMonitorCommand::Shutdown).await;
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let _ = self.tx.send(WalMonitorCommand::Shutdown(ack_tx)).await;
+        match tokio::time::timeout(std::time::Duration::from_secs(10), ack_rx).await {
+            Ok(_) => {}
+            Err(_) => tracing::error!("WAL monitor did not ack shutdown within 10s"),
+        }
     }
 }
 
@@ -131,6 +189,11 @@ pub struct WalMonitor {
     pool: SqlitePool,
     metrics: DbMetrics,
     config: WalMonitorConfig,
+    last_wal_state: WalState,
+    wal_ever_present: bool,
+    tripped: bool,
+    trip_events: u32,
+    guard: Option<crate::wal_guard::WalGuard>,
 }
 
 impl WalMonitor {
@@ -142,13 +205,28 @@ impl WalMonitor {
         pool: SqlitePool,
         metrics: DbMetrics,
         config: WalMonitorConfig,
+        guard: Option<crate::wal_guard::WalGuard>,
     ) -> WalMonitorHandle {
         let (tx, rx) = mpsc::channel(16);
+        let db_path_buf = db_path.as_ref().to_path_buf();
+        let wal_path = wal_path_for(&db_path_buf);
+        
+        let last_wal_state = match std::fs::metadata(&wal_path) {
+            Ok(md) => WalState::Present(wal_identity(&md)),
+            Err(_) => WalState::Absent,
+        };
+        let wal_ever_present = matches!(last_wal_state, WalState::Present(_));
+        
         let monitor = Self {
-            db_path: db_path.as_ref().to_path_buf(),
+            db_path: db_path_buf,
             pool,
             metrics,
             config,
+            last_wal_state,
+            wal_ever_present,
+            tripped: false,
+            trip_events: 0,
+            guard,
         };
         tokio::spawn(async move {
             let _ = supervised_run("wal_monitor", monitor.run(rx)).await;
@@ -161,11 +239,12 @@ impl WalMonitor {
         db_path: impl AsRef<Path>,
         pool: SqlitePool,
         metrics: DbMetrics,
+        guard: Option<crate::wal_guard::WalGuard>,
     ) -> WalMonitorHandle {
-        Self::spawn(db_path, pool, metrics, WalMonitorConfig::default())
+        Self::spawn(db_path, pool, metrics, WalMonitorConfig::default(), guard)
     }
 
-    async fn run(self, mut rx: mpsc::Receiver<WalMonitorCommand>) {
+    async fn run(mut self, mut rx: mpsc::Receiver<WalMonitorCommand>) {
         let mut check_interval =
             tokio::time::interval(Duration::from_secs(self.config.check_interval_secs));
 
@@ -206,8 +285,12 @@ impl WalMonitor {
                         WalMonitorCommand::TruncateCheckpoint => {
                             self.run_truncate_checkpoint().await;
                         }
-                        WalMonitorCommand::Shutdown => {
+                        WalMonitorCommand::Shutdown(ack) => {
+                            if let Some(ref mut g) = self.guard {
+                                g.release_read_mark().await;
+                            }
                             tracing::info!("WAL monitor shutting down");
+                            let _ = ack.send(());
                             break;
                         }
                     }
@@ -216,21 +299,52 @@ impl WalMonitor {
                     self.check_wal_size().await;
                 }
                 _ = truncate_interval.tick(), if truncate_enabled => {
+                    if let Some(guard) = &mut self.guard {
+                        guard.release_read_mark().await;
+                    }
                     self.run_truncate_checkpoint().await;
+                    if let Some(guard) = &mut self.guard {
+                        if let Err(e) = guard.reacquire_read_mark().await {
+                            tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
+                        }
+                    }
+                }
+            }
+            
+            if let Some(guard) = &mut self.guard {
+                if !guard.is_alive().await {
+                    match guard.reconnect().await {
+                        Ok(_) => tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected"),
+                        Err(e) => {
+                            tracing::error!(error = ?e, "WAL guard reconnect failed");
+                            if !self.tripped {
+                                self.tripped = true;
+                                self.trip_events += 1;
+                                tracing::error!(event = "wal_guard_unavailable", "WAL guard unavailable; treating as durability trip");
+                                self.handle_trip().await;
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
-    async fn check_wal_size(&self) {
-        let wal_path = self.db_path.with_extension("sqlite-wal");
-
-        let wal_size = match std::fs::metadata(&wal_path) {
-            Ok(meta) => meta.len(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // WAL file doesn't exist (might be using different journal mode)
-                0
-            }
+    async fn check_wal_size(&mut self) {
+        let wal_path = wal_path_for(&self.db_path);
+        
+        if self.tripped {
+            let current = match std::fs::metadata(&wal_path) {
+                Ok(md) => WalState::Present(wal_identity(&md)),
+                Err(_) => WalState::Absent,
+            };
+            self.last_wal_state = current;
+            return;
+        }
+        
+        let current = match std::fs::metadata(&wal_path) {
+            Ok(md) => WalState::Present(wal_identity(&md)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => WalState::Absent,
             Err(e) => {
                 tracing::warn!(
                     error = ?e,
@@ -240,35 +354,99 @@ impl WalMonitor {
                 return;
             }
         };
-
-        // Update metrics
-        self.metrics.update_wal_size(wal_size);
-
-        let wal_size_mb = wal_size as f64 / (1024.0 * 1024.0);
-
-        // Log at appropriate level based on size
-        if wal_size >= self.config.checkpoint_threshold_bytes {
-            tracing::warn!(
-                wal_size_mb = format!("{:.2}", wal_size_mb),
-                threshold_mb = self.config.checkpoint_threshold_bytes / (1024 * 1024),
-                "WAL file exceeds checkpoint threshold"
-            );
-
-            if self.config.auto_checkpoint {
-                self.run_checkpoint().await;
+        
+        let transition = wal_transition(self.last_wal_state, current);
+        
+        match transition {
+            WalTransition::Appeared => {
+                self.wal_ever_present = true;
+                self.last_wal_state = current;
+                let wal_size = match std::fs::metadata(&wal_path) {
+                    Ok(meta) => meta.len(),
+                    Err(_) => 0,
+                };
+                self.metrics.update_wal_size(wal_size);
+                let wal_size_mb = wal_size as f64 / (1024.0 * 1024.0);
+                if wal_size >= self.config.checkpoint_threshold_bytes {
+                    tracing::warn!(
+                        wal_size_mb = format!("{:.2}", wal_size_mb),
+                        threshold_mb = self.config.checkpoint_threshold_bytes / (1024 * 1024),
+                        "WAL file exceeds checkpoint threshold"
+                    );
+                    if self.config.auto_checkpoint {
+                        self.run_checkpoint().await;
+                    }
+                }
             }
-        } else if wal_size >= self.config.warning_threshold_bytes {
-            tracing::warn!(
-                wal_size_mb = format!("{:.2}", wal_size_mb),
-                threshold_mb = self.config.warning_threshold_bytes / (1024 * 1024),
-                "WAL file size exceeds warning threshold"
-            );
-        } else {
-            tracing::debug!(
-                wal_size_mb = format!("{:.2}", wal_size_mb),
-                "WAL file size check completed"
-            );
+            WalTransition::Unchanged | WalTransition::Replaced if matches!(current, WalState::Present(_)) => {
+                self.wal_ever_present = true;
+                let wal_size = match std::fs::metadata(&wal_path) {
+                    Ok(meta) => meta.len(),
+                    Err(_) => 0,
+                };
+                self.metrics.update_wal_size(wal_size);
+                let wal_size_mb = wal_size as f64 / (1024.0 * 1024.0);
+                if wal_size >= self.config.checkpoint_threshold_bytes {
+                    tracing::warn!(
+                        wal_size_mb = format!("{:.2}", wal_size_mb),
+                        threshold_mb = self.config.checkpoint_threshold_bytes / (1024 * 1024),
+                        "WAL file exceeds checkpoint threshold"
+                    );
+                    if self.config.auto_checkpoint {
+                        self.run_checkpoint().await;
+                    }
+                } else if wal_size >= self.config.warning_threshold_bytes {
+                    tracing::warn!(
+                        wal_size_mb = format!("{:.2}", wal_size_mb),
+                        threshold_mb = self.config.warning_threshold_bytes / (1024 * 1024),
+                        "WAL file size exceeds warning threshold"
+                    );
+                } else {
+                    tracing::debug!(
+                        wal_size_mb = format!("{:.2}", wal_size_mb),
+                        "WAL file size check completed"
+                    );
+                }
+                self.last_wal_state = current;
+            }
+            WalTransition::Vanished | WalTransition::Replaced | _ if matches!(current, WalState::Absent) && self.wal_ever_present => {
+                let last_inode = match self.last_wal_state {
+                    WalState::Present(Some(inode)) => Some(inode),
+                    _ => None,
+                };
+                let event = UnlinkedEvent {
+                    event: "wal_unlinked_externally",
+                    path: self.db_path.clone(),
+                    wal_path: wal_path.clone(),
+                    last_inode,
+                    remediation: "node will refuse writes; restart the node after investigating",
+                };
+                tracing::warn!(
+                    event = "wal_unlinked_externally",
+                    path = %event.path.display(),
+                    wal_path = %event.wal_path.display(),
+                    last_inode = ?event.last_inode,
+                    remediation = event.remediation,
+                    "WAL unlinked externally"
+                );
+                self.tripped = true;
+                self.trip_events += 1;
+                self.last_wal_state = current;
+                self.handle_trip().await;
+            }
+            WalTransition::Unchanged if matches!(current, WalState::Absent) && !self.wal_ever_present => {
+                tracing::debug!("WAL not yet present (benign)");
+                self.last_wal_state = current;
+            }
+            _ => {
+                self.last_wal_state = current;
+            }
         }
+    }
+
+    async fn handle_trip(&mut self) {
+        // In this task, only emit event + set tripped.
+        // Tasks 030/031 extend with salvage and refusal latch.
     }
 
     /// Run a PASSIVE checkpoint.
@@ -316,7 +494,7 @@ impl WalMonitor {
     /// main database file, minimizing data loss if the server is killed abruptly.
     ///
     /// This is more aggressive than PASSIVE checkpoint but provides stronger data durability.
-    async fn run_truncate_checkpoint(&self) {
+    async fn run_truncate_checkpoint(&mut self) {
         tracing::info!("Running TRUNCATE checkpoint (periodic data safety)");
 
         let start = std::time::Instant::now();
@@ -365,7 +543,7 @@ impl WalMonitor {
 ///
 /// Returns 0 if the WAL file doesn't exist.
 pub fn get_wal_size(db_path: impl AsRef<Path>) -> u64 {
-    let wal_path = db_path.as_ref().with_extension("sqlite-wal");
+    let wal_path = wal_path_for(db_path.as_ref());
     std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0)
 }
 
@@ -449,5 +627,132 @@ mod tests {
             matches!(result, Err(ref msg) if msg.contains("<non-string panic>")),
             "non-string panic payload should yield the fallback marker, got {result:?}"
         );
+    }
+
+    #[test]
+    fn wal_path_for_appends_dash_wal() {
+        assert_eq!(wal_path_for(Path::new("/tmp/test.db")), PathBuf::from("/tmp/test.db-wal"));
+        assert_eq!(wal_path_for(Path::new("/data/db.sqlite")), PathBuf::from("/data/db.sqlite-wal"));
+    }
+
+    #[test]
+    fn wal_transition_classifies_all_cases() {
+        assert_eq!(wal_transition(WalState::Absent, WalState::Absent), WalTransition::Unchanged);
+        assert_eq!(wal_transition(WalState::Absent, WalState::Present(None)), WalTransition::Appeared);
+        assert_eq!(wal_transition(WalState::Present(None), WalState::Absent), WalTransition::Vanished);
+        assert_eq!(wal_transition(WalState::Present(Some(1)), WalState::Present(Some(2))), WalTransition::Replaced);
+        assert_eq!(wal_transition(WalState::Present(Some(2)), WalState::Present(Some(2))), WalTransition::Unchanged);
+        assert_eq!(wal_transition(WalState::Present(None), WalState::Present(None)), WalTransition::Unchanged);
+    }
+
+    #[tokio::test]
+    async fn vanished_trips() {
+        let (pool, temp_dir) = crate::test_utils::create_test_pool().await;
+        let db_path = temp_dir.path().join("test.db");
+        
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'test', '/tmp/test')")
+            .execute(&pool)
+            .await
+            .expect("failed to insert projects row");
+        
+        let wal_path = wal_path_for(&db_path);
+        
+        // Seed state BEFORE removing WAL
+        let config = WalMonitorConfig::default();
+        let metrics = crate::metrics::DbMetrics::new();
+        let last_wal_state = match std::fs::metadata(&wal_path) {
+            Ok(md) => WalState::Present(wal_identity(&md)),
+            Err(_) => WalState::Absent,
+        };
+        let wal_ever_present = matches!(last_wal_state, WalState::Present(_));
+
+        let mut mon = WalMonitor {
+            db_path: db_path.clone(),
+            pool,
+            metrics,
+            config,
+            last_wal_state,
+            wal_ever_present,
+            tripped: false,
+            trip_events: 0,
+            guard: None,
+        };
+
+        // Now remove the WAL and check
+        let _removed = std::fs::remove_file(&wal_path);
+        mon.check_wal_size().await;
+        assert!(mon.tripped);
+        assert_eq!(mon.trip_events, 1);
+    }
+
+    #[tokio::test]
+    async fn no_wal_yet_does_not_trip() {
+        let (pool, temp_dir) = crate::test_utils::create_test_pool().await;
+        let db_path = temp_dir.path().join("test.db");
+
+        let config = WalMonitorConfig::default();
+        let metrics = crate::metrics::DbMetrics::new();
+        let last_wal_state = WalState::Absent;
+        let wal_ever_present = false;
+
+        let mut mon = WalMonitor {
+            db_path,
+            pool,
+            metrics,
+            config,
+            last_wal_state,
+            wal_ever_present,
+            tripped: false,
+            trip_events: 0,
+            guard: None,
+        };
+
+        mon.check_wal_size().await;
+        assert!(!mon.tripped);
+    }
+
+    #[tokio::test]
+    async fn trip_is_idempotent() {
+        let (pool, temp_dir) = crate::test_utils::create_test_pool().await;
+        let db_path = temp_dir.path().join("test.db");
+        
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'test', '/tmp/test')")
+            .execute(&pool)
+            .await
+            .expect("failed to insert projects row");
+        
+        let wal_path = wal_path_for(&db_path);
+        
+        // Seed state BEFORE removing WAL
+        let config = WalMonitorConfig::default();
+        let metrics = crate::metrics::DbMetrics::new();
+        let last_wal_state = match std::fs::metadata(&wal_path) {
+            Ok(md) => WalState::Present(wal_identity(&md)),
+            Err(_) => WalState::Absent,
+        };
+        let wal_ever_present = matches!(last_wal_state, WalState::Present(_));
+
+        let mut mon = WalMonitor {
+            db_path: db_path.clone(),
+            pool,
+            metrics,
+            config,
+            last_wal_state,
+            wal_ever_present,
+            tripped: false,
+            trip_events: 0,
+            guard: None,
+        };
+
+        // Remove WAL and trigger trip
+        let _removed = std::fs::remove_file(&wal_path);
+        mon.check_wal_size().await;
+        assert_eq!(mon.trip_events, 1);
+        
+        // Remove it again and check idempotence
+        let _removed = std::fs::remove_file(&wal_path);
+        mon.check_wal_size().await;
+        mon.check_wal_size().await;
+        assert_eq!(mon.trip_events, 1);
     }
 }
