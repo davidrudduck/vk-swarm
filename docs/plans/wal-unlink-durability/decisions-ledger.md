@@ -247,7 +247,7 @@ one `MODE=baseline` run exited `0` with `24/0`. Port `9012` was free afterwards.
   `ABORTED` and `UNKNOWN` use the did-not-complete reason -
   `scripts/live/wal-unlink-durability-repro.sh`
 
-## T1 mechanism evidence (2026-08-30)
+## Historical — T1 mechanism evidence (2026-08-30, superseded by re-plan v2 below)
 
 Host/tool versions: `sqlite3 3.53.4 2026-07-24`, `Python 3.14.7`, Linux
 `6.8.0-138-generic`.
@@ -349,7 +349,7 @@ Host/tool versions: `sqlite3 3.53.4 2026-07-24`, `Python 3.14.7`, Linux
 
 Clean capture root `/tmp/opencode/wal-t1-nVisow`, node PID `4066118`: before and after the
 single external `sqlite3 db.sqlite "PRAGMA user_version=$RANDOM;"` session, `lslocks` showed
-the node's POSIX READ locks on `db.sqlite` (`0..1073742335`) and `db.sqlite-shm` (`128..128`).
+the node's POSIX READ locks on `db.sqlite` (`1073741826..1073742335`) and `db.sqlite-shm` (`128..128`).
 `/proc/4066118/fd` showed live `db.sqlite-wal` and `db.sqlite-shm` descriptors (including fds
 14 and 15) before and after, with no `(deleted)` path.
 
@@ -374,12 +374,43 @@ without HoldRead's checkpoint-blocking transaction.
 
 ### VERDICT 3 - A6 salvage viable
 
+Superseded by `### VERDICT 3 redo — A6 salvage attribution` (operator amendment): counts retained for review history only.
+
 Fault-injected salvage root `/tmp/opencode/wal-t1-ULlk2F`, node PID `3361`, surviving pre-trip
 Python connection PID `3763`: after an API `marker-salvage-pre` write, `rm -f db.sqlite-wal
 db.sqlite-shm` produced node fd entries for both `db.sqlite-wal (deleted)` and
 `db.sqlite-shm (deleted)`. `PRAGMA wal_checkpoint(TRUNCATE)` through the surviving connection
 returned `[(0, 0, 0)]`; after graceful node stop, offline `marker-salvage-pre` count was `1`.
 Checkpoint via a surviving open fd therefore does flush old-inode frames; A6 salvage is viable.
+
+### VERDICT 3 redo — A6 salvage attribution
+
+Full two-arm transcript: `/tmp/opencode/wal-a6-redo-transcript.log`; scratch root
+`/tmp/opencode/wal-a6-redo.cAmqk7`. Each arm booted a fresh `:9012` scratch node, seeded a
+session, wrote its marker through the node API, then opened a Python survivor connection before
+the trip and read `SELECT count(*) FROM tasks` (`[(1,)]`) to retain the pre-trip shm mapping.
+Removing both named WAL files produced deleted node fd evidence in both arms.
+
+ARM A (salvage): after the trip, the survivor ran `PRAGMA wal_checkpoint(TRUNCATE)` and returned
+`[(0, 0, 0)]` (`busy=0`, `nLog=0`, `nCkpt=0`: zero frames moved). The fresh
+`file:<db>?immutable=1` pre-stop main-file-only read nonetheless counted `marker-a6-A` as `1`;
+the post-graceful-stop count remained `1`.
+
+ARM B (control): after the identical trip, the survivor did not run a checkpoint
+(`[("not-run",)]`). The same fresh immutable pre-stop read counted `marker-a6-B` as `0`; after
+the node's graceful stop it counted `1`.
+
+The control proves the node shutdown checkpoint salvages the old-inode frames. ARM A's pre-stop
+`1` cannot be attributed to its reported zero-frame checkpoint, so A6 via a surviving connection
+is REFUTED as designed. Salvage degrades to named-failure plus refusal (US2 still met); task 030
+must assert refusal rather than a surviving-fd flush. The deleted-fd, API response, survivor-read,
+checkpoint, immutable pre-stop, and post-stop lines for both arms are retained verbatim in the
+transcript above.
+
+- [Task 002] Treat a survivor checkpoint returning `[(0, 0, 0)]` as zero-frame evidence, not
+  proof of old-inode durability; use the immutable pre-stop control comparison to attribute
+  durability to the node shutdown checkpoint, and implement named-failure plus refusal in place
+  of A6 surviving-fd salvage - `docs/plans/wal-unlink-durability/decisions-ledger.md`
 
 ### Harness delta and red proof
 
@@ -395,8 +426,8 @@ Leg A was GREEN (`PASS=17 FAIL=0`): its write session executed and the detector 
 29671ms. Leg B's fault-injection detector fired after 2ms and the named events
 `wal_unlinked_externally` and `wal_write_refusal_active` were absent. However, the current
 binary returned HTTP 200 for `marker-B-post` and its offline count was `1`, not the stipulated
-`0` (`Leg B: PASS=10 FAIL=5`). The red proof's accepted-but-absent post-write condition is not
-reproducible on this binary; assertions were intentionally left unchanged rather than falsified.
+`0` (`Leg B: PASS=10 FAIL=5`). ~~The red proof's accepted-but-absent post-write condition is not
+reproducible on this binary; assertions were intentionally left unchanged rather than falsified.~~
 
 - [Task 002] Select MapOnly because it persistently holds the required db/shm shared locks for
   the complete 60-second API-write probe and avoids HoldRead's observed checkpoint busy result -

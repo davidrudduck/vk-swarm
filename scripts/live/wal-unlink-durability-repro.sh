@@ -277,11 +277,25 @@ refusal_latch_detector() {
 }
 
 external_write_session() {
-  local legdir="$1" success_sentinel
+  local legdir="$1" success_sentinel session_pid start_seconds
   success_sentinel="$legdir/.write-session-succeeded"
   WRITE_SESSION_SUCCEEDED=0
   rm -f "$success_sentinel"
-  sqlite3 "$legdir/db.sqlite" "PRAGMA user_version=$RANDOM;" >/dev/null 2>&1 && : >"$success_sentinel"
+  setsid sqlite3 "$legdir/db.sqlite" "PRAGMA user_version=$RANDOM;" >/dev/null 2>&1 &
+  session_pid=$!
+  start_seconds=$SECONDS
+  while kill -0 "$session_pid" 2>/dev/null; do
+    if (( SECONDS - start_seconds >= 30 )); then
+      log_error "External write session $session_pid timed out; terminating process group"
+      kill -TERM -- "-$session_pid" 2>/dev/null || true
+      sleep 0.1
+      if kill -0 "$session_pid" 2>/dev/null; then kill -KILL -- "-$session_pid" 2>/dev/null || true; fi
+      wait "$session_pid" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.1
+  done
+  if wait "$session_pid" 2>/dev/null; then : >"$success_sentinel"; fi
   [ -f "$success_sentinel" ] && WRITE_SESSION_SUCCEEDED=1
   [ "$WRITE_SESSION_SUCCEEDED" = 1 ]
 }
@@ -338,9 +352,9 @@ run_leg_a() {
     if [ -n "$STOP_REASON" ]; then stop_node "$pid" || true; return 1; fi
     check_status 'Leg A external write session executed' external_write_session "$legdir"
     if trip_detector "$pid"; then
-      check_status 'Leg A guard prevented external WAL unlink' false
+      check_status 'Leg A no external WAL unlink (detector timed out)' false
     else
-      check_status 'Leg A guard prevented external WAL unlink' true
+      check_status 'Leg A no external WAL unlink (detector timed out)' true
     fi
     for i in 1 2 3 4 5; do
       check_status "Leg A timing-$i written" record_timing "$legdir" "timing-$i" "$SCRATCH_ROOT/timings.txt"
@@ -394,7 +408,7 @@ run_leg_b_attempt() {
     if trip_detector "$pid"; then
       trip_detected=1
     fi
-    check_status "Leg B attempt $attempt fault injection removed WAL and SHM" true
+    check_status "Leg B attempt $attempt fault injection removed WAL and SHM" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$legdir/db.sqlite-wal" "$legdir/db.sqlite-shm"
     if [ "$trip_detected" -eq 1 ]; then
       check_status "Leg B attempt $attempt detected external WAL unlink" true
     elif [ "$attempt" = 1 ]; then
