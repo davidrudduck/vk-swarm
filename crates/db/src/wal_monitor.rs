@@ -330,19 +330,10 @@ impl WalMonitor {
 
     async fn check_wal_size(&mut self) {
         let wal_path = wal_path_for(&self.db_path);
-        
-        if self.tripped {
-            let current = match std::fs::metadata(&wal_path) {
-                Ok(md) => WalState::Present(wal_identity(&md)),
-                Err(_) => WalState::Absent,
-            };
-            self.last_wal_state = current;
-            return;
-        }
-        
-        let current = match std::fs::metadata(&wal_path) {
-            Ok(md) => WalState::Present(wal_identity(&md)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => WalState::Absent,
+
+        let (current, wal_size) = match std::fs::metadata(&wal_path) {
+            Ok(md) => (WalState::Present(wal_identity(&md)), md.len()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (WalState::Absent, 0),
             Err(e) => {
                 tracing::warn!(
                     error = ?e,
@@ -352,6 +343,11 @@ impl WalMonitor {
                 return;
             }
         };
+
+        if self.tripped {
+            self.last_wal_state = current;
+            return;
+        }
         
         let transition = wal_transition(self.last_wal_state, current);
         
@@ -359,10 +355,6 @@ impl WalMonitor {
             WalTransition::Appeared => {
                 self.wal_ever_present = true;
                 self.last_wal_state = current;
-                let wal_size = match std::fs::metadata(&wal_path) {
-                    Ok(meta) => meta.len(),
-                    Err(_) => 0,
-                };
                 self.metrics.update_wal_size(wal_size);
                 let wal_size_mb = wal_size as f64 / (1024.0 * 1024.0);
                 if wal_size >= self.config.checkpoint_threshold_bytes {
@@ -374,14 +366,21 @@ impl WalMonitor {
                     if self.config.auto_checkpoint {
                         self.run_checkpoint().await;
                     }
+                } else if wal_size >= self.config.warning_threshold_bytes {
+                    tracing::warn!(
+                        wal_size_mb = format!("{:.2}", wal_size_mb),
+                        threshold_mb = self.config.warning_threshold_bytes / (1024 * 1024),
+                        "WAL file size exceeds warning threshold"
+                    );
+                } else {
+                    tracing::debug!(
+                        wal_size_mb = format!("{:.2}", wal_size_mb),
+                        "WAL file size check completed"
+                    );
                 }
             }
-            WalTransition::Unchanged | WalTransition::Replaced if matches!(current, WalState::Present(_)) => {
+            WalTransition::Unchanged if matches!(current, WalState::Present(_)) => {
                 self.wal_ever_present = true;
-                let wal_size = match std::fs::metadata(&wal_path) {
-                    Ok(meta) => meta.len(),
-                    Err(_) => 0,
-                };
                 self.metrics.update_wal_size(wal_size);
                 let wal_size_mb = wal_size as f64 / (1024.0 * 1024.0);
                 if wal_size >= self.config.checkpoint_threshold_bytes {
@@ -407,7 +406,32 @@ impl WalMonitor {
                 }
                 self.last_wal_state = current;
             }
-            WalTransition::Vanished | WalTransition::Unchanged if matches!(current, WalState::Absent) && self.wal_ever_present => {
+            WalTransition::Replaced | WalTransition::Vanished => {
+                let last_inode = match self.last_wal_state {
+                    WalState::Present(Some(inode)) => Some(inode),
+                    _ => None,
+                };
+                let event = UnlinkedEvent {
+                    event: "wal_unlinked_externally",
+                    path: self.db_path.clone(),
+                    wal_path: wal_path.clone(),
+                    last_inode,
+                    remediation: "node will refuse writes; restart the node after investigating",
+                };
+                tracing::warn!(
+                    event = "wal_unlinked_externally",
+                    path = %event.path.display(),
+                    wal_path = %event.wal_path.display(),
+                    last_inode = ?event.last_inode,
+                    remediation = event.remediation,
+                    "WAL unlinked externally"
+                );
+                self.tripped = true;
+                self.trip_events += 1;
+                self.last_wal_state = current;
+                self.handle_trip().await;
+            }
+            WalTransition::Unchanged if matches!(current, WalState::Absent) && self.wal_ever_present => {
                 let last_inode = match self.last_wal_state {
                     WalState::Present(Some(inode)) => Some(inode),
                     _ => None,
@@ -678,6 +702,41 @@ mod tests {
 
         // Now remove the WAL and check
         let _removed = std::fs::remove_file(&wal_path);
+        mon.check_wal_size().await;
+        assert!(mon.tripped);
+        assert_eq!(mon.trip_events, 1);
+    }
+
+    #[tokio::test]
+    async fn replaced_trips() {
+        let (pool, temp_dir) = crate::test_utils::create_test_pool().await;
+        let db_path = temp_dir.path().join("test.db");
+
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'test', '/tmp/test')")
+            .execute(&pool)
+            .await
+            .expect("failed to insert projects row");
+
+        let wal_path = wal_path_for(&db_path);
+        let mut last_wal_state = match std::fs::metadata(&wal_path) {
+            Ok(md) => WalState::Present(wal_identity(&md)),
+            Err(_) => WalState::Absent,
+        };
+        assert!(matches!(last_wal_state, WalState::Present(_)));
+        last_wal_state = WalState::Present(Some(u64::MAX));
+
+        let mut mon = WalMonitor {
+            db_path,
+            pool,
+            metrics: crate::metrics::DbMetrics::new(),
+            config: WalMonitorConfig::default(),
+            last_wal_state,
+            wal_ever_present: true,
+            tripped: false,
+            trip_events: 0,
+            guard: None,
+        };
+
         mon.check_wal_size().await;
         assert!(mon.tripped);
         assert_eq!(mon.trip_events, 1);
