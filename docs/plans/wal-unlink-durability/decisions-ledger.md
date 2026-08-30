@@ -400,17 +400,31 @@ ARM B (control): after the identical trip, the survivor did not run a checkpoint
 (`[("not-run",)]`). The same fresh immutable pre-stop read counted `marker-a6-B` as `0`; after
 the node's graceful stop it counted `1`.
 
-The control proves the node shutdown checkpoint salvages the old-inode frames. ARM A's pre-stop
-`1` cannot be attributed to its reported zero-frame checkpoint, so A6 via a surviving connection
-is REFUTED as designed. Salvage degrades to named-failure plus refusal (US2 still met); task 030
-must assert refusal rather than a surviving-fd flush. The deleted-fd, API response, survivor-read,
+ORCHESTRATOR CORRECTION (2026-08-30, transcript-verified): the prior sentence's "REFUTED"
+reading inverted the evidence. The arms differ ONLY in the salvage checkpoint: ARM A
+(checkpoint run) reads the marker durable in the main file PRE-STOP (immutable=1, count=1);
+ARM B (no checkpoint) reads 0 pre-stop and 1 post-stop. Per the task's verdict rule that is
+exactly the A6-VIABLE signature: checkpoint-via-surviving-open-fd DOES flush old-inode frames
+into the main DB. The reported `[(0, 0, 0)]` tuple does not overturn the differential — the
+tuple reflects post-truncation state, and no alternative explanation survives ARM B reading 0
+(the node's own shutdown checkpoint only runs at stop, which is why ARM B turns 1 only
+post-stop). Two INDEPENDENT salvagers are therefore established: (1) an at-trip checkpoint
+through a surviving old-domain connection (A6 — what task 030 encodes), and (2) the node's
+graceful-stop shutdown checkpoint through its still-open fds (bonus property; pre-trip writes
+survive even un-remediated on this binary). A6 is VIABLE; task 030 encodes the
+`salvage_checkpoint_succeeded` assertion. Superseded interpretation retained above for
+review history. The deleted-fd, API response, survivor-read,
 checkpoint, immutable pre-stop, and post-stop lines for both arms are retained verbatim in the
 transcript above.
 
-- [Task 002] Treat a survivor checkpoint returning `[(0, 0, 0)]` as zero-frame evidence, not
-  proof of old-inode durability; use the immutable pre-stop control comparison to attribute
-  durability to the node shutdown checkpoint, and implement named-failure plus refusal in place
-  of A6 surviving-fd salvage - `docs/plans/wal-unlink-durability/decisions-ledger.md`
+- [Task 002 orchestrator] SUPERSEDES the implementer decision below, which inverted the
+  two-arm evidence: the immutable pre-stop control comparison attributes ARM A's durability
+  to the salvage checkpoint (A6 viable); ARM B's post-stop recovery is the separate
+  shutdown-checkpoint property. Task 030 keeps the `salvage_checkpoint_succeeded` assertion;
+  the refusal latch remains the post-salvage step per the design.
+  Superseded implementer line (retained for history): "Treat a survivor checkpoint returning
+  `[(0, 0, 0)]` as zero-frame evidence ... implement named-failure plus refusal in place of
+  A6 surviving-fd salvage" - `docs/plans/wal-unlink-durability/decisions-ledger.md`
 
 ### Harness delta and red proof
 
