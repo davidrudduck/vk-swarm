@@ -67,7 +67,9 @@ impl WalGuard {
 
     pub async fn release_read_mark(&mut self) {
         if self.holding_read_mark {
-            let _ = sqlx::query("COMMIT").execute(&mut self.conn).await;
+            if let Err(e) = sqlx::query("COMMIT").execute(&mut self.conn).await {
+                tracing::warn!(error = ?e, "wal guard: releasing read-mark failed (COMMIT)");
+            }
             self.holding_read_mark = false;
         }
     }
