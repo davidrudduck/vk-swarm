@@ -641,3 +641,5 @@ Sibling divergences documented (authorized):
 - **Watch scope**: NARROWED. Sibling watches root (recursive); we watch only db_path.parent() (non-recursive, single known filename, immediate detection).
 
 Implementation notes: Red test written first (`is_wal_removal_matches_delete_and_rename_from`), confirm it fails on function absence. Added cfg-gated helper + watch setup + select arm. Non-Linux: 60s poll only, debug log at startup.
+
+- Select arm now uses `pending()` when watch is `None` and sets `watch = None` on `recv()` returning `None` so the 60s tick can re-arm.

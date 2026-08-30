@@ -325,21 +325,24 @@ impl WalMonitor {
                             tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
                         }
                     }
-                    Some(ev) = async {
-                        if let Some((_, rx)) = watch.as_mut() {
-                            rx.recv().await
-                        } else {
-                            None::<Result<notify::Event, notify::Error>>
+                    ev = async {
+                        match watch.as_mut() {
+                            Some((_, rx)) => rx.recv().await,
+                            None => std::future::pending().await,
                         }
                     } => {
                         match ev {
-                            Ok(event) => {
+                            Some(Ok(event)) => {
                                 if is_wal_removal(&event.kind, &event.paths, &wal_basename) {
                                     self.check_wal_size().await;
                                 }
                             }
-                            Err(e) => {
+                            Some(Err(e)) => {
                                 tracing::warn!(error = ?e, "wal inotify watch dropped; falling back to 60s poll");
+                                watch = None;
+                            }
+                            None => {
+                                tracing::warn!("wal inotify watch dropped; falling back to 60s poll");
                                 watch = None;
                             }
                         }
