@@ -2,7 +2,7 @@
 id: "010"
 phase: 2
 title: "WalGuard module: dedicated wal-index-holding guard connection + VK_WAL_GUARD kill-switch"
-status: ready
+status: passed
 depends_on: ["002"]
 parallel: false
 conflicts_with: []
