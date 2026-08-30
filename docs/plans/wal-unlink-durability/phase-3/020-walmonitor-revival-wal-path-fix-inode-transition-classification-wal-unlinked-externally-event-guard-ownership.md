@@ -2,7 +2,7 @@
 id: "020"
 phase: 3
 title: "WalMonitor revival: wal-path fix, inode transition classification, wal_unlinked_externally event, guard ownership"
-status: ready
+status: passed
 depends_on: ["010"]
 parallel: false
 conflicts_with: ["021","030","031"]
