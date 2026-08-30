@@ -197,6 +197,35 @@ impl RefusalLatch {
     }
 }
 
+impl Drop for RefusalLatch {
+    fn drop(&mut self) {
+        crate::WAL_WRITE_REFUSAL_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Fail-fast latched writers: production pools use a 30s SQLite busy_timeout, which
+/// outlives the 10s client deadline. Flip the process flag (after_release + new
+/// connects) and PRAGMA-zero idle connections. Never `timeout(acquire)` — sqlx
+/// drops the popped connection on cancel, emptying the pool.
+async fn zero_pooled_busy_timeout(pool: &SqlitePool) {
+    crate::WAL_WRITE_REFUSAL_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut held = Vec::new();
+    while let Some(conn) = pool.try_acquire() {
+        held.push(conn);
+    }
+    for mut conn in held {
+        if let Err(e) = sqlx::query("PRAGMA busy_timeout = 0")
+            .execute(&mut *conn)
+            .await
+        {
+            tracing::warn!(
+                error = ?e,
+                "wal monitor: failed to zero busy_timeout on pooled connection"
+            );
+        }
+    }
+}
+
 /// WAL monitoring service.
 pub struct WalMonitor {
     db_path: PathBuf,
@@ -618,6 +647,10 @@ impl WalMonitor {
             Some(conn) => match RefusalLatch::arm(conn).await {
                 Ok(l) => {
                     self.refusal = Some(l);
+                    // Zero busy_timeout BEFORE the refusal log: the live harness POSTs
+                    // as soon as it sees wal_write_refusal_active, and production pools
+                    // wait 30s on SQLITE_BUSY (curl --max-time 10 → HTTP 000).
+                    zero_pooled_busy_timeout(&self.pool).await;
                     tracing::error!(event = "wal_write_refusal_active", path = %self.db_path.display(), remediation = "writes are refused until the node is restarted", "WAL write refusal active");
                 }
                 Err(e) => {
@@ -1121,6 +1154,97 @@ mod tests {
         let read: Result<i64, sqlx::Error> = sqlx::query_scalar("SELECT count(*) FROM projects").fetch_one(&mut *pooled).await;
         assert!(read.is_ok(), "read blocked on the held old-domain connection: {read:?}");
         drop(latch);
+    }
+
+    #[tokio::test]
+    async fn refusal_latch_fail_fast_under_production_busy_timeout() {
+        use sqlx::ConnectOptions;
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+        use std::str::FromStr;
+        use std::time::Duration;
+        // Start from a migrated temp DB, then reopen with the production 30s
+        // busy_timeout + the same before_acquire hook the live pool uses.
+        let (seed, tmp) = crate::test_utils::create_test_pool().await;
+        let db_path = tmp.path().join("test.db");
+        seed.close().await;
+        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .unwrap()
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(30));
+        let pool = crate::with_refusal_after_release(
+            SqlitePoolOptions::new()
+                .min_connections(1)
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(5)),
+        )
+        .connect_with(options)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'pre-latch', '/tmp/pre-latch-uniq')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Hold the old-domain pooled conn across unlink so ping/checkout cannot
+        // replace it with a fresh 30s-timeout connection.
+        let mut pooled = pool.acquire().await.unwrap();
+        let mut conn = crate::wal_guard::options_for(&db_path)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("SELECT count(*) FROM sqlite_master")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        std::fs::remove_file(tmp.path().join("test.db-wal")).unwrap();
+        let _ = std::fs::remove_file(tmp.path().join("test.db-shm"));
+        let latch = RefusalLatch::arm(conn)
+            .await
+            .expect("latch must arm on the old-domain connection");
+        zero_pooled_busy_timeout(&pool).await;
+        sqlx::query("PRAGMA busy_timeout = 0")
+            .execute(&mut *pooled)
+            .await
+            .unwrap();
+        let write = tokio::time::timeout(
+            Duration::from_secs(3),
+            sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'refusal-probe', '/tmp/refusal-probe-uniq')")
+                .execute(&mut *pooled),
+        )
+        .await
+        .expect("latched write waited past 3s — busy_timeout still the production 30s window");
+        let write_code = write
+            .as_ref()
+            .err()
+            .and_then(|e| e.as_database_error())
+            .and_then(|e| e.code())
+            .map(|c| c.into_owned());
+        assert_eq!(
+            write_code.as_deref(),
+            Some("5"),
+            "write must be SQLITE_BUSY (code 5) inside the 10s client deadline, got {write:?}"
+        );
+        drop(pooled);
+        let pool_write = tokio::time::timeout(
+            Duration::from_secs(3),
+            sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'refusal-pool', '/tmp/refusal-pool-uniq')")
+                .execute(&pool),
+        )
+        .await
+        .expect("pooled write after release waited past 3s — after_release busy_timeout not zero");
+        let pool_code = pool_write
+            .as_ref()
+            .err()
+            .and_then(|e| e.as_database_error())
+            .and_then(|e| e.code())
+            .map(|c| c.into_owned());
+        assert_eq!(
+            pool_code.as_deref(),
+            Some("5"),
+            "pool checkout after latch must be SQLITE_BUSY (code 5), got {pool_write:?}"
+        );
+        drop(latch);
+        pool.close().await;
     }
 
     #[cfg(target_os = "linux")]

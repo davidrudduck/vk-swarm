@@ -1,4 +1,12 @@
-use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    path::Path,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use sqlx::{
     Error, Executor, Pool, Sqlite,
@@ -48,6 +56,26 @@ const DEFAULT_MIN_CONNECTIONS: u32 = 2;
 
 /// Connection acquisition timeout in seconds.
 const DEFAULT_ACQUIRE_TIMEOUT_SECS: u64 = 30;
+
+/// Set when the WAL write-refusal latch is armed. New pooled connections then
+/// get `PRAGMA busy_timeout = 0` in `apply_performance_pragmas`; existing ones
+/// are zeroed by `zero_pooled_busy_timeout` / `after_release` so writers fail
+/// SQLITE_BUSY inside the 10s client deadline instead of waiting the 30s window.
+pub(crate) static WAL_WRITE_REFUSAL_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Zero `busy_timeout` when a connection returns to the pool after the latch.
+/// `before_acquire` + `execute` deadlocks (sqlx worker contention); this hook
+/// runs on the return path instead.
+pub(crate) fn with_refusal_after_release(options: SqlitePoolOptions) -> SqlitePoolOptions {
+    options.after_release(|conn, _meta| {
+        Box::pin(async move {
+            if WAL_WRITE_REFUSAL_ACTIVE.load(Ordering::Relaxed) {
+                let _ = conn.execute("PRAGMA busy_timeout = 0").await;
+            }
+            Ok(true)
+        })
+    })
+}
 
 /// Idle connection timeout in seconds (10 minutes).
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 600;
@@ -103,6 +131,10 @@ async fn apply_performance_pragmas(conn: &mut SqliteConnection) -> Result<(), Er
     // Default is 1000 pages (~4MB). Larger threshold reduces checkpoint frequency
     // which helps under heavy write load.
     conn.execute("PRAGMA wal_autocheckpoint = 2000").await?;
+
+    if WAL_WRITE_REFUSAL_ACTIVE.load(Ordering::Relaxed) {
+        conn.execute("PRAGMA busy_timeout = 0").await?;
+    }
 
     Ok(())
 }
@@ -324,15 +356,17 @@ impl DBService {
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS));
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(2) // Minimal connections for bootstrap
-            .min_connections(1)
-            .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
-            .after_connect(|conn, _meta| {
-                Box::pin(async move { apply_performance_pragmas(conn).await })
-            })
-            .connect_with(options)
-            .await?;
+        let pool = with_refusal_after_release(
+            SqlitePoolOptions::new()
+                .max_connections(2) // Minimal connections for bootstrap
+                .min_connections(1)
+                .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
+                .after_connect(|conn, _meta| {
+                    Box::pin(async move { apply_performance_pragmas(conn).await })
+                }),
+        )
+        .connect_with(options)
+        .await?;
 
         let metrics = DbMetrics::new();
         Ok(DBService { pool, metrics })
@@ -396,16 +430,18 @@ impl DBService {
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS));
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(max_connections)
-            .min_connections(DEFAULT_MIN_CONNECTIONS)
-            .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
-            .idle_timeout(Some(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS)))
-            .after_connect(|conn, _meta| {
-                Box::pin(async move { apply_performance_pragmas(conn).await })
-            })
-            .connect_with(options)
-            .await?;
+        let pool = with_refusal_after_release(
+            SqlitePoolOptions::new()
+                .max_connections(max_connections)
+                .min_connections(DEFAULT_MIN_CONNECTIONS)
+                .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
+                .idle_timeout(Some(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS)))
+                .after_connect(|conn, _meta| {
+                    Box::pin(async move { apply_performance_pragmas(conn).await })
+                }),
+        )
+        .connect_with(options)
+        .await?;
 
         // Check if there are pending migrations before deciding to backup
         let has_pending = has_pending_migrations(&pool).await;
@@ -530,34 +566,38 @@ impl DBService {
             .busy_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS));
 
         let pool = if let Some(hook) = after_connect {
-            SqlitePoolOptions::new()
-                .max_connections(max_connections)
-                .min_connections(DEFAULT_MIN_CONNECTIONS)
-                .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
-                .idle_timeout(Some(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS)))
-                .after_connect(move |conn, _meta| {
-                    let hook = hook.clone();
-                    Box::pin(async move {
-                        // Apply performance pragmas first
-                        apply_performance_pragmas(conn).await?;
-                        // Then run user-provided hook
-                        hook(conn).await?;
-                        Ok(())
-                    })
-                })
-                .connect_with(options)
-                .await?
+            with_refusal_after_release(
+                SqlitePoolOptions::new()
+                    .max_connections(max_connections)
+                    .min_connections(DEFAULT_MIN_CONNECTIONS)
+                    .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
+                    .idle_timeout(Some(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS)))
+                    .after_connect(move |conn, _meta| {
+                        let hook = hook.clone();
+                        Box::pin(async move {
+                            // Apply performance pragmas first
+                            apply_performance_pragmas(conn).await?;
+                            // Then run user-provided hook
+                            hook(conn).await?;
+                            Ok(())
+                        })
+                    }),
+            )
+            .connect_with(options)
+            .await?
         } else {
-            SqlitePoolOptions::new()
-                .max_connections(max_connections)
-                .min_connections(DEFAULT_MIN_CONNECTIONS)
-                .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
-                .idle_timeout(Some(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS)))
-                .after_connect(|conn, _meta| {
-                    Box::pin(async move { apply_performance_pragmas(conn).await })
-                })
-                .connect_with(options)
-                .await?
+            with_refusal_after_release(
+                SqlitePoolOptions::new()
+                    .max_connections(max_connections)
+                    .min_connections(DEFAULT_MIN_CONNECTIONS)
+                    .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
+                    .idle_timeout(Some(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS)))
+                    .after_connect(|conn, _meta| {
+                        Box::pin(async move { apply_performance_pragmas(conn).await })
+                    }),
+            )
+            .connect_with(options)
+            .await?
         };
 
         // Check if there are pending migrations before deciding to backup
