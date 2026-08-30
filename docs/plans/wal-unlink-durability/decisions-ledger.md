@@ -279,8 +279,9 @@ established. No script maintenance delta was retained.
   `docs/plans/wal-unlink-durability/decisions-ledger.md`
 
 ## 2026-08-30 — Re-plan: trip stimulus = external write session; 002 rescoped to design-decision experiments (operator-approved)
-- [Task 002 orchestrator] VERDICT 1's evidence hunt (ledger `## T1 mechanism evidence
-  (2026-08-30)`, commit 797665bbf) established: the read-only CLI vector is NOT reproducible
+- [Task 002 orchestrator] VERDICT 1's evidence hunt (ledger `## Historical — T1 mechanism
+  evidence (2026-08-30, superseded by re-plan v2 below)`, commit 797665bbf) established: the
+  read-only CLI vector is NOT reproducible
   on the current binary under any probed condition; an external WRITE session reliably
   produces the deleted-WAL/deleted-SHM state. Operator approved the 10,000-foot re-plan:
   the workstream's outcome is "no silent data loss under any external vector", and the
@@ -385,14 +386,19 @@ Checkpoint via a surviving open fd therefore does flush old-inode frames; A6 sal
 
 ### VERDICT 3 redo — A6 salvage attribution
 
-Full two-arm transcript: `/tmp/opencode/wal-a6-redo-transcript.log`; scratch root
-`/tmp/opencode/wal-a6-redo.cAmqk7`. Each arm booted a fresh `:9012` scratch node, seeded a
+The earlier full two-arm transcript used scratch root `/tmp/opencode/wal-a6-redo.cAmqk7`.
+Fresh retained re-run: `/tmp/opencode/wal-a6-redo.sh`,
+which emits `/tmp/opencode/wal-a6-redo-transcript.log` (ARM A lines 7-14 and ARM B lines 22-28;
+scratch root `/tmp/opencode/wal-a6-redo-20260830-101600`) and reproduces ARM A pre-stop `1` /
+ARM B pre-stop `0`. Each arm booted a fresh `:9012` scratch node, seeded a
 session, wrote its marker through the node API, then opened a Python survivor connection before
 the trip and read `SELECT count(*) FROM tasks` (`[(1,)]`) to retain the pre-trip shm mapping.
 Removing both named WAL files produced deleted node fd evidence in both arms.
 
 ARM A (salvage): after the trip, the survivor ran `PRAGMA wal_checkpoint(TRUNCATE)` and returned
-`[(0, 0, 0)]` (`busy=0`, `nLog=0`, `nCkpt=0`: zero frames moved). The fresh
+`[(0, 0, 0)]` (`busy=0`, `nLog=0`, `nCkpt=0`: `wal_checkpoint(TRUNCATE)`'s post-truncation
+success signature; sqlite3.h specifies both `pnLog` and `pnCkpt` are zero after successful
+TRUNCATE, not a zero-work result). The fresh
 `file:<db>?immutable=1` pre-stop main-file-only read nonetheless counted `marker-a6-A` as `1`;
 the post-graceful-stop count remained `1`.
 
@@ -435,13 +441,17 @@ PASS, and deterministic `rm -f db.sqlite-wal db.sqlite-shm` in Leg B. It removes
 assertion accounting, sentinels, abort handling, auth STOP, PID lifecycle, and timing bounds are
 unchanged.
 
-`LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh` exited nonzero as required.
-Leg A was GREEN (`PASS=17 FAIL=0`): its write session executed and the detector timed out after
-29671ms. Leg B's fault-injection detector fired after 2ms and the named events
+Post-remediation-script evidence: `LEGS=AB MODE=full bash
+scripts/live/wal-unlink-durability-repro.sh` exited nonzero as required
+(`/tmp/opencode/wal-unlink-full-remediation-verified.log`: `PASS=17 FAIL=0` at line 67,
+`PASS=10 FAIL=5` at line 68, exit 1 at line 70). Leg A was GREEN (`PASS=17 FAIL=0`): its
+write session executed and the detector timed out after 29687ms (line 15). Leg B's
+fault-injection detector fired after 3ms (lines 44-51) and the named events
 `wal_unlinked_externally` and `wal_write_refusal_active` were absent. However, the current
 binary returned HTTP 200 for `marker-B-post` and its offline count was `1`, not the stipulated
 `0` (`Leg B: PASS=10 FAIL=5`). ~~The red proof's accepted-but-absent post-write condition is not
 reproducible on this binary; assertions were intentionally left unchanged rather than falsified.~~
+Superseded by `### Amended harness verification` below.
 
 - [Task 002] Select MapOnly because it persistently holds the required db/shm shared locks for
   the complete 60-second API-write probe and avoids HoldRead's observed checkpoint busy result -
@@ -454,16 +464,21 @@ reproducible on this binary; assertions were intentionally left unchanged rather
 
 The operator amendment classifies the prior `marker-B-post` offline count `1` as the expected
 current-code RED failure: graceful shutdown checkpoints the write through the still-open fds.
-The assertion remains pinned to the POST-FIX `count = 0` expectation.
+The assertion remains pinned to the POST-FIX `count = 0` expectation. The evidence below is
+from the post-remediation script; the older `wal-t1-full-amended.log` records a
+pre-remediation script version.
 
 `LEGS=AB MODE=baseline bash scripts/live/wal-unlink-durability-repro.sh` exited `0` with
-`Total PASS: 24`, `Total FAIL: 0`; both legs were `PASS=12 FAIL=0 TOTAL=12`.
+`Total PASS: 24`, `Total FAIL: 0` (`/tmp/opencode/wal-unlink-baseline-remediation.log` lines
+48-49); both legs were `PASS=12 FAIL=0 TOTAL=12` (lines 52-53).
 
-`LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh` exited `1` as intended.
-Leg A was GREEN (`PASS=17 FAIL=0 TOTAL=17`): the single write session executed and the trip
-detector timed out after 30179ms. Leg B was RED (`PASS=10 FAIL=5 TOTAL=15`): fault injection
-produced deleted-WAL fd evidence after 3ms; `wal_unlinked_externally` and its db-path check were
-absent; the bounded pre-write `wal_write_refusal_active` latch poll timed out after 29609ms;
+`LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh` exited `1` as intended
+(`/tmp/opencode/wal-unlink-full-remediation-verified.log` lines 67-70). Leg A was GREEN
+(`PASS=17 FAIL=0 TOTAL=17`): the single write session executed and the trip detector timed out
+after 29687ms (line 15). Leg B was RED (`PASS=10 FAIL=5 TOTAL=15`): fault injection produced
+deleted-WAL fd evidence after 3ms (lines 44-51); `wal_unlinked_externally` and its db-path check
+were absent; the bounded pre-write `wal_write_refusal_active` latch poll timed out after 29620ms
+(line 55);
 `marker-B-post` was accepted with HTTP 200 and success true; its pinned offline `count = 0`
 assertion failed because the observed count was `1`.
 

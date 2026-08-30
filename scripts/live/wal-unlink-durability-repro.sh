@@ -68,6 +68,7 @@ preflight() {
   if ! command -v sqlite3 >/dev/null 2>&1; then log_error "sqlite3 not found in PATH"; exit 2; fi
   if ! command -v curl >/dev/null 2>&1; then log_error "curl not found in PATH"; exit 2; fi
   if ! command -v git >/dev/null 2>&1; then log_error "git not found in PATH"; exit 2; fi
+  if ! command -v python3 >/dev/null 2>&1; then log_error "python3 not found in PATH"; exit 2; fi
   if ! command -v setsid >/dev/null 2>&1; then log_error "setsid not found in PATH"; exit 2; fi
   if ! binary_exists; then
     log_error "Binary not found: $BINARY"
@@ -214,6 +215,11 @@ api_write() {
   task_id=$(printf '%s' "$resp_body" | grep -o '"id":"[^"]*"' | head -n 1 | cut -d'"' -f4)
   [ -n "$task_id" ] || { log_error 'api_write returned an empty task id'; return 1; }
   printf '%s\n' "$task_id" >&2
+}
+
+response_success_true() {
+  local response_body="$1"
+  RESPONSE_BODY="$response_body" python3 -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["RESPONSE_BODY"]).get("success") is True else 1)' 2>/dev/null
 }
 
 create_project() {
@@ -385,7 +391,7 @@ run_leg_a() {
 }
 
 run_leg_b_attempt() {
-  local legdir="$1" attempt="$2" completion_sentinel="$3" pid project_id response http_code resp_body count journal_mode i setup_before completion_allowed=1 trip_detected=0
+  local legdir="$1" attempt="$2" completion_sentinel="$3" pid project_id response http_code resp_body count journal_mode i setup_before completion_allowed=1 trip_detected=0 wal_existed=0 shm_existed=0 rm_succeeded=0
   local before=$FAIL_COUNT
   mkdir -p "$legdir"
   if ! boot_and_seed "$legdir" off "Leg B attempt $attempt"; then return 1; fi
@@ -404,11 +410,13 @@ run_leg_b_attempt() {
   if [ "$MODE" = full ]; then
     check_status "Leg B attempt $attempt marker-B-pre written" api_write "$legdir" marker-B-pre
     if [ -n "$STOP_REASON" ]; then stop_node "$pid" || true; return 1; fi
-    rm -f "$legdir/db.sqlite-wal" "$legdir/db.sqlite-shm"
+    [ -e "$legdir/db.sqlite-wal" ] && wal_existed=1
+    [ -e "$legdir/db.sqlite-shm" ] && shm_existed=1
+    if rm -f "$legdir/db.sqlite-wal" "$legdir/db.sqlite-shm"; then rm_succeeded=1; fi
     if trip_detector "$pid"; then
       trip_detected=1
     fi
-    check_status "Leg B attempt $attempt fault injection removed WAL and SHM" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$legdir/db.sqlite-wal" "$legdir/db.sqlite-shm"
+    check_status "Leg B attempt $attempt fault injection removed existing WAL and SHM" bash -c '[ "$1" = 1 ] && [ "$2" = 1 ] && [ "$3" = 1 ] && [ ! -e "$4" ] && [ ! -e "$5" ]' _ "$wal_existed" "$shm_existed" "$rm_succeeded" "$legdir/db.sqlite-wal" "$legdir/db.sqlite-shm"
     if [ "$trip_detected" -eq 1 ]; then
       check_status "Leg B attempt $attempt detected external WAL unlink" true
     elif [ "$attempt" = 1 ]; then
@@ -431,10 +439,12 @@ run_leg_b_attempt() {
     if auth_drift_stop "$http_code" /api/tasks; then stop_node "$pid" || true; return 1; fi
     if [ "$http_code" = 000 ] || ! [[ "$http_code" =~ ^[1-5][0-9]{2}$ ]]; then
       check_status "Leg B attempt $attempt marker-B-post rejected (no HTTP response: $resp_body)" false
-    elif ! [[ "$http_code" =~ ^2[0-9]{2}$ ]] || printf '%s' "$resp_body" | grep -Eq '"success"[[:space:]]*:[[:space:]]*false'; then
+    elif [ "$http_code" != 200 ]; then
       check_status "Leg B attempt $attempt marker-B-post rejected" true
+    elif response_success_true "$resp_body"; then
+      check_status "Leg B attempt $attempt marker-B-post rejected (HTTP 200, parsed .success=true)" false
     else
-      check_status "Leg B attempt $attempt marker-B-post rejected (HTTP $http_code, success was not false)" false
+      check_status "Leg B attempt $attempt marker-B-post response was malformed or ambiguous" false
     fi
     check_status "Leg B attempt $attempt node remains alive after refusal" kill -0 "$pid"
     check_status "Leg B attempt $attempt stopped gracefully" stop_node "$pid"
