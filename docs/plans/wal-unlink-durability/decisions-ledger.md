@@ -403,7 +403,7 @@ TRUNCATE, not a zero-work result). The fresh
 the post-graceful-stop count remained `1`.
 
 ARM B (control): after the identical trip, the survivor did not run a checkpoint
-(`[("not-run",)]`). The same fresh immutable pre-stop read counted `marker-a6-B` as `0`; after
+(`[('not-run',)]`). The same fresh immutable pre-stop read counted `marker-a6-B` as `0`; after
 the node's graceful stop it counted `0` (`/tmp/opencode/wal-a6-redo-transcript.log` line 30) —
 NOTE: that post-stop `0` is a pre-fix probe artifact (read 4ms after stop, before the shutdown
 checkpoint completed; see the ORCHESTRATOR CORRECTION below — reliable runs read `1`).

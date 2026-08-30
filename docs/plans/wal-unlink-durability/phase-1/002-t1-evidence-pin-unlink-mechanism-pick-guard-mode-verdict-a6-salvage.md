@@ -2,7 +2,7 @@
 id: "002"
 phase: 1
 title: "T1 evidence: pin unlink mechanism, pick guard mode, verdict A6 salvage"
-status: ready
+status: passed
 depends_on: ["001"]
 parallel: false
 conflicts_with: ["001","040"]
