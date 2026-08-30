@@ -20,6 +20,9 @@ use futures::FutureExt;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
+#[cfg(target_os = "linux")]
+use notify::Watcher;
+
 use crate::DbMetrics;
 
 /// Default check interval in seconds.
@@ -272,55 +275,149 @@ impl WalMonitor {
             truncate_interval.tick().await;
         }
 
-        loop {
-            tokio::select! {
-                Some(cmd) = rx.recv() => {
-                    match cmd {
-                        WalMonitorCommand::CheckNow => {
-                            self.check_wal_size().await;
-                        }
-                        WalMonitorCommand::Checkpoint => {
-                            self.run_checkpoint().await;
-                        }
-                        WalMonitorCommand::TruncateCheckpoint => {
-                            self.run_truncate_checkpoint().await;
-                        }
-                        WalMonitorCommand::Shutdown(ack) => {
-                            if let Some(ref mut g) = self.guard {
-                                g.release_read_mark().await;
+        #[cfg(target_os = "linux")]
+        {
+            let mut watch = start_watch(&self.db_path);
+            let wal_basename = wal_path_for(&self.db_path)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+
+            loop {
+                tokio::select! {
+                    Some(cmd) = rx.recv() => {
+                        match cmd {
+                            WalMonitorCommand::CheckNow => {
+                                self.check_wal_size().await;
                             }
-                            tracing::info!("WAL monitor shutting down");
-                            let _ = ack.send(());
-                            break;
+                            WalMonitorCommand::Checkpoint => {
+                                self.run_checkpoint().await;
+                            }
+                            WalMonitorCommand::TruncateCheckpoint => {
+                                self.run_truncate_checkpoint().await;
+                            }
+                            WalMonitorCommand::Shutdown(ack) => {
+                                if let Some(ref mut g) = self.guard {
+                                    g.release_read_mark().await;
+                                }
+                                tracing::info!("WAL monitor shutting down");
+                                let _ = ack.send(());
+                                break;
+                            }
+                        }
+                    }
+                    _ = check_interval.tick() => {
+                        self.check_wal_size().await;
+                        if watch.is_none() {
+                            watch = start_watch(&self.db_path);
+                            if watch.is_some() {
+                                tracing::info!("WAL inotify watch re-armed");
+                            }
+                        }
+                    }
+                    _ = truncate_interval.tick(), if truncate_enabled => {
+                        if let Some(guard) = &mut self.guard {
+                            guard.release_read_mark().await;
+                        }
+                        self.run_truncate_checkpoint().await;
+                        if let Some(guard) = &mut self.guard
+                            && let Err(e) = guard.reacquire_read_mark().await {
+                            tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
+                        }
+                    }
+                    Some(ev) = async {
+                        if let Some((_, rx)) = watch.as_mut() {
+                            rx.recv().await
+                        } else {
+                            None::<Result<notify::Event, notify::Error>>
+                        }
+                    } => {
+                        match ev {
+                            Ok(event) => {
+                                if is_wal_removal(&event.kind, &event.paths, &wal_basename) {
+                                    self.check_wal_size().await;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = ?e, "wal inotify watch dropped; falling back to 60s poll");
+                                watch = None;
+                            }
                         }
                     }
                 }
-                _ = check_interval.tick() => {
-                    self.check_wal_size().await;
-                }
-                _ = truncate_interval.tick(), if truncate_enabled => {
-                    if let Some(guard) = &mut self.guard {
-                        guard.release_read_mark().await;
-                    }
-                    self.run_truncate_checkpoint().await;
-                    if let Some(guard) = &mut self.guard
-                        && let Err(e) = guard.reacquire_read_mark().await {
-                        tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
+                
+                if let Some(guard) = &mut self.guard
+                    && !guard.is_alive().await {
+                    match guard.reconnect().await {
+                        Ok(_) => tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected"),
+                        Err(e) => {
+                            tracing::error!(error = ?e, "WAL guard reconnect failed");
+                            if !self.tripped {
+                                self.tripped = true;
+                                self.trip_events += 1;
+                                tracing::error!(event = "wal_guard_unavailable", "WAL guard unavailable; treating as durability trip");
+                                self.handle_trip().await;
+                            }
+                        }
                     }
                 }
             }
-            
-            if let Some(guard) = &mut self.guard
-                && !guard.is_alive().await {
-                match guard.reconnect().await {
-                    Ok(_) => tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected"),
-                    Err(e) => {
-                        tracing::error!(error = ?e, "WAL guard reconnect failed");
-                        if !self.tripped {
-                            self.tripped = true;
-                            self.trip_events += 1;
-                            tracing::error!(event = "wal_guard_unavailable", "WAL guard unavailable; treating as durability trip");
-                            self.handle_trip().await;
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            tracing::debug!("WAL inotify monitoring unavailable on non-Linux; using 60s poll fallback");
+
+            loop {
+                tokio::select! {
+                    Some(cmd) = rx.recv() => {
+                        match cmd {
+                            WalMonitorCommand::CheckNow => {
+                                self.check_wal_size().await;
+                            }
+                            WalMonitorCommand::Checkpoint => {
+                                self.run_checkpoint().await;
+                            }
+                            WalMonitorCommand::TruncateCheckpoint => {
+                                self.run_truncate_checkpoint().await;
+                            }
+                            WalMonitorCommand::Shutdown(ack) => {
+                                if let Some(ref mut g) = self.guard {
+                                    g.release_read_mark().await;
+                                }
+                                tracing::info!("WAL monitor shutting down");
+                                let _ = ack.send(());
+                                break;
+                            }
+                        }
+                    }
+                    _ = check_interval.tick() => {
+                        self.check_wal_size().await;
+                    }
+                    _ = truncate_interval.tick(), if truncate_enabled => {
+                        if let Some(guard) = &mut self.guard {
+                            guard.release_read_mark().await;
+                        }
+                        self.run_truncate_checkpoint().await;
+                        if let Some(guard) = &mut self.guard
+                            && let Err(e) = guard.reacquire_read_mark().await {
+                            tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
+                        }
+                    }
+                }
+                
+                if let Some(guard) = &mut self.guard
+                    && !guard.is_alive().await {
+                    match guard.reconnect().await {
+                        Ok(_) => tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected"),
+                        Err(e) => {
+                            tracing::error!(error = ?e, "WAL guard reconnect failed");
+                            if !self.tripped {
+                                self.tripped = true;
+                                self.trip_events += 1;
+                                tracing::error!(event = "wal_guard_unavailable", "WAL guard unavailable; treating as durability trip");
+                                self.handle_trip().await;
+                            }
                         }
                     }
                 }
@@ -572,7 +669,53 @@ pub fn get_wal_size(db_path: impl AsRef<Path>) -> u64 {
 /// Check if an inotify event indicates WAL removal.
 #[cfg(target_os = "linux")]
 fn is_wal_removal(kind: &notify::event::EventKind, paths: &[std::path::PathBuf], wal_basename: &str) -> bool {
-    false // stub: will be filled by GREEN implementation
+    use notify::event::{ModifyKind, RenameMode};
+    
+    // Match Remove(_) or Modify(Name(RenameMode::From))
+    let is_removal_kind = matches!(kind, notify::event::EventKind::Remove(_)) || 
+        matches!(kind, notify::event::EventKind::Modify(ModifyKind::Name(RenameMode::From)));
+    
+    if !is_removal_kind {
+        return false;
+    }
+    
+    // Check if any path's file_name equals wal_basename
+    paths.iter().any(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|name_str| name_str == wal_basename)
+            .unwrap_or(false)
+    })
+}
+
+/// Set up inotify watch for WAL file in the database directory.
+#[cfg(target_os = "linux")]
+fn start_watch(db_path: &Path) -> Option<(notify::RecommendedWatcher, tokio::sync::mpsc::UnboundedReceiver<Result<notify::Event, notify::Error>>)> {
+    use notify::{RecommendedWatcher, RecursiveMode};
+    
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    
+    let mut watcher = match RecommendedWatcher::new(
+        move |res| {
+            let _ = tx.send(res);
+        },
+        notify::Config::default(),
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!(error = ?e, "Failed to create WAL inotify watcher; falling back to 60s poll");
+            return None;
+        }
+    };
+    
+    let db_dir = db_path.parent().unwrap_or(Path::new("."));
+    match watcher.watch(db_dir, RecursiveMode::NonRecursive) {
+        Ok(_) => Some((watcher, rx)),
+        Err(e) => {
+            tracing::warn!(error = ?e, "Failed to watch WAL directory; falling back to 60s poll");
+            None
+        }
+    }
 }
 
 /// Run `fut` to completion, catching any panic and logging it at error level.
