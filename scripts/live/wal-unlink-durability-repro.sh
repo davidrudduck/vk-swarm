@@ -222,6 +222,11 @@ response_success_true() {
   RESPONSE_BODY="$response_body" python3 -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["RESPONSE_BODY"]).get("success") is True else 1)' 2>/dev/null
 }
 
+response_success_false() {
+  local response_body="$1"
+  RESPONSE_BODY="$response_body" python3 -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["RESPONSE_BODY"]).get("success") is False else 1)' 2>/dev/null
+}
+
 create_project() {
   local legdir="$1" name="$2" repo_dir project_body response http_code resp_body project_id
   repo_dir="$legdir/repo"
@@ -437,11 +442,11 @@ run_leg_b_attempt() {
     response=$(api_call POST /api/tasks "$legdir" "{\"project_id\":\"$project_id\",\"title\":\"marker-B-post\"}")
     http_code=$(printf '%s\n' "$response" | head -n 1); resp_body=$(printf '%s\n' "$response" | tail -n 1)
     if auth_drift_stop "$http_code" /api/tasks; then stop_node "$pid" || true; return 1; fi
-    if [ "$http_code" = 000 ] || ! [[ "$http_code" =~ ^[1-5][0-9]{2}$ ]]; then
-      check_status "Leg B attempt $attempt marker-B-post rejected (no HTTP response: $resp_body)" false
-    elif [ "$http_code" != 200 ]; then
-      check_status "Leg B attempt $attempt marker-B-post rejected" true
-    elif response_success_true "$resp_body"; then
+    if ! [[ "$http_code" =~ ^2[0-9]{2}$ ]]; then
+      check_status "Leg B attempt $attempt marker-B-post rejected (HTTP $http_code)" true
+    elif response_success_false "$resp_body"; then
+      check_status "Leg B attempt $attempt marker-B-post rejected (HTTP $http_code, parsed .success=false)" true
+    elif [ "$http_code" = 200 ] && response_success_true "$resp_body"; then
       check_status "Leg B attempt $attempt marker-B-post rejected (HTTP 200, parsed .success=true)" false
     else
       check_status "Leg B attempt $attempt marker-B-post response was malformed or ambiguous" false

@@ -387,8 +387,8 @@ Checkpoint via a surviving open fd therefore does flush old-inode frames; A6 sal
 ### VERDICT 3 redo — A6 salvage attribution
 
 The earlier full two-arm transcript used scratch root `/tmp/opencode/wal-a6-redo.cAmqk7`.
-Fresh retained re-run: `/tmp/opencode/wal-a6-redo.sh`,
-which emits `/tmp/opencode/wal-a6-redo-transcript.log` (ARM A lines 7-14 and ARM B lines 22-28;
+The retained re-run from `/tmp/opencode/wal-a6-redo.sh` emits
+`/tmp/opencode/wal-a6-redo-transcript.log` (ARM A lines 7-14 and ARM B lines 22-28;
 scratch root `/tmp/opencode/wal-a6-redo-20260830-101600`) and reproduces ARM A pre-stop `1` /
 ARM B pre-stop `0`. Each arm booted a fresh `:9012` scratch node, seeded a
 session, wrote its marker through the node API, then opened a Python survivor connection before
@@ -404,29 +404,28 @@ the post-graceful-stop count remained `1`.
 
 ARM B (control): after the identical trip, the survivor did not run a checkpoint
 (`[("not-run",)]`). The same fresh immutable pre-stop read counted `marker-a6-B` as `0`; after
-the node's graceful stop it counted `1`.
+the node's graceful stop it counted `0` (`/tmp/opencode/wal-a6-redo-transcript.log` line 30).
 
 ORCHESTRATOR CORRECTION (2026-08-30, transcript-verified): the prior sentence's "REFUTED"
 reading inverted the evidence. The arms differ ONLY in the salvage checkpoint: ARM A
 (checkpoint run) reads the marker durable in the main file PRE-STOP (immutable=1, count=1);
-ARM B (no checkpoint) reads 0 pre-stop and 1 post-stop. Per the task's verdict rule that is
+ARM B (no checkpoint) reads 0 pre-stop. Per the task's verdict rule that is
 exactly the A6-VIABLE signature: checkpoint-via-surviving-open-fd DOES flush old-inode frames
 into the main DB. The reported `[(0, 0, 0)]` tuple does not overturn the differential — the
 tuple reflects post-truncation state, and no alternative explanation survives ARM B reading 0
-(the node's own shutdown checkpoint only runs at stop, which is why ARM B turns 1 only
-post-stop). Two INDEPENDENT salvagers are therefore established: (1) an at-trip checkpoint
-through a surviving old-domain connection (A6 — what task 030 encodes), and (2) the node's
-graceful-stop shutdown checkpoint through its still-open fds (bonus property; pre-trip writes
-survive even un-remediated on this binary). A6 is VIABLE; task 030 encodes the
-`salvage_checkpoint_succeeded` assertion. Superseded interpretation retained above for
-review history. The deleted-fd, API response, survivor-read,
-checkpoint, immutable pre-stop, and post-stop lines for both arms are retained verbatim in the
-transcript above.
+pre-stop. A6 is VIABLE solely because of that pre-stop differential; task 030 encodes the
+`salvage_checkpoint_succeeded` assertion. Post-stop recovery is observational and variable, not
+a contracted second salvager: the first run observed ARM B `post_stop=1`, while the retained run
+observed `post_stop=0` (line 30). The corrected fresh probe run
+`/tmp/opencode/wal-a6-redo-r3-transcript.log` also reproduces ARM A pre-stop `1` (line 14) and
+ARM B pre-stop `0` (line 29), while observing post-stop ARM A `1` (line 16) and ARM B `1`
+(line 31). The deleted-fd, API response, survivor-read, checkpoint, immutable pre-stop, and
+post-stop lines for both arms are retained verbatim in those transcripts.
 
 - [Task 002 orchestrator] SUPERSEDES the implementer decision below, which inverted the
   two-arm evidence: the immutable pre-stop control comparison attributes ARM A's durability
-  to the salvage checkpoint (A6 viable); ARM B's post-stop recovery is the separate
-  shutdown-checkpoint property. Task 030 keeps the `salvage_checkpoint_succeeded` assertion;
+  to the salvage checkpoint (A6 viable). ARM B post-stop recovery is variable observation, not
+  a shutdown-checkpoint property. Task 030 keeps the `salvage_checkpoint_succeeded` assertion;
   the refusal latch remains the post-salvage step per the design.
   Superseded implementer line (retained for history): "Treat a survivor checkpoint returning
   `[(0, 0, 0)]` as zero-frame evidence ... implement named-failure plus refusal in place of
@@ -441,17 +440,16 @@ PASS, and deterministic `rm -f db.sqlite-wal db.sqlite-shm` in Leg B. It removes
 assertion accounting, sentinels, abort handling, auth STOP, PID lifecycle, and timing bounds are
 unchanged.
 
-Post-remediation-script evidence: `LEGS=AB MODE=full bash
-scripts/live/wal-unlink-durability-repro.sh` exited nonzero as required
-(`/tmp/opencode/wal-unlink-full-remediation-verified.log`: `PASS=17 FAIL=0` at line 67,
-`PASS=10 FAIL=5` at line 68, exit 1 at line 70). Leg A was GREEN (`PASS=17 FAIL=0`): its
-write session executed and the detector timed out after 29687ms (line 15). Leg B's
-fault-injection detector fired after 3ms (lines 44-51) and the named events
-`wal_unlinked_externally` and `wal_write_refusal_active` were absent. However, the current
-binary returned HTTP 200 for `marker-B-post` and its offline count was `1`, not the stipulated
-`0` (`Leg B: PASS=10 FAIL=5`). ~~The red proof's accepted-but-absent post-write condition is not
-reproducible on this binary; assertions were intentionally left unchanged rather than falsified.~~
-Superseded by `### Amended harness verification` below.
+Fresh remediation-round-3 evidence used the current script. `MODE=baseline bash
+scripts/live/wal-unlink-durability-repro.sh` exited `0` with `Total PASS: 24` and `Total FAIL: 0`
+(`/tmp/opencode/wal-002-r3-baseline.log` lines 48-49); both legs were `PASS=12 FAIL=0 TOTAL=12`
+(lines 52-53). `LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh` exited `1`
+with `Total PASS: 27` and `Total FAIL: 5` (`/tmp/opencode/wal-002-r3-full.log` lines 64-65).
+Leg A was GREEN (`PASS=17 FAIL=0 TOTAL=17`, line 68); Leg B was RED (`PASS=10 FAIL=5 TOTAL=15`,
+line 69). Its fault-injection detector fired after 3ms (lines 44-51), the named events
+`wal_unlinked_externally` and `wal_write_refusal_active` were absent (lines 54-57), and the
+current binary returned HTTP 200 with parsed `.success=true` for `marker-B-post` (line 58),
+followed by an offline persisted-count failure (line 61).
 
 - [Task 002] Select MapOnly because it persistently holds the required db/shm shared locks for
   the complete 60-second API-write probe and avoids HoldRead's observed checkpoint busy result -
@@ -469,19 +467,26 @@ from the post-remediation script; the older `wal-t1-full-amended.log` records a
 pre-remediation script version.
 
 `LEGS=AB MODE=baseline bash scripts/live/wal-unlink-durability-repro.sh` exited `0` with
-`Total PASS: 24`, `Total FAIL: 0` (`/tmp/opencode/wal-unlink-baseline-remediation.log` lines
-48-49); both legs were `PASS=12 FAIL=0 TOTAL=12` (lines 52-53).
+`Total PASS: 24`, `Total FAIL: 0` (`/tmp/opencode/wal-002-r3-baseline.log` lines 48-49); both
+legs were `PASS=12 FAIL=0 TOTAL=12` (lines 52-53).
 
 `LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh` exited `1` as intended
-(`/tmp/opencode/wal-unlink-full-remediation-verified.log` lines 67-70). Leg A was GREEN
-(`PASS=17 FAIL=0 TOTAL=17`): the single write session executed and the trip detector timed out
-after 29687ms (line 15). Leg B was RED (`PASS=10 FAIL=5 TOTAL=15`): fault injection produced
-deleted-WAL fd evidence after 3ms (lines 44-51); `wal_unlinked_externally` and its db-path check
-were absent; the bounded pre-write `wal_write_refusal_active` latch poll timed out after 29620ms
-(line 55);
-`marker-B-post` was accepted with HTTP 200 and success true; its pinned offline `count = 0`
-assertion failed because the observed count was `1`.
+(`/tmp/opencode/wal-002-r3-full.log` lines 63-71). Leg A was GREEN
+(`PASS=17 FAIL=0 TOTAL=17`, line 68): the single write session executed and the trip detector
+timed out after 29691ms (line 15). Leg B was RED (`PASS=10 FAIL=5 TOTAL=15`, line 69): fault
+injection produced deleted-WAL fd evidence after 3ms (lines 44-51); `wal_unlinked_externally`
+and its db-path check were absent (lines 54-55); the bounded pre-write
+`wal_write_refusal_active` latch poll timed out after 29620ms (lines 56-57); `marker-B-post`
+was accepted with HTTP 200 and parsed `.success=true` (line 58), and its pinned offline
+`count = 0` assertion failed because the observed count was `1` (line 61).
 
 - [Task 002] Poll `wal_write_refusal_active` before the post-trip write using the trip detector's
   30-second bounded polling shape, so post-fix refusal is proven armed before the write can race
   the salvage checkpoint - `scripts/live/wal-unlink-durability-repro.sh`
+- [Task 002] Parse `.success` with explicit true and false helpers after status classification —
+  non-2xx responses and valid 2xx refusal envelopes earn refusal credit, while successful 200
+  envelopes and malformed responses remain distinct red signals —
+  `scripts/live/wal-unlink-durability-repro.sh`
+- [Task 002] Poll exact node PIDs before reaping the A6 probe — PIDs captured through command
+  substitution are non-children, so `wait` alone cannot reliably observe graceful shutdown —
+  `/tmp/opencode/wal-a6-redo.sh`
