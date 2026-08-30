@@ -671,3 +671,4 @@ Implementation notes: Red test written first (`is_wal_removal_matches_delete_and
 
 - cargo test -p db wal_monitor: test result: ok. 14 passed; 0 failed (incl. refusal_latch_blocks_writes_allows_reads; write SQLITE_BUSY code 5 on held conn)
 - [Task 031 orchestrator] `{read:?}` on `query(...).fetch_one` does not compile (`SqliteRow: !Debug`). Named-arg `read = read.as_ref().map(|_| ())` was panel-drift. Replacement: `query_scalar` → `Result<i64, sqlx::Error>` so `{read:?}` is legal and still asserts the held-conn read succeeded.
+- [Task 031 orchestrator] Panel round 2 (HEAD `1273f9776`): Opus CONFORMS, GPT CONFORMS, Grok CONFORMS. SC13: no-op arm fails write_code Some("5"). Indent-only churn discarded as not task-text. Marked passed.

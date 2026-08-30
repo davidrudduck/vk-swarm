@@ -2,7 +2,7 @@
 id: "031"
 phase: 4
 title: "Write-refusal latch on trip: BEGIN IMMEDIATE on the dedicated pre-unlink connection + wal_write_refusal_active event"
-status: ready
+status: passed
 depends_on: ["030"]
 parallel: false
 conflicts_with: ["020","021","030"]
