@@ -1054,6 +1054,27 @@ mod tests {
         drop(mon);
     }
 
+    #[tokio::test]
+    async fn refusal_latch_blocks_writes_allows_reads() {
+        use sqlx::ConnectOptions;
+        let (pool, tmp) = crate::test_utils::create_test_pool().await;
+        let db_path = tmp.path().join("test.db");
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'pre-latch', '/tmp/pre-latch-uniq')").execute(&pool).await.unwrap(); // forces the WAL into existence
+        // Dedicated connection opened PRE-unlink (old shm/inode domain) — a fresh post-unlink conn would fence nobody.
+        let mut conn = crate::wal_guard::options_for(&db_path).unwrap().connect().await.unwrap();
+        // Dummy read maps the wal-index — connect alone does not put the connection in the old shm domain.
+        sqlx::query("SELECT count(*) FROM sqlite_master").fetch_one(&mut conn).await.unwrap();
+        // integrated-review amendment 2026-08-30: fault injection removes BOTH files, matching the live harness.
+        std::fs::remove_file(tmp.path().join("test.db-wal")).unwrap(); // REAL external unlink
+        let _ = std::fs::remove_file(tmp.path().join("test.db-shm"));
+        let latch = RefusalLatch::arm(conn).await.expect("latch must arm on the old-domain connection");
+        let write = sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'refusal-probe', '/tmp/refusal-probe-uniq')").execute(&pool).await;
+        assert!(write.is_err(), "write succeeded despite the refusal latch");
+        let read = sqlx::query("SELECT count(*) FROM projects").fetch_one(&pool).await;
+        assert!(read.is_ok(), "read blocked by the refusal latch");
+        drop(latch);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn is_wal_removal_matches_delete_and_rename_from() {

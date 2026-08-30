@@ -654,3 +654,14 @@ Implementation notes: Red test written first (`is_wal_removal_matches_delete_and
 ## Task 030 orchestrator
 
 - Panel round 1 (HEAD `0180d5025`): Opus+GPT DEVIATES SC13 — `trip_runs_salvage_checkpoint` post-close offline n==1 stays green if `run_salvage_checkpoint` is stub `Ok((0,0,0))` (SQLite close-time checkpoint through still-open fds). Grok CONFORMS (task-text match). Adjudication: hollow is real; the spelled test contradicted this ledger's own L411-421 ("post-stop is NOT the attribution basis for A6"). First amendment (post-only immutable n==1) REJECTED by expedited Opus breakdown: real salvage also returns `(0,0,0)`, so post-only still fails to discriminate; also `no such table` panics and a reused immutable conn caches pages. Replacement: BOTH-sides `main_file_probe` (fresh `options_for(...).immutable(true)` each call) — `before==0` then `after==1` while pool+mon remain open. Also fix stray 9-space indent at `wal_monitor.rs:979`.
+
+## Task 031 orchestrator
+
+- Pre-resolutions (do not STOP for these):
+  - `refusal: Option<RefusalLatch>` on `WalMonitor`; `spawn`/`spawn_default` init `refusal: None`. Do NOT add a spawn parameter.
+  - All five existing `WalMonitor { ... }` test literals must add `refusal: None`.
+  - `handle_trip`: keep 030 salvage first (`run_salvage_checkpoint` still uses `salvage_conn.as_mut()`). AFTER that match, `match self.salvage_conn.take()` and arm. Latch even if salvage returned Err.
+  - `salvage_conn` is None: fail-closed with `error = "salvage connection unavailable"` (no `e`) then `self.pool.close().await`. Arm `Err(e)`: fail-closed with `error = ?e` then `self.pool.close().await`. Two log sites; do not invent a dummy sqlx::Error.
+  - Shutdown BOTH linux (`wal_monitor.rs:305`) and non-linux (`:393`): after `release_read_mark`, `self.refusal = None;`, then the existing info log, then ack. Do not restructure other arms.
+  - Test lives in `wal_monitor.rs` `tests` module (in-module visibility). Write it FIRST, verbatim.
+  - STOP only if a task STOP trigger actually fires at test time (arm Err / write succeeds / read blocked).
