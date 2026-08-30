@@ -414,19 +414,25 @@ exactly the A6-VIABLE signature: checkpoint-via-surviving-open-fd DOES flush old
 into the main DB. The reported `[(0, 0, 0)]` tuple does not overturn the differential — the
 tuple reflects post-truncation state, and no alternative explanation survives ARM B reading 0
 pre-stop. A6 is VIABLE solely because of that pre-stop differential; task 030 encodes the
-`salvage_checkpoint_succeeded` assertion. Post-stop recovery is observational and variable, not
-a contracted second salvager: the first run observed ARM B `post_stop=1`, while the retained run
-observed `post_stop=0` (line 30). The corrected fresh probe run
-`/tmp/opencode/wal-a6-redo-r3-transcript.log` also reproduces ARM A pre-stop `1` (line 14) and
-ARM B pre-stop `0` (line 29), while observing post-stop ARM A `1` (line 16) and ARM B `1`
-(line 31). The deleted-fd, API response, survivor-read, checkpoint, immutable pre-stop, and
-post-stop lines for both arms are retained verbatim in those transcripts.
+`salvage_checkpoint_succeeded` assertion. ARM B's post-stop recovery is the node's own shutdown
+checkpoint through its still-open fds (reproduced at `wal-a6-redo-r3-transcript.log:31` and
+`wal-002-r3-full.log:61`); it is NOT the attribution basis for A6 — A6 rests solely on the
+pre-stop differential (ARM A=1, ARM B=0, reproduced in both runs). The retained `post_stop=0`
+reading in `wal-a6-redo-transcript.log:30` is a pre-fix probe artifact read 4ms after stop,
+before the shutdown checkpoint completed. `/tmp/opencode/wal-a6-redo.sh` defaults `TRANSCRIPT`
+to the older cited transcript, so a default re-run clobbers it; the retained record transcripts
+are `wal-a6-redo-transcript.log` (first run, superseded wait) and
+`wal-a6-redo-r3-transcript.log` (fixed probe). The deleted-fd, API response, survivor-read,
+checkpoint, immutable pre-stop, and post-stop lines for both arms are retained verbatim there.
 
 - [Task 002 orchestrator] SUPERSEDES the implementer decision below, which inverted the
-  two-arm evidence: the immutable pre-stop control comparison attributes ARM A's durability
-  to the salvage checkpoint (A6 viable). ARM B post-stop recovery is variable observation, not
-  a shutdown-checkpoint property. Task 030 keeps the `salvage_checkpoint_succeeded` assertion;
-  the refusal latch remains the post-salvage step per the design.
+two-arm evidence: the immutable pre-stop control comparison attributes ARM A's durability
+to the salvage checkpoint (A6 viable). ARM B's post-stop recovery is the node's own shutdown
+checkpoint through its still-open fds (reproduced at `wal-a6-redo-r3-transcript.log:31` and
+`wal-002-r3-full.log:61`); it is NOT the attribution basis for A6 — A6 rests solely on the
+pre-stop differential (ARM A=1, ARM B=0, reproduced in both runs). Task 030 keeps the
+`salvage_checkpoint_succeeded` assertion; the refusal latch remains the post-salvage step per
+the design.
   Superseded implementer line (retained for history): "Treat a survivor checkpoint returning
   `[(0, 0, 0)]` as zero-frame evidence ... implement named-failure plus refusal in place of
   A6 surviving-fd salvage" - `docs/plans/wal-unlink-durability/decisions-ledger.md`
@@ -440,11 +446,11 @@ PASS, and deterministic `rm -f db.sqlite-wal db.sqlite-shm` in Leg B. It removes
 assertion accounting, sentinels, abort handling, auth STOP, PID lifecycle, and timing bounds are
 unchanged.
 
-Fresh remediation-round-3 evidence used the current script. `MODE=baseline bash
+Fresh remediation-round-4 evidence used the current script. `MODE=baseline bash
 scripts/live/wal-unlink-durability-repro.sh` exited `0` with `Total PASS: 24` and `Total FAIL: 0`
-(`/tmp/opencode/wal-002-r3-baseline.log` lines 48-49); both legs were `PASS=12 FAIL=0 TOTAL=12`
+(`/tmp/opencode/wal-002-r4-baseline.log` lines 48-49); both legs were `PASS=12 FAIL=0 TOTAL=12`
 (lines 52-53). `LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh` exited `1`
-with `Total PASS: 27` and `Total FAIL: 5` (`/tmp/opencode/wal-002-r3-full.log` lines 64-65).
+with `Total PASS: 27` and `Total FAIL: 5` (`/tmp/opencode/wal-002-r4-full.log` lines 64-65).
 Leg A was GREEN (`PASS=17 FAIL=0 TOTAL=17`, line 68); Leg B was RED (`PASS=10 FAIL=5 TOTAL=15`,
 line 69). Its fault-injection detector fired after 3ms (lines 44-51), the named events
 `wal_unlinked_externally` and `wal_write_refusal_active` were absent (lines 54-57), and the
@@ -467,11 +473,11 @@ from the post-remediation script; the older `wal-t1-full-amended.log` records a
 pre-remediation script version.
 
 `LEGS=AB MODE=baseline bash scripts/live/wal-unlink-durability-repro.sh` exited `0` with
-`Total PASS: 24`, `Total FAIL: 0` (`/tmp/opencode/wal-002-r3-baseline.log` lines 48-49); both
+`Total PASS: 24`, `Total FAIL: 0` (`/tmp/opencode/wal-002-r4-baseline.log` lines 48-49); both
 legs were `PASS=12 FAIL=0 TOTAL=12` (lines 52-53).
 
 `LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh` exited `1` as intended
-(`/tmp/opencode/wal-002-r3-full.log` lines 63-71). Leg A was GREEN
+(`/tmp/opencode/wal-002-r4-full.log` lines 63-71). Leg A was GREEN
 (`PASS=17 FAIL=0 TOTAL=17`, line 68): the single write session executed and the trip detector
 timed out after 29691ms (line 15). Leg B was RED (`PASS=10 FAIL=5 TOTAL=15`, line 69): fault
 injection produced deleted-WAL fd evidence after 3ms (lines 44-51); `wal_unlinked_externally`

@@ -442,12 +442,14 @@ run_leg_b_attempt() {
     response=$(api_call POST /api/tasks "$legdir" "{\"project_id\":\"$project_id\",\"title\":\"marker-B-post\"}")
     http_code=$(printf '%s\n' "$response" | head -n 1); resp_body=$(printf '%s\n' "$response" | tail -n 1)
     if auth_drift_stop "$http_code" /api/tasks; then stop_node "$pid" || true; return 1; fi
-    if ! [[ "$http_code" =~ ^2[0-9]{2}$ ]]; then
+    if [[ "$http_code" = 000 || ! "$http_code" =~ ^[1-5][0-9]{2}$ ]]; then
+      check_status "Leg B attempt $attempt marker-B-post rejected (no HTTP response: $http_code)" false
+    elif ! [[ "$http_code" =~ ^2[0-9]{2}$ ]]; then
       check_status "Leg B attempt $attempt marker-B-post rejected (HTTP $http_code)" true
     elif response_success_false "$resp_body"; then
       check_status "Leg B attempt $attempt marker-B-post rejected (HTTP $http_code, parsed .success=false)" true
-    elif [ "$http_code" = 200 ] && response_success_true "$resp_body"; then
-      check_status "Leg B attempt $attempt marker-B-post rejected (HTTP 200, parsed .success=true)" false
+    elif response_success_true "$resp_body"; then
+      check_status "Leg B attempt $attempt marker-B-post rejected (HTTP $http_code, parsed .success=true)" false
     else
       check_status "Leg B attempt $attempt marker-B-post response was malformed or ambiguous" false
     fi
