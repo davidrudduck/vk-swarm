@@ -713,7 +713,12 @@ Leg A (guard-on):
 - `WAL guard connected` (`node.log`); monitor `check_interval_secs=60` (production default).
 - External write session does NOT unlink WAL; trip detector times out as designed.
 - Post-trip API write durable offline (`marker-A-post` persisted).
-- `PRAGMA journal_mode;` on leftover `leg-a.BWm5iN/db.sqlite` prints `wal`.
+- `PRAGMA journal_mode;` on leftover `leg-a.BWm5iN/db.sqlite`:
+
+```
+$ sqlite3 /tmp/wal-repro.puBSeq/leg-a.BWm5iN/db.sqlite 'PRAGMA journal_mode;'
+wal
+```
 
 Leg B (`VK_WAL_GUARD=off`, `VK_WAL_CHECK_INTERVAL_SECS=5`):
 - `WAL guard disabled via VK_WAL_GUARD; node is exposed to external WAL unlink`
