@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures::FutureExt;
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use tokio::sync::mpsc;
 
 #[cfg(target_os = "linux")]
@@ -197,6 +197,8 @@ pub struct WalMonitor {
     tripped: bool,
     trip_events: u32,
     guard: Option<crate::wal_guard::WalGuard>,
+    salvage_conn: Option<SqliteConnection>,
+    last_salvage: Option<Result<(i32, i32, i32), String>>,
 }
 
 impl WalMonitor {
@@ -209,6 +211,7 @@ impl WalMonitor {
         metrics: DbMetrics,
         config: WalMonitorConfig,
         guard: Option<crate::wal_guard::WalGuard>,
+        salvage_conn: Option<SqliteConnection>,
     ) -> WalMonitorHandle {
         let (tx, rx) = mpsc::channel(16);
         let db_path_buf = db_path.as_ref().to_path_buf();
@@ -230,6 +233,8 @@ impl WalMonitor {
             tripped: false,
             trip_events: 0,
             guard,
+            salvage_conn,
+            last_salvage: None,
         };
         tokio::spawn(async move {
             let _ = supervised_run("wal_monitor", monitor.run(rx)).await;
@@ -243,8 +248,9 @@ impl WalMonitor {
         pool: SqlitePool,
         metrics: DbMetrics,
         guard: Option<crate::wal_guard::WalGuard>,
+        salvage_conn: Option<SqliteConnection>,
     ) -> WalMonitorHandle {
-        Self::spawn(db_path, pool, metrics, WalMonitorConfig::default(), guard)
+        Self::spawn(db_path, pool, metrics, WalMonitorConfig::default(), guard, salvage_conn)
     }
 
     async fn run(mut self, mut rx: mpsc::Receiver<WalMonitorCommand>) {
@@ -566,6 +572,21 @@ impl WalMonitor {
         }
     }
 
+    async fn run_salvage_checkpoint(&mut self) -> Result<(i32, i32, i32), sqlx::Error> {
+        use sqlx::Row;
+        let conn = self.salvage_conn.as_mut().ok_or_else(|| {
+            sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::NotConnected, "salvage connection unavailable"))
+        })?;
+        let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").fetch_one(conn).await?;
+        let (busy, log_frames, checkpointed): (i32, i32, i32) = (row.try_get(0)?, row.try_get(1)?, row.try_get(2)?);
+        if busy != 0 {
+            return Err(sqlx::Error::Protocol(format!(
+                "salvage checkpoint blocked (busy={busy}, log_frames={log_frames}, checkpointed={checkpointed})"
+            )));
+        }
+        Ok((busy, log_frames, checkpointed))
+    }
+
     async fn handle_trip(&mut self) {
         // In this task, only emit event + set tripped.
         // Tasks 030/031 extend with salvage and refusal latch.
@@ -850,6 +871,8 @@ mod tests {
             tripped: false,
             trip_events: 0,
             guard: None,
+            salvage_conn: None,
+            last_salvage: None,
         };
 
         // Now remove the WAL and check
@@ -887,6 +910,8 @@ mod tests {
             tripped: false,
             trip_events: 0,
             guard: None,
+            salvage_conn: None,
+            last_salvage: None,
         };
 
         mon.check_wal_size().await;
@@ -914,6 +939,8 @@ mod tests {
             tripped: false,
             trip_events: 0,
             guard: None,
+            salvage_conn: None,
+            last_salvage: None,
         };
 
         mon.check_wal_size().await;
@@ -941,7 +968,7 @@ mod tests {
         };
         let wal_ever_present = matches!(last_wal_state, WalState::Present(_));
 
-        let mut mon = WalMonitor {
+         let mut mon = WalMonitor {
             db_path: db_path.clone(),
             pool,
             metrics,
@@ -951,6 +978,8 @@ mod tests {
             tripped: false,
             trip_events: 0,
             guard: None,
+            salvage_conn: None,
+            last_salvage: None,
         };
 
         // Remove WAL and trigger trip
@@ -963,6 +992,44 @@ mod tests {
         mon.check_wal_size().await;
         mon.check_wal_size().await;
         assert_eq!(mon.trip_events, 1);
+    }
+
+    #[tokio::test]
+    async fn trip_runs_salvage_checkpoint() {
+        use sqlx::ConnectOptions;
+        let (pool, tmp) = crate::test_utils::create_test_pool().await;
+        let db_path = tmp.path().join("test.db");
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'salvage-probe', '/tmp/salvage-probe-uniq')").execute(&pool).await.unwrap();
+        let wal = wal_path_for(&db_path);
+        assert!(wal.exists());
+        let md = std::fs::metadata(&wal).unwrap();
+        let mut salvage_conn = crate::wal_guard::options_for(&db_path).unwrap().connect().await.unwrap();
+        sqlx::query("SELECT count(*) FROM sqlite_master").fetch_one(&mut salvage_conn).await.unwrap();
+        let mut mon = WalMonitor {
+            db_path: db_path.clone(),
+            pool: pool.clone(),
+            metrics: crate::metrics::DbMetrics::new(),
+            config: WalMonitorConfig::default(),
+            last_wal_state: WalState::Present(wal_identity(&md)),
+            wal_ever_present: true,
+            tripped: false,
+            trip_events: 0,
+            guard: None,
+            salvage_conn: Some(salvage_conn),
+            last_salvage: None,
+        };
+        std::fs::remove_file(&wal).unwrap();
+        let _ = std::fs::remove_file(format!("{}-shm", db_path.display()));
+        mon.check_wal_size().await;
+        assert!(mon.tripped, "trip was not detected after WAL removal");
+        assert!(mon.last_salvage.as_ref().is_some_and(|r| r.is_ok()), "salvage did not run through the dedicated connection: {:?}", mon.last_salvage);
+        assert!(matches!(mon.last_salvage.as_ref(), Some(Ok((0, _, _)))), "salvage checkpoint reported busy: {:?}", mon.last_salvage);
+        pool.close().await;
+        drop(mon);
+        let offline = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
+            .connect_with(crate::wal_guard::options_for(&db_path).unwrap()).await.unwrap();
+        let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM projects WHERE name='salvage-probe'").fetch_one(&offline).await.unwrap();
+        assert_eq!(n, 1, "salvage checkpoint did not flush pre-trip frames (A6 refuted?)");
     }
 
     #[cfg(target_os = "linux")]
