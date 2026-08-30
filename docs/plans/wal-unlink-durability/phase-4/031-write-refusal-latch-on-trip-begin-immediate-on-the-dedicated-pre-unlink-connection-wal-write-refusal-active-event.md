@@ -45,7 +45,7 @@ async fn refusal_latch_blocks_writes_allows_reads() {
         .map(|c| c.into_owned());
     assert_eq!(write_code.as_deref(), Some("5"),
         "write must be refused by the latch with SQLITE_BUSY (code 5), got {write:?}");
-    let read = sqlx::query("SELECT count(*) FROM projects").fetch_one(&mut *pooled).await;
+    let read: Result<i64, sqlx::Error> = sqlx::query_scalar("SELECT count(*) FROM projects").fetch_one(&mut *pooled).await;
     assert!(read.is_ok(), "read blocked on the held old-domain connection: {read:?}");
     drop(latch);
 }
