@@ -569,6 +569,12 @@ pub fn get_wal_size(db_path: impl AsRef<Path>) -> u64 {
     std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0)
 }
 
+/// Check if an inotify event indicates WAL removal.
+#[cfg(target_os = "linux")]
+fn is_wal_removal(kind: &notify::event::EventKind, paths: &[std::path::PathBuf], wal_basename: &str) -> bool {
+    false // stub: will be filled by GREEN implementation
+}
+
 /// Run `fut` to completion, catching any panic and logging it at error level.
 ///
 /// Returns `Ok(())` on normal completion, `Err(panic_message)` on panic. This
@@ -811,5 +817,17 @@ mod tests {
         mon.check_wal_size().await;
         mon.check_wal_size().await;
         assert_eq!(mon.trip_events, 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn is_wal_removal_matches_delete_and_rename_from() {
+        use notify::event::{EventKind, RemoveKind, ModifyKind, RenameMode};
+        let wal = std::path::PathBuf::from("/x/db.sqlite-wal");
+        let other = std::path::PathBuf::from("/x/db.sqlite");
+        assert!(is_wal_removal(&EventKind::Remove(RemoveKind::File), std::slice::from_ref(&wal), "db.sqlite-wal"));
+        assert!(is_wal_removal(&EventKind::Modify(ModifyKind::Name(RenameMode::From)), std::slice::from_ref(&wal), "db.sqlite-wal"));
+        assert!(!is_wal_removal(&EventKind::Remove(RemoveKind::File), std::slice::from_ref(&other), "db.sqlite-wal"));
+        assert!(!is_wal_removal(&EventKind::Create(notify::event::CreateKind::File), std::slice::from_ref(&wal), "db.sqlite-wal"));
     }
 }

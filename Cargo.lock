@@ -1240,6 +1240,7 @@ dependencies = [
  "db",
  "executors",
  "futures",
+ "notify",
  "rusqlite",
  "serde",
  "serde_json",

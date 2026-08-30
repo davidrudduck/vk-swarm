@@ -619,3 +619,25 @@ durable record. `.gitignore:91` excludes `*.log`, so these eight files were stag
 - [Task 020 orchestrator] Attempt 1 (`4e2fa18e7` feat + `8d95c7707` clippy) panel unanimous DEVIATES: `Replaced` routed into size-threshold (`Unchanged | Replaced if Present(_)`); `vanished_trips` hollow vs Replaced≡Unchanged. Attempt 2 (`e224af884`) dedicated `Replaced | Vanished` trip arm (no Absent guard) + `replaced_trips` (seed `Present(Some(u64::MAX))`). Stage-1 CONFORMS.
 
 - [Task 020 orchestrator] Panel round 2 (HEAD `e224af884`): Grok CONFORMS. Opus/GPT DEVIATES on spec TS1 L128 "asserting the named WARN event fields". Task Failing-test section authorizes only `tripped`/`trip_events` assertions; 040 live harness (`scripts/live/wal-unlink-durability-repro.sh`) asserts the log line names the DB path (SC2). `replaced_trips` fails a Replaced≡Unchanged mutant and a no-op `check_wal_size`. DISCARD WARN-fields as plan-level, not implementer drift. Remaining SHOULD-FIX not rejected: guard-health after every `select` arm (extra probes, not a classification hole; 022 wires the guard); `replaced_trips` ungated on non-unix (host is Linux; Manual verification is compile-on-non-Linux); Replaced arm omits redundant `wal_ever_present = true` (already true whenever last was Present); `#[allow(dead_code)]` on frozen `UnlinkedEvent.event` (warn! uses the task-specified literal).
+
+## Task 021 orchestrator
+
+- [Task 021 orchestrator] `files:` amended to include `Cargo.lock` — adding `notify = "8.2.0"` under `[target.'cfg(target_os = "linux")'.dependencies]` always rewrites the workspace lockfile; without it Stage-1 file-set fails. Mechanical, not a behaviour change.
+
+- [Task 021 orchestrator] Pre-resolution: do NOT STOP if the linux watch select arm requires `#[cfg(target_os = "linux")]` around watch locals / a cfg-split of the `run` loop. That is the spec's documented non-Linux poll-only degradation. Do not restructure existing command/tick/truncate arms beyond adding the watch arm + recreating the watch inside the 60s tick arm. Record the cfg split in the ledger if used.
+
+- [Task 021 orchestrator] Pre-resolution: sibling `filesystem_watcher.rs` uses notify 8.2.0 + notify-debouncer-full, gitignore walk, canonicalize. Expected divergence (task-authorized): RAW un-debounced events for a single known filename — no debouncer, no gitignore. List every sibling exclusion/guard in the ledger and justify each divergence. Do not add `notify-debouncer-full`.
+
+## Task 021 implementer
+
+Sibling divergences documented (authorized):
+- **notify-debouncer-full**: NOT USED. Sibling debounces at 200ms for general file changes; we need raw un-debounced events to detect WAL removal immediately (no debounce delay).
+- **Gitignore walk + path_allowed filter**: NOT USED. Sibling scans .gitignore files and filters events against ignore rules for a recursive watch of potentially thousands of files; we filter by simple filename match (wal_basename) for a single known directory (NonRecursive), no gitignore relevance.
+- **Canonicalize + path resolution**: NOT USED. Sibling canonicalizes all paths for gitignore matching and to detect paths outside the watched root; we watch only db_path.parent() with NonRecursive, no path resolution needed.
+- **RecursiveMode**: DIVERGED. Sibling uses Recursive; we use NonRecursive (watch parent dir only, don't recurse into subdirs).
+- **Channel capacity**: DIVERGED. Sibling uses bounded channel(64); we use unbounded tokio::sync::mpsc::UnboundedReceiver per spec (Event callback posts to unbounded channel).
+- **Access event filter**: NOT NEEDED. Sibling explicitly filters `event.kind.is_access()` because recursive watch generates spurious access events; unlink detection on a single dir does not emit access events, no filter needed.
+- **Permission error handling**: SIMPLIFIED. Sibling skips individual permission errors during gitignore walk; we fail the entire watch setup on error (tracing::warn + return None, degrade to poll fallback).
+- **Watch scope**: NARROWED. Sibling watches root (recursive); we watch only db_path.parent() (non-recursive, single known filename, immediate detection).
+
+Implementation notes: Red test written first (`is_wal_removal_matches_delete_and_rename_from`), confirm it fails on function absence. Added cfg-gated helper + watch setup + select arm. Non-Linux: 60s poll only, debug log at startup.

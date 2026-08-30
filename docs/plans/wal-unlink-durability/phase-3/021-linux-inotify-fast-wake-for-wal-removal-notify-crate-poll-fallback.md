@@ -9,6 +9,7 @@ conflicts_with: ["020","030","031"]
 files:
   - "crates/db/src/wal_monitor.rs"
   - "crates/db/Cargo.toml"
+  - "Cargo.lock"
 siblings: ["crates/services/src/services/filesystem_watcher.rs"]
 irreversible: false
 scope_test: "crates/db/src/wal_monitor.rs"
