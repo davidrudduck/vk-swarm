@@ -2,7 +2,7 @@
 id: "021"
 phase: 3
 title: "Linux inotify fast-wake for WAL removal (notify crate, poll fallback)"
-status: ready
+status: passed
 depends_on: ["020"]
 parallel: false
 conflicts_with: ["020","030","031"]

@@ -643,3 +643,5 @@ Sibling divergences documented (authorized):
 Implementation notes: Red test written first (`is_wal_removal_matches_delete_and_rename_from`), confirm it fails on function absence. Added cfg-gated helper + watch setup + select arm. Non-Linux: 60s poll only, debug log at startup.
 
 - Select arm now uses `pending()` when watch is `None` and sets `watch = None` on `recv()` returning `None` so the 60s tick can re-arm.
+
+- [Task 021 orchestrator] Panel round 2 (HEAD `e47930ed7`): Opus CONFORMS, Grok CONFORMS. GPT DEVIATES on re-arm-after-`check_wal_size` race vs L52 "create watch before first metadata reconcile". L52 is the INITIAL create (already before the loop at `wal_monitor.rs:280`); L68 does not order re-arm vs `check_wal_size`. DISCARD as plan-level, not implementer drift. Round-1 closed-channel `None` fix confirmed. Marked passed.
