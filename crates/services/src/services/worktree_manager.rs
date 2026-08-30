@@ -684,7 +684,7 @@ impl WorktreeManager {
             }
 
             // Sort by size descending and take top 10
-            worktrees.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+            worktrees.sort_by_key(|b| std::cmp::Reverse(b.bytes));
             let largest = worktrees.into_iter().take(10).collect();
 
             Ok(DiskUsageStats {

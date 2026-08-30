@@ -49,7 +49,7 @@ pub async fn get_projects_with_stats(
         })
         .collect();
 
-    projects.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    projects.sort_by_key(|p| p.name.to_lowercase());
 
     Ok(ResponseJson(ApiResponse::success(
         ProjectsWithStatsResponse { projects },

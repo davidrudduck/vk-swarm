@@ -155,7 +155,7 @@ fn cleanup_old_logs(log_dir: &PathBuf, max_files: usize) {
         .collect();
 
     // Sort by modification time, newest first
-    log_files.sort_by(|a, b| b.1.cmp(&a.1));
+    log_files.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // Remove files beyond max_files
     for (path, _) in log_files.into_iter().skip(max_files) {

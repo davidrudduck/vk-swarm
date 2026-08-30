@@ -157,6 +157,10 @@ impl LocalDeployment {
     /// loop) is covered rather than re-implemented in the test module.
     ///
     /// The public API is unchanged: this is `pub(crate)`, and the `Deployment` trait is untouched.
+    // db_path was threaded through as an 8th arg by the wal-unlink-durability workstream
+    // (task 022: guard/monitor construction needs the on-disk DB path; bundling the args
+    // into a struct would churn every test caller for no behavioural gain).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn from_parts(
         db: DBService,
         config: Arc<RwLock<Config>>,
