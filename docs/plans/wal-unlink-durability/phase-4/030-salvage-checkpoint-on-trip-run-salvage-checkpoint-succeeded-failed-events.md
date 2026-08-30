@@ -2,7 +2,7 @@
 id: "030"
 phase: 4
 title: "Salvage checkpoint on trip (run_salvage_checkpoint + succeeded/failed events)"
-status: ready
+status: passed
 depends_on: ["020"]
 parallel: false
 conflicts_with: ["020","021","031"]

@@ -648,8 +648,8 @@ Implementation notes: Red test written first (`is_wal_removal_matches_delete_and
 
 ## Task 030 implementer
 
-- A6-true branch used (offline n==1) — ledger ### VERDICT 3 redo — A6 salvage attribution L387-418 — crates/db/src/wal_monitor.rs
-- `cargo test -p db wal_monitor`: test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 307 filtered out; finished in 1.15s
+- A6-true branch used (pre-stop immutable before==0 / after==1) — ledger ### VERDICT 3 redo L411-421 — crates/db/src/wal_monitor.rs
+- `cargo test -p db wal_monitor` after SC13 amendment: test result: ok. 13 passed; 0 failed (Opus scratch mutant stub Ok((0,0,0)) fails after==1)
 
 ## Task 030 orchestrator
 
