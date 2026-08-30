@@ -30,26 +30,19 @@ async fn guard_blocks_external_unlink_hold_read() {
     sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'guard-probe', '/tmp/guard-probe-uniq')").execute(&pool).await.unwrap();
     let mode = ledger_mode(); // see change text — the mode task 002 recorded
     let guard = WalGuard::connect(&db_path, mode).await.unwrap();
+    // integrated-review amendment 2026-08-30: the previous /proc/locks self-pid assertion was
+    // vacuous — SQLite's shm fcntl locks are per-PROCESS, so the test's own pool already showed a
+    // READ lock for this pid whether or not the guard held anything. The real differential is:
+    // CLOSE THE POOL FIRST, then run the external write session. With every pooled connection
+    // gone, only the guard can prevent the last-closer WAL unlink, so `wal.exists()` afterwards
+    // is a genuine guard signal rather than a side effect of the pool.
+    pool.close().await;
     // 2026-08-30 vector amendment: the unlink trigger is an external WRITE session, not a read.
     let out = std::process::Command::new("sqlite3").arg(&db_path).arg("PRAGMA user_version=1;").output().unwrap();
     assert!(out.status.success());
     let wal = std::path::PathBuf::from(format!("{}-wal", db_path.display()));
-    assert!(wal.exists(), "external write-session close unlinked the WAL despite the guard");
-    // 2026-08-30 amendment v2: external sessions provably cannot unlink on this binary, so
-    // wal.exists() alone is vacuous-green. The DIFFERENTIAL assertion is lock persistence:
-    // /proc/locks must show a POSIX READ lock on the shm file held by THIS process while the
-    // guard is alive (the lock class that blocks external close-unlink; VERDICT 2 in the
-    // ledger names the mode whose probe held it persistently).
-    let shm = format!("{}-shm", db_path.display());
-    let locks = std::fs::read_to_string("/proc/locks").unwrap();
-    let self_pid = std::process::id().to_string();
-    assert!(locks.lines().any(|l| l.contains("READ") && l.contains(&self_pid) && {
-        // /proc/locks lists device:inode, not paths — resolve the shm inode and match it
-        let ino = std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&shm).unwrap());
-        l.contains(&format!(":{:x}", ino)) || l.contains(&ino.to_string())
-    }), "guard does not hold a persistent READ lock on the shm file");
+    assert!(wal.exists(), "external write-session close unlinked the WAL despite the guard (pool already closed)");
     drop(guard);
-    pool.close().await;
     // Durability must survive a FULL close: a fresh offline connection sees the pre-CLI row.
     let offline = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
         .connect_with(options_for(&db_path).unwrap()).await.unwrap();
@@ -61,7 +54,7 @@ Gate env: WAI_TYPECHECK_CMD="cargo check -p db" WAI_TEST_CMD="cargo test -p db w
 
 
 ## Change
-Create `crates/db/src/wal_guard.rs`. FIRST read docs/plans/wal-unlink-durability/decisions-ledger.md `## T1 mechanism evidence` and implement the mode it records (Mode::HoldRead expected; Mode::MapOnly if that is what the evidence says). In the test above, replace `ledger_mode()` with a literal of the recorded mode (e.g. `Mode::HoldRead`).
+Create `crates/db/src/wal_guard.rs`. FIRST read docs/plans/wal-unlink-durability/decisions-ledger.md `## T1 mechanism evidence` and implement the mode it records — read the ledger VERDICT 2: MapOnly (selected 2026-08-30) (integrated-review amendment 2026-08-30: the old "HoldRead expected" note predated the verdict and contradicted it). In the test above, replace `ledger_mode()` with a literal of the recorded mode.
 
 Module contents (sqlx 0.8.6, mirrors crates/db/src/lib.rs connect style):
 
@@ -84,14 +77,15 @@ pub struct WalGuard {
 ```
 
 - `pub(crate) fn options_for(db_path: &Path) -> Result<SqliteConnectOptions, sqlx::Error>` (pub(crate): tasks 030/031 reuse it — never duplicate pragma SQL): `SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))?` then `.create_if_missing(false).journal_mode(SqliteJournalMode::Wal).synchronous(SqliteSynchronous::Normal).busy_timeout(Duration::from_secs(5))`. (create_if_missing(FALSE): the guard must never create a stray DB; the pool bootstrap already created it. Shared helper so reconnect uses identical options.)
-- `pub async fn connect(db_path: &Path, mode: Mode) -> Result<Self, sqlx::Error>`: `let mut conn = options.connect().await?;` then `crate::apply_performance_pragmas(&mut conn).await?;` (crate-root private fn at lib.rs L80-107 — visible to this child module as `crate::apply_performance_pragmas`). If mode==HoldRead: `sqlx::query("BEGIN DEFERRED").execute(&mut conn).await?;` then `sqlx::query("SELECT name FROM sqlite_schema LIMIT 1").fetch_optional(&mut conn).await?;` and set holding_read_mark=true (the SELECT materialises the read-mark on the wal-index; BEGIN alone does not).
+- `pub async fn connect(db_path: &Path, mode: Mode) -> Result<Self, sqlx::Error>`: `let mut conn = options.connect().await?;` then `crate::apply_performance_pragmas(&mut conn).await?;` (crate-root private fn at lib.rs L80-107 — visible to this child module as `crate::apply_performance_pragmas`), then, IN BOTH MODES, a DUMMY READ: `sqlx::query("SELECT count(*) FROM sqlite_master").fetch_one(&mut conn).await?;`. (integrated-review amendment 2026-08-30: MapOnly is connect + pragmas + dummy read, NOT connect-only. Opening a connection does not map the wal-index; the first read does — the ledger's VERDICT-2 MapOnly probe held its persistent locks only after `SELECT count(*) FROM tasks`. A connect-only MapOnly guard holds nothing at all.) If mode==HoldRead, additionally: `sqlx::query("BEGIN DEFERRED").execute(&mut conn).await?;` then `sqlx::query("SELECT name FROM sqlite_schema LIMIT 1").fetch_optional(&mut conn).await?;` and set holding_read_mark=true (the SELECT materialises the read-mark inside the transaction; BEGIN alone does not).
 - `pub async fn is_alive(&mut self) -> bool`: `sqlx::query("SELECT 1").execute(&mut self.conn).await.is_ok()`.
 - `pub async fn reconnect(&mut self) -> Result<(), sqlx::Error>`: drop the old conn, re-run connect logic from stored options+mode, restore holding_read_mark.
-- HoldRead only: `pub async fn release_read_mark(&mut self)`: if holding_read_mark, `sqlx::query("COMMIT").execute(&mut self.conn).await` (log-and-continue on error — never panic in a coordination path), set false. `pub async fn reacquire_read_mark(&mut self) -> Result<(), sqlx::Error>`: BEGIN DEFERRED + the schema SELECT, set true. (The monitor calls these around its TRUNCATE checkpoint — a held read-mark blocks TRUNCATE; that is the recorded trade.)
+- HoldRead only: `pub async fn release_read_mark(&mut self)`: if holding_read_mark, `sqlx::query("COMMIT").execute(&mut self.conn).await` (log-and-continue on error — never panic in a coordination path), set false. `pub async fn reacquire_read_mark(&mut self) -> Result<(), sqlx::Error>`: FIRST `if self.mode != Mode::HoldRead { return Ok(()); }`, then BEGIN DEFERRED + the schema SELECT, set true. (integrated-review amendment 2026-08-30: the mode gate is load-bearing — without it the monitor's first TRUNCATE tick would convert a MapOnly guard into a HoldRead one and permanently block TRUNCATE checkpoints, including the node's shutdown checkpoint. Both methods are no-ops under MapOnly; only a HoldRead guard ever takes a read-mark.) The monitor calls these around its TRUNCATE checkpoint — a held read-mark blocks TRUNCATE; that is the recorded trade under HoldRead, and the reason MapOnly was selected.
+- `pub async fn open_salvage_connection(db_path: &Path) -> Result<SqliteConnection, sqlx::Error>` (integrated-review amendment 2026-08-30: the dedicated old-domain connection that tasks 030/031 use for the salvage checkpoint and the refusal latch is opened by an ASYNC CALLER — `WalMonitor::spawn` is synchronous and cannot open it — and `options_for` is pub(crate), so a cross-crate caller such as the task-022 wiring needs a public opener; it lives here because this module owns the connect options): `let mut conn = options_for(db_path)?.connect().await?;` then `crate::apply_performance_pragmas(&mut conn).await?;` then the SAME dummy read as above, then `Ok(conn)`. No transaction and no read-mark — the caller decides what to do with it.
 - `pub fn guard_disabled() -> bool`: `std::env::var("VK_WAL_GUARD").map(|v| matches!(v.to_ascii_lowercase().as_str(), "off" | "0" | "false")).unwrap_or(false)` (kill-switch for the SC2 repro leg; house bool-env pattern mirrors VK_WAL_AUTO_CHECKPOINT at wal_monitor.rs L71-73).
 - The wal-path helper is NOT here — it lands in wal_monitor.rs (task 020). Keep this module single-purpose.
 
-This task introduces the new symbols `options_for()`, `connect()`, `is_alive()`, `reconnect()`, `release_read_mark()`, `reacquire_read_mark()`, and `guard_disabled()` (later tasks may call them; they are defined here).
+This task introduces the new symbols `options_for()`, `connect()`, `is_alive()`, `reconnect()`, `release_read_mark()`, `reacquire_read_mark()`, `open_salvage_connection()`, and `guard_disabled()` (later tasks may call them; they are defined here).
 
 In crates/db/src/lib.rs add exactly one line: `pub mod wal_guard;` inserted between L21 `pub mod validation;` and L22 `pub mod wal_monitor;` (alphabetical). Do NOT add a `pub use` re-export — callers use `db::wal_guard::WalGuard`.
 

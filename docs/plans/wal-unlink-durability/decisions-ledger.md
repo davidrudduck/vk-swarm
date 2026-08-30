@@ -501,3 +501,107 @@ was accepted with HTTP 200 and parsed `.success=true` (line 58), and its pinned 
 - [Task 002] Poll exact node PIDs before reaping the A6 probe — PIDs captured through command
   substitution are non-children, so `wait` alone cannot reliably observe graceful shutdown —
   `/tmp/opencode/wal-a6-redo.sh`
+
+## 2026-08-30 — Phase-1 integrated review remediation
+
+Seven BLOCKING findings from the phase-1 integrated adversarial review, all fixed in this session
+(one line each, with the file the fix landed in):
+
+1. Salvage connection opened in a SYNC constructor. `spawn`/`spawn_default` (wal_monitor.rs
+   L140-166) are synchronous and task 022 calls them without `.await`, so an `.await` inside them
+   cannot compile. The CALLER now opens the dedicated pre-unlink connection in async context and
+   passes it into spawn as a trailing parameter; task 010 exposes a public opener in wal_guard.rs
+   because `options_for` is pub(crate) and the wiring caller lives in another crate —
+   `docs/plans/wal-unlink-durability/phase-4/030-salvage-checkpoint-on-trip-run-salvage-checkpoint-succeeded-failed-events.md`,
+   `docs/plans/wal-unlink-durability/phase-2/010-walguard-module-dedicated-wal-index-holding-guard-connection-vk-wal-guard-kill-switch.md`,
+   `docs/plans/wal-unlink-durability/phase-4/022-wire-walguard-walmonitor-into-localdeployment-from-parts-with-shutdown-ordering.md`.
+2. Connect-only does not map the wal-index. Every dedicated old-domain connection (guard, salvage,
+   refusal) now performs a dummy read at open — the VERDICT-2 and VERDICT-3 probes each issued a
+   SELECT before their observation, and an unmapped connection holds nothing —
+   `docs/plans/wal-unlink-durability/phase-2/010-walguard-module-dedicated-wal-index-holding-guard-connection-vk-wal-guard-kill-switch.md`,
+   `docs/plans/wal-unlink-durability/phase-4/030-salvage-checkpoint-on-trip-run-salvage-checkpoint-succeeded-failed-events.md`,
+   `docs/plans/wal-unlink-durability/phase-4/031-write-refusal-latch-on-trip-begin-immediate-on-the-dedicated-pre-unlink-connection-wal-write-refusal-active-event.md`.
+3. A checkpoint returning Ok with a non-zero first column is BLOCKED, not salvaged (VERDICT 2
+   recorded `[(1, 880, 19)]` for exactly that case). `run_salvage_checkpoint` now maps that row to
+   an error so the emitted event is the failed one —
+   `docs/plans/wal-unlink-durability/phase-4/030-salvage-checkpoint-on-trip-run-salvage-checkpoint-succeeded-failed-events.md`.
+4. The TS3 `/proc/locks` self-pid assertion was vacuous — SQLite's shm fcntl locks are per-process,
+   so the test's own pool already produced a matching READ lock. Replaced by a real differential:
+   close the pool first, then run the external write session and assert the WAL still exists, so
+   only the guard can be preventing the last-closer unlink (this also removes the metadata-panic
+   path on the shm file) —
+   `docs/plans/wal-unlink-durability/phase-2/010-walguard-module-dedicated-wal-index-holding-guard-connection-vk-wal-guard-kill-switch.md`.
+5. Read-mark release/reacquire around the TRUNCATE tick was unconditional, so the first tick would
+   have converted the selected MapOnly guard into a HoldRead one and permanently blocked TRUNCATE
+   including the node's shutdown checkpoint. Both calls are now gated on HoldRead mode, and the
+   stale "HoldRead expected" note was corrected to the recorded MapOnly verdict —
+   `docs/plans/wal-unlink-durability/phase-2/010-...md`,
+   `docs/plans/wal-unlink-durability/phase-3/020-walmonitor-revival-wal-path-fix-inode-transition-classification-wal-unlinked-externally-event-guard-ownership.md`,
+   `docs/plans/wal-unlink-durability/phase-4/022-...md` (hardcoded HoldRead literal corrected to
+   MapOnly per VERDICT 2).
+6. WalState seeding missed the leg-B race: spawn seeds Absent, the first API write creates the WAL,
+   and the removal can land before the next tick, so the incident read as benign. The monitor now
+   tracks whether the WAL was ever observed present; Absent→Present updates state without tripping,
+   and an Absent observation is benign only when the WAL was never seen —
+   `docs/plans/wal-unlink-durability/phase-3/020-...md`.
+7. Shutdown ordering and event payloads. The Shutdown arm now releases the read-mark (HoldRead
+   only), drops the refusal latch, and only then acks, so the node's final TRUNCATE cannot race a
+   live latch; and both named events carry the DB path in `path` (WAL path moved to a separate
+   `wal_path` field) as SC2 and the harness require —
+   `docs/plans/wal-unlink-durability/phase-3/020-...md`,
+   `docs/plans/wal-unlink-durability/phase-4/031-...md`.
+   Test fault injection in 030 and 031 now removes BOTH the `-wal` and `-shm` files, matching the
+   harness's injection step.
+
+SC1 DIFFERENTIAL NOTE. With the vacuous `/proc/locks` assertion gone, SC1's live differential rests
+on task 010's pool-closed TS3 test plus the VERDICT-2 lock-persistence evidence (MapOnly held the
+db and shm POSIX READ locks across all 13 captures, `/tmp/opencode/wal-t1-map.log`, copied to the
+evidence directory below). Leg A of the live harness is REGRESSION COVERAGE only: on this binary an
+external write session provably cannot unlink the WAL, so leg A's detector timeout proves the
+absence of a regression, not the presence of guard prevention.
+
+HARNESS CHANGE AND TRUE OBSERVED COUNTS. Leg B's assertion count went 15 → 16: the
+`wal_unlinked_externally` grep became a bounded 30s poll (unchanged count; the node emits it
+asynchronously while the fd-state detector trips in ~2ms) and a new post-trip read assertion was
+added (authenticated `GET /api/projects` expecting HTTP 200 with a parsed `.success == true`),
+which is the reads-continue property of the D6 posture — it passes on the unfixed binary (nothing
+is refused) and post-fix (only writes are refused), and fails only in the fail-closed pool-death
+deviation. Leg B also boots with `VK_WAL_CHECK_INTERVAL_SECS=5`, a documented divergence from the
+60s production default so the monitor's poll fallback fires inside the harness's 30s windows.
+
+Observed on the current (unfixed) binary, `target/release/vks-node-server`:
+`MODE=baseline bash scripts/live/wal-unlink-durability-repro.sh` exited `0` with `Total PASS: 24`
+and `Total FAIL: 0` (`/tmp/opencode/wal-ir-baseline.log` lines 48-49); both legs `PASS=12 FAIL=0
+TOTAL=12` (lines 52-53). `LEGS=AB MODE=full bash scripts/live/wal-unlink-durability-repro.sh`
+exited `1` with `Total PASS: 28` and `Total FAIL: 5` (`/tmp/opencode/wal-ir-full.log` lines 65-66);
+Leg A `PASS=17 FAIL=0 TOTAL=17` and Leg B `PASS=11 FAIL=5 TOTAL=16` (lines 69-70). The five leg-B
+reds are the unlink-event poll timeout (line 53-54), its db-path check, the refusal-latch poll
+timeout, the accepted `marker-B-post` write, and the pinned offline persisted count; the new
+post-trip read PASSED (line 59) as predicted for an unfixed node.
+
+I2 POINTER. The `[(0, 0, 0)]` tuple returned by the ARM-A salvage checkpoint is
+`wal_checkpoint(TRUNCATE)`'s post-truncation SUCCESS signature — sqlite3.h specifies both `pnLog`
+and `pnCkpt` read zero after a successful TRUNCATE, so it is not a zero-work result. The live
+reading of the two-arm evidence is the ORCHESTRATOR CORRECTION in
+`### VERDICT 3 redo — A6 salvage attribution` above; A6 rests on the pre-stop differential
+(ARM A = 1, ARM B = 0), not on the tuple.
+
+EVIDENCE DIRECTORY. The load-bearing transcripts are now copied into
+`docs/plans/wal-unlink-durability/evidence/` (`wal-a6-redo-r3-transcript.log`, `wal-t1-clean.log`,
+`wal-t1-map.log`, `wal-t1-hold-checkpoint.log`, `wal-002-r4-baseline.log`, `wal-002-r4-full.log`,
+plus this session's `wal-ir-baseline.log` and `wal-ir-full.log`). The `/tmp/opencode/...` citations
+throughout this ledger are retained for history; they are ephemeral, and the repo copies are the
+durable record. `.gitignore:91` excludes `*.log`, so these eight files were staged with `git add
+-f` deliberately — the filenames are kept identical to the citations rather than renamed.
+
+- [Integrated review] Open the salvage connection in the async caller and pass it into the
+  synchronous spawn, rather than making spawn async — spawn has no other await and task 022 calls
+  it from a non-await position -
+  `docs/plans/wal-unlink-durability/phase-4/030-salvage-checkpoint-on-trip-run-salvage-checkpoint-succeeded-failed-events.md`
+- [Integrated review] Replace the vacuous per-process lock assertion with a pool-closed external
+  write differential, because SQLite's shm fcntl locks cannot distinguish the guard from the test's
+  own pool within one process -
+  `docs/plans/wal-unlink-durability/phase-2/010-walguard-module-dedicated-wal-index-holding-guard-connection-vk-wal-guard-kill-switch.md`
+- [Integrated review] Add the post-trip read assertion and shorten leg B's WAL check interval,
+  making the reads-continue property of D6 an asserted contract rather than an assumption -
+  `scripts/live/wal-unlink-durability-repro.sh`

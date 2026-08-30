@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Live two-leg WAL-unlink durability harness.
+# Leg B runs with VK_WAL_CHECK_INTERVAL_SECS=5 (integrated-review amendment 2026-08-30): a
+# documented divergence from the 60s production default so the WAL-monitor poll fallback fires
+# inside this harness's 30s assertion windows. Leg A keeps production defaults.
 set -euo pipefail
 
 LEGS="${LEGS-AB}"
@@ -227,6 +230,17 @@ response_success_false() {
   RESPONSE_BODY="$response_body" python3 -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["RESPONSE_BODY"]).get("success") is False else 1)' 2>/dev/null
 }
 
+# integrated-review amendment 2026-08-30: post-trip read probe. The D6 posture refuses WRITES and
+# keeps READS live, so a failure here signals the fail-closed deviation rather than a refusal.
+api_read_ok() {
+  local legdir="$1" response http_code resp_body
+  response=$(api_call GET /api/projects "$legdir")
+  http_code=$(printf '%s\n' "$response" | head -n 1)
+  resp_body=$(printf '%s\n' "$response" | tail -n 1)
+  [ "$http_code" = 200 ] || { log_error "post-trip read failed: HTTP $http_code"; return 1; }
+  response_success_true "$resp_body" || { log_error 'post-trip read did not parse as .success=true'; return 1; }
+}
+
 create_project() {
   local legdir="$1" name="$2" repo_dir project_body response http_code resp_body project_id
   repo_dir="$legdir/repo"
@@ -265,6 +279,28 @@ trip_detector() {
   now_ns=$(date +%s%N)
   elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
   log_info "Trip detector timeout after ${elapsed_ms}ms"
+  return 1
+}
+
+# integrated-review amendment 2026-08-30: the node emits wal_unlinked_externally asynchronously on
+# its own monitor tick, while the fd-state trip detector fires in ~2ms, so an unpolled grep races
+# the monitor. Bounded 30s poll, same shape as the refusal poll; a timeout is still a FAIL.
+unlink_event_detector() {
+  local legdir="$1" start_ns now_ns elapsed_ms start_seconds
+  start_ns=$(date +%s%N)
+  start_seconds=$SECONDS
+  while (( SECONDS - start_seconds < 30 )); do
+    if grep -q 'wal_unlinked_externally' "$legdir/node.log"; then
+      now_ns=$(date +%s%N)
+      elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
+      log_info "Unlink event evidence after ${elapsed_ms}ms"
+      return 0
+    fi
+    sleep 0.5
+  done
+  now_ns=$(date +%s%N)
+  elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
+  log_info "Unlink event detector timeout after ${elapsed_ms}ms"
   return 1
 }
 
@@ -324,6 +360,8 @@ record_timing() {
 
 boot_and_seed() {
   local legdir="$1" guard="$2" label="$3" pid
+  shift 3
+  local extra_env=("$@")
   local before=$FAIL_COUNT
   run_node "$legdir"
   pid=$RUN_NODE_PID
@@ -333,7 +371,7 @@ boot_and_seed() {
   if [ "$FAIL_COUNT" -ne "$before" ]; then return 1; fi
   check_status "$label browser session seeded" seed_session "$legdir"
   if [ "$FAIL_COUNT" -ne "$before" ]; then return 1; fi
-  run_node "$legdir" "VK_WAL_GUARD=$guard"
+  run_node "$legdir" "VK_WAL_GUARD=$guard" ${extra_env[@]+"${extra_env[@]}"}
   pid=$RUN_NODE_PID
   check_status "$label boot 2 is healthy" wait_health "$legdir"
   if [ "$FAIL_COUNT" -ne "$before" ]; then stop_node "$pid" || true; return 1; fi
@@ -399,7 +437,10 @@ run_leg_b_attempt() {
   local legdir="$1" attempt="$2" completion_sentinel="$3" pid project_id response http_code resp_body count journal_mode i setup_before completion_allowed=1 trip_detected=0 wal_existed=0 shm_existed=0 rm_succeeded=0
   local before=$FAIL_COUNT
   mkdir -p "$legdir"
-  if ! boot_and_seed "$legdir" off "Leg B attempt $attempt"; then return 1; fi
+  # integrated-review amendment 2026-08-30: leg B boots with VK_WAL_CHECK_INTERVAL_SECS=5 — a
+  # documented divergence from the 60s production default, so the monitor's poll fallback can fire
+  # inside this leg's 30s assertion windows and can observe the WAL present before its removal.
+  if ! boot_and_seed "$legdir" off "Leg B attempt $attempt" "VK_WAL_CHECK_INTERVAL_SECS=5"; then return 1; fi
   pid=$BOOT_PID
   setup_before=$FAIL_COUNT
   check_status "Leg B attempt $attempt project created" create_project "$legdir" "repro-B-$attempt"
@@ -436,7 +477,7 @@ run_leg_b_attempt() {
     else
       check_status "Leg B attempt $attempt detected external WAL unlink" false
     fi
-    check_status "Leg B attempt $attempt wal_unlinked_externally logged" grep -q 'wal_unlinked_externally' "$legdir/node.log"
+    check_status "Leg B attempt $attempt wal_unlinked_externally logged" unlink_event_detector "$legdir"
     check_status "Leg B attempt $attempt unlink log names db path" bash -c "grep 'wal_unlinked_externally' \"\$1\" | grep -qF \"\$2\"" _ "$legdir/node.log" "$legdir/db.sqlite"
     check_status "Leg B attempt $attempt wal_write_refusal_active latched" refusal_latch_detector "$legdir"
     response=$(api_call POST /api/tasks "$legdir" "{\"project_id\":\"$project_id\",\"title\":\"marker-B-post\"}")
@@ -453,6 +494,7 @@ run_leg_b_attempt() {
     else
       check_status "Leg B attempt $attempt marker-B-post response was malformed or ambiguous" false
     fi
+    check_status "Leg B attempt $attempt post-trip read still served" api_read_ok "$legdir"
     check_status "Leg B attempt $attempt node remains alive after refusal" kill -0 "$pid"
     check_status "Leg B attempt $attempt stopped gracefully" stop_node "$pid"
     count=$(sqlite3 "$legdir/db.sqlite" "SELECT count(*) FROM tasks WHERE title='marker-B-post';")

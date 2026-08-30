@@ -28,12 +28,18 @@ async fn trip_runs_salvage_checkpoint() {
     assert!(wal.exists());
     let md = std::fs::metadata(&wal).unwrap();
     // Dedicated connection opened PRE-unlink (old shm/inode domain) — the monitor's salvage handle.
-    let salvage_conn = crate::wal_guard::options_for(&db_path).unwrap().connect().await.unwrap();
+    // (integrated-review amendment 2026-08-30: connect alone does not map the wal-index — the dummy read does.)
+    let mut salvage_conn = crate::wal_guard::options_for(&db_path).unwrap().connect().await.unwrap();
+    sqlx::query("SELECT count(*) FROM sqlite_master").fetch_one(&mut salvage_conn).await.unwrap();
     let mut mon = WalMonitor { db_path: db_path.clone(), pool: pool.clone(), metrics: crate::metrics::DbMetrics::new(), config: WalMonitorConfig::default(), last_wal_state: WalState::Present(wal_identity(&md)), tripped: false, trip_events: 0, guard: None, salvage_conn: Some(salvage_conn), last_salvage: None, /* + any fields other landed tasks added; default them */ };
+    // integrated-review amendment 2026-08-30: fault injection must match the live harness — remove BOTH -wal and -shm.
     std::fs::remove_file(&wal).unwrap(); // REAL external unlink while the conns hold the inode open
+    let _ = std::fs::remove_file(format!("{}-shm", db_path.display()));
     mon.check_wal_size().await;
     assert!(mon.tripped, "trip was not detected after WAL removal");
     assert!(mon.last_salvage.as_ref().is_some_and(|r| r.is_ok()), "salvage did not run through the dedicated connection: {:?}", mon.last_salvage);
+    // busy must be 0 — an Ok row with busy=1 is a BLOCKED checkpoint, not a salvage (ledger VERDICT 2 recorded [(1,880,19)]).
+    assert!(matches!(mon.last_salvage.as_ref(), Some(Ok((0, _, _)))), "salvage checkpoint reported busy: {:?}", mon.last_salvage);
     // A6 verdict TRUE branch: close EVERY original connection, then a FRESH offline connection must see the pre-trip row.
     pool.close().await;
     drop(mon);
@@ -49,7 +55,15 @@ Gate env: WAI_TYPECHECK_CMD="cargo check -p db" WAI_TEST_CMD="cargo test -p db w
 ## Change
 Edit crates/db/src/wal_monitor.rs.
 
-1. DEDICATED SALVAGE CONNECTION (the tournament-verified mechanism; see the spec's amended §3): WalMonitor gains `salvage_conn: Option<sqlx::sqlite::SqliteConnection>`, opened in spawn/spawn_default BEFORE the monitor task starts (pre-unlink — this connection lives in the OLD shm/inode domain, which after an external unlink is the ONLY handle guaranteed to address the orphaned WAL inode): `crate::wal_guard::options_for(&db_path)?.connect().await` (import `use sqlx::ConnectOptions;`). On connect error: log an error and continue with None (salvage then fails loudly at trip time — never panic in a coordination path). Add `last_salvage: Option<Result<(i32,i32,i32), String>>` for test observability (Ok mapped to its tuple, Err to the message).
+1. DEDICATED SALVAGE CONNECTION (the tournament-verified mechanism; see the spec's amended §3): WalMonitor gains `salvage_conn: Option<sqlx::sqlite::SqliteConnection>`, holding a connection opened BEFORE the monitor task starts (pre-unlink — this connection lives in the OLD shm/inode domain, which after an external unlink is the ONLY handle guaranteed to address the orphaned WAL inode).
+
+   OPENED BY THE CALLER, NOT BY spawn (integrated-review amendment 2026-08-30: spawn/spawn_default at wal_monitor.rs L140-166 are SYNCHRONOUS and task 022 calls them without `.await`, so an `.await` inside them would not compile): the CALLER — the async DBService init / `from_parts` wiring in task 022 — opens the connection and passes the resulting `Option<SqliteConnection>` INTO spawn as a trailing parameter, e.g. `WalMonitor::spawn_default(config, db_path, salvage_conn)` / `WalMonitor::spawn(db_path, pool, metrics, config, guard, salvage_conn)`. spawn stores it on the struct and stays synchronous.
+
+   The public opener already exists: task 010 defines `crate::wal_guard::open_salvage_connection` (connect + pragmas + the dummy read below), because `options_for` is pub(crate) and the cross-crate task-022 caller needs a public entry point. Do NOT define a second opener here.
+
+   DUMMY READ AT OPEN (integrated-review amendment 2026-08-30, evidence B2/B3): after connecting, run `sqlx::query("SELECT count(*) FROM sqlite_master").fetch_one(&mut conn).await?`. Connect-only does NOT map the wal-index/shm segment — the ledger's VERDICT-2 and VERDICT-3 probes each issued a SELECT before their lock/checkpoint observation, and an unmapped connection is not in the old shm domain at all. Apply the same rule to any other dedicated old-domain connection.
+
+   On connect or dummy-read error: log an error and pass None (salvage then fails loudly at trip time — never panic in a coordination path). Add `last_salvage: Option<Result<(i32,i32,i32), String>>` for test observability (Ok mapped to its tuple, Err to the message).
 
 2. `async fn run_salvage_checkpoint(&mut self) -> Result<(i32, i32, i32), sqlx::Error>` — the checkpoint runs through the DEDICATED connection, NOT the pool (a fresh pooled connection post-unlink opens the NEW empty inode and checkpoints nothing):
 ```rust
@@ -58,12 +72,22 @@ let conn = self.salvage_conn.as_mut().ok_or_else(|| {
     sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::NotConnected, "salvage connection unavailable").into())
 })?;
 let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").fetch_one(conn).await?;
-Ok((row.try_get(0)?, row.try_get(1)?, row.try_get(2)?)) // busy, log frames, checkpointed frames
+let (busy, log_frames, checkpointed): (i32, i32, i32) = (row.try_get(0)?, row.try_get(1)?, row.try_get(2)?);
+// integrated-review amendment 2026-08-30: an Ok row with a non-zero first column is a BLOCKED
+// checkpoint, not a salvage — the ledger's VERDICT 2 recorded [(1, 880, 19)] for exactly that
+// case. Only a zero first column counts as success; anything else is mapped to an error here so
+// the caller emits the failed event.
+if busy != 0 {
+    return Err(sqlx::Error::Protocol(format!(
+        "salvage checkpoint blocked (busy={busy}, log_frames={log_frames}, checkpointed={checkpointed})"
+    )));
+}
+Ok((busy, log_frames, checkpointed)) // busy (always 0 here), log frames, checkpointed frames
 ```
 
-3. handle_trip ORDER (spec's amended §3): (1) emit the wal_unlinked_externally event as structured in 020; (2) run_salvage_checkpoint FIRST — writers may still be committing into the orphaned WAL and the salvage checkpoint flushes those frames too — emitting per spec §3: on Ok((busy, log_frames, checkpointed)) → `tracing::info!(event = "wal_salvage_checkpoint_succeeded", busy, log_frames, checkpointed_frames = checkpointed, "WAL salvage checkpoint succeeded")`; on Err(e) → `tracing::error!(event = "wal_salvage_checkpoint_failed", error = ?e, "WAL salvage checkpoint failed")`; store the outcome in self.last_salvage; (3) THEN task 031's refusal latch — latch-first would make the salvage checkpoint itself fail with database-locked.
+3. handle_trip ORDER (spec's amended §3): (1) emit the wal_unlinked_externally event as structured in 020; (2) run_salvage_checkpoint FIRST — writers may still be committing into the orphaned WAL and the salvage checkpoint flushes those frames too — emitting per spec §3: on Ok((busy, log_frames, checkpointed)) — which by the guard above means busy == 0 — → `tracing::info!(event = "wal_salvage_checkpoint_succeeded", busy, log_frames, checkpointed_frames = checkpointed, "WAL salvage checkpoint succeeded")`; on Err(e), INCLUDING the blocked-checkpoint case mapped above → `tracing::error!(event = "wal_salvage_checkpoint_failed", error = ?e, "WAL salvage checkpoint failed")` (integrated-review amendment 2026-08-30: a checkpoint that returns Ok with a non-zero busy column is a failure, never a success); store the outcome in self.last_salvage; (3) THEN task 031's refusal latch — latch-first would make the salvage checkpoint itself fail with database-locked.
 
-4. The test's struct literal must match the landed field set (last_wal_state, tripped, trip_events, guard, salvage_conn, last_salvage — plus whatever other landed tasks added; default everything to None/false/0 except last_wal_state, which the test seeds from the real WAL metadata, and salvage_conn, which the test opens BEFORE the unlink via crate::wal_guard::options_for). The offline probe in the test uses crate::wal_guard::options_for directly (it is pub(crate) — do NOT duplicate pragma SQL).
+4. The test's struct literal must match the landed field set (last_wal_state, tripped, trip_events, guard, salvage_conn, last_salvage — plus whatever other landed tasks added; default everything to None/false/0 except last_wal_state, which the test seeds from the real WAL metadata, and salvage_conn, which the test opens BEFORE the unlink via crate::wal_guard::options_for AND primes with the dummy read). The offline probe in the test uses crate::wal_guard::options_for directly (it is pub(crate) — do NOT duplicate pragma SQL). Its fault injection removes BOTH the `-wal` and the `-shm` file, matching the live harness's injection step (integrated-review amendment 2026-08-30: harness parity — a wal-only removal is not the incident post-state).
 
 This task introduces the new symbol `run_salvage_checkpoint()`.
 

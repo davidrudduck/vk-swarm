@@ -31,7 +31,7 @@ let wal_guard = if db::wal_guard::guard_disabled() {
     tracing::warn!("WAL guard disabled via VK_WAL_GUARD; node is exposed to external WAL unlink");
     None
 } else {
-    match db::wal_guard::WalGuard::connect(&db_path, db::wal_guard::Mode::HoldRead).await {
+    match db::wal_guard::WalGuard::connect(&db_path, db::wal_guard::Mode::MapOnly).await {
         Ok(g) => {
             tracing::info!("WAL guard connected");
             Some(g)
@@ -42,15 +42,28 @@ let wal_guard = if db::wal_guard::guard_disabled() {
         }
     }
 };
+// The salvage connection is opened HERE (async context) and passed INTO spawn — spawn is sync.
+let wal_salvage_conn = match db::wal_guard::open_salvage_connection(&db_path).await {
+    Ok(c) => Some(c),
+    Err(e) => {
+        tracing::error!(error = ?e, "WAL salvage connection failed to open; salvage will be unavailable on trip");
+        None
+    }
+};
 let wal_monitor_handle = db::WalMonitor::spawn(
     db_path.clone(),
     db.pool.clone(),
     db.metrics.clone(),
     db::WalMonitorConfig::default(),
     wal_guard,
+    wal_salvage_conn,
 );
 ```
-IMPORTANT: the `Mode::HoldRead` literal is a placeholder — FIRST read docs/plans/wal-unlink-durability/decisions-ledger.md `## T1 mechanism evidence` and use the mode task 002 recorded (HoldRead expected). The spawn call's argument order/shape must match the post-020 signature (db_path, pool, metrics, config, guard) — if 020 ordered it differently, follow the real signature.
+The `Mode::MapOnly` literal is the mode recorded by task 002 — docs/plans/wal-unlink-durability/decisions-ledger.md `## T1 mechanism evidence`, VERDICT 2 (selected 2026-08-30, integrated-review amendment 2026-08-30: the earlier HoldRead placeholder contradicted that verdict and is removed). Re-read the verdict before coding and use whatever it records.
+
+integrated-review amendment 2026-08-30 (salvage-connection ownership): spawn/spawn_default are SYNCHRONOUS, so the dedicated pre-unlink salvage connection cannot be opened inside them — this caller opens it with `.await` (connect + the pragmas + the wal-index-mapping dummy read) and passes it in as the trailing parameter. Task 010 defines the public opener in wal_guard.rs and task 030 defines what the monitor does with it; if either named things differently, follow the landed symbols. On error, log and pass None — never block boot on it.
+
+The spawn call's argument order/shape must match the post-020/post-030 signature (db_path, pool, metrics, config, guard, salvage connection) — if those tasks ordered it differently, follow the real signature.
 
 3. Add a field to the LocalDeployment struct (it already retains compaction_handle — find that field, L44-74+): `wal_monitor_handle: db::WalMonitorHandle,` and set it in the struct literal at L467-area next to compaction_handle.
 
