@@ -19,6 +19,7 @@ pub mod retry;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 pub mod validation;
+pub mod wal_guard;
 pub mod wal_monitor;
 
 pub use backup::{

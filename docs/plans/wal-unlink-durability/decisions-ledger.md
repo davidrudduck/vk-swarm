@@ -605,3 +605,7 @@ durable record. `.gitignore:91` excludes `*.log`, so these eight files were stag
 - [Integrated review] Add the post-trip read assertion and shorten leg B's WAL check interval,
   making the reads-continue property of D6 an asserted contract rather than an assumption -
   `scripts/live/wal-unlink-durability-repro.sh`
+
+## Task 010 orchestrator
+
+- [Task 010 orchestrator] sqlx 0.8 `Connection::close` takes `self`; cannot close a struct field. First amendment (reconnect from live conn + assert is_alive/holding_read_mark) FAILED expedited Opus breakdown: vacuous — a no-op reconnect() would pass; unused `sqlx::Connection` import would fail clippy -D warnings. Second amendment (Opus exact fix): TEMP-table probe + second BEGIN DEFERRED to prove conn replacement and rematerialised read-mark; drop `Connection` and `PathBuf` imports. reconnect implemented as `self.conn = self.options.clone().connect().await?;` then pragmas + dummy read + HoldRead BEGIN/SELECT. — files: 010 task file

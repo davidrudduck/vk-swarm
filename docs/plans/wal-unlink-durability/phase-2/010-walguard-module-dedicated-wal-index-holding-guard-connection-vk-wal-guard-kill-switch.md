@@ -59,11 +59,11 @@ Create `crates/db/src/wal_guard.rs`. FIRST read docs/plans/wal-unlink-durability
 Module contents (sqlx 0.8.6, mirrors crates/db/src/lib.rs connect style):
 
 ```rust
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqliteSynchronous};
-use sqlx::{ConnectOptions, Connection}; // ConnectOptions is REQUIRED: options.connect() is ConnectOptions::connect — without the import that call is E0599
+use sqlx::ConnectOptions; // REQUIRED: options.connect() is ConnectOptions::connect — without the import that call is E0599. Do NOT import sqlx::Connection: close() is never called here, and an unused import fails `clippy -D warnings`. Do NOT import PathBuf (unused).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode { MapOnly, HoldRead }
@@ -79,7 +79,7 @@ pub struct WalGuard {
 - `pub(crate) fn options_for(db_path: &Path) -> Result<SqliteConnectOptions, sqlx::Error>` (pub(crate): tasks 030/031 reuse it — never duplicate pragma SQL): `SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.to_string_lossy()))?` then `.create_if_missing(false).journal_mode(SqliteJournalMode::Wal).synchronous(SqliteSynchronous::Normal).busy_timeout(Duration::from_secs(5))`. (create_if_missing(FALSE): the guard must never create a stray DB; the pool bootstrap already created it. Shared helper so reconnect uses identical options.)
 - `pub async fn connect(db_path: &Path, mode: Mode) -> Result<Self, sqlx::Error>`: `let mut conn = options.connect().await?;` then `crate::apply_performance_pragmas(&mut conn).await?;` (crate-root private fn at lib.rs L80-107 — visible to this child module as `crate::apply_performance_pragmas`), then, IN BOTH MODES, a DUMMY READ: `sqlx::query("SELECT count(*) FROM sqlite_master").fetch_one(&mut conn).await?;`. (integrated-review amendment 2026-08-30: MapOnly is connect + pragmas + dummy read, NOT connect-only. Opening a connection does not map the wal-index; the first read does — the ledger's VERDICT-2 MapOnly probe held its persistent locks only after `SELECT count(*) FROM tasks`. A connect-only MapOnly guard holds nothing at all.) If mode==HoldRead, additionally: `sqlx::query("BEGIN DEFERRED").execute(&mut conn).await?;` then `sqlx::query("SELECT name FROM sqlite_schema LIMIT 1").fetch_optional(&mut conn).await?;` and set holding_read_mark=true (the SELECT materialises the read-mark inside the transaction; BEGIN alone does not).
 - `pub async fn is_alive(&mut self) -> bool`: `sqlx::query("SELECT 1").execute(&mut self.conn).await.is_ok()`.
-- `pub async fn reconnect(&mut self) -> Result<(), sqlx::Error>`: drop the old conn, re-run connect logic from stored options+mode, restore holding_read_mark.
+- `pub async fn reconnect(&mut self) -> Result<(), sqlx::Error>`: drop the old conn, re-run connect logic from stored options+mode, restore holding_read_mark. Implement as `self.conn = self.options.clone().connect().await?;` — the assignment drops the old connection in place (no `Option`, no `close()`); then re-apply pragmas + dummy read, and if `mode == Mode::HoldRead` re-run BEGIN DEFERRED + schema SELECT and set `holding_read_mark = true`.
 - HoldRead only: `pub async fn release_read_mark(&mut self)`: if holding_read_mark, `sqlx::query("COMMIT").execute(&mut self.conn).await` (log-and-continue on error — never panic in a coordination path), set false. `pub async fn reacquire_read_mark(&mut self) -> Result<(), sqlx::Error>`: FIRST `if self.mode != Mode::HoldRead { return Ok(()); }`, then BEGIN DEFERRED + the schema SELECT, set true. (integrated-review amendment 2026-08-30: the mode gate is load-bearing — without it the monitor's first TRUNCATE tick would convert a MapOnly guard into a HoldRead one and permanently block TRUNCATE checkpoints, including the node's shutdown checkpoint. Both methods are no-ops under MapOnly; only a HoldRead guard ever takes a read-mark.) The monitor calls these around its TRUNCATE checkpoint — a held read-mark blocks TRUNCATE; that is the recorded trade under HoldRead, and the reason MapOnly was selected.
 - `pub async fn open_salvage_connection(db_path: &Path) -> Result<SqliteConnection, sqlx::Error>` (integrated-review amendment 2026-08-30: the dedicated old-domain connection that tasks 030/031 use for the salvage checkpoint and the refusal latch is opened by an ASYNC CALLER — `WalMonitor::spawn` is synchronous and cannot open it — and `options_for` is pub(crate), so a cross-crate caller such as the task-022 wiring needs a public opener; it lives here because this module owns the connect options): `let mut conn = options_for(db_path)?.connect().await?;` then `crate::apply_performance_pragmas(&mut conn).await?;` then the SAME dummy read as above, then `Ok(conn)`. No transaction and no read-mark — the caller decides what to do with it.
 - `pub fn guard_disabled() -> bool`: `std::env::var("VK_WAL_GUARD").map(|v| matches!(v.to_ascii_lowercase().as_str(), "off" | "0" | "false")).unwrap_or(false)` (kill-switch for the SC2 repro leg; house bool-env pattern mirrors VK_WAL_AUTO_CHECKPOINT at wal_monitor.rs L71-73).
@@ -89,7 +89,32 @@ This task introduces the new symbols `options_for()`, `connect()`, `is_alive()`,
 
 In crates/db/src/lib.rs add exactly one line: `pub mod wal_guard;` inserted between L21 `pub mod validation;` and L22 `pub mod wal_monitor;` (alphabetical). Do NOT add a `pub use` re-export — callers use `db::wal_guard::WalGuard`.
 
-Tests (in-module): the failing test above; plus `reconnect_restores_read_mark`: connect a HoldRead guard on a create_test_pool DB; `guard.conn.close().await.unwrap()` (in-module field access; Connection::close kills the connection); assert `!guard.is_alive().await`; `guard.reconnect().await.unwrap()`; assert `guard.is_alive().await` AND `guard.holding_read_mark` (HoldRead mode re-materialises the read-mark on reconnect); plus `guard_disabled` table test (env set to off/0/false/OFF → true; unset/anything-else → false — use serial_test::serial since it mutates env, mirroring existing dev-dep). Then run the TS3 test and confirm green.
+Tests (in-module): the failing test above; plus `reconnect_restores_read_mark` (must prove the connection was actually REPLACED — `is_alive()`/`holding_read_mark` are already true before `reconnect()` and a no-op would pass):
+
+```rust
+#[tokio::test]
+async fn reconnect_restores_read_mark() {
+    let (pool, tmp) = crate::test_utils::create_test_pool().await;
+    let db_path = tmp.path().join("test.db");
+    let mut guard = WalGuard::connect(&db_path, Mode::HoldRead).await.unwrap();
+    // TEMP tables are per-connection: a surviving probe proves the old conn was reused.
+    sqlx::query("CREATE TEMP TABLE reconnect_probe(x)").execute(&mut guard.conn).await.unwrap();
+    guard.reconnect().await.unwrap();
+    let (probe,): (i64,) = sqlx::query_as("SELECT count(*) FROM sqlite_temp_master WHERE name='reconnect_probe'")
+        .fetch_one(&mut guard.conn).await.unwrap();
+    assert_eq!(probe, 0, "reconnect() did not replace the connection");
+    assert!(guard.is_alive().await);
+    assert!(guard.holding_read_mark);
+    // The read-mark must live on the NEW conn: a second BEGIN fails only if a txn is already open.
+    assert!(sqlx::query("BEGIN DEFERRED").execute(&mut guard.conn).await.is_err(),
+        "no open read transaction after reconnect — read-mark not re-materialised");
+    pool.close().await;
+}
+```
+
+(`conn` is a private field but the test is in-module, so `&mut guard.conn` is legal. sqlx 0.8 `Connection::close` takes `self`, so a struct field cannot be closed in-place — do NOT wrap `conn` in `Option`, do NOT call `close()` on the field.)
+
+plus `guard_disabled` table test (env set to off/0/false/OFF → true; unset/anything-else → false — use serial_test::serial since it mutates env, mirroring existing dev-dep). Then run the TS3 test and confirm green.
 
 
 ## Allowed moves
