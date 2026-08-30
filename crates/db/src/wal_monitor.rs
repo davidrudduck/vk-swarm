@@ -588,8 +588,16 @@ impl WalMonitor {
     }
 
     async fn handle_trip(&mut self) {
-        // In this task, only emit event + set tripped.
-        // Tasks 030/031 extend with salvage and refusal latch.
+        match self.run_salvage_checkpoint().await {
+            Ok((busy, log_frames, checkpointed)) => {
+                tracing::info!(event = "wal_salvage_checkpoint_succeeded", busy, log_frames, checkpointed_frames = checkpointed, "WAL salvage checkpoint succeeded");
+                self.last_salvage = Some(Ok((busy, log_frames, checkpointed)));
+            }
+            Err(e) => {
+                tracing::error!(event = "wal_salvage_checkpoint_failed", error = ?e, "WAL salvage checkpoint failed");
+                self.last_salvage = Some(Err(e.to_string()));
+            }
+        }
     }
 
     /// Run a PASSIVE checkpoint.
