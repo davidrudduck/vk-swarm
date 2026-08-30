@@ -672,3 +672,14 @@ Implementation notes: Red test written first (`is_wal_removal_matches_delete_and
 - cargo test -p db wal_monitor: test result: ok. 14 passed; 0 failed (incl. refusal_latch_blocks_writes_allows_reads; write SQLITE_BUSY code 5 on held conn)
 - [Task 031 orchestrator] `{read:?}` on `query(...).fetch_one` does not compile (`SqliteRow: !Debug`). Named-arg `read = read.as_ref().map(|_| ())` was panel-drift. Replacement: `query_scalar` → `Result<i64, sqlx::Error>` so `{read:?}` is legal and still asserts the held-conn read succeeded.
 - [Task 031 orchestrator] Panel round 2 (HEAD `1273f9776`): Opus CONFORMS, GPT CONFORMS, Grok CONFORMS. SC13: no-op arm fails write_code Some("5"). Indent-only churn discarded as not task-text. Marked passed.
+
+## Task 022 orchestrator
+
+Pre-resolutions (do not STOP for these):
+- T1 VERDICT 2 MapOnly stands (`## T1 mechanism evidence`). Use `db::wal_guard::Mode::MapOnly`.
+- Spawn signature matches the wiring block (`wal_monitor.rs:220-227`): `(db_path, pool, metrics, config, guard, salvage_conn)` — SYNC. `open_salvage_connection` is a free fn at `db::wal_guard::open_salvage_connection`.
+- Change §1 wins over Allowed-moves "one wiring block": add `db_path: PathBuf` to `from_parts` AND update every caller in this file. `for_test` currently has no path — add `db_path: PathBuf` as its last param and pass `temp_dir.path().join("test.db")` at every `for_test` / direct `from_parts` test call site (`create_test_pool_with_migrations` writes `test.db`). Production `new()` passes `database_path()`. NEVER call `database_path()` inside `from_parts`.
+- `scope_test: N/A` — skip red; one green commit.
+- Scratch-node :9012 smoke is orchestrator-after-gate, not implementer. Do not STOP if you cannot boot a node.
+- Do not touch `crates/server/src/main.rs` or the Deployment trait. Do not edit `wal_monitor.rs`.
+- KEEP UNSTAGED: `docs/plans/.wai-reporoot`, `docs/plans/.wai-topic`, `docs/plans/wal-unlink-durability/.wai-test-cmd`.
