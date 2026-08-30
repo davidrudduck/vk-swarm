@@ -2,7 +2,7 @@
 id: "040"
 phase: 5
 title: "Ship gate: verify_cmd green on both legs + SC3 no-regression evidence"
-status: ready
+status: passed
 depends_on: ["001","022"]
 parallel: false
 conflicts_with: ["002"]
