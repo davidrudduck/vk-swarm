@@ -2,7 +2,7 @@
 id: "022"
 phase: 4
 title: "Wire WalGuard + WalMonitor into LocalDeployment::from_parts with shutdown ordering"
-status: ready
+status: passed
 depends_on: ["010","020","021","030","031"]
 parallel: false
 conflicts_with: []

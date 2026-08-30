@@ -683,3 +683,5 @@ Pre-resolutions (do not STOP for these):
 - Scratch-node :9012 smoke is orchestrator-after-gate, not implementer. Do not STOP if you cannot boot a node.
 - Do not touch `crates/server/src/main.rs` or the Deployment trait. Do not edit `wal_monitor.rs`.
 - KEEP UNSTAGED: `docs/plans/.wai-reporoot`, `docs/plans/.wai-topic`, `docs/plans/wal-unlink-durability/.wai-test-cmd`.
+
+- [Task 022 orchestrator] Panel round 1 (HEAD `953f7d405`): Opus CONFORMS, GPT CONFORMS, Grok CONFORMS. Wiring, db_path threading, shutdown-first, file-set all match. Scratch-node :9012 smoke deferred (user stop-before-040). Marked passed.
