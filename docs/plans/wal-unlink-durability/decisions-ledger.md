@@ -685,3 +685,92 @@ Pre-resolutions (do not STOP for these):
 - KEEP UNSTAGED: `docs/plans/.wai-reporoot`, `docs/plans/.wai-topic`, `docs/plans/wal-unlink-durability/.wai-test-cmd`.
 
 - [Task 022 orchestrator] Panel round 1 (HEAD `953f7d405`): Opus CONFORMS, GPT CONFORMS, Grok CONFORMS. Wiring, db_path threading, shutdown-first, file-set all match. Scratch-node :9012 smoke deferred (user stop-before-040). Marked passed.
+
+## Ship-gate evidence (SC3)
+
+Pre-040 STOP (verify_cmd exit 1): Leg B `marker-B-post rejected (no HTTP response: 000)`. Cause: `RefusalLatch` `BEGIN IMMEDIATE` + production `busy_timeout=30s` (`DEFAULT_ACQUIRE_TIMEOUT_SECS`); harness curl `--max-time 10` died with HTTP 000. Reads continued (D6). Remediation `6e1979aeb` (not a 040 file-set change): `WAL_WRITE_REFUSAL_ACTIVE` atomic; `apply_performance_pragmas` sets `PRAGMA busy_timeout=0` when latched; `handle_trip` success arm calls `zero_pooled_busy_timeout` before `wal_write_refusal_active`; `RefusalLatch` Drop clears the atomic. Repro script untouched.
+
+### 1. GREEN RUN
+
+```
+cargo build --release -p server --bin vks-node-server
+# Finished `release` profile; binary target/release/vks-node-server (mtime Aug 30 22:46)
+
+bash scripts/live/wal-unlink-durability-repro.sh
+# scratch /tmp/wal-repro.puBSeq
+# exit code: 0
+
+========== SUMMARY ==========
+Total PASS: 33
+Total FAIL: 0
+Leg results:
+  LEG A: PASS PASS=17 FAIL=0 TOTAL=17
+  LEG B: PASS PASS=16 FAIL=0 TOTAL=16
+[22:47:30] All tests passed
+```
+
+Leg A (guard-on):
+- `WAL guard connected` (`node.log`); monitor `check_interval_secs=60` (production default).
+- External write session does NOT unlink WAL; trip detector times out as designed.
+- Post-trip API write durable offline (`marker-A-post` persisted).
+- `PRAGMA journal_mode;` on leftover `leg-a.BWm5iN/db.sqlite` prints `wal`.
+
+Leg B (`VK_WAL_GUARD=off`, `VK_WAL_CHECK_INTERVAL_SECS=5`):
+- `WAL guard disabled via VK_WAL_GUARD; node is exposed to external WAL unlink`
+- monitor `check_interval_secs=5` (harness divergence from 60s production default).
+- trip fires; `wal_unlinked_externally` names the DB path:
+  `path=/tmp/wal-repro.puBSeq/leg-b.qjtAh8/db.sqlite`
+  `wal_path=.../db.sqlite-wal` `last_inode=Some(5946697)`
+- salvage `wal_salvage_checkpoint_succeeded busy=0`
+- `wal_write_refusal_active` latched BEFORE the post-trip write
+- post-trip write rejected (HTTP 500, not 000); `marker-B-post` not persisted
+- post-trip READ GET 200 `.success==true` (D6 reads-continue)
+- node still alive
+
+### 2. SC3 TIMINGS
+
+Baseline worktree: `git worktree add --detach /data/.cache/wal-main-baseline origin/main` succeeded (dirty `.wai-*` ignored). Built with worktree default target dir. Copied to `/data/.cache/wal-baseline-vks-node-server`. Worktree removed.
+
+Both `MODE=baseline` runs completed successfully (PASS 24/24 each).
+
+| sample | main (`origin/main`) | branch (`clever-pangolin`) |
+|--------|----------------------|----------------------------|
+| 1 | 19 | 19 |
+| 2 | 21 | 20 |
+| 3 | 19 | 18 |
+| 4 | 19 | 18 |
+| 5 | 19 | 19 |
+| **median** | **19** | **19** |
+
+```
+# /tmp/wal-sc3-main/timings.txt
+write_latency_ms=19
+write_latency_ms=21
+write_latency_ms=19
+write_latency_ms=19
+write_latency_ms=19
+
+# /tmp/wal-sc3-branch/timings.txt
+write_latency_ms=19
+write_latency_ms=20
+write_latency_ms=18
+write_latency_ms=18
+write_latency_ms=19
+```
+
+percentDelta = (19-19)/19 = 0% (<10% cliff). No STOP.
+
+### 3. SC3 VERDICT
+
+journal_mode observed = wal (unchanged). Checkpoint/behaviour path unchanged in the no-external-access case: monitor only logs/checkpoints on its pre-existing thresholds; guard adds one idle connection (MapOnly, VERDICT 2) + dummy read / WAL mapping, not a held read-mark. Latency delta 0% within tolerance. SC3 satisfied.
+
+### 4. SC1–SC4 end-to-end
+
+- SC1 (guard-on WAL survives external write-session close; committed rows visible offline): **true** — Leg A 17/17.
+- SC2 (guard-off: unlink detected, named WARN with DB path, writes refused, node alive, reads continue): **true** — Leg B 16/16.
+- SC3 (no regression vs main write-latency / journal_mode wal): **true** — this section.
+- SC4 (`scripts/live/wal-unlink-durability-repro.sh` is the frozen `verify_cmd`): **true** — exit 0 on the feature-branch release binary.
+
+No escalation.
+
+- [Task 040] Fail-fast busy_timeout=0 after latch is a production-pool adaptation required for the harness 10s client deadline; unit test 031 used `create_test_pool` with no busy_timeout so SQLITE_BUSY was instant there. Recorded here because 040 files: ledger only — the code landed in `6e1979aeb` before this evidence paste. — `crates/db/src/lib.rs`, `crates/db/src/wal_monitor.rs`
