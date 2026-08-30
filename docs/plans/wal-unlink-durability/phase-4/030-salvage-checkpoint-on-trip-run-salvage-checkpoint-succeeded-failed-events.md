@@ -35,18 +35,37 @@ async fn trip_runs_salvage_checkpoint() {
     // integrated-review amendment 2026-08-30: fault injection must match the live harness — remove BOTH -wal and -shm.
     std::fs::remove_file(&wal).unwrap(); // REAL external unlink while the conns hold the inode open
     let _ = std::fs::remove_file(format!("{}-shm", db_path.display()));
+    // A6 pre-stop differential (ledger L411-421). BOTH sides required: the real salvage
+    // checkpoint on an unlinked WAL returns (0,0,0), identical to a stub Ok((0,0,0)) —
+    // only the main-file content discriminates. Each read uses a FRESH immutable
+    // connection (immutable=1 tells SQLite the file never changes, so pages are cached).
+    async fn main_file_probe(db_path: &std::path::Path) -> i64 {
+        let p = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
+            .connect_with(crate::wal_guard::options_for(db_path).unwrap().immutable(true))
+            .await.unwrap();
+        // schema itself may live only in the WAL — do not let `no such table` panic
+        let has: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'")
+            .fetch_one(&p).await.unwrap();
+        let n: i64 = if has == 0 { 0 } else {
+            sqlx::query_scalar("SELECT count(*) FROM projects WHERE name='salvage-probe'")
+                .fetch_one(&p).await.unwrap()
+        };
+        p.close().await;
+        n
+    }
+    let before = main_file_probe(&db_path).await;
+    assert_eq!(before, 0, "pre-trip main file already holds the row — no differential to measure (an earlier checkpoint flushed it); the A6 assertion would be hollow");
     mon.check_wal_size().await;
     assert!(mon.tripped, "trip was not detected after WAL removal");
     assert!(mon.last_salvage.as_ref().is_some_and(|r| r.is_ok()), "salvage did not run through the dedicated connection: {:?}", mon.last_salvage);
     // busy must be 0 — an Ok row with busy=1 is a BLOCKED checkpoint, not a salvage (ledger VERDICT 2 recorded [(1,880,19)]).
     assert!(matches!(mon.last_salvage.as_ref(), Some(Ok((0, _, _)))), "salvage checkpoint reported busy: {:?}", mon.last_salvage);
-    // A6 verdict TRUE branch: close EVERY original connection, then a FRESH offline connection must see the pre-trip row.
+    // pool+mon+salvage_conn are STILL OPEN — no shutdown checkpoint has run.
+    let after = main_file_probe(&db_path).await;
+    assert_eq!(after, 1, "salvage checkpoint did not flush pre-trip frames into the main file (A6 pre-stop differential; before={before})");
     pool.close().await;
     drop(mon);
-    let offline = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
-        .connect_with(crate::wal_guard::options_for(&db_path).unwrap()).await.unwrap();
-    let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM projects WHERE name='salvage-probe'").fetch_one(&offline).await.unwrap();
-    assert_eq!(n, 1, "salvage checkpoint did not flush pre-trip frames (A6 refuted?)");
 }
 ```
 Gate env: WAI_TYPECHECK_CMD="cargo check -p db" WAI_TEST_CMD="cargo test -p db wal_monitor" WAI_LINT_CMD="cargo clippy -p db --all-targets -- -D warnings".
@@ -106,7 +125,7 @@ Declared decision points (from the spec; do not edit here):
 
 
 ## Manual verification (record in decisions-ledger)
-N/A — unit-tested (TS5). Confirm `cargo test -p db wal_monitor trip_runs_salvage_checkpoint` green and paste the assertion branch used (A6-true vs A6-refuted) with the ledger line it came from.
+N/A — unit-tested (TS5). Confirm `cargo test -p db wal_monitor trip_runs_salvage_checkpoint` green and paste the assertion branch used (A6-true pre-stop immutable n==1 vs A6-refuted) with the ledger line it came from.
 
 
 ## Done when

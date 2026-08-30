@@ -976,7 +976,7 @@ mod tests {
         };
         let wal_ever_present = matches!(last_wal_state, WalState::Present(_));
 
-         let mut mon = WalMonitor {
+        let mut mon = WalMonitor {
             db_path: db_path.clone(),
             pool,
             metrics,
@@ -1028,16 +1028,30 @@ mod tests {
         };
         std::fs::remove_file(&wal).unwrap();
         let _ = std::fs::remove_file(format!("{}-shm", db_path.display()));
+        async fn main_file_probe(db_path: &std::path::Path) -> i64 {
+            let p = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
+                .connect_with(crate::wal_guard::options_for(db_path).unwrap().immutable(true))
+                .await.unwrap();
+            let has: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'")
+                .fetch_one(&p).await.unwrap();
+            let n: i64 = if has == 0 { 0 } else {
+                sqlx::query_scalar("SELECT count(*) FROM projects WHERE name='salvage-probe'")
+                    .fetch_one(&p).await.unwrap()
+            };
+            p.close().await;
+            n
+        }
+        let before = main_file_probe(&db_path).await;
+        assert_eq!(before, 0, "pre-trip main file already holds the row — no differential to measure (an earlier checkpoint flushed it); the A6 assertion would be hollow");
         mon.check_wal_size().await;
         assert!(mon.tripped, "trip was not detected after WAL removal");
         assert!(mon.last_salvage.as_ref().is_some_and(|r| r.is_ok()), "salvage did not run through the dedicated connection: {:?}", mon.last_salvage);
         assert!(matches!(mon.last_salvage.as_ref(), Some(Ok((0, _, _)))), "salvage checkpoint reported busy: {:?}", mon.last_salvage);
+        let after = main_file_probe(&db_path).await;
+        assert_eq!(after, 1, "salvage checkpoint did not flush pre-trip frames into the main file (A6 pre-stop differential; before={before})");
         pool.close().await;
         drop(mon);
-        let offline = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
-            .connect_with(crate::wal_guard::options_for(&db_path).unwrap()).await.unwrap();
-        let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM projects WHERE name='salvage-probe'").fetch_one(&offline).await.unwrap();
-        assert_eq!(n, 1, "salvage checkpoint did not flush pre-trip frames (A6 refuted?)");
     }
 
     #[cfg(target_os = "linux")]

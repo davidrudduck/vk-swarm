@@ -645,3 +645,12 @@ Implementation notes: Red test written first (`is_wal_removal_matches_delete_and
 - Select arm now uses `pending()` when watch is `None` and sets `watch = None` on `recv()` returning `None` so the 60s tick can re-arm.
 
 - [Task 021 orchestrator] Panel round 2 (HEAD `e47930ed7`): Opus CONFORMS, Grok CONFORMS. GPT DEVIATES on re-arm-after-`check_wal_size` race vs L52 "create watch before first metadata reconcile". L52 is the INITIAL create (already before the loop at `wal_monitor.rs:280`); L68 does not order re-arm vs `check_wal_size`. DISCARD as plan-level, not implementer drift. Round-1 closed-channel `None` fix confirmed. Marked passed.
+
+## Task 030 implementer
+
+- A6-true branch used (offline n==1) — ledger ### VERDICT 3 redo — A6 salvage attribution L387-418 — crates/db/src/wal_monitor.rs
+- `cargo test -p db wal_monitor`: test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 307 filtered out; finished in 1.15s
+
+## Task 030 orchestrator
+
+- Panel round 1 (HEAD `0180d5025`): Opus+GPT DEVIATES SC13 — `trip_runs_salvage_checkpoint` post-close offline n==1 stays green if `run_salvage_checkpoint` is stub `Ok((0,0,0))` (SQLite close-time checkpoint through still-open fds). Grok CONFORMS (task-text match). Adjudication: hollow is real; the spelled test contradicted this ledger's own L411-421 ("post-stop is NOT the attribution basis for A6"). First amendment (post-only immutable n==1) REJECTED by expedited Opus breakdown: real salvage also returns `(0,0,0)`, so post-only still fails to discriminate; also `no such table` panics and a reused immutable conn caches pages. Replacement: BOTH-sides `main_file_probe` (fresh `options_for(...).immutable(true)` each call) — `before==0` then `after==1` while pool+mon remain open. Also fix stray 9-space indent at `wal_monitor.rs:979`.
