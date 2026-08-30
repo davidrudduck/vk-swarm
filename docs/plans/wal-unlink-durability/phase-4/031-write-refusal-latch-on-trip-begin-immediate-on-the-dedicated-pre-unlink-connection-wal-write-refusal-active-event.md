@@ -23,7 +23,13 @@ async fn refusal_latch_blocks_writes_allows_reads() {
     use sqlx::ConnectOptions;
     let (pool, tmp) = crate::test_utils::create_test_pool().await;
     let db_path = tmp.path().join("test.db");
-    sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'pre-latch', '/tmp/pre-latch-uniq')").execute(&pool).await.unwrap(); // forces the WAL into existence
+    // Hold one pool connection across unlink. sqlx retires a connection after a
+    // locked write; the next `&pool` acquire is a FRESH post-unlink conn that
+    // fails with SQLITE_IOERR (code 522), which is NOT a latch block. D6's
+    // reads-continue is about OLD-domain pooled connections (execute-time
+    // amendment 2026-08-30).
+    let mut pooled = pool.acquire().await.unwrap();
+    sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'pre-latch', '/tmp/pre-latch-uniq')").execute(&mut *pooled).await.unwrap(); // forces the WAL into existence
     // Dedicated connection opened PRE-unlink (old shm/inode domain) — a fresh post-unlink conn would fence nobody.
     let mut conn = crate::wal_guard::options_for(&db_path).unwrap().connect().await.unwrap();
     // Dummy read maps the wal-index — connect alone does not put the connection in the old shm domain.
@@ -32,10 +38,15 @@ async fn refusal_latch_blocks_writes_allows_reads() {
     std::fs::remove_file(tmp.path().join("test.db-wal")).unwrap(); // REAL external unlink
     let _ = std::fs::remove_file(tmp.path().join("test.db-shm"));
     let latch = RefusalLatch::arm(conn).await.expect("latch must arm on the old-domain connection");
-    let write = sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'refusal-probe', '/tmp/refusal-probe-uniq')").execute(&pool).await;
-    assert!(write.is_err(), "write succeeded despite the refusal latch");
-    let read = sqlx::query("SELECT count(*) FROM projects").fetch_one(&pool).await;
-    assert!(read.is_ok(), "read blocked by the refusal latch");
+    let write = sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'refusal-probe', '/tmp/refusal-probe-uniq')").execute(&mut *pooled).await;
+    let write_code = write.as_ref().err()
+        .and_then(|e| e.as_database_error())
+        .and_then(|e| e.code())
+        .map(|c| c.into_owned());
+    assert_eq!(write_code.as_deref(), Some("5"),
+        "write must be refused by the latch with SQLITE_BUSY (code 5), got {write:?}");
+    let read = sqlx::query("SELECT count(*) FROM projects").fetch_one(&mut *pooled).await;
+    assert!(read.is_ok(), "read blocked on the held old-domain connection: {read:?}");
     drop(latch);
 }
 ```
@@ -67,7 +78,7 @@ Edit ONLY crates/db/src/wal_monitor.rs. Do not surface the refusal through the A
 
 
 ## STOP triggers
-The latch cannot arm in the test because the dedicated connection did not survive the unlink (arm returns Err) → STOP; without an old-domain connection the latch cannot fence — this is a DP-level D6 re-settle, escalate (do NOT silently swap in a fresh connection: a fresh conn coordinates via the NEW shm and fences nobody). The pooled write SUCCEEDS despite the held BEGIN IMMEDIATE on the old-domain conn → STOP; the tournament-verified shm-domain mechanism is wrong on this host and the enforcement needs re-investigation. The latch also blocks pool READS → STOP; record the observation — D6's reads-continue property is violated and the mechanism needs operator re-decision.
+The latch cannot arm in the test because the dedicated connection did not survive the unlink (arm returns Err) → STOP; without an old-domain connection the latch cannot fence — this is a DP-level D6 re-settle, escalate (do NOT silently swap in a fresh connection: a fresh conn coordinates via the NEW shm and fences nobody). The pooled write SUCCEEDS despite the held BEGIN IMMEDIATE on the old-domain conn → STOP; the tournament-verified shm-domain mechanism is wrong on this host and the enforcement needs re-investigation. The latch also blocks pool READS on the held old-domain pooled connection (SQLITE_BUSY / code 5) → STOP; record the observation — D6's reads-continue property is violated and the mechanism needs operator re-decision. A SQLITE_IOERR (code 522) on a fresh `&pool` acquire after unlink is NOT this trigger (sqlx retired the old conn; that is a new shm domain). The read on the **held** old-domain pooled connection fails with SQLITE_IOERR (code 522) rather than SQLITE_BUSY → STOP; that is neither the fresh-acquire exemption nor a latch block — the held connection lost its old-domain shm mapping and the test's fault-injection premise is wrong. Record the observed code and escalate.
 
 
 Declared decision points (from the spec; do not edit here):

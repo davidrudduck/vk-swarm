@@ -663,5 +663,6 @@ Implementation notes: Red test written first (`is_wal_removal_matches_delete_and
   - `handle_trip`: keep 030 salvage first (`run_salvage_checkpoint` still uses `salvage_conn.as_mut()`). AFTER that match, `match self.salvage_conn.take()` and arm. Latch even if salvage returned Err.
   - `salvage_conn` is None: fail-closed with `error = "salvage connection unavailable"` (no `e`) then `self.pool.close().await`. Arm `Err(e)`: fail-closed with `error = ?e` then `self.pool.close().await`. Two log sites; do not invent a dummy sqlx::Error.
   - Shutdown BOTH linux (`wal_monitor.rs:305`) and non-linux (`:393`): after `release_read_mark`, `self.refusal = None;`, then the existing info log, then ack. Do not restructure other arms.
-  - Test lives in `wal_monitor.rs` `tests` module (in-module visibility). Write it FIRST, verbatim.
-  - STOP only if a task STOP trigger actually fires at test time (arm Err / write succeeds / read blocked).
+  - Test lives in `wal_monitor.rs` `tests` module (in-module visibility). Write it FIRST, matching the task file (including the held-connection amendment below).
+  - STOP only if a task STOP trigger actually fires at test time (arm Err / write succeeds / SQLITE_BUSY on the held old-domain read).
+- Haiku attempt 1 STOP on `assert!(read.is_ok())`. Probe: write = SQLITE_BUSY code 5 (latch works); read via `&pool` = SQLITE_IOERR code 522 (not locked). Python same-conn: write locked, read ok; fresh conn after unlink: disk I/O error. Cause: sqlx retires the pooled conn after the locked write; next `&pool` acquire is a new shm domain. D6 reads-continue is NOT violated. Amended test holds `pool.acquire()` across unlink and drives write+read on `&mut *pooled`. IOERR on a fresh acquire is NOT the STOP trigger.
