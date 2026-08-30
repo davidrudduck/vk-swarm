@@ -1117,9 +1117,10 @@ mod tests {
             .and_then(|e| e.code())
             .map(|c| c.into_owned());
         assert_eq!(write_code.as_deref(), Some("5"),
-            "write must be refused by the latch with SQLITE_BUSY (code 5)");
+            "write must be refused by the latch with SQLITE_BUSY (code 5), got {write:?}");
         let read = sqlx::query("SELECT count(*) FROM projects").fetch_one(&mut *pooled).await;
-        assert!(read.is_ok(), "read must not be blocked by the refusal latch");
+        assert!(read.is_ok(), "read blocked on the held old-domain connection: {read:?}",
+            read = read.as_ref().map(|_| ()));
         drop(latch);
     }
 

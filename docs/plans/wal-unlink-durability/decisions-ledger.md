@@ -666,3 +666,7 @@ Implementation notes: Red test written first (`is_wal_removal_matches_delete_and
   - Test lives in `wal_monitor.rs` `tests` module (in-module visibility). Write it FIRST, matching the task file (including the held-connection amendment below).
   - STOP only if a task STOP trigger actually fires at test time (arm Err / write succeeds / SQLITE_BUSY on the held old-domain read).
 - Haiku attempt 1 STOP on `assert!(read.is_ok())`. Probe: write = SQLITE_BUSY code 5 (latch works); read via `&pool` = SQLITE_IOERR code 522 (not locked). Python same-conn: write locked, read ok; fresh conn after unlink: disk I/O error. Cause: sqlx retires the pooled conn after the locked write; next `&pool` acquire is a new shm domain. D6 reads-continue is NOT violated. Amended test holds `pool.acquire()` across unlink and drives write+read on `&mut *pooled`. IOERR on a fresh acquire is NOT the STOP trigger.
+
+## Task 031 implementer
+
+- cargo test -p db wal_monitor: test result: ok. 14 passed; 0 failed (incl. refusal_latch_blocks_writes_allows_reads; write SQLITE_BUSY code 5 on held conn)
