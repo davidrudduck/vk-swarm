@@ -303,26 +303,24 @@ impl WalMonitor {
                         guard.release_read_mark().await;
                     }
                     self.run_truncate_checkpoint().await;
-                    if let Some(guard) = &mut self.guard {
-                        if let Err(e) = guard.reacquire_read_mark().await {
-                            tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
-                        }
+                    if let Some(guard) = &mut self.guard
+                        && let Err(e) = guard.reacquire_read_mark().await {
+                        tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
                     }
                 }
             }
             
-            if let Some(guard) = &mut self.guard {
-                if !guard.is_alive().await {
-                    match guard.reconnect().await {
-                        Ok(_) => tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected"),
-                        Err(e) => {
-                            tracing::error!(error = ?e, "WAL guard reconnect failed");
-                            if !self.tripped {
-                                self.tripped = true;
-                                self.trip_events += 1;
-                                tracing::error!(event = "wal_guard_unavailable", "WAL guard unavailable; treating as durability trip");
-                                self.handle_trip().await;
-                            }
+            if let Some(guard) = &mut self.guard
+                && !guard.is_alive().await {
+                match guard.reconnect().await {
+                    Ok(_) => tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected"),
+                    Err(e) => {
+                        tracing::error!(error = ?e, "WAL guard reconnect failed");
+                        if !self.tripped {
+                            self.tripped = true;
+                            self.trip_events += 1;
+                            tracing::error!(event = "wal_guard_unavailable", "WAL guard unavailable; treating as durability trip");
+                            self.handle_trip().await;
                         }
                     }
                 }
@@ -409,7 +407,7 @@ impl WalMonitor {
                 }
                 self.last_wal_state = current;
             }
-            WalTransition::Vanished | WalTransition::Replaced | _ if matches!(current, WalState::Absent) && self.wal_ever_present => {
+            WalTransition::Vanished | WalTransition::Unchanged if matches!(current, WalState::Absent) && self.wal_ever_present => {
                 let last_inode = match self.last_wal_state {
                     WalState::Present(Some(inode)) => Some(inode),
                     _ => None,
