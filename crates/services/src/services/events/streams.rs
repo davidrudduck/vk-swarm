@@ -284,10 +284,8 @@ impl EventService {
                                     RecordTypes::DeletedExecutionProcess {
                                         task_attempt_id: Some(deleted_attempt_id),
                                         ..
-                                    } => {
-                                        if *deleted_attempt_id == task_attempt_id {
-                                            return Some(Ok(LogMsg::JsonPatch(patch)));
-                                        }
+                                    } if *deleted_attempt_id == task_attempt_id => {
+                                        return Some(Ok(LogMsg::JsonPatch(patch)));
                                     }
                                     _ => {}
                                 }

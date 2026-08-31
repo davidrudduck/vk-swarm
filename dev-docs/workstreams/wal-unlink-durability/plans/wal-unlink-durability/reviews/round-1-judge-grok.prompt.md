@@ -1,0 +1,18 @@
+Do not modify files, run destructive commands, or change repository state. READ-ONLY covers UNDOING as well as authoring: NEVER revert or discard working-tree state — no git checkout/restore/stash/reset/clean in ANY form, with or without a path argument, not to reset the tree to a 'clean' state before reviewing and not to undo an experiment you ran. Uncommitted modifications are the caller's; a revert destroys them with NO trace (the file matches HEAD again, so git status reads clean). To compare against another revision use 'git show <rev>:<path>'. If the tree is not what you expected, say so in your report. Do NOT attempt to write, stage, or save any file, including the report: you are running under a read-only/plan mode and every write will be blocked. Emit the COMPLETE markdown report as your FINAL message — full findings, evidence and detail, not a summary, not a pointer to a file staged elsewhere. The runner captures your final message verbatim to /data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/round-1-judge-grok.md; a short 'the report is staged at ...' reply fails the run. If your report QUOTES a stub pointer (e.g. when the review is about this very failure mode), quote the WHOLE SENTENCE. Backticking only the PATH does NOT help: the words that make it a claim sit outside the backticks, so 'The report is at `<path>`' still reads as your own pointer. In your FIRST THREE non-blank lines only a code fence or a blockquote rescues a quoted pointer — backticks around the sentence work everywhere below that. Bare prose fails the run. If a write really is impossible, hand the report over IN THIS REPLY: write a line reading 'Full report content:' and then the entire report beneath it — that is recognised and accepted; a promise to deliver it after an approval is not.
+
+ADVERSARIAL TOURNAMENT — JUDGE ROUND. You are judging a PEER competitor's findings against the REAL repo. You did NOT write these findings; judge them without loyalty or spite.
+
+SUBMISSION UNDER JUDGEMENT: docs/plans/wal-unlink-durability/reviews/round-1-codex.md (a find+remediate report on the wal-unlink-durability decompose breakdown).
+
+CONTEXT: spec at docs/superpowers/specs/2026-08-28-wal-unlink-durability.md (FROZEN — tasks may not diverge); breakdown under docs/plans/wal-unlink-durability/ (plan.md, phase-*/). Repo anchors: crates/db/src/wal_monitor.rs, crates/db/src/lib.rs, crates/db/src/test_utils.rs, crates/db/src/metrics.rs, crates/local-deployment/src/lib.rs, crates/server/src/main.rs, crates/server/src/routes/, crates/db/migrations/, scripts/verify-local-node-browser-oauth.sh.
+
+Rule on EVERY finding row, against the REAL repo (open the cited file:line yourself):
+- issue_real = YES/NO — is the cited defect genuine? Pedantic, already-handled-in-task-text, misread anchor, or unverifiable → NO (say why in one line).
+- fix_ok = YES/NO — is the remediation concrete, correct, and free of NEW defects? A fix that introduces a worse bug or contradicts the frozen spec → NO (give the correct fix).
+
+TOURNAMENT RULES (non-negotiable):
+- You INSPECT and REPORT; you never mutate the repo. NEVER revert or discard working-tree state: no git checkout/restore/stash/reset/clean in ANY form.
+- Do not apply fixes. Do not edit task files.
+
+Output one Markdown row per judged finding: | finding # | issue_real (YES/NO) | fix_ok (YES/NO) | verdict rationale (1 line, cite repo file:line you verified) | corrected fix (only if fix_ok=NO but issue_real=YES) |
+Then a summary line: VALIDATED: <n of m findings real with ok fixes>, PARTIAL: <n real but bad fix>, REJECTED: <n not real>.

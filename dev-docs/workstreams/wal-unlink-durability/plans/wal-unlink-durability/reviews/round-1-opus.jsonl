@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "claude",
+    "-p",
+    "--permission-mode",
+    "plan",
+    "--output-format",
+    "json",
+    "--model",
+    "opus"
+  ],
+  "cwd": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin",
+  "exit_code": 0,
+  "finished_at": "2026-08-28T21:00:36.646835+00:00",
+  "notes": [],
+  "prompt_file": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/find-prompt-round-1.md",
+  "raw_log": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/round-1-opus.raw.log",
+  "report": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/round-1-opus.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-08-28T20:45:33.474740+00:00",
+  "status": "ok",
+  "stub_risk_accepted": false,
+  "task": "plan-review",
+  "tool": "claude",
+  "tool_version": "2.1.247 (Claude Code)"
+}

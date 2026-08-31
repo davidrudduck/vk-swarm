@@ -116,7 +116,7 @@ pub async fn get_all_templates(
     }
 
     // Sort alphabetically by name
-    all_templates.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    all_templates.sort_by_key(|t| t.name.to_lowercase());
 
     Ok(ResponseJson(ApiResponse::success(all_templates)))
 }

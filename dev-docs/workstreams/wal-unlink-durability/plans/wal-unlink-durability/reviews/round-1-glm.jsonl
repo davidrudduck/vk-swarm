@@ -1,0 +1,33 @@
+{
+  "argv": [
+    "opencode",
+    "run",
+    "--dir",
+    "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin",
+    "--auto",
+    "--agent",
+    "plan",
+    "--format",
+    "json",
+    "--model",
+    "openrouter/z-ai/glm-5.3",
+    "Read the full task instructions from /data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/round-1-glm.prompt.md and execute them."
+  ],
+  "cwd": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin",
+  "exit_code": 1,
+  "finished_at": "2026-08-28T20:45:39.728002+00:00",
+  "notes": [
+    "stub report: report is empty"
+  ],
+  "prompt_file": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/find-prompt-round-1.md",
+  "raw_log": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/round-1-glm.raw.log",
+  "report": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/round-1-glm.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-08-28T20:45:36.996307+00:00",
+  "status": "failed",
+  "stub_risk_accepted": false,
+  "task": "plan-review",
+  "tool": "opencode",
+  "tool_version": "1.18.23"
+}

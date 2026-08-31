@@ -278,7 +278,7 @@ pub async fn register_node(
     // Validate API key
     let api_key = match extract_and_validate_api_key(&service, &headers).await {
         Ok(key) => key,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     Span::current().record("org_id", format_args!("{}", api_key.organization_id));
@@ -343,7 +343,7 @@ pub async fn heartbeat(
 
     // Validate API key
     if let Err(response) = extract_and_validate_api_key(&service, &headers).await {
-        return response;
+        return *response;
     }
 
     // TODO: Verify node belongs to the organization from the API key
@@ -1885,7 +1885,7 @@ pub async fn get_node_task_attempt(
 async fn extract_and_validate_api_key(
     service: &NodeServiceImpl,
     headers: &HeaderMap,
-) -> Result<NodeApiKey, Response> {
+) -> Result<NodeApiKey, Box<Response>> {
     let api_key_value = headers
         .get(API_KEY_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -1908,7 +1908,7 @@ async fn extract_and_validate_api_key(
                 "failed to validate API key",
             ),
         };
-        (status, Json(json!({ "error": message }))).into_response()
+        Box::new((status, Json(json!({ "error": message }))).into_response())
     })
 }
 

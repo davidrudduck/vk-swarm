@@ -171,7 +171,7 @@ pub async fn upgrade_log_stream(
             let pool = pool.clone();
             ws.on_upgrade(move |socket| handle_log_stream(socket, pool, assignment_id))
         }
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -181,7 +181,7 @@ async fn authenticate(
     query: &LogStreamQuery,
     ctx: Option<&RequestContext>,
     assignment_id: Uuid,
-) -> Result<(), Response> {
+) -> Result<(), Box<Response>> {
     let pool = state.pool();
 
     // First, try connection token authentication
@@ -190,25 +190,31 @@ async fn authenticate(
         match connection_token_service.validate_for_assignment(token, assignment_id) {
             Ok(_) => return Ok(()),
             Err(ConnectionTokenError::ExecutionMismatch) => {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    Json(json!({ "error": "token does not match assignment" })),
-                )
-                    .into_response());
+                return Err(Box::new(
+                    (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({ "error": "token does not match assignment" })),
+                    )
+                        .into_response(),
+                ));
             }
             Err(ConnectionTokenError::TokenExpired) => {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({ "error": "token expired" })),
-                )
-                    .into_response());
+                return Err(Box::new(
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({ "error": "token expired" })),
+                    )
+                        .into_response(),
+                ));
             }
             Err(_) => {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({ "error": "invalid token" })),
-                )
-                    .into_response());
+                return Err(Box::new(
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({ "error": "invalid token" })),
+                    )
+                        .into_response(),
+                ));
             }
         }
     }
@@ -407,7 +413,7 @@ pub async fn get_paginated_logs(
     .await;
 
     if let Err(response) = auth_result {
-        return response;
+        return *response;
     }
 
     let limit = query.limit();

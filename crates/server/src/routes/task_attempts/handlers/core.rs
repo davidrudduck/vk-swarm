@@ -198,7 +198,7 @@ pub async fn get_task_attempts(
 
     // Step 8: Convert back to Vec and sort by created_at DESC
     let mut merged: Vec<TaskAttempt> = attempt_map.into_values().collect();
-    merged.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    merged.sort_by_key(|m| std::cmp::Reverse(m.created_at));
 
     tracing::debug!(
         task_id = %task_id,

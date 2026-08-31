@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "codex",
+    "exec",
+    "-C",
+    "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin",
+    "--sandbox",
+    "read-only",
+    "--json",
+    "-"
+  ],
+  "cwd": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin",
+  "exit_code": 0,
+  "finished_at": "2026-08-28T21:04:06.119719+00:00",
+  "notes": [],
+  "prompt_file": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/judge-prompt-codex.md",
+  "raw_log": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/round-1-judge-codex.raw.log",
+  "report": "/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/clever-pangolin/docs/plans/wal-unlink-durability/reviews/round-1-judge-codex.md",
+  "safety": "read-only",
+  "schema_version": "dr.executor.panel.v1",
+  "started_at": "2026-08-28T21:01:11.604635+00:00",
+  "status": "ok",
+  "stub_risk_accepted": false,
+  "task": "plan-review",
+  "tool": "codex",
+  "tool_version": "codex-cli 0.150.1"
+}

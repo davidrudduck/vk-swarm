@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use db::DBService;
@@ -96,6 +96,9 @@ pub struct LocalDeployment {
     /// on-demand `compact_now()` used by this file's tests — remain reachable.
     #[allow(dead_code)]
     compaction_handle: services::services::event_compaction::EventCompactionHandle,
+    /// Handle to the WAL monitor background service.
+    #[allow(dead_code)]
+    wal_monitor_handle: db::WalMonitorHandle,
 }
 
 /// Default initial backoff before a dead trigger-hook runner is respawned.
@@ -154,6 +157,10 @@ impl LocalDeployment {
     /// loop) is covered rather than re-implemented in the test module.
     ///
     /// The public API is unchanged: this is `pub(crate)`, and the `Deployment` trait is untouched.
+    // db_path was threaded through as an 8th arg by the wal-unlink-durability workstream
+    // (task 022: guard/monitor construction needs the on-disk DB path; bundling the args
+    // into a struct would churn every test caller for no behavioural gain).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn from_parts(
         db: DBService,
         config: Arc<RwLock<Config>>,
@@ -162,6 +169,7 @@ impl LocalDeployment {
         events_entry_count: Arc<RwLock<usize>>,
         tuning: StartupTuning,
         remote_config: StartupRemoteConfig,
+        db_path: PathBuf,
     ) -> Result<Self, DeploymentError> {
         let StartupRemoteConfig {
             api_base,
@@ -437,6 +445,39 @@ impl LocalDeployment {
         // Spawn the event compaction loop over the same live pool
         let compaction_handle = EventCompaction::spawn(db.pool.clone(), tuning.compaction);
 
+        // WAL durability: prevention guard + detection monitor (wal-unlink-durability).
+        let wal_guard = if db::wal_guard::guard_disabled() {
+            tracing::warn!("WAL guard disabled via VK_WAL_GUARD; node is exposed to external WAL unlink");
+            None
+        } else {
+            match db::wal_guard::WalGuard::connect(&db_path, db::wal_guard::Mode::MapOnly).await {
+                Ok(g) => {
+                    tracing::info!("WAL guard connected");
+                    Some(g)
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "WAL guard failed to connect; continuing without prevention");
+                    None
+                }
+            }
+        };
+        // The salvage connection is opened HERE (async context) and passed INTO spawn — spawn is sync.
+        let wal_salvage_conn = match db::wal_guard::open_salvage_connection(&db_path).await {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::error!(error = ?e, "WAL salvage connection failed to open; salvage will be unavailable on trip");
+                None
+            }
+        };
+        let wal_monitor_handle = db::WalMonitor::spawn(
+            db_path.clone(),
+            db.pool.clone(),
+            db.metrics.clone(),
+            db::WalMonitorConfig::default(),
+            wal_guard,
+            wal_salvage_conn,
+        );
+
         let deployment = Self {
             config,
             user_id,
@@ -465,6 +506,7 @@ impl LocalDeployment {
             event_bus,
             trigger_hook_runner_handles,
             compaction_handle,
+            wal_monitor_handle,
         };
 
         // Log startup config summary for debugging connection issues
@@ -533,6 +575,7 @@ impl LocalDeployment {
     pub(crate) async fn for_test(
         pool: sqlx::SqlitePool,
         tuning: StartupTuning,
+        db_path: PathBuf,
     ) -> Result<Self, DeploymentError> {
         // `from_parts` builds a real LocalContainerService, whose constructor spawns
         // `cleanup_orphaned_worktrees` (crates/local-deployment/src/container.rs:320). That sweep
@@ -562,6 +605,7 @@ impl LocalDeployment {
                 api_base: None,
                 share_config: None,
             },
+            db_path,
         )
         .await
     }
@@ -668,6 +712,7 @@ impl Deployment for LocalDeployment {
                 api_base,
                 share_config,
             },
+            database_path(),
         )
         .await
     }
@@ -841,16 +886,15 @@ impl LocalDeployment {
 
     /// Stop the event-journal background writers: the compaction loop and the bus tailer.
     ///
-    /// Called from the server's shutdown path BEFORE the final WAL checkpoint. Best-effort
-    /// and signal-only: the compaction shutdown returns once the command is queued (not when
-    /// the worker exits) and the tailer abort is asynchronous, so a pass already in flight
-    /// can still commit after the checkpoint — SQLite replays any residual WAL on next open,
-    /// and `pool.close().await` waits out in-flight connections. What this DOES guarantee is
-    /// that no NEW compaction pass or tail poll starts after shutdown, so the writers cannot
-    /// spin on `PoolClosed` errors until process exit.
+    /// Called from the server's shutdown path before the final WAL checkpoint. Best-effort
+    /// and signal-only: compaction shutdown only queues the command and the tailer abort is
+    /// asynchronous, so a pass can still be in flight. Stop them before the WAL monitor so
+    /// its refusal latch remains armed through that window; then no NEW pass or tail poll
+    /// starts and writers cannot spin on `PoolClosed` errors until process exit.
     pub async fn shutdown_event_services(&self) {
         self.compaction_handle.shutdown().await;
         self.event_bus.shutdown().await;
+        self.wal_monitor_handle.shutdown().await;
     }
 
     /// Get direct access to the local container service.
@@ -1004,8 +1048,8 @@ mod tests {
     /// `subscribe_from` that yields a stream nothing ever feeds, fails here.
     #[tokio::test]
     async fn deployment_exposes_an_event_bus() {
-        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning(), temp_dir.path().join("test.db"))
             .await
             .expect("deployment constructs over the test pool");
 
@@ -1038,8 +1082,8 @@ mod tests {
     /// fails here.
     #[tokio::test]
     async fn startup_spawns_the_tailer() {
-        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning(), temp_dir.path().join("test.db"))
             .await
             .expect("deployment constructs over the test pool");
 
@@ -1068,8 +1112,8 @@ mod tests {
     /// hook (or skips `ensure_row`) leaves no row and fails here.
     #[tokio::test]
     async fn startup_registers_the_real_trigger_hook() {
-        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning(), temp_dir.path().join("test.db"))
             .await
             .expect("deployment constructs over the test pool");
 
@@ -1097,8 +1141,8 @@ mod tests {
     /// not retain a working handle), nothing consumes the command and the journal stays at 20.
     #[tokio::test]
     async fn startup_spawns_compaction() {
-        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning(), temp_dir.path().join("test.db"))
             .await
             .expect("deployment constructs over the test pool");
 
@@ -1130,8 +1174,8 @@ mod tests {
     ///     history, so a subscriber created afterwards would report silence even from a live tailer.
     #[tokio::test]
     async fn shutdown_stops_the_background_tasks() {
-        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning(), temp_dir.path().join("test.db"))
             .await
             .expect("deployment constructs over the test pool");
 
@@ -1164,8 +1208,8 @@ mod tests {
     /// post-shutdown commit reaches `sub1`.
     #[tokio::test]
     async fn event_bus_clone_shares_tailer_handle() {
-        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning(), temp_dir.path().join("test.db"))
             .await
             .expect("deployment constructs over the test pool");
 
@@ -1225,8 +1269,8 @@ mod tests {
     /// `ensure_row` is an INSERT OR IGNORE.
     #[tokio::test]
     async fn supervised_runner_resumes_after_poisoned_cursor_writes() {
-        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning())
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool.clone(), test_tuning(), temp_dir.path().join("test.db"))
             .await
             .expect("deployment constructs over the test pool");
 
@@ -1310,8 +1354,8 @@ mod tests {
 
     #[tokio::test]
     async fn browser_auth_epoch_is_shared_by_deployment_clones() {
-        let (pool, _temp_dir) = create_test_pool_with_migrations().await;
-        let deployment = LocalDeployment::for_test(pool, test_tuning())
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment = LocalDeployment::for_test(pool, test_tuning(), temp_dir.path().join("test.db"))
             .await
             .unwrap();
         let clone = deployment.clone();
@@ -1356,6 +1400,7 @@ mod tests {
                     bulk_sync_threshold: 1,
                 }),
             },
+            temp_dir.path().join("test.db"),
         )
         .await
         .unwrap();
@@ -1386,6 +1431,7 @@ mod tests {
                 api_base: Some("ftp://example.invalid".to_owned()),
                 share_config: None,
             },
+            temp_dir.path().join("test.db"),
         )
         .await
         .unwrap();
