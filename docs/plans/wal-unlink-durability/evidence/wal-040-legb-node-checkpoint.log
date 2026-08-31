@@ -1,0 +1,34 @@
+[2m2026-08-31T12:44:15.774448Z[0m [32m INFO[0m [2mservices::services::oauth_credentials[0m[2m:[0m OAuth credentials backend: file
+[2m2026-08-31T12:44:15.774876Z[0m [32m INFO[0m [2mexecutors::profile[0m[2m:[0m No user profiles.json found, using defaults only
+[2m2026-08-31T12:44:15.852325Z[0m [32m INFO[0m [2mexecutors::profile[0m[2m:[0m Recommended executor: CLAUDE_CODE
+[2m2026-08-31T12:44:15.852444Z[0m [32m INFO[0m [2mlocal_deployment[0m[2m:[0m Storage locations [3mdatabase[0m[2m=[0m/tmp/wal-repro.yrG7CZ/leg-b.IH8VIG/db.sqlite [3mbackups[0m[2m=[0m/tmp/wal-repro.yrG7CZ/leg-b.IH8VIG/backup [3mworktrees[0m[2m=[0m/tmp/wal-repro.yrG7CZ/leg-b.IH8VIG/worktrees
+[2m2026-08-31T12:44:15.854853Z[0m [32m INFO[0m [2mdb[0m[2m:[0m Database integrity check passed
+[2m2026-08-31T12:44:15.855220Z[0m [32m INFO[0m [2mdb[0m[2m:[0m Initializing SQLite connection pool [3mmax_connections[0m[2m=[0m10 [3mmin_connections[0m[2m=[0m2
+[2m2026-08-31T12:44:15.856725Z[0m [32m INFO[0m [2mlocal_deployment[0m[2m:[0m Starting orphaned image cleanup...
+[2m2026-08-31T12:44:15.856797Z[0m [32m INFO[0m [2mlocal_deployment[0m[2m:[0m VK_SHARED_API_BASE not set; remote features disabled
+[2m2026-08-31T12:44:15.856825Z[0m [32m INFO[0m [2mlocal_deployment::container[0m[2m:[0m Generated server instance ID [3minstance_id[0m[2m=[0m848070c0-7f65-49bd-9455-4ee348d19024
+[2m2026-08-31T12:44:15.857912Z[0m [32m INFO[0m [2mlocal_deployment::container[0m[2m:[0m Starting periodic worktree cleanup...
+[2m2026-08-31T12:44:15.861584Z[0m [33m WARN[0m [2mlocal_deployment[0m[2m:[0m WAL guard disabled via VK_WAL_GUARD; node is exposed to external WAL unlink
+[2m2026-08-31T12:44:15.861587Z[0m [32m INFO[0m [2mservices::services::event_compaction[0m[2m:[0m Event compaction service started [3mretention_hours[0m[2m=[0m168 [3mmin_rows[0m[2m=[0m10000 [3mmax_rows[0m[2m=[0m100000 [3minterval_secs[0m[2m=[0m60
+[2m2026-08-31T12:44:15.862340Z[0m [32m INFO[0m [2mlocal_deployment[0m[2m:[0m Hive connection: not configured (standalone mode)
+[2m2026-08-31T12:44:15.862345Z[0m [33m WARN[0m [2mlocal_deployment[0m[2m:[0m remote client not configured, skipping node cache sync
+[2m2026-08-31T12:44:15.862351Z[0m [32m INFO[0m [2mdb::wal_monitor[0m[2m:[0m WAL monitor started [3mcheck_interval_secs[0m[2m=[0m5 [3mwarning_threshold_mb[0m[2m=[0m50 [3mcheckpoint_threshold_mb[0m[2m=[0m100 [3mauto_checkpoint[0m[2m=[0mtrue [3mtruncate_interval_secs[0m[2m=[0m300
+[2m2026-08-31T12:44:15.862384Z[0m [32m INFO[0m [2mservices::services::container[0m[2m:[0m Starting fence-then-resume recovery for orphaned execution processes [3minstance_id[0m[2m=[0m848070c0-7f65-49bd-9455-4ee348d19024
+[2m2026-08-31T12:44:15.862392Z[0m [32m INFO[0m [2mservices::services::pr_monitor[0m[2m:[0m Starting PR monitoring service with interval 60s
+[2m2026-08-31T12:44:15.862398Z[0m [32m INFO[0m [2mservices::services::github_sync[0m[2m:[0m Starting GitHub sync service with interval 300s
+[2m2026-08-31T12:44:15.865449Z[0m [32m INFO[0m [2mservices::services::file_search_cache[0m[2m:[0m Starting file search cache warming...
+[2m2026-08-31T12:44:15.865628Z[0m [32m INFO[0m [2mservices::services::file_search_cache[0m[2m:[0m No active projects found, skipping cache warming
+[2m2026-08-31T12:44:15.866729Z[0m [32m INFO[0m [2mservices::services::terminal_session[0m[2m:[0m Tmux detected but using PTY mode for reliable I/O (tmux support coming soon)
+[2m2026-08-31T12:44:15.869956Z[0m [32m INFO[0m [2mutils::port_file[0m[2m:[0m Registered vibe-kanban instance [3mproject[0m[2m=[0m/data/.worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/origin-clever-pangolin [3mpid[0m[2m=[0m1352297 [3mbackend_port[0m[2m=[0mSome(9012)
+[2m2026-08-31T12:44:15.883204Z[0m [33m WARN[0m [2mvks_node_server[0m[2m:[0m Failed to open browser automatically: Launcher "xdg-open" "http://127.0.0.1:9012" failed with ExitStatus(unix_wait_status(768)). Please open http://127.0.0.1:9012 manually.
+[2m2026-08-31T12:44:16.336190Z[0m [33m WARN[0m [2mdb::wal_monitor[0m[2m:[0m WAL unlinked externally [3mevent[0m[2m=[0m"wal_unlinked_externally" [3mpath[0m[2m=[0m/tmp/wal-repro.yrG7CZ/leg-b.IH8VIG/db.sqlite [3mwal_path[0m[2m=[0m/tmp/wal-repro.yrG7CZ/leg-b.IH8VIG/db.sqlite-wal [3mlast_inode[0m[2m=[0mSome(5668726) [3mremediation[0m[2m=[0m"node will refuse writes; restart the node after investigating"
+[2m2026-08-31T12:44:16.346080Z[0m [32m INFO[0m [2mdb::wal_monitor[0m[2m:[0m WAL salvage checkpoint succeeded [3mevent[0m[2m=[0m"wal_salvage_checkpoint_succeeded" [3mbusy[0m[2m=[0m0 [3mlog_frames[0m[2m=[0m0 [3mcheckpointed_frames[0m[2m=[0m0
+[2m2026-08-31T12:44:16.346290Z[0m [31mERROR[0m [2mdb::wal_monitor[0m[2m:[0m WAL write refusal active [3mevent[0m[2m=[0m"wal_write_refusal_active" [3mpath[0m[2m=[0m/tmp/wal-repro.yrG7CZ/leg-b.IH8VIG/db.sqlite [3mremediation[0m[2m=[0m"writes are refused until the node is restarted"
+[2m2026-08-31T12:44:16.395129Z[0m [31mERROR[0m [2mlocal_deployment[0m[2m:[0m trigger hook runner failed [3mhook[0m[2m=[0mtask_status_changed_logger [3merror[0m[2m=[0mDatabase(SqliteError { code: 5, message: "database is locked" })
+[2m2026-08-31T12:44:16.395239Z[0m [33m WARN[0m [2mlocal_deployment[0m[2m:[0m trigger hook runner terminated; respawning after backoff [3mhook[0m[2m=[0mtask_status_changed_logger [3mneeds_rebootstrap[0m[2m=[0mfalse [3mbackoff_ms[0m[2m=[0m1000
+[2m2026-08-31T12:44:16.396724Z[0m [32m INFO[0m [2mservices::services::log_batcher[0m[2m:[0m Log batcher shutting down
+[2m2026-08-31T12:44:16.396735Z[0m [32m INFO[0m [2mlocal_deployment::container[0m[2m:[0m Killing running processes for this instance [3minstance_id[0m[2m=[0m848070c0-7f65-49bd-9455-4ee348d19024
+[2m2026-08-31T12:44:16.396865Z[0m [32m INFO[0m [2mlocal_deployment::container[0m[2m:[0m No running processes to kill for this instance [3minstance_id[0m[2m=[0m848070c0-7f65-49bd-9455-4ee348d19024
+[2m2026-08-31T12:44:16.396883Z[0m [32m INFO[0m [2mservices::services::event_compaction[0m[2m:[0m Event compaction service shutting down
+[2m2026-08-31T12:44:16.397007Z[0m [32m INFO[0m [2mdb::wal_monitor[0m[2m:[0m WAL monitor shutting down
+Final WAL checkpoint completed - all data flushed to main database

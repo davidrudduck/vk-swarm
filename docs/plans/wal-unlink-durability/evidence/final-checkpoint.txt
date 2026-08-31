@@ -1,6 +1,15 @@
-No `Final WAL checkpoint` line was emitted by the retained Leg B node log.
+Final-checkpoint observability (2026-08-31)
 
-Rerun 3 used `/tmp/wal-repro-rerun3/leg-b.QLrjUn/node.log`. It records
-`WAL monitor shutting down` but has no subsequent final-checkpoint outcome,
-despite the harness reporting a graceful Leg B stop. This is a STOP condition;
-do not treat rerun 3's graceful-exit result as final-checkpoint proof.
+Earlier note (retained): rerun3's leg-b node.log ended at "WAL monitor shutting down"
+with no checkpoint outcome. Root cause was NOT a shutdown stall or checkpoint failure:
+stop_node fails the leg on SIGKILL (repro.sh:160), so the node exited cleanly via
+SIGTERM — the final tracing lines (main.rs:365-385) were lost in the logging teardown
+after the container log batcher stopped (observability defect).
+
+Fix: crates/server/src/main.rs now ALSO eprintln!s the final-checkpoint outcome
+(bypasses the tracing appender into node.log). Verified 2026-08-31: LEGS=B run green
+(16/0, exit 0) and leg-b node.log carries:
+
+  Final WAL checkpoint completed - all data flushed to main database
+
+Full node log: evidence/wal-040-legb-node-checkpoint.log

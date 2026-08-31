@@ -365,19 +365,26 @@ pub async fn perform_cleanup_actions(deployment: &DeploymentImpl) {
 
     // Run TRUNCATE checkpoint to ensure all WAL content is written to main database.
     // This is critical for data durability - if the server is killed after this point,
-    // the database will be in a consistent state.
+    // the database will be in a consistent state. eprintln! as well as tracing: the
+    // logging pipeline is already tearing down at this point and tracing lines after
+    // the batcher stop are lost before they persist (observed 2026-08-31 on a scratch
+    // node: clean SIGTERM exit, no checkpoint line in node.log).
     tracing::info!("Running final WAL checkpoint...");
     match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(&deployment.db().pool)
         .await
     {
         Ok(_) => {
-            tracing::info!("Final WAL checkpoint completed - all data flushed to main database")
+            tracing::info!("Final WAL checkpoint completed - all data flushed to main database");
+            eprintln!("Final WAL checkpoint completed - all data flushed to main database");
         }
-        Err(e) => tracing::warn!(
-            "Final WAL checkpoint failed (data may still be in WAL): {}",
-            e
-        ),
+        Err(e) => {
+            tracing::warn!(
+                "Final WAL checkpoint failed (data may still be in WAL): {}",
+                e
+            );
+            eprintln!("Final WAL checkpoint failed (data may still be in WAL): {e}");
+        }
     }
 
     // Close the pool gracefully to ensure all connections are properly closed
