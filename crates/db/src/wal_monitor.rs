@@ -230,6 +230,7 @@ async fn zero_pooled_busy_timeout(pool: &SqlitePool) {
 
 /// Fence idle pooled connections before releasing the old-domain refusal latch.
 async fn fence_pooled_read_only(pool: &SqlitePool) {
+    crate::WAL_REFUSAL_FENCE_ALL.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut held = Vec::new();
     while let Some(conn) = pool.try_acquire() {
         held.push(conn);
@@ -1182,6 +1183,13 @@ mod tests {
     #[serial_test::serial]
     async fn trip_runs_salvage_checkpoint() {
         use sqlx::ConnectOptions;
+        struct FlagGuard;
+        impl Drop for FlagGuard {
+            fn drop(&mut self) {
+                crate::WAL_WRITE_REFUSAL_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let _flag_guard = FlagGuard;
         let (pool, tmp) = crate::test_utils::create_test_pool().await;
         let db_path = tmp.path().join("test.db");
         sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'salvage-probe', '/tmp/salvage-probe-uniq')").execute(&pool).await.unwrap();
@@ -1273,17 +1281,28 @@ mod tests {
     #[serial_test::serial]
     async fn refusal_fence_survives_monitor_shutdown() {
         use sqlx::ConnectOptions;
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+        use std::str::FromStr;
 
         struct FlagGuard;
         impl Drop for FlagGuard {
             fn drop(&mut self) {
                 crate::WAL_WRITE_REFUSAL_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+                crate::WAL_REFUSAL_FENCE_ALL.store(false, std::sync::atomic::Ordering::SeqCst);
             }
         }
 
         let _flag_guard = FlagGuard;
-        let (pool, tmp) = crate::test_utils::create_test_pool().await;
+        let (seed, tmp) = crate::test_utils::create_test_pool().await;
         let db_path = tmp.path().join("test.db");
+        seed.close().await;
+        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .unwrap()
+            .journal_mode(SqliteJournalMode::Wal);
+        let pool = crate::with_refusal_after_release(SqlitePoolOptions::new().max_connections(1))
+            .connect_with(options)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'shutdown-probe', '/tmp/shutdown-probe-uniq')")
             .execute(&pool)
             .await
@@ -1317,10 +1336,28 @@ mod tests {
         .await
         .expect("monitor did not arm the refusal fence");
 
+        // Hold this old-domain connection across shutdown. It is not idle when
+        // fence_pooled_read_only drains the pool, so its return path must fence it.
+        let pooled = pool.acquire().await.unwrap();
         handle.shutdown().await;
         assert!(
             crate::WAL_WRITE_REFUSAL_ACTIVE.load(std::sync::atomic::Ordering::SeqCst),
             "monitor shutdown must preserve the write-refusal fence until process exit"
+        );
+        drop(pooled);
+        let write = sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'shutdown-returned', '/tmp/shutdown-returned-uniq')")
+            .execute(&pool)
+            .await;
+        let code = write
+            .as_ref()
+            .err()
+            .and_then(|e| e.as_database_error())
+            .and_then(|e| e.code())
+            .map(|c| c.into_owned());
+        assert_eq!(
+            code.as_deref(),
+            Some("8"),
+            "returning pooled conn write must fail SQLITE_READONLY (code 8), got {write:?}"
         );
         pool.close().await;
     }
@@ -1447,6 +1484,13 @@ mod tests {
         use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
         use std::str::FromStr;
         use std::time::Duration;
+        struct FlagGuard;
+        impl Drop for FlagGuard {
+            fn drop(&mut self) {
+                crate::WAL_WRITE_REFUSAL_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let _flag_guard = FlagGuard;
         // Start from a migrated temp DB, then reopen with the production 30s
         // busy_timeout + the same after_release hook the live pool uses. This pool
         // intentionally omits after_connect(apply_performance_pragmas) so the

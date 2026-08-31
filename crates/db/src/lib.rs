@@ -68,6 +68,10 @@ const DEFAULT_ACQUIRE_TIMEOUT_SECS: u64 = 30;
 /// with SQLITE_BUSY, and query_only there would mask that distinct error.
 pub(crate) static WAL_WRITE_REFUSAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// Set by the monitor's shutdown fence. From that point every connection returning
+/// to the pool is also fenced read-only because the old-domain latch is gone.
+pub(crate) static WAL_REFUSAL_FENCE_ALL: AtomicBool = AtomicBool::new(false);
+
 /// Zero `busy_timeout` when a connection returns to the pool after the latch.
 /// `before_acquire` + `execute` deadlocks (sqlx worker contention); this hook
 /// runs on the return path instead.
@@ -76,6 +80,9 @@ pub(crate) fn with_refusal_after_release(options: SqlitePoolOptions) -> SqlitePo
         Box::pin(async move {
             if WAL_WRITE_REFUSAL_ACTIVE.load(Ordering::Relaxed) {
                 let _ = conn.execute("PRAGMA busy_timeout = 0").await;
+            }
+            if WAL_REFUSAL_FENCE_ALL.load(Ordering::Relaxed) {
+                let _ = conn.execute("PRAGMA query_only = ON").await;
             }
             Ok(true)
         })

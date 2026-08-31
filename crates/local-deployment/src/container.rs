@@ -2081,10 +2081,6 @@ impl ContainerService for LocalContainerService {
         self.remove_entry_index_provider(&execution_process.id)
             .await;
 
-        if let Some(error) = completion_update_error {
-            return Err(error.into());
-        }
-
         // Flush any remaining buffered logs before signaling finished
         if let Some(log_batcher) = self.log_batcher() {
             log_batcher.finish(execution_process.id).await;
@@ -2187,6 +2183,10 @@ impl ContainerService for LocalContainerService {
                 )
                 .await;
             }
+        }
+
+        if let Some(error) = completion_update_error {
+            return Err(error.into());
         }
 
         Ok(())
