@@ -2004,7 +2004,7 @@ impl ContainerService for LocalContainerService {
             None
         };
 
-        ExecutionProcess::update_completion(
+        let completion_update_error = ExecutionProcess::update_completion(
             &self.db.pool,
             execution_process.id,
             status,
@@ -2012,7 +2012,15 @@ impl ContainerService for LocalContainerService {
             completion_reason,
             None, // No completion message for manual stops
         )
-        .await?;
+        .await
+        .err();
+        if let Some(error) = &completion_update_error {
+            tracing::warn!(
+                execution_process_id = %execution_process.id,
+                error = %error,
+                "Failed to record execution completion; terminating process anyway"
+            );
+        }
 
         // Ask the agent to interrupt first if it supports a protocol-native stop.
         // We still fall back to killing the process group below.
@@ -2072,6 +2080,10 @@ impl ContainerService for LocalContainerService {
         self.remove_protocol_peer(&execution_process.id).await;
         self.remove_entry_index_provider(&execution_process.id)
             .await;
+
+        if let Some(error) = completion_update_error {
+            return Err(error.into());
+        }
 
         // Flush any remaining buffered logs before signaling finished
         if let Some(log_batcher) = self.log_batcher() {

@@ -122,7 +122,9 @@ fn wal_transition(last: WalState, current: WalState) -> WalTransition {
         (WalState::Absent, WalState::Absent) => WalTransition::Unchanged,
         (WalState::Absent, WalState::Present(_)) => WalTransition::Appeared,
         (WalState::Present(_), WalState::Absent) => WalTransition::Vanished,
-        (WalState::Present(Some(a)), WalState::Present(Some(b))) if a != b => WalTransition::Replaced,
+        (WalState::Present(Some(a)), WalState::Present(Some(b))) if a != b => {
+            WalTransition::Replaced
+        }
         (WalState::Present(_), WalState::Present(_)) => WalTransition::Unchanged,
     }
 }
@@ -195,10 +197,10 @@ impl RefusalLatch {
         sqlx::query("BEGIN IMMEDIATE").execute(&mut conn).await?;
         Ok(Self { _conn: conn })
     }
-}
 
-impl Drop for RefusalLatch {
-    fn drop(&mut self) {
+    /// Clear the process-wide refusal fence after explicitly dismantling a test latch.
+    #[cfg(test)]
+    pub(crate) fn disarm(self) {
         crate::WAL_WRITE_REFUSAL_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
@@ -221,6 +223,25 @@ async fn zero_pooled_busy_timeout(pool: &SqlitePool) {
             tracing::warn!(
                 error = ?e,
                 "wal monitor: failed to zero busy_timeout on pooled connection"
+            );
+        }
+    }
+}
+
+/// Fence idle pooled connections before releasing the old-domain refusal latch.
+async fn fence_pooled_read_only(pool: &SqlitePool) {
+    let mut held = Vec::new();
+    while let Some(conn) = pool.try_acquire() {
+        held.push(conn);
+    }
+    for mut conn in held {
+        if let Err(e) = sqlx::query("PRAGMA query_only = ON")
+            .execute(&mut *conn)
+            .await
+        {
+            tracing::warn!(
+                error = ?e,
+                "wal monitor: failed to fence pooled connection read-only"
             );
         }
     }
@@ -257,13 +278,13 @@ impl WalMonitor {
         let (tx, rx) = mpsc::channel(16);
         let db_path_buf = db_path.as_ref().to_path_buf();
         let wal_path = wal_path_for(&db_path_buf);
-        
+
         let last_wal_state = match std::fs::metadata(&wal_path) {
             Ok(md) => WalState::Present(wal_identity(&md)),
             Err(_) => WalState::Absent,
         };
         let wal_ever_present = matches!(last_wal_state, WalState::Present(_));
-        
+
         let monitor = Self {
             db_path: db_path_buf,
             pool,
@@ -292,7 +313,14 @@ impl WalMonitor {
         guard: Option<crate::wal_guard::WalGuard>,
         salvage_conn: Option<SqliteConnection>,
     ) -> WalMonitorHandle {
-        Self::spawn(db_path, pool, metrics, WalMonitorConfig::default(), guard, salvage_conn)
+        Self::spawn(
+            db_path,
+            pool,
+            metrics,
+            WalMonitorConfig::default(),
+            guard,
+            salvage_conn,
+        )
     }
 
     async fn run(mut self, mut rx: mpsc::Receiver<WalMonitorCommand>) {
@@ -324,15 +352,15 @@ impl WalMonitor {
         }
 
         #[cfg(target_os = "linux")]
-         {
-             let mut watch = start_watch(&self.db_path);
-             let wal_basename = wal_path_for(&self.db_path)
-                 .file_name()
-                 .map(|s| s.to_string_lossy().into_owned())
-                 .unwrap_or_default();
- 
-             loop {
-                 tokio::select! {
+        {
+            let mut watch = start_watch(&self.db_path);
+            let wal_basename = wal_path_for(&self.db_path)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+
+            loop {
+                tokio::select! {
                      Some(cmd) = rx.recv() => {
                          match cmd {
                              WalMonitorCommand::CheckNow => {
@@ -344,11 +372,14 @@ impl WalMonitor {
                              WalMonitorCommand::TruncateCheckpoint => {
                                  self.run_truncate_checkpoint().await;
                              }
-                             WalMonitorCommand::Shutdown(ack) => {
-                                 if let Some(ref mut g) = self.guard {
-                                     g.release_read_mark().await;
-                                 }
-                                 self.refusal = None;
+                              WalMonitorCommand::Shutdown(ack) => {
+                                  if let Some(ref mut g) = self.guard {
+                                      g.release_read_mark().await;
+                                  }
+                                  if self.refusal.is_some() {
+                                      fence_pooled_read_only(&self.pool).await;
+                                      self.refusal = None;
+                                  }
                                  tracing::info!("WAL monitor shutting down");
                                  let _ = ack.send(());
                                  break;
@@ -397,17 +428,23 @@ impl WalMonitor {
                         }
                     }
                 }
-                
+
                 if let Some(guard) = &mut self.guard
-                    && !guard.is_alive().await {
+                    && !guard.is_alive().await
+                {
                     match guard.reconnect().await {
-                        Ok(_) => tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected"),
+                        Ok(_) => {
+                            tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected")
+                        }
                         Err(e) => {
                             tracing::error!(error = ?e, "WAL guard reconnect failed");
                             if !self.tripped {
                                 self.tripped = true;
                                 self.trip_events += 1;
-                                tracing::error!(event = "wal_guard_unavailable", "WAL guard unavailable; treating as durability trip");
+                                tracing::error!(
+                                    event = "wal_guard_unavailable",
+                                    "WAL guard unavailable; treating as durability trip"
+                                );
                                 self.handle_trip().await;
                             }
                         }
@@ -416,12 +453,14 @@ impl WalMonitor {
             }
         }
 
-         #[cfg(not(target_os = "linux"))]
-         {
-             tracing::debug!("WAL inotify monitoring unavailable on non-Linux; using 60s poll fallback");
- 
-             loop {
-                 tokio::select! {
+        #[cfg(not(target_os = "linux"))]
+        {
+            tracing::debug!(
+                "WAL inotify monitoring unavailable on non-Linux; using 60s poll fallback"
+            );
+
+            loop {
+                tokio::select! {
                      Some(cmd) = rx.recv() => {
                          match cmd {
                              WalMonitorCommand::CheckNow => {
@@ -433,11 +472,14 @@ impl WalMonitor {
                              WalMonitorCommand::TruncateCheckpoint => {
                                  self.run_truncate_checkpoint().await;
                              }
-                             WalMonitorCommand::Shutdown(ack) => {
-                                 if let Some(ref mut g) = self.guard {
-                                     g.release_read_mark().await;
-                                 }
-                                 self.refusal = None;
+                              WalMonitorCommand::Shutdown(ack) => {
+                                  if let Some(ref mut g) = self.guard {
+                                      g.release_read_mark().await;
+                                  }
+                                  if self.refusal.is_some() {
+                                      fence_pooled_read_only(&self.pool).await;
+                                      self.refusal = None;
+                                  }
                                  tracing::info!("WAL monitor shutting down");
                                  let _ = ack.send(());
                                  break;
@@ -458,17 +500,23 @@ impl WalMonitor {
                         }
                     }
                 }
-                
+
                 if let Some(guard) = &mut self.guard
-                    && !guard.is_alive().await {
+                    && !guard.is_alive().await
+                {
                     match guard.reconnect().await {
-                        Ok(_) => tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected"),
+                        Ok(_) => {
+                            tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected")
+                        }
                         Err(e) => {
                             tracing::error!(error = ?e, "WAL guard reconnect failed");
                             if !self.tripped {
                                 self.tripped = true;
                                 self.trip_events += 1;
-                                tracing::error!(event = "wal_guard_unavailable", "WAL guard unavailable; treating as durability trip");
+                                tracing::error!(
+                                    event = "wal_guard_unavailable",
+                                    "WAL guard unavailable; treating as durability trip"
+                                );
                                 self.handle_trip().await;
                             }
                         }
@@ -498,9 +546,9 @@ impl WalMonitor {
             self.last_wal_state = current;
             return;
         }
-        
+
         let transition = wal_transition(self.last_wal_state, current);
-        
+
         match transition {
             WalTransition::Appeared => {
                 self.wal_ever_present = true;
@@ -581,7 +629,9 @@ impl WalMonitor {
                 self.last_wal_state = current;
                 self.handle_trip().await;
             }
-            WalTransition::Unchanged if matches!(current, WalState::Absent) && self.wal_ever_present => {
+            WalTransition::Unchanged
+                if matches!(current, WalState::Absent) && self.wal_ever_present =>
+            {
                 let last_inode = match self.last_wal_state {
                     WalState::Present(Some(inode)) => Some(inode),
                     _ => None,
@@ -606,7 +656,9 @@ impl WalMonitor {
                 self.last_wal_state = current;
                 self.handle_trip().await;
             }
-            WalTransition::Unchanged if matches!(current, WalState::Absent) && !self.wal_ever_present => {
+            WalTransition::Unchanged
+                if matches!(current, WalState::Absent) && !self.wal_ever_present =>
+            {
                 tracing::debug!("WAL not yet present (benign)");
                 self.last_wal_state = current;
             }
@@ -619,10 +671,16 @@ impl WalMonitor {
     async fn run_salvage_checkpoint(&mut self) -> Result<(i32, i32, i32), sqlx::Error> {
         use sqlx::Row;
         let conn = self.salvage_conn.as_mut().ok_or_else(|| {
-            sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::NotConnected, "salvage connection unavailable"))
+            sqlx::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "salvage connection unavailable",
+            ))
         })?;
-        let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").fetch_one(conn).await?;
-        let (busy, log_frames, checkpointed): (i32, i32, i32) = (row.try_get(0)?, row.try_get(1)?, row.try_get(2)?);
+        let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_one(conn)
+            .await?;
+        let (busy, log_frames, checkpointed): (i32, i32, i32) =
+            (row.try_get(0)?, row.try_get(1)?, row.try_get(2)?);
         if busy != 0 {
             return Err(sqlx::Error::Protocol(format!(
                 "salvage checkpoint blocked (busy={busy}, log_frames={log_frames}, checkpointed={checkpointed})"
@@ -634,7 +692,13 @@ impl WalMonitor {
     async fn handle_trip(&mut self) {
         match self.run_salvage_checkpoint().await {
             Ok((busy, log_frames, checkpointed)) => {
-                tracing::info!(event = "wal_salvage_checkpoint_succeeded", busy, log_frames, checkpointed_frames = checkpointed, "WAL salvage checkpoint succeeded");
+                tracing::info!(
+                    event = "wal_salvage_checkpoint_succeeded",
+                    busy,
+                    log_frames,
+                    checkpointed_frames = checkpointed,
+                    "WAL salvage checkpoint succeeded"
+                );
                 self.last_salvage = Some(Ok((busy, log_frames, checkpointed)));
             }
             Err(e) => {
@@ -642,7 +706,7 @@ impl WalMonitor {
                 self.last_salvage = Some(Err(e.to_string()));
             }
         }
-        
+
         match self.salvage_conn.take() {
             Some(conn) => match RefusalLatch::arm(conn).await {
                 Ok(l) => {
@@ -657,9 +721,14 @@ impl WalMonitor {
                     tracing::error!(event = "wal_write_refusal_active", armed = false, error = ?e, "write-refusal latch could not be armed; closing the pool (D6 deviation: refuse-everything)");
                     self.pool.close().await;
                 }
-            }
+            },
             None => {
-                tracing::error!(event = "wal_write_refusal_active", armed = false, error = "salvage connection unavailable", "write-refusal latch could not be armed; closing the pool (D6 deviation: refuse-everything)");
+                tracing::error!(
+                    event = "wal_write_refusal_active",
+                    armed = false,
+                    error = "salvage connection unavailable",
+                    "write-refusal latch could not be armed; closing the pool (D6 deviation: refuse-everything)"
+                );
                 self.pool.close().await;
             }
         }
@@ -765,17 +834,24 @@ pub fn get_wal_size(db_path: impl AsRef<Path>) -> u64 {
 
 /// Check if an inotify event indicates WAL removal.
 #[cfg(target_os = "linux")]
-fn is_wal_removal(kind: &notify::event::EventKind, paths: &[std::path::PathBuf], wal_basename: &str) -> bool {
+fn is_wal_removal(
+    kind: &notify::event::EventKind,
+    paths: &[std::path::PathBuf],
+    wal_basename: &str,
+) -> bool {
     use notify::event::{ModifyKind, RenameMode};
-    
+
     // Match Remove(_) or Modify(Name(RenameMode::From))
-    let is_removal_kind = matches!(kind, notify::event::EventKind::Remove(_)) || 
-        matches!(kind, notify::event::EventKind::Modify(ModifyKind::Name(RenameMode::From)));
-    
+    let is_removal_kind = matches!(kind, notify::event::EventKind::Remove(_))
+        || matches!(
+            kind,
+            notify::event::EventKind::Modify(ModifyKind::Name(RenameMode::From))
+        );
+
     if !is_removal_kind {
         return false;
     }
-    
+
     // Check if any path's file_name equals wal_basename
     paths.iter().any(|path| {
         path.file_name()
@@ -787,11 +863,16 @@ fn is_wal_removal(kind: &notify::event::EventKind, paths: &[std::path::PathBuf],
 
 /// Set up inotify watch for WAL file in the database directory.
 #[cfg(target_os = "linux")]
-fn start_watch(db_path: &Path) -> Option<(notify::RecommendedWatcher, tokio::sync::mpsc::UnboundedReceiver<Result<notify::Event, notify::Error>>)> {
+fn start_watch(
+    db_path: &Path,
+) -> Option<(
+    notify::RecommendedWatcher,
+    tokio::sync::mpsc::UnboundedReceiver<Result<notify::Event, notify::Error>>,
+)> {
     use notify::{RecommendedWatcher, RecursiveMode};
-    
+
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    
+
     let mut watcher = match RecommendedWatcher::new(
         move |res| {
             let _ = tx.send(res);
@@ -804,7 +885,7 @@ fn start_watch(db_path: &Path) -> Option<(notify::RecommendedWatcher, tokio::syn
             return None;
         }
     };
-    
+
     let db_dir = db_path.parent().unwrap_or(Path::new("."));
     match watcher.watch(db_dir, RecursiveMode::NonRecursive) {
         Ok(_) => Some((watcher, rx)),
@@ -899,32 +980,56 @@ mod tests {
 
     #[test]
     fn wal_path_for_appends_dash_wal() {
-        assert_eq!(wal_path_for(Path::new("/tmp/test.db")), PathBuf::from("/tmp/test.db-wal"));
-        assert_eq!(wal_path_for(Path::new("/data/db.sqlite")), PathBuf::from("/data/db.sqlite-wal"));
+        assert_eq!(
+            wal_path_for(Path::new("/tmp/test.db")),
+            PathBuf::from("/tmp/test.db-wal")
+        );
+        assert_eq!(
+            wal_path_for(Path::new("/data/db.sqlite")),
+            PathBuf::from("/data/db.sqlite-wal")
+        );
     }
 
     #[test]
     fn wal_transition_classifies_all_cases() {
-        assert_eq!(wal_transition(WalState::Absent, WalState::Absent), WalTransition::Unchanged);
-        assert_eq!(wal_transition(WalState::Absent, WalState::Present(None)), WalTransition::Appeared);
-        assert_eq!(wal_transition(WalState::Present(None), WalState::Absent), WalTransition::Vanished);
-        assert_eq!(wal_transition(WalState::Present(Some(1)), WalState::Present(Some(2))), WalTransition::Replaced);
-        assert_eq!(wal_transition(WalState::Present(Some(2)), WalState::Present(Some(2))), WalTransition::Unchanged);
-        assert_eq!(wal_transition(WalState::Present(None), WalState::Present(None)), WalTransition::Unchanged);
+        assert_eq!(
+            wal_transition(WalState::Absent, WalState::Absent),
+            WalTransition::Unchanged
+        );
+        assert_eq!(
+            wal_transition(WalState::Absent, WalState::Present(None)),
+            WalTransition::Appeared
+        );
+        assert_eq!(
+            wal_transition(WalState::Present(None), WalState::Absent),
+            WalTransition::Vanished
+        );
+        assert_eq!(
+            wal_transition(WalState::Present(Some(1)), WalState::Present(Some(2))),
+            WalTransition::Replaced
+        );
+        assert_eq!(
+            wal_transition(WalState::Present(Some(2)), WalState::Present(Some(2))),
+            WalTransition::Unchanged
+        );
+        assert_eq!(
+            wal_transition(WalState::Present(None), WalState::Present(None)),
+            WalTransition::Unchanged
+        );
     }
 
     #[tokio::test]
     async fn vanished_trips() {
         let (pool, temp_dir) = crate::test_utils::create_test_pool().await;
         let db_path = temp_dir.path().join("test.db");
-        
+
         sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'test', '/tmp/test')")
             .execute(&pool)
             .await
             .expect("failed to insert projects row");
-        
+
         let wal_path = wal_path_for(&db_path);
-        
+
         // Seed state BEFORE removing WAL
         let config = WalMonitorConfig::default();
         let metrics = crate::metrics::DbMetrics::new();
@@ -1027,14 +1132,14 @@ mod tests {
     async fn trip_is_idempotent() {
         let (pool, temp_dir) = crate::test_utils::create_test_pool().await;
         let db_path = temp_dir.path().join("test.db");
-        
+
         sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'test', '/tmp/test')")
             .execute(&pool)
             .await
             .expect("failed to insert projects row");
-        
+
         let wal_path = wal_path_for(&db_path);
-        
+
         // Seed state BEFORE removing WAL
         let config = WalMonitorConfig::default();
         let metrics = crate::metrics::DbMetrics::new();
@@ -1063,7 +1168,7 @@ mod tests {
         let _removed = std::fs::remove_file(&wal_path);
         mon.check_wal_size().await;
         assert_eq!(mon.trip_events, 1);
-        
+
         // Remove it again and check idempotence
         let _removed = std::fs::remove_file(&wal_path);
         mon.check_wal_size().await;
@@ -1083,54 +1188,145 @@ mod tests {
         let wal = wal_path_for(&db_path);
         assert!(wal.exists());
         let md = std::fs::metadata(&wal).unwrap();
-        let mut salvage_conn = crate::wal_guard::options_for(&db_path).unwrap().connect().await.unwrap();
-        sqlx::query("SELECT count(*) FROM sqlite_master").fetch_one(&mut salvage_conn).await.unwrap();
-         let mut mon = WalMonitor {
-             db_path: db_path.clone(),
-             pool: pool.clone(),
-             metrics: crate::metrics::DbMetrics::new(),
-             config: WalMonitorConfig::default(),
-             last_wal_state: WalState::Present(wal_identity(&md)),
-             wal_ever_present: true,
-             tripped: false,
-             trip_events: 0,
-             guard: None,
-             salvage_conn: Some(salvage_conn),
-             last_salvage: None,
-             refusal: None,
-         };
-         std::fs::remove_file(&wal).unwrap();
-         let _ = std::fs::remove_file(format!("{}-shm", db_path.display()));
+        let mut salvage_conn = crate::wal_guard::options_for(&db_path)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("SELECT count(*) FROM sqlite_master")
+            .fetch_one(&mut salvage_conn)
+            .await
+            .unwrap();
+        let mut mon = WalMonitor {
+            db_path: db_path.clone(),
+            pool: pool.clone(),
+            metrics: crate::metrics::DbMetrics::new(),
+            config: WalMonitorConfig::default(),
+            last_wal_state: WalState::Present(wal_identity(&md)),
+            wal_ever_present: true,
+            tripped: false,
+            trip_events: 0,
+            guard: None,
+            salvage_conn: Some(salvage_conn),
+            last_salvage: None,
+            refusal: None,
+        };
+        std::fs::remove_file(&wal).unwrap();
+        let _ = std::fs::remove_file(format!("{}-shm", db_path.display()));
         async fn main_file_probe(db_path: &std::path::Path) -> i64 {
-            let p = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
-                .connect_with(crate::wal_guard::options_for(db_path).unwrap().immutable(true))
-                .await.unwrap();
+            let p = sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    crate::wal_guard::options_for(db_path)
+                        .unwrap()
+                        .immutable(true),
+                )
+                .await
+                .unwrap();
             let has: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'")
-                .fetch_one(&p).await.unwrap();
-            let n: i64 = if has == 0 { 0 } else {
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'",
+            )
+            .fetch_one(&p)
+            .await
+            .unwrap();
+            let n: i64 = if has == 0 {
+                0
+            } else {
                 sqlx::query_scalar("SELECT count(*) FROM projects WHERE name='salvage-probe'")
-                    .fetch_one(&p).await.unwrap()
+                    .fetch_one(&p)
+                    .await
+                    .unwrap()
             };
             p.close().await;
             n
         }
         let before = main_file_probe(&db_path).await;
-        assert_eq!(before, 0, "pre-trip main file already holds the row — no differential to measure (an earlier checkpoint flushed it); the A6 assertion would be hollow");
+        assert_eq!(
+            before, 0,
+            "pre-trip main file already holds the row — no differential to measure (an earlier checkpoint flushed it); the A6 assertion would be hollow"
+        );
         mon.check_wal_size().await;
         assert!(mon.tripped, "trip was not detected after WAL removal");
-        assert!(mon.last_salvage.as_ref().is_some_and(|r| r.is_ok()), "salvage did not run through the dedicated connection: {:?}", mon.last_salvage);
-        assert!(matches!(mon.last_salvage.as_ref(), Some(Ok((0, _, _)))), "salvage checkpoint reported busy: {:?}", mon.last_salvage);
+        assert!(
+            mon.last_salvage.as_ref().is_some_and(|r| r.is_ok()),
+            "salvage did not run through the dedicated connection: {:?}",
+            mon.last_salvage
+        );
+        assert!(
+            matches!(mon.last_salvage.as_ref(), Some(Ok((0, _, _)))),
+            "salvage checkpoint reported busy: {:?}",
+            mon.last_salvage
+        );
         let after = main_file_probe(&db_path).await;
-        assert_eq!(after, 1, "salvage checkpoint did not flush pre-trip frames into the main file (A6 pre-stop differential; before={before})");
+        assert_eq!(
+            after, 1,
+            "salvage checkpoint did not flush pre-trip frames into the main file (A6 pre-stop differential; before={before})"
+        );
         pool.close().await;
+        if let Some(latch) = mon.refusal.take() {
+            latch.disarm();
+        }
         drop(mon);
     }
 
-    // Both refusal tests touch the process-global WAL_WRITE_REFUSAL_ACTIVE flag
-    // (zero_pooled_busy_timeout sets it, RefusalLatch::drop clears it) — serialize
-    // them against each other and against any future flag user, or a concurrent
-    // latch drop clears the flag mid-test.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn refusal_fence_survives_monitor_shutdown() {
+        use sqlx::ConnectOptions;
+
+        struct FlagGuard;
+        impl Drop for FlagGuard {
+            fn drop(&mut self) {
+                crate::WAL_WRITE_REFUSAL_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let _flag_guard = FlagGuard;
+        let (pool, tmp) = crate::test_utils::create_test_pool().await;
+        let db_path = tmp.path().join("test.db");
+        sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'shutdown-probe', '/tmp/shutdown-probe-uniq')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let wal = wal_path_for(&db_path);
+        let salvage_conn = crate::wal_guard::options_for(&db_path)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let handle = WalMonitor::spawn(
+            &db_path,
+            pool.clone(),
+            crate::metrics::DbMetrics::new(),
+            WalMonitorConfig {
+                truncate_checkpoint_interval_secs: 0,
+                ..WalMonitorConfig::default()
+            },
+            None,
+            Some(salvage_conn),
+        );
+
+        std::fs::remove_file(&wal).unwrap();
+        let _ = std::fs::remove_file(tmp.path().join("test.db-shm"));
+        handle.check_now().await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !crate::WAL_WRITE_REFUSAL_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("monitor did not arm the refusal fence");
+
+        handle.shutdown().await;
+        assert!(
+            crate::WAL_WRITE_REFUSAL_ACTIVE.load(std::sync::atomic::Ordering::SeqCst),
+            "monitor shutdown must preserve the write-refusal fence until process exit"
+        );
+        pool.close().await;
+    }
+
+    // Refusal tests touch the process-global WAL_WRITE_REFUSAL_ACTIVE flag. Serialize
+    // them against each other and against any future flag user.
     #[tokio::test]
     #[serial_test::serial]
     async fn refusal_latch_blocks_writes_allows_reads() {
@@ -1145,22 +1341,41 @@ mod tests {
         let mut pooled = pool.acquire().await.unwrap();
         sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'pre-latch', '/tmp/pre-latch-uniq')").execute(&mut *pooled).await.unwrap(); // forces the WAL into existence
         // Dedicated connection opened PRE-unlink (old shm/inode domain) — a fresh post-unlink conn would fence nobody.
-        let mut conn = crate::wal_guard::options_for(&db_path).unwrap().connect().await.unwrap();
+        let mut conn = crate::wal_guard::options_for(&db_path)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
         // Dummy read maps the wal-index — connect alone does not put the connection in the old shm domain.
-        sqlx::query("SELECT count(*) FROM sqlite_master").fetch_one(&mut conn).await.unwrap();
+        sqlx::query("SELECT count(*) FROM sqlite_master")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
         // integrated-review amendment 2026-08-30: fault injection removes BOTH files, matching the live harness.
         std::fs::remove_file(tmp.path().join("test.db-wal")).unwrap(); // REAL external unlink
         let _ = std::fs::remove_file(tmp.path().join("test.db-shm"));
-        let latch = RefusalLatch::arm(conn).await.expect("latch must arm on the old-domain connection");
+        let latch = RefusalLatch::arm(conn)
+            .await
+            .expect("latch must arm on the old-domain connection");
         let write = sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'refusal-probe', '/tmp/refusal-probe-uniq')").execute(&mut *pooled).await;
-        let write_code = write.as_ref().err()
+        let write_code = write
+            .as_ref()
+            .err()
             .and_then(|e| e.as_database_error())
             .and_then(|e| e.code())
             .map(|c| c.into_owned());
-        assert_eq!(write_code.as_deref(), Some("5"),
-            "write must be refused by the latch with SQLITE_BUSY (code 5), got {write:?}");
-        let read: Result<i64, sqlx::Error> = sqlx::query_scalar("SELECT count(*) FROM projects").fetch_one(&mut *pooled).await;
-        assert!(read.is_ok(), "read blocked on the held old-domain connection: {read:?}");
+        assert_eq!(
+            write_code.as_deref(),
+            Some("5"),
+            "write must be refused by the latch with SQLITE_BUSY (code 5), got {write:?}"
+        );
+        let read: Result<i64, sqlx::Error> = sqlx::query_scalar("SELECT count(*) FROM projects")
+            .fetch_one(&mut *pooled)
+            .await;
+        assert!(
+            read.is_ok(),
+            "read blocked on the held old-domain connection: {read:?}"
+        );
         drop(latch);
     }
 
@@ -1204,16 +1419,24 @@ mod tests {
         let write = sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'refused-fresh', '/tmp/refused-fresh-uniq')")
             .execute(&pool)
             .await;
-        let code = write.as_ref().err()
+        let code = write
+            .as_ref()
+            .err()
             .and_then(|e| e.as_database_error())
             .and_then(|e| e.code())
             .map(|c| c.into_owned());
-        assert_eq!(code.as_deref(), Some("8"),
-            "fresh post-unlink pooled conn write must fail SQLITE_READONLY (code 8), got {write:?}");
+        assert_eq!(
+            code.as_deref(),
+            Some("8"),
+            "fresh post-unlink pooled conn write must fail SQLITE_READONLY (code 8), got {write:?}"
+        );
         let read: Result<i64, sqlx::Error> = sqlx::query_scalar("SELECT count(*) FROM projects")
             .fetch_one(&pool)
             .await;
-        assert!(read.is_ok(), "read blocked on a fresh post-latch pooled conn: {read:?}");
+        assert!(
+            read.is_ok(),
+            "read blocked on a fresh post-latch pooled conn: {read:?}"
+        );
         pool.close().await;
     }
 
@@ -1225,7 +1448,10 @@ mod tests {
         use std::str::FromStr;
         use std::time::Duration;
         // Start from a migrated temp DB, then reopen with the production 30s
-        // busy_timeout + the same before_acquire hook the live pool uses.
+        // busy_timeout + the same after_release hook the live pool uses. This pool
+        // intentionally omits after_connect(apply_performance_pragmas) so the
+        // old-domain SQLITE_BUSY path is isolated from the new-domain query_only
+        // fence, covered by refusal_flag_fences_fresh_connections_read_only.
         let (seed, tmp) = crate::test_utils::create_test_pool().await;
         let db_path = tmp.path().join("test.db");
         seed.close().await;
@@ -1305,19 +1531,35 @@ mod tests {
             Some("5"),
             "pool checkout after latch must be SQLITE_BUSY (code 5), got {pool_write:?}"
         );
-        drop(latch);
+        latch.disarm();
         pool.close().await;
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn is_wal_removal_matches_delete_and_rename_from() {
-        use notify::event::{EventKind, RemoveKind, ModifyKind, RenameMode};
+        use notify::event::{EventKind, ModifyKind, RemoveKind, RenameMode};
         let wal = std::path::PathBuf::from("/x/db.sqlite-wal");
         let other = std::path::PathBuf::from("/x/db.sqlite");
-        assert!(is_wal_removal(&EventKind::Remove(RemoveKind::File), std::slice::from_ref(&wal), "db.sqlite-wal"));
-        assert!(is_wal_removal(&EventKind::Modify(ModifyKind::Name(RenameMode::From)), std::slice::from_ref(&wal), "db.sqlite-wal"));
-        assert!(!is_wal_removal(&EventKind::Remove(RemoveKind::File), std::slice::from_ref(&other), "db.sqlite-wal"));
-        assert!(!is_wal_removal(&EventKind::Create(notify::event::CreateKind::File), std::slice::from_ref(&wal), "db.sqlite-wal"));
+        assert!(is_wal_removal(
+            &EventKind::Remove(RemoveKind::File),
+            std::slice::from_ref(&wal),
+            "db.sqlite-wal"
+        ));
+        assert!(is_wal_removal(
+            &EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+            std::slice::from_ref(&wal),
+            "db.sqlite-wal"
+        ));
+        assert!(!is_wal_removal(
+            &EventKind::Remove(RemoveKind::File),
+            std::slice::from_ref(&other),
+            "db.sqlite-wal"
+        ));
+        assert!(!is_wal_removal(
+            &EventKind::Create(notify::event::CreateKind::File),
+            std::slice::from_ref(&wal),
+            "db.sqlite-wal"
+        ));
     }
 }
