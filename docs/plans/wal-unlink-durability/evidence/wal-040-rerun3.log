@@ -1,0 +1,49 @@
+[22:33:11] Using scratch directory: /tmp/wal-repro-rerun3
+
+========== LEG A: guard-on durability ==========
+MODE=full
+PASS Leg A boot 1 is healthy
+PASS Leg A boot 1 stopped gracefully
+PASS Leg A browser session seeded
+PASS Leg A boot 2 is healthy
+PASS Leg A project created
+PASS Leg A marker-A-pre written
+PASS Leg A external write session executed
+PASS Leg A no external WAL unlink (detector timed out)
+PASS Leg A timing-1 written
+PASS Leg A timing-2 written
+PASS Leg A timing-3 written
+PASS Leg A timing-4 written
+PASS Leg A timing-5 written
+PASS Leg A marker-A-post API write
+PASS Leg A stopped gracefully
+PASS Leg A marker-A-post persisted
+PASS Leg A journal_mode is wal
+
+========== LEG B: guard-off detection+refusal ==========
+MODE=full
+PASS Leg B attempt 1 boot 1 is healthy
+PASS Leg B attempt 1 boot 1 stopped gracefully
+PASS Leg B attempt 1 browser session seeded
+PASS Leg B attempt 1 boot 2 is healthy
+PASS Leg B attempt 1 project created
+PASS Leg B attempt 1 marker-B-pre written
+PASS Leg B attempt 1 fault injection removed existing WAL and SHM
+PASS Leg B attempt 1 detected external WAL unlink
+PASS Leg B attempt 1 wal_unlinked_externally logged
+PASS Leg B attempt 1 unlink log names db path
+PASS Leg B attempt 1 wal_write_refusal_active latched
+PASS Leg B attempt 1 marker-B-post rejected (HTTP 500)
+PASS Leg B attempt 1 post-trip read still served
+PASS Leg B attempt 1 node remains alive after refusal
+PASS Leg B attempt 1 stopped gracefully
+PASS Leg B attempt 1 marker-B-post was not persisted
+
+========== SUMMARY ==========
+Total PASS: 33
+Total FAIL: 0
+
+Leg results:
+  LEG A: PASS PASS=17 FAIL=0 TOTAL=17
+  LEG B: PASS PASS=16 FAIL=0 TOTAL=16
+[22:33:44] All tests passed

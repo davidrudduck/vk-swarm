@@ -839,9 +839,12 @@ Findings and dispositions:
     - The microsecond flag-after-latch-arm window cannot be hit by the harness,
       which waits for wal_write_refusal_active before attempting its post-trip
       write.
-    - Leg B's warm-connection refusal is served by an old-domain pooled connection;
-      the fresh-connection query_only path is covered by
-      refusal_flag_fences_fresh_connections_read_only.
+     - Leg B's warm-connection refusal is served by an old-domain pooled connection;
+       the fresh-connection query_only path is covered by
+       refusal_flag_fences_fresh_connections_read_only.
+     - A connection checked out before fence_pooled_read_only runs is fenced read-only
+       when it returns through after_release. A connection never returned before
+       pool.close() remains latch-fenced until monitor shutdown; the process is then exiting.
     - SC2 "distinct integrity error": at the db layer the refusal IS distinct
      (SQLITE_BUSY code 5 old-domain / SQLITE_READONLY code 8 new-domain); at the
      HTTP layer it maps to generic 500 DatabaseError (pre-existing error.rs
@@ -852,12 +855,11 @@ Findings and dispositions:
 
 6. SHUTDOWN REFUSAL FENCE (Task 040 remediation): RefusalLatch no longer clears
    WAL_WRITE_REFUSAL_ACTIVE on Drop; only test-only disarm clears it. On monitor
-   shutdown, idle pooled connections are first set query_only=ON, then the
-   old-domain latch is released. This preserves refusal through process exit while
-   allowing the final query_only-compatible TRUNCATE checkpoint. The server's
-   shutdown ordering at main.rs:343-385 stops the monitor before the final
-   checkpoint and pool close, so this prevents post-refusal writes from being
-   merged into the main DB.
+   shutdown, idle pooled connections are set query_only=ON, WAL_REFUSAL_FENCE_ALL
+   fences returning connections through after_release, and then the old-domain latch
+   is released. The compaction and event-bus shutdown signals run before monitor
+   shutdown, keeping the latch armed through their in-flight window. The final
+   TRUNCATE still runs because query_only connections can checkpoint.
 7. EXECUTOR TERMINATION AFTER REFUSAL (Task 040 remediation): stop_execution now
    records a completion-update failure, terminates the OS process regardless, then
    returns that DB error. Refusal is expected after a durability trip; leaving an
@@ -868,3 +870,18 @@ Findings and dispositions:
 - [Task 040 remediation] Kill executors despite completion-update refusal — OS termination is more important than the expected post-trip DB error — `crates/local-deployment/src/container.rs`
 - [Task 040 remediation] Correct the old-domain refusal test hook comment — documents the actual after_release isolation and fresh-connection coverage — `crates/db/src/wal_monitor.rs`
 - [Task 040 remediation] Normalize and extend WAL refusal findings — records residual races and keeps BACKLOG schema-valid — `dev-docs/BACKLOG.md`, `docs/plans/wal-unlink-durability/decisions-ledger.md`
+- [Task 040 remediation] Fence every returned pooled connection after monitor shutdown — idle draining cannot reach checked-out connections — `crates/db/src/lib.rs`, `crates/db/src/wal_monitor.rs`
+- [Task 040 remediation] Stop event writers before releasing the refusal latch — compaction in flight remains latch-fenced — `crates/local-deployment/src/lib.rs`
+- [Task 040 remediation] Finish lifecycle cleanup before surfacing completion DB errors — buffered logs, approvals, and normalizers must terminate after refusal — `crates/local-deployment/src/container.rs`
+- [Task 040 remediation] Restore refusal findings with precise evidence and remediation — backlog remains review-actionable and schema-conformant — `dev-docs/BACKLOG.md`
+
+## 2026-08-31 — Task 040 final verification
+
+Rebuilt `target/release/vks-node-server` after `a4da77bea`, then ran
+`SCRATCH_ROOT=/tmp/wal-repro-rerun3 bash scripts/live/wal-unlink-durability-repro.sh`.
+It exited 0 with 33 PASS / 0 FAIL (Leg A 17/0; Leg B 16/0), retained at
+`evidence/wal-040-rerun3.log`; port 9012 was free afterwards. I inspected the
+retained Leg B `node.log` for `Final WAL checkpoint` after the graceful stop.
+It contains `WAL monitor shutting down` but no final-checkpoint outcome. The
+absence is recorded in `evidence/final-checkpoint.txt`; this is not final
+checkpoint proof and remains a STOP condition.

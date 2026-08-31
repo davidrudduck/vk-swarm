@@ -1,0 +1,6 @@
+No `Final WAL checkpoint` line was emitted by the retained Leg B node log.
+
+Rerun 3 used `/tmp/wal-repro-rerun3/leg-b.QLrjUn/node.log`. It records
+`WAL monitor shutting down` but has no subsequent final-checkpoint outcome,
+despite the harness reporting a graceful Leg B stop. This is a STOP condition;
+do not treat rerun 3's graceful-exit result as final-checkpoint proof.
