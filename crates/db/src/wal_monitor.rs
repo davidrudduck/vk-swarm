@@ -1124,7 +1124,11 @@ mod tests {
         drop(mon);
     }
 
+    // Both refusal tests touch the process-global WAL_WRITE_REFUSAL_ACTIVE flag
+    // (arm sets it, RefusalLatch::drop clears it) — serialize them against each other
+    // and against any future flag user, or a concurrent latch drop clears the flag mid-test.
     #[tokio::test]
+    #[serial_test::serial]
     async fn refusal_latch_blocks_writes_allows_reads() {
         use sqlx::ConnectOptions;
         let (pool, tmp) = crate::test_utils::create_test_pool().await;
@@ -1157,6 +1161,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn refusal_latch_fail_fast_under_production_busy_timeout() {
         use sqlx::ConnectOptions;
         use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
