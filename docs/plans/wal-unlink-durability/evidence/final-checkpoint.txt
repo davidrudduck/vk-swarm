@@ -3,13 +3,26 @@ Final-checkpoint observability (2026-08-31)
 Earlier note (retained): rerun3's leg-b node.log ended at "WAL monitor shutting down"
 with no checkpoint outcome. Root cause was NOT a shutdown stall or checkpoint failure:
 stop_node fails the leg on SIGKILL (repro.sh:160), so the node exited cleanly via
-SIGTERM — the final tracing lines (main.rs:365-385) were lost in the logging teardown
-after the container log batcher stopped (observability defect).
+SIGTERM. The missing lines were a FILTER-TARGET bug: main.rs compiles as the
+vks_node_server BIN target, which crates/server/src/file_logging.rs's filter string
+did not name — every tracing::info! in perform_cleanup_actions fell through to the
+`warn` default and was silently dropped (disproof of the earlier "logging teardown"
+theory: the batcher's own later line survived, and zero INFO vks_node_server lines
+exist anywhere in the log).
 
-Fix: crates/server/src/main.rs now ALSO eprintln!s the final-checkpoint outcome
-(bypasses the tracing appender into node.log). Verified 2026-08-31: LEGS=B run green
-(16/0, exit 0) and leg-b node.log carries:
+Fixes: (1) file_logging.rs now names vks_node_server={level}; (2) main.rs ALSO
+eprintln!s the final-checkpoint outcome (durability outcome must survive log
+config). Verified 2026-08-31: LEGS=B run green (16/0, exit 0) and leg-b node.log
+carries:
 
   Final WAL checkpoint completed - all data flushed to main database
 
 Full node log: evidence/wal-040-legb-node-checkpoint.log
+
+Follow-up verification (same day): with the file_logging filter fixed, the full
+shutdown sequence is now visible via tracing itself — evidence/wal-040-legb-node-checkpoint.log:
+  INFO vks_node_server: Event journal services stopped
+  INFO vks_node_server: Running final WAL checkpoint...
+  INFO vks_node_server: Final WAL checkpoint completed - all data flushed to main database
+  Final WAL checkpoint completed - all data flushed to main database   (eprintln)
+  INFO vks_node_server: Database connection pool closed

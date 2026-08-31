@@ -74,9 +74,12 @@ impl Default for FileLoggingConfig {
 pub fn init_logging(log_level: &str) -> Option<WorkerGuard> {
     let config = FileLoggingConfig::default();
 
-    // Build the filter string for our crates at the specified level
+    // Build the filter string for our crates at the specified level.
+    // vks_node_server is the BIN target (crates/server/src/main.rs) — without its
+    // own directive, every tracing::info! in main.rs (e.g. the whole shutdown
+    // sequence) falls through to the `warn` default and is silently dropped.
     let filter_string = format!(
-        "warn,server={level},services={level},db={level},executors={level},deployment={level},local_deployment={level},utils={level}",
+        "warn,vks_node_server={level},server={level},services={level},db={level},executors={level},deployment={level},local_deployment={level},utils={level}",
         level = log_level
     );
     let env_filter = EnvFilter::try_new(&filter_string).expect("Failed to create tracing filter");

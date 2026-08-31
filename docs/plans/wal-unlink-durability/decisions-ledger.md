@@ -885,3 +885,14 @@ retained Leg B `node.log` for `Final WAL checkpoint` after the graceful stop.
 It contains `WAL monitor shutting down` but no final-checkpoint outcome. The
 absence is recorded in `evidence/final-checkpoint.txt`; this is not final
 checkpoint proof and remains a STOP condition.
+
+SUPERSEDED (2026-08-31, commit 5f9fad167 + follow-up): the STOP is cleared.
+Root cause was a filter-target bug — main.rs compiles as the `vks_node_server`
+BIN target, which `file_logging.rs`'s filter string did not name, so every
+`tracing::info!` in `perform_cleanup_actions` was silently dropped (the earlier
+"logging teardown" theory was disproved: the batcher's own later line survived
+and zero INFO vks_node_server lines exist in the log). Fixes: `file_logging.rs`
+now names `vks_node_server={level}`, and main.rs also `eprintln!`s the
+checkpoint outcome. Verified: LEGS=B rerun green (16/0, exit 0) with
+`Final WAL checkpoint completed - all data flushed to main database` present in
+`evidence/wal-040-legb-node-checkpoint.log:34`.

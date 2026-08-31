@@ -366,9 +366,11 @@ pub async fn perform_cleanup_actions(deployment: &DeploymentImpl) {
     // Run TRUNCATE checkpoint to ensure all WAL content is written to main database.
     // This is critical for data durability - if the server is killed after this point,
     // the database will be in a consistent state. eprintln! as well as tracing: the
-    // logging pipeline is already tearing down at this point and tracing lines after
-    // the batcher stop are lost before they persist (observed 2026-08-31 on a scratch
-    // node: clean SIGTERM exit, no checkpoint line in node.log).
+    // vks_node_server BIN target historically had no directive in the file_logging
+    // filter, so every tracing::info! in this file fell through to the `warn`
+    // default and was silently dropped (observed 2026-08-31 on a scratch node:
+    // clean SIGTERM exit, no checkpoint line in node.log). The durability outcome
+    // must be visible even if the log config regresses again.
     tracing::info!("Running final WAL checkpoint...");
     match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(&deployment.db().pool)
