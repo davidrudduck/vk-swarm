@@ -1,0 +1,44 @@
+2026-08-31T22:22:33.474969Z  INFO services::services::oauth_credentials: OAuth credentials backend: file
+2026-08-31T22:22:33.475243Z  INFO executors::profile: No user profiles.json found, using defaults only
+2026-08-31T22:22:33.516928Z  INFO executors::profile: Recommended executor: CODEX
+2026-08-31T22:22:33.516981Z  INFO local_deployment: Storage locations database=/tmp/wal-resume/leg-b.1VEIw9/db.sqlite backups=/tmp/wal-resume/leg-b.1VEIw9/backup worktrees=/tmp/wal-resume/leg-b.1VEIw9/worktrees
+2026-08-31T22:22:33.518969Z  INFO db: Database integrity check passed
+2026-08-31T22:22:33.519396Z  INFO db: Initializing SQLite connection pool max_connections=10 min_connections=2
+2026-08-31T22:22:33.520546Z  INFO local_deployment: Starting orphaned image cleanup...
+2026-08-31T22:22:33.520584Z  INFO local_deployment: VK_SHARED_API_BASE not set; remote features disabled
+2026-08-31T22:22:33.520595Z  INFO local_deployment::container: Generated server instance ID instance_id=29ee1fdc-145b-40f5-a40d-1c8a32c23ba6
+2026-08-31T22:22:33.521667Z  INFO local_deployment::container: Starting periodic worktree cleanup...
+2026-08-31T22:22:33.524738Z  WARN local_deployment: WAL guard disabled via VK_WAL_GUARD; node is exposed to external WAL unlink
+2026-08-31T22:22:33.524740Z  INFO services::services::event_compaction: Event compaction service started retention_hours=168 min_rows=10000 max_rows=100000 interval_secs=60
+2026-08-31T22:22:33.526320Z  INFO local_deployment: Hive connection: not configured (standalone mode)
+2026-08-31T22:22:33.526323Z  WARN local_deployment: remote client not configured, skipping node cache sync
+2026-08-31T22:22:33.526325Z  INFO db::wal_monitor: WAL monitor started check_interval_secs=5 warning_threshold_mb=50 checkpoint_threshold_mb=100 auto_checkpoint=true truncate_interval_secs=300
+2026-08-31T22:22:33.526351Z  INFO services::services::github_sync: Starting GitHub sync service with interval 300s
+2026-08-31T22:22:33.526355Z  INFO services::services::container: Starting fence-then-resume recovery for orphaned execution processes instance_id=29ee1fdc-145b-40f5-a40d-1c8a32c23ba6
+2026-08-31T22:22:33.526356Z  INFO services::services::pr_monitor: Starting PR monitoring service with interval 60s
+2026-08-31T22:22:33.526687Z  INFO services::services::file_search_cache: Starting file search cache warming...
+2026-08-31T22:22:33.527060Z  INFO services::services::file_search_cache: No active projects found, skipping cache warming
+2026-08-31T22:22:33.527566Z  INFO services::services::terminal_session: Tmux detected but using PTY mode for reliable I/O (tmux support coming soon)
+2026-08-31T22:22:33.531702Z  INFO utils::port_file: Registered vibe-kanban instance project=/home/david/.local/share/opencode/worktree/864023a7bea1094222edb02741f5b7e3b07c3f4d/origin-clever-pangolin pid=120410 backend_port=Some(9012)
+2026-08-31T22:22:33.531744Z  INFO vks_node_server: Server running on http://0.0.0.0:9012
+2026-08-31T22:22:33.531747Z  INFO vks_node_server: Opening browser...
+2026-08-31T22:22:33.533387Z  WARN vks_node_server: Failed to open browser automatically: Launcher "gio" "open" "http://127.0.0.1:9012" failed with ExitStatus(unix_wait_status(512)). Please open http://127.0.0.1:9012 manually.
+2026-08-31T22:22:34.023545Z  WARN db::wal_monitor: WAL unlinked externally event="wal_unlinked_externally" path=/tmp/wal-resume/leg-b.1VEIw9/db.sqlite wal_path=/tmp/wal-resume/leg-b.1VEIw9/db.sqlite-wal last_inode=Some(2771957) remediation="node will refuse writes; restart the node after investigating"
+2026-08-31T22:22:34.023694Z  INFO db::wal_monitor: WAL salvage checkpoint succeeded event="wal_salvage_checkpoint_succeeded" busy=0 log_frames=0 checkpointed_frames=0
+2026-08-31T22:22:34.023863Z ERROR db::wal_monitor: WAL write refusal active event="wal_write_refusal_active" path=/tmp/wal-resume/leg-b.1VEIw9/db.sqlite remediation="writes are refused until the node is restarted"
+2026-08-31T22:22:34.059223Z ERROR local_deployment: trigger hook runner failed hook=task_status_changed_logger error=Database(SqliteError { code: 5, message: "database is locked" })
+2026-08-31T22:22:34.059304Z  WARN local_deployment: trigger hook runner terminated; respawning after backoff hook=task_status_changed_logger needs_rebootstrap=false backoff_ms=1000
+2026-08-31T22:22:34.086049Z  INFO vks_node_server: Flushing pending log buffers...
+2026-08-31T22:22:34.086078Z  INFO vks_node_server: Log buffers flushed
+2026-08-31T22:22:34.086078Z  INFO services::services::log_batcher: Log batcher shutting down
+2026-08-31T22:22:34.086088Z  INFO local_deployment::container: Killing running processes for this instance instance_id=29ee1fdc-145b-40f5-a40d-1c8a32c23ba6
+2026-08-31T22:22:34.086256Z  INFO local_deployment::container: No running processes to kill for this instance instance_id=29ee1fdc-145b-40f5-a40d-1c8a32c23ba6
+2026-08-31T22:22:34.086259Z  INFO vks_node_server: Stopping event journal services...
+2026-08-31T22:22:34.086279Z  INFO services::services::event_compaction: Event compaction service shutting down
+2026-08-31T22:22:34.086382Z  INFO db::wal_monitor: WAL monitor shutting down
+2026-08-31T22:22:34.086391Z  INFO vks_node_server: Event journal services stopped
+2026-08-31T22:22:34.086393Z  INFO vks_node_server: Running final WAL checkpoint...
+2026-08-31T22:22:34.086446Z  INFO vks_node_server: Final WAL checkpoint completed - all data flushed to main database
+Final WAL checkpoint completed - all data flushed to main database
+2026-08-31T22:22:34.086449Z  INFO vks_node_server: Closing database connection pool...
+2026-08-31T22:22:34.087056Z  INFO vks_node_server: Database connection pool closed

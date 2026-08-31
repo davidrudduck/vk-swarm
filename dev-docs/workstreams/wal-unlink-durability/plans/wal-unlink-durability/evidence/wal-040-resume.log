@@ -1,0 +1,72 @@
+[22:22:01] Using scratch directory: /tmp/wal-resume
+
+========== LEG A: guard-on durability ==========
+MODE=full
+[22:22:01] Health check passed after 512ms
+PASS Leg A boot 1 is healthy
+PASS Leg A boot 1 stopped gracefully
+PASS Leg A browser session seeded
+[22:22:02] Health check passed after 512ms
+PASS Leg A boot 2 is healthy
+PASS Leg A project created
+1b4f98b3-429c-489a-a979-702584111a7a
+PASS Leg A marker-A-pre written
+PASS Leg A external write session executed
+[22:22:32] Trip detector timeout after 29676ms
+PASS Leg A no external WAL unlink (detector timed out)
+12e7ae40-516c-4b97-978d-8d66a70d8b39
+PASS Leg A timing-1 written
+79d192fc-46fb-41d7-8fac-330c29d0e3a5
+PASS Leg A timing-2 written
+47935b4f-6553-4689-bc3d-8df90108724d
+PASS Leg A timing-3 written
+bd51dfb2-a648-4a51-81ac-2a0d47af4b0d
+PASS Leg A timing-4 written
+3682a323-f49c-4650-8104-bf105417a2a8
+PASS Leg A timing-5 written
+fa694c19-209e-4e0f-921b-797c55c09676
+PASS Leg A marker-A-post API write
+PASS Leg A stopped gracefully
+PASS Leg A marker-A-post persisted
+PASS Leg A journal_mode is wal
+
+========== LEG B: guard-off detection+refusal ==========
+MODE=full
+[22:22:33] Health check passed after 515ms
+PASS Leg B attempt 1 boot 1 is healthy
+PASS Leg B attempt 1 boot 1 stopped gracefully
+PASS Leg B attempt 1 browser session seeded
+[22:22:33] Health check passed after 512ms
+PASS Leg B attempt 1 boot 2 is healthy
+PASS Leg B attempt 1 project created
+f5232299-c65d-447c-b955-92b12503a0d6
+PASS Leg B attempt 1 marker-B-pre written
+[22:22:34] WAL evidence after 4ms: lrwx------ 1 david david 64 Aug 31 22:22 14 -> /tmp/wal-resume/leg-b.1VEIw9/db.sqlite-wal (deleted)
+lrwx------ 1 david david 64 Aug 31 22:22 17 -> /tmp/wal-resume/leg-b.1VEIw9/db.sqlite-wal (deleted)
+lrwx------ 1 david david 64 Aug 31 22:22 19 -> /tmp/wal-resume/leg-b.1VEIw9/db.sqlite-wal (deleted)
+lrwx------ 1 david david 64 Aug 31 22:22 23 -> /tmp/wal-resume/leg-b.1VEIw9/db.sqlite-wal (deleted)
+lrwx------ 1 david david 64 Aug 31 22:22 24 -> /tmp/wal-resume/leg-b.1VEIw9/db.sqlite-wal (deleted)
+lrwx------ 1 david david 64 Aug 31 22:22 25 -> /tmp/wal-resume/leg-b.1VEIw9/db.sqlite-wal (deleted)
+lrwx------ 1 david david 64 Aug 31 22:22 28 -> /tmp/wal-resume/leg-b.1VEIw9/db.sqlite-wal (deleted)
+lrwx------ 1 david david 64 Aug 31 22:22 29 -> /tmp/wal-resume/leg-b.1VEIw9/db.sqlite-wal (deleted)
+PASS Leg B attempt 1 fault injection removed existing WAL and SHM
+PASS Leg B attempt 1 detected external WAL unlink
+[22:22:34] Unlink event evidence after 2ms
+PASS Leg B attempt 1 wal_unlinked_externally logged
+PASS Leg B attempt 1 unlink log names db path
+[22:22:34] Refusal latch evidence after 2ms
+PASS Leg B attempt 1 wal_write_refusal_active latched
+PASS Leg B attempt 1 marker-B-post rejected (HTTP 500)
+PASS Leg B attempt 1 post-trip read still served
+PASS Leg B attempt 1 node remains alive after refusal
+PASS Leg B attempt 1 stopped gracefully
+PASS Leg B attempt 1 marker-B-post was not persisted
+
+========== SUMMARY ==========
+Total PASS: 33
+Total FAIL: 0
+
+Leg results:
+  LEG A: PASS PASS=17 FAIL=0 TOTAL=17
+  LEG B: PASS PASS=16 FAIL=0 TOTAL=16
+[22:22:34] All tests passed
