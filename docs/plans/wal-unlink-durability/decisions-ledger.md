@@ -779,3 +779,59 @@ journal_mode observed = wal (unchanged). Checkpoint/behaviour path unchanged in 
 No escalation.
 
 - [Task 040] Fail-fast busy_timeout=0 after latch is a production-pool adaptation required for the harness 10s client deadline; unit test 031 used `create_test_pool` with no busy_timeout so SQLITE_BUSY was instant there. Recorded here because 040 files: ledger only — the code landed in `6e1979aeb` before this evidence paste. — `crates/db/src/lib.rs`, `crates/db/src/wal_monitor.rs`
+
+## 2026-08-31 — 040 adversarial panel remediation (orchestrator)
+The phantom session's 040 work was panel-reviewed post-hoc (opus + gpt-sol + grok).
+Findings and dispositions:
+
+1. SPLIT-BRAIN HOLE (all three panelists) — FIXED in 725df1440: the BEGIN IMMEDIATE
+   latch fenced only old-domain writers; a fresh post-unlink pooled connection
+   attaches to a NEW WAL inode and would write freely (divergent histories). New
+   connections now also get PRAGMA query_only=ON while WAL_WRITE_REFUSAL_ACTIVE
+   (SQLITE_READONLY code 8; reads continue per D6). Old-domain connections keep
+   busy_timeout=0 + SQLITE_BUSY unchanged. New test
+   refusal_flag_fences_fresh_connections_read_only; all flag-sensitive tests
+   serialized. Harness re-verified green 33/0 post-fix
+   (docs/plans/wal-unlink-durability/evidence/wal-040-rerun.log: exit 0,
+   leg A 17/0, leg B 16/0, "marker-B-post rejected (HTTP 500)",
+   "post-trip read still served"). Gates: clippy --all --all-targets --all-features
+   -D warnings clean; cargo test --workspace 68 suites, 0 failures.
+2. 040 PROCESS DEVIATION (recorded, not re-litigated): the phantom's verify_cmd
+   failure (leg B 000) was a declared 040 STOP trigger; it landed the 211-line
+   remediation 6e1979aeb inside 040's window instead of STOPping into an
+   implementation-task remediation. The commit is retained — it was the correct
+   engineering and has since been validated (clippy clean, workspace tests green,
+   adversarial panel review of this section) — but the classification "not a 040
+   file-set change" is corrected here: it WAS out-of-process, and the panel review
+   + this record are the remediation. Its own test flake (global refusal flag) was
+   fixed in e60af55e9 and the serialization extended in 725df1440.
+3. SC3 PARAGRAPH NARROWED (gpt-sol): the monitor is now ACTIVE (60s checks +
+   periodic TRUNCATE per WalMonitorConfig defaults) where it was dead code —
+   new-but-designed behavior (spec Design section 2), not "unchanged behaviour
+   path". SC3's honest reading: the request write path is unchanged (median write
+   latency main 19ms vs branch 19ms, 0% delta), WAL mode retained
+   (journal_mode=wal). The periodic checkpoint matches the original WalMonitor
+   intent and the spec's wiring decision.
+4. EVIDENCE CITATIONS (grok/opus): the ship-gate section's last_inode, busy=0,
+   HTTP 500, and interval observations were read from the run's node.log; the
+   scratch dir (/tmp/wal-repro.puBSeq) is gone, so those values are
+   observed-during-run, not re-verifiable. The re-run evidence log
+   (evidence/wal-040-rerun.log) re-establishes HTTP 500 + reads-continue on disk.
+   Baseline-mode commands used SCRATCH_ROOT-scoped timing collection; both
+   baseline runs exited 0 (PASS 24/24 each) as recorded.
+5. DOCUMENTED LIMITATIONS (no code change, by design):
+   - In-flight residual window: a writer holding a checked-out connection at trip
+     time keeps its 30s busy_timeout (per-connection pragma, not remotely
+     settable); correctness is preserved by the latch's SQLITE_BUSY, but the 10s
+     client deadline can be exceeded (HTTP 000) in that narrow race. D6's
+     operator-restart posture accepts this.
+   - busy_timeout=0 persists on drained connections until idle-reap (600s);
+     post-latch-drop there is no contention, so the shutdown TRUNCATE is
+     unaffected in practice.
+   - SC2 "distinct integrity error": at the db layer the refusal IS distinct
+     (SQLITE_BUSY code 5 old-domain / SQLITE_READONLY code 8 new-domain); at the
+     HTTP layer it maps to generic 500 DatabaseError (pre-existing error.rs
+     mapping). The named events (wal_unlinked_externally,
+     wal_write_refusal_active) are the contracted actionable signal; the frozen
+     verify_cmd's contract (non-2xx or .success==false) is met. A distinct API
+     error variant is filed as backlog finding F-2026-08-31-01.

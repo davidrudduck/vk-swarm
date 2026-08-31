@@ -1128,8 +1128,9 @@ mod tests {
     }
 
     // Both refusal tests touch the process-global WAL_WRITE_REFUSAL_ACTIVE flag
-    // (arm sets it, RefusalLatch::drop clears it) — serialize them against each other
-    // and against any future flag user, or a concurrent latch drop clears the flag mid-test.
+    // (zero_pooled_busy_timeout sets it, RefusalLatch::drop clears it) — serialize
+    // them against each other and against any future flag user, or a concurrent
+    // latch drop clears the flag mid-test.
     #[tokio::test]
     #[serial_test::serial]
     async fn refusal_latch_blocks_writes_allows_reads() {
