@@ -58,9 +58,14 @@ const DEFAULT_MIN_CONNECTIONS: u32 = 2;
 const DEFAULT_ACQUIRE_TIMEOUT_SECS: u64 = 30;
 
 /// Set when the WAL write-refusal latch is armed. New pooled connections then
-/// get `PRAGMA busy_timeout = 0` in `apply_performance_pragmas`; existing ones
-/// are zeroed by `zero_pooled_busy_timeout` / `after_release` so writers fail
-/// SQLITE_BUSY inside the 10s client deadline instead of waiting the 30s window.
+/// get `PRAGMA busy_timeout = 0` (fail SQLITE_BUSY inside the 10s client deadline
+/// on the old-domain latch fence) AND `PRAGMA query_only = ON` (a FRESH
+/// post-unlink connection attaches to a new WAL inode the latch cannot fence —
+/// without query_only it would write freely and split the DB into divergent
+/// histories; SQLITE_READONLY code 8, reads continue per D6). Existing
+/// (old-domain) connections only get `busy_timeout = 0` via
+/// `zero_pooled_busy_timeout` / `after_release` — the latch fences their writes
+/// with SQLITE_BUSY, and query_only there would mask that distinct error.
 pub(crate) static WAL_WRITE_REFUSAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Zero `busy_timeout` when a connection returns to the pool after the latch.
@@ -134,6 +139,9 @@ async fn apply_performance_pragmas(conn: &mut SqliteConnection) -> Result<(), Er
 
     if WAL_WRITE_REFUSAL_ACTIVE.load(Ordering::Relaxed) {
         conn.execute("PRAGMA busy_timeout = 0").await?;
+        // Fence NEW-domain connections read-only: a fresh post-unlink connection
+        // attaches to a new WAL inode the old-domain latch cannot reach.
+        conn.execute("PRAGMA query_only = ON").await?;
     }
 
     Ok(())

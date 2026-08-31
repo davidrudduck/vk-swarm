@@ -1071,7 +1071,10 @@ mod tests {
         assert_eq!(mon.trip_events, 1);
     }
 
+    // Serial: uses options_for connections (apply_performance_pragmas honours the
+    // process-global refusal flag set by the refusal tests).
     #[tokio::test]
+    #[serial_test::serial]
     async fn trip_runs_salvage_checkpoint() {
         use sqlx::ConnectOptions;
         let (pool, tmp) = crate::test_utils::create_test_pool().await;
@@ -1158,6 +1161,59 @@ mod tests {
         let read: Result<i64, sqlx::Error> = sqlx::query_scalar("SELECT count(*) FROM projects").fetch_one(&mut *pooled).await;
         assert!(read.is_ok(), "read blocked on the held old-domain connection: {read:?}");
         drop(latch);
+    }
+
+    /// With the refusal flag set, a FRESH pooled connection (the new post-unlink
+    /// WAL domain the BEGIN IMMEDIATE latch cannot fence) must be read-only:
+    /// writes fail SQLITE_READONLY (code 8), reads continue (D6).
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn refusal_flag_fences_fresh_connections_read_only() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+        use std::str::FromStr;
+        use std::time::Duration;
+        let (seed, tmp) = crate::test_utils::create_test_pool().await;
+        let db_path = tmp.path().join("test.db");
+        seed.close().await;
+        // Reset the global flag on every exit path — it is process-wide.
+        struct FlagGuard;
+        impl Drop for FlagGuard {
+            fn drop(&mut self) {
+                crate::WAL_WRITE_REFUSAL_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let _guard = FlagGuard;
+        crate::WAL_WRITE_REFUSAL_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
+        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .unwrap()
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(30));
+        let pool = crate::with_refusal_after_release(
+            SqlitePoolOptions::new()
+                .min_connections(1)
+                .max_connections(2)
+                .acquire_timeout(Duration::from_secs(5))
+                .after_connect(|conn, _meta| {
+                    Box::pin(async move { crate::apply_performance_pragmas(conn).await })
+                }),
+        )
+        .connect_with(options)
+        .await
+        .unwrap();
+        let write = sqlx::query("INSERT INTO projects (id, name, git_repo_path) VALUES (randomblob(16), 'refused-fresh', '/tmp/refused-fresh-uniq')")
+            .execute(&pool)
+            .await;
+        let code = write.as_ref().err()
+            .and_then(|e| e.as_database_error())
+            .and_then(|e| e.code())
+            .map(|c| c.into_owned());
+        assert_eq!(code.as_deref(), Some("8"),
+            "fresh post-unlink pooled conn write must fail SQLITE_READONLY (code 8), got {write:?}");
+        let read: Result<i64, sqlx::Error> = sqlx::query_scalar("SELECT count(*) FROM projects")
+            .fetch_one(&pool)
+            .await;
+        assert!(read.is_ok(), "read blocked on a fresh post-latch pooled conn: {read:?}");
+        pool.close().await;
     }
 
     #[tokio::test]

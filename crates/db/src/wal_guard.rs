@@ -103,7 +103,12 @@ pub fn guard_disabled() -> bool {
 mod tests {
     use super::*;
 
+    // Serial against the refusal-flag tests: guard connections run
+    // apply_performance_pragmas, which honours the process-global
+    // WAL_WRITE_REFUSAL_ACTIVE flag (busy_timeout=0 + query_only) — a concurrent
+    // refusal test would turn this test's writes READONLY.
     #[tokio::test]
+    #[serial_test::serial]
     async fn guard_blocks_external_unlink_hold_read() {
         if std::process::Command::new("sqlite3").arg("--version").output().is_err() {
             eprintln!("Skipping test: sqlite3 CLI not available");
@@ -127,6 +132,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn reconnect_restores_read_mark() {
         let (pool, tmp) = crate::test_utils::create_test_pool().await;
         let db_path = tmp.path().join("test.db");
