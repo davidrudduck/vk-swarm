@@ -1,6 +1,6 @@
 ---
 doc_type: spec
-status: active
+status: shipped
 workstream: wal-unlink-durability
 change_kind: bugfix
 verify_cmd: "bash scripts/live/wal-unlink-durability-repro.sh"

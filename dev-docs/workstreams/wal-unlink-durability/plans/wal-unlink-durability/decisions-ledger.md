@@ -896,3 +896,176 @@ now names `vks_node_server={level}`, and main.rs also `eprintln!`s the
 checkpoint outcome. Verified: LEGS=B rerun green (16/0, exit 0) with
 `Final WAL checkpoint completed - all data flushed to main database` present in
 `evidence/wal-040-legb-node-checkpoint.log:34`.
+
+## 2026-08-31 — Pre-existing clippy debt fixed in-session (toolchain drift)
+
+The mandatory gate on this machine (rustup stable 1.98.0, fresh install for the
+cross-machine resume) failed `cargo clippy --all --all-targets --all-features --
+-D warnings` with three lints in code this branch never touched
+(`git diff --name-only origin/main...HEAD` is empty for `crates/executors` and
+`crates/remote`; the flagged lines are byte-identical on `origin/main`). CI pins
+`RUST_TOOLCHAIN: stable` (`.github/workflows/pre-release.yml:29`), so the drift
+would break CI as stable advances — real findings, fixed now per the No Deferred
+Remediation rule:
+
+1. `clippy::drain_collect` — `crates/executors/src/logs/plain_text_processor.rs:117`:
+   `self.lines.drain(..).collect()` → `std::mem::take(&mut self.lines)`.
+2. `clippy::result_large_err` — `crates/remote/src/routes/nodes.rs:1888`
+   (`extract_and_validate_api_key`): `Err` variant boxed (`Box<Response>`); the two
+   call sites deref (`*response`); the `?`-propagated `ok_or_else` auto-converts via
+   `From<T> for Box<T>`.
+3. `clippy::result_large_err` — `crates/remote/src/routes/relay.rs:184`
+   (`authenticate`): same treatment; three direct `return Err(...)` constructions
+   boxed explicitly, the five `?`-propagated `map_err`/`ok_or_else` sites convert
+   automatically, both call sites deref.
+
+Gate re-run after the fixes: EXIT 0, zero warnings (log: this session). Behaviour
+unchanged — the boxed `Response` is constructed only on cold auth-error paths and
+returned verbatim by the handlers.
+
+- [2026-08-31] Fix pre-existing clippy 1.98 lints in executors/remote so the mandatory gate passes on current stable — pre-existing main-code debt surfaced by toolchain drift, fixed in-session per No Deferred Remediation — `crates/executors/src/logs/plain_text_processor.rs`, `crates/remote/src/routes/nodes.rs`, `crates/remote/src/routes/relay.rs`
+
+## Reachability gate
+
+(a) Call-path trace (production, file:line at HEAD `c30e2c77`):
+
+1. Entry: `crates/server/src/main.rs:124` — `let deployment = DeploymentImpl::new().await?;`
+   (`DeploymentImpl = local_deployment::LocalDeployment`, `crates/server/src/lib.rs:13`).
+2. `crates/local-deployment/src/lib.rs:637` — `async fn new()` under
+   `impl Deployment for LocalDeployment` (`:615`); production wiring delegates at `:704`
+   (`Self::from_parts(db, config, ...)`) to `pub(crate) async fn from_parts` (`:164`).
+3. Guard spawn: `crates/local-deployment/src/lib.rs:449-463` — kill-switch check
+   `db::wal_guard::guard_disabled()` then `WalGuard::connect(&db_path, Mode::MapOnly)`
+   (impl `crates/db/src/wal_guard.rs:30`).
+4. Salvage connection: `crates/local-deployment/src/lib.rs:465-470` —
+   `db::wal_guard::open_salvage_connection(&db_path)`.
+5. Monitor spawn: `crates/local-deployment/src/lib.rs:472-478` —
+   `db::WalMonitor::spawn(db_path, db.pool.clone(), db.metrics.clone(),
+   WalMonitorConfig::default(), wal_guard, wal_salvage_conn)`
+   (impl `crates/db/src/wal_monitor.rs:271`).
+6. Pool acquire path (refusal fence, every pool in the crate):
+   `crates/db/src/lib.rs:69` `WAL_WRITE_REFUSAL_ACTIVE`; `:78-89`
+   `with_refusal_after_release` (`after_release` hook: `busy_timeout = 0` /
+   `query_only = ON` when latched); `:147-151` fresh-connection fence in
+   `apply_performance_pragmas`; pool construction sites `:374`, `:448`, `:584`, `:604`
+   all wrap options in `with_refusal_after_release`.
+7. Shutdown ordering: `crates/server/src/main.rs:280` → `perform_cleanup_actions` (`:339`)
+   → `:363` `deployment.shutdown_event_services().await` →
+   `crates/local-deployment/src/lib.rs:897` `self.wal_monitor_handle.shutdown().await` →
+   final WAL checkpoint outcome logged (`crates/server/src/main.rs:380-388`, tracing INFO
+   under the `vks_node_server` target plus `eprintln!`).
+
+(b) Real-seam test:
+
+- `scripts/live/wal-unlink-durability-repro.sh` (the frozen `verify_cmd`) drives the real
+  release binary `target/release/vks-node-server` end-to-end on the :9012 scratch pattern —
+  real HTTP API, real on-disk SQLite DB, real fault-injection unlink. Leg A (guard-on
+  durability, SC1) and Leg B (guard-off trip → named event + refusal, SC2).
+- Pool-level integration tests (`crates/db/src/wal_monitor.rs`):
+  `refusal_latch_blocks_writes_allows_reads` (`:1369`),
+  `refusal_flag_fences_fresh_connections_read_only` (`:1424`),
+  `refusal_latch_fail_fast_under_production_busy_timeout` (`:1482`),
+  `refusal_fence_survives_monitor_shutdown` (`:1282`).
+- Deployment wiring test seam: `for_test` (`crates/local-deployment/src/lib.rs:575`) builds
+  through the same `from_parts` (`:597`), so startup-spawn tests exercise the production
+  wiring, not a re-wired substitute.
+
+(c) Incident-symptom assertion (2026-08-28 task-resurrection: API-committed write lost on
+graceful stop after external WAL unlink):
+
+- Repro Leg A asserts exactly this: `scripts/live/wal-unlink-durability-repro.sh:400`
+  (marker-A-pre API write), `:402` (external write session), `:412` (marker-A-post API
+  write), `:414` (graceful stop), `:416` `Leg A marker-A-post persisted` — an offline
+  `sqlite3` inspect after the graceful stop asserts the API-committed write is durable.
+  Fresh run 2026-08-31 (this machine, `/tmp/wal-resume`): Leg A 17/0, marker persisted.
+
+| Criterion | Owning tasks | Evidence |
+|---|---|---|
+| SC1 | 010, 020, 040 | Repro Leg A 17/17 fresh (`evidence/wal-040-resume.log`); TS3 guard-effectiveness test |
+| SC2 | 021, 022, 030, 031, 040 | Repro Leg B 16/16 fresh (`evidence/wal-040-resume.log`); `wal_unlinked_externally` WARN names DB path; refusal latch tests above |
+| SC3 | 040 | `## Ship-gate evidence (SC3)` §2: median write latency main 19ms vs branch 19ms (0% delta, <10% cliff); journal_mode `wal` retained offline |
+| TS1 | 021 | `wal_monitor.rs` integrity-watch unit tests (wal-vanished / inode-changed) |
+| TS2 | 030, 031 | `refusal_latch_blocks_writes_allows_reads` + sibling refusal tests |
+| TS3 | 020 | Guard-effectiveness integration test (sqlite3-CLI-gated) |
+| TS4 | 001, 002, 040 | Frozen `verify_cmd` exit 0, 33 PASS / 0 FAIL (fresh run below) |
+| TS5 | 022 | Salvage-checkpoint integration test (simulated external unlink) |
+
+VERDICT: PASS
+
+## Deploy verification
+
+Scratch-node run on this machine (cross-machine resume): branch `clever-pangolin`, HEAD
+`c30e2c77`, date 2026-08-31. Release binary rebuilt locally
+(`cargo build --release --bin vks-node-server`, Finished `release` profile). Frozen
+`verify_cmd` run fresh with `SCRATCH_ROOT=/tmp/wal-resume`; port 9012 free afterwards.
+Full log retained at `evidence/wal-040-resume.log`; Leg B node log (ANSI-stripped) at
+`evidence/wal-040-resume-legb-node.log`.
+
+```console
+$ SCRATCH_ROOT=/tmp/wal-resume bash scripts/live/wal-unlink-durability-repro.sh
+[22:22:01] Using scratch directory: /tmp/wal-resume
+
+========== LEG A: guard-on durability ==========
+MODE=full
+PASS Leg A boot 1 is healthy
+PASS Leg A boot 1 stopped gracefully
+PASS Leg A browser session seeded
+PASS Leg A boot 2 is healthy
+PASS Leg A project created
+PASS Leg A marker-A-pre written
+PASS Leg A external write session executed
+PASS Leg A no external WAL unlink (detector timed out)
+PASS Leg A timing-1 written
+PASS Leg A timing-2 written
+PASS Leg A timing-3 written
+PASS Leg A timing-4 written
+PASS Leg A timing-5 written
+PASS Leg A marker-A-post API write
+PASS Leg A stopped gracefully
+PASS Leg A marker-A-post persisted
+PASS Leg A journal_mode is wal
+
+========== LEG B: guard-off detection+refusal ==========
+MODE=full
+PASS Leg B attempt 1 boot 1 is healthy
+PASS Leg B attempt 1 boot 1 stopped gracefully
+PASS Leg B attempt 1 browser session seeded
+PASS Leg B attempt 1 boot 2 is healthy
+PASS Leg B attempt 1 project created
+PASS Leg B attempt 1 marker-B-pre written
+PASS Leg B attempt 1 fault injection removed existing WAL and SHM
+PASS Leg B attempt 1 detected external WAL unlink
+PASS Leg B attempt 1 wal_unlinked_externally logged
+PASS Leg B attempt 1 unlink log names db path
+PASS Leg B attempt 1 wal_write_refusal_active latched
+PASS Leg B attempt 1 marker-B-post rejected (HTTP 500)
+PASS Leg B attempt 1 post-trip read still served
+PASS Leg B attempt 1 node remains alive after refusal
+PASS Leg B attempt 1 stopped gracefully
+PASS Leg B attempt 1 marker-B-post was not persisted
+
+========== SUMMARY ==========
+Total PASS: 33
+Total FAIL: 0
+
+Leg results:
+  LEG A: PASS PASS=17 FAIL=0 TOTAL=17
+  LEG B: PASS PASS=16 FAIL=0 TOTAL=16
+[22:22:34] All tests passed
+
+$ sqlite3 /tmp/wal-resume/leg-a.LZY6Jt/db.sqlite 'PRAGMA journal_mode;'
+wal
+$ sqlite3 /tmp/wal-resume/leg-b.1VEIw9/db.sqlite 'PRAGMA journal_mode;'
+wal
+
+$ grep 'Final WAL checkpoint' /tmp/wal-resume/leg-b.1VEIw9/node.log
+2026-08-31T22:22:34.086446Z  INFO vks_node_server: Final WAL checkpoint completed - all data flushed to main database
+Final WAL checkpoint completed - all data flushed to main database
+```
+
+Exit 0. Leg A timings this run: 45–63ms (`/tmp/wal-resume/timings.txt`); the SC3
+no-cliff verdict rests on the same-machine main-vs-branch comparison recorded in
+`## Ship-gate evidence (SC3)` §2 (median 19ms vs 19ms, 0% delta) — cross-machine
+absolute latencies are not comparable. `Final WAL checkpoint completed` present in the
+Leg B node log (`evidence/wal-040-resume-legb-node.log:41-42`) after the graceful stop,
+confirming the `vks_node_server` filter-directive fix (`5b860a4b2`) on this machine.
