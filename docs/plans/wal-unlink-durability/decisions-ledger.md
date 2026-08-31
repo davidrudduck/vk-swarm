@@ -767,7 +767,7 @@ percentDelta = (19-19)/19 = 0% (<10% cliff). No STOP.
 
 ### 3. SC3 VERDICT
 
-journal_mode observed = wal (unchanged). Checkpoint/behaviour path unchanged in the no-external-access case: monitor only logs/checkpoints on its pre-existing thresholds; guard adds one idle connection (MapOnly, VERDICT 2) + dummy read / WAL mapping, not a held read-mark. Latency delta 0% within tolerance. SC3 satisfied.
+The request write path is unchanged (median latency main 19ms vs branch 19ms, 0% delta) and WAL mode is retained; the monitor is newly ACTIVE (60s checks + periodic TRUNCATE per WalMonitorConfig defaults) where it was dead code — new-but-designed behavior (spec Design §2).
 
 ### 4. SC1–SC4 end-to-end
 
@@ -817,21 +817,54 @@ Findings and dispositions:
    scratch dir (/tmp/wal-repro.puBSeq) is gone, so those values are
    observed-during-run, not re-verifiable. The re-run evidence log
    (evidence/wal-040-rerun.log) re-establishes HTTP 500 + reads-continue on disk.
-   Baseline-mode commands used SCRATCH_ROOT-scoped timing collection; both
-   baseline runs exited 0 (PASS 24/24 each) as recorded.
+    Baseline-mode commands used SCRATCH_ROOT-scoped timing collection; both
+    baseline runs exited 0 (PASS 24/24 each) as recorded. The clippy-clean result
+    and cargo test --workspace result (68 suites, 0 failures) were observed during
+    the run; no retained artifact exists for either.
 5. DOCUMENTED LIMITATIONS (no code change, by design):
    - In-flight residual window: a writer holding a checked-out connection at trip
      time keeps its 30s busy_timeout (per-connection pragma, not remotely
      settable); correctness is preserved by the latch's SQLITE_BUSY, but the 10s
      client deadline can be exceeded (HTTP 000) in that narrow race. D6's
      operator-restart posture accepts this.
-   - busy_timeout=0 persists on drained connections until idle-reap (600s);
-     post-latch-drop there is no contention, so the shutdown TRUNCATE is
-     unaffected in practice.
-   - SC2 "distinct integrity error": at the db layer the refusal IS distinct
+    - busy_timeout=0 persists on drained connections until idle-reap (600s);
+      post-latch-drop there is no contention, so the shutdown TRUNCATE is
+      unaffected in practice.
+    - Pre-flag new-domain connection race (F-2026-08-31-02): a connection opened
+      between unlink and flag-set can write to the new linked WAL. No silent data
+      loss follows (those writes are durable in that WAL; named events and D6's
+      restart posture cover the state), but "subsequent write attempts fail" is
+      best-effort rather than absolute. A central DB write gate consulted by every
+      write path is the remediation.
+    - The microsecond flag-after-latch-arm window cannot be hit by the harness,
+      which waits for wal_write_refusal_active before attempting its post-trip
+      write.
+    - Leg B's warm-connection refusal is served by an old-domain pooled connection;
+      the fresh-connection query_only path is covered by
+      refusal_flag_fences_fresh_connections_read_only.
+    - SC2 "distinct integrity error": at the db layer the refusal IS distinct
      (SQLITE_BUSY code 5 old-domain / SQLITE_READONLY code 8 new-domain); at the
      HTTP layer it maps to generic 500 DatabaseError (pre-existing error.rs
      mapping). The named events (wal_unlinked_externally,
      wal_write_refusal_active) are the contracted actionable signal; the frozen
-     verify_cmd's contract (non-2xx or .success==false) is met. A distinct API
-     error variant is filed as backlog finding F-2026-08-31-01.
+      verify_cmd's contract (non-2xx or .success==false) is met. A distinct API
+      error variant is filed as backlog finding F-2026-08-31-01.
+
+6. SHUTDOWN REFUSAL FENCE (Task 040 remediation): RefusalLatch no longer clears
+   WAL_WRITE_REFUSAL_ACTIVE on Drop; only test-only disarm clears it. On monitor
+   shutdown, idle pooled connections are first set query_only=ON, then the
+   old-domain latch is released. This preserves refusal through process exit while
+   allowing the final query_only-compatible TRUNCATE checkpoint. The server's
+   shutdown ordering at main.rs:343-385 stops the monitor before the final
+   checkpoint and pool close, so this prevents post-refusal writes from being
+   merged into the main DB.
+7. EXECUTOR TERMINATION AFTER REFUSAL (Task 040 remediation): stop_execution now
+   records a completion-update failure, terminates the OS process regardless, then
+   returns that DB error. Refusal is expected after a durability trip; leaving an
+   executor running is not.
+
+- [Task 040 remediation] Preserve the process-wide refusal flag through monitor shutdown — prevents post-trip writes before main.rs's final checkpoint/pool close — `crates/db/src/wal_monitor.rs`
+- [Task 040 remediation] Fence idle pooled connections query_only before releasing the latch — old-domain latch release cannot reopen pooled writers — `crates/db/src/wal_monitor.rs`
+- [Task 040 remediation] Kill executors despite completion-update refusal — OS termination is more important than the expected post-trip DB error — `crates/local-deployment/src/container.rs`
+- [Task 040 remediation] Correct the old-domain refusal test hook comment — documents the actual after_release isolation and fresh-connection coverage — `crates/db/src/wal_monitor.rs`
+- [Task 040 remediation] Normalize and extend WAL refusal findings — records residual races and keeps BACKLOG schema-valid — `dev-docs/BACKLOG.md`, `docs/plans/wal-unlink-durability/decisions-ledger.md`
