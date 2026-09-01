@@ -98,3 +98,22 @@ F-2026-08-31-03, CI pins Node 22).
 Full spec, decisions-ledger (incl. Reachability gate + Deploy verification
 sections), panel history, and evidence:
 `dev-docs/workstreams/wal-unlink-durability/`.
+
+## Document verification
+
+Verified 2026-08-31 against the pushed `main`:
+
+- **Rendering**: GitHub blob page renders correctly — YAML frontmatter as a
+  metadata table, H1 + four H2 sections with anchors, all lists/code spans
+  well-formed.
+- **Merge commit**: `72f20ea031072f0a2edfba5dd484e243cf27c170` on `main`.
+- **PR status**: #479 **MERGED** (squash, 2026-08-31T22:50:51Z).
+- **Branch commits** `1120cc54` / `de16b93e` / `7f06257d` / `c30e2c77`: resolve
+  via PR #479 commit history (head branch `clever-pangolin` was auto-deleted
+  on merge; SHAs remain reachable through the PR and local clones).
+- **Follow-ups**: `F-2026-08-31-01` / `-02` / `-03` all present in
+  `dev-docs/BACKLOG.md` on `main`.
+- **Referenced paths**: spec, decisions-ledger, `wal-040-resume*.log` evidence,
+  repro script, `wal_guard.rs`, `wal_monitor.rs` — all exist on `main`.
+
+VERDICT: PASS — no dangling references.
