@@ -11,6 +11,15 @@
 //! - Logs warnings when WAL exceeds configurable threshold
 //! - Optionally triggers passive checkpoint when WAL is large
 //! - Runs periodic TRUNCATE checkpoints to minimize data loss on abrupt shutdown
+//!
+//! # Platform support
+//!
+//! External WAL-unlink detection relies on inode identity (`wal_identity`) and
+//! inotify. On non-unix platforms `wal_identity` returns `None`, so
+//! unlink+recreate between two poll ticks classifies as `Unchanged` and cannot
+//! be detected — the monitor still detects unlink-without-recreate
+//! (`Present→Absent`). Windows deployments therefore lack replacement
+//! detection; unix/macOS/Linux are unaffected.
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -108,6 +117,14 @@ fn wal_identity(_md: &std::fs::Metadata) -> Option<u64> {
     None
 }
 
+fn wal_identity_eq(a: WalState, b: WalState) -> bool {
+    match (a, b) {
+        (WalState::Present(x), WalState::Present(y)) => x == y,
+        (WalState::Absent, WalState::Absent) => true,
+        _ => false,
+    }
+}
+
 /// WAL state transition classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WalTransition {
@@ -132,16 +149,6 @@ fn wal_transition(last: WalState, current: WalState) -> WalTransition {
 /// Construct WAL path by appending `-wal` suffix to database path.
 fn wal_path_for(db_path: &Path) -> PathBuf {
     PathBuf::from(format!("{}-wal", db_path.display()))
-}
-
-/// Event logged when WAL is unlinked externally.
-#[allow(dead_code)]
-struct UnlinkedEvent {
-    event: &'static str,
-    path: PathBuf,
-    wal_path: PathBuf,
-    last_inode: Option<u64>,
-    remediation: &'static str,
 }
 
 /// Handle for controlling the WAL monitor.
@@ -259,6 +266,19 @@ pub struct WalMonitor {
     tripped: bool,
     trip_events: u32,
     guard: Option<crate::wal_guard::WalGuard>,
+    /// True when the caller wanted a guard but the initial connect failed
+    /// (fail-open). The monitor retries the connect lazily on check ticks.
+    guard_pending: bool,
+    /// Mode the lazy guard reconnect uses. Inferred from the initial guard
+    /// when one was handed in; defaults to `MapOnly` (the only production
+    /// mode) when the initial connect failed and the caller's intended mode
+    /// is not visible here.
+    guard_mode: crate::wal_guard::Mode,
+    /// Throttle for lazy guard-connect retries: at most one attempt per
+    /// check interval, so an inotify event stream during a DB outage cannot
+    /// turn into a connect + warn-log storm (each connect attempt can take
+    /// up to the 5s busy-timeout).
+    last_guard_attempt: Option<std::time::Instant>,
     salvage_conn: Option<SqliteConnection>,
     last_salvage: Option<Result<(i32, i32, i32), String>>,
     refusal: Option<RefusalLatch>,
@@ -285,6 +305,13 @@ impl WalMonitor {
             Err(_) => WalState::Absent,
         };
         let wal_ever_present = matches!(last_wal_state, WalState::Present(_));
+        // A wanted-but-failed initial guard connect retries lazily; an
+        // explicitly disabled guard (VK_WAL_GUARD) never does.
+        let guard_pending = guard.is_none() && !crate::wal_guard::guard_disabled();
+        let guard_mode = guard
+            .as_ref()
+            .map(crate::wal_guard::WalGuard::mode)
+            .unwrap_or(crate::wal_guard::Mode::MapOnly);
 
         let monitor = Self {
             db_path: db_path_buf,
@@ -296,6 +323,9 @@ impl WalMonitor {
             tripped: false,
             trip_events: 0,
             guard,
+            guard_pending,
+            guard_mode,
+            last_guard_attempt: None,
             salvage_conn,
             last_salvage: None,
             refusal: None,
@@ -322,6 +352,112 @@ impl WalMonitor {
             guard,
             salvage_conn,
         )
+    }
+
+    /// Handle a monitor command. Returns true when the run loop should exit.
+    async fn handle_command(&mut self, cmd: WalMonitorCommand) -> bool {
+        match cmd {
+            WalMonitorCommand::CheckNow => {
+                self.check_wal_size().await;
+            }
+            WalMonitorCommand::Checkpoint => {
+                self.run_checkpoint().await;
+            }
+            WalMonitorCommand::TruncateCheckpoint => {
+                self.run_truncate_checkpoint().await;
+            }
+            WalMonitorCommand::Shutdown(ack) => {
+                if let Some(ref mut g) = self.guard {
+                    g.release_read_mark().await;
+                }
+                if self.refusal.is_some() {
+                    fence_pooled_read_only(&self.pool).await;
+                    self.refusal = None;
+                }
+                tracing::info!("WAL monitor shutting down");
+                let _ = ack.send(());
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Periodic TRUNCATE checkpoint arm: release the guard read-mark so the
+    /// checkpoint can drain the WAL, checkpoint, then reacquire the mark.
+    /// Skipped once tripped — pooled connections are fenced (or the pool is
+    /// closed), so checkpointing through the pool only produces warn-log spam.
+    async fn truncate_checkpoint_tick(&mut self) {
+        if self.tripped {
+            return;
+        }
+        if let Some(guard) = &mut self.guard {
+            guard.release_read_mark().await;
+        }
+        self.run_truncate_checkpoint().await;
+        if let Some(guard) = &mut self.guard
+            && let Err(e) = guard.reacquire_read_mark().await
+        {
+            tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
+        }
+    }
+
+    /// Guard liveness check + reconnect. Skipped once tripped — the write-refusal
+    /// fence is already armed, so reconnecting serves no purpose and would only
+    /// spam error logs while the DB is unavailable.
+    async fn guard_liveness_check(&mut self) {
+        if self.tripped {
+            return;
+        }
+        if self.guard.is_none() {
+            // The initial guard connect failed at startup (fail-open). Retry
+            // lazily on check ticks — a transient startup error (e.g. the 5s
+            // busy-timeout) must not forfeit prevention for the process
+            // lifetime. Never blocks boot: this runs inside the monitor task.
+            if self.guard_pending {
+                // Throttle to at most one connect attempt per check interval:
+                // `guard_liveness_check` runs after every command/event, and a
+                // connect can take up to the 5s busy-timeout.
+                let retry_due = self
+                    .last_guard_attempt
+                    .map(|t| t.elapsed() >= Duration::from_secs(self.config.check_interval_secs))
+                    .unwrap_or(true);
+                if !retry_due {
+                    return;
+                }
+                self.last_guard_attempt = Some(std::time::Instant::now());
+                match crate::wal_guard::WalGuard::connect(&self.db_path, self.guard_mode).await
+                {
+                    Ok(g) => {
+                        tracing::info!("WAL guard connected on lazy retry");
+                        self.guard = Some(g);
+                        self.guard_pending = false;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "WAL guard lazy reconnect failed; will retry");
+                    }
+                }
+            }
+            return;
+        }
+        if let Some(guard) = &mut self.guard
+            && !guard.is_alive().await
+        {
+            match guard.reconnect().await {
+                Ok(_) => {
+                    tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected")
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "WAL guard reconnect failed");
+                    self.tripped = true;
+                    self.trip_events += 1;
+                    tracing::error!(
+                        event = "wal_guard_unavailable",
+                        "WAL guard unavailable; treating as durability trip"
+                    );
+                    self.handle_trip().await;
+                }
+            }
+        }
     }
 
     async fn run(mut self, mut rx: mpsc::Receiver<WalMonitorCommand>) {
@@ -361,30 +497,24 @@ impl WalMonitor {
                 .unwrap_or_default();
 
             loop {
-                tokio::select! {
-                     Some(cmd) = rx.recv() => {
-                         match cmd {
-                             WalMonitorCommand::CheckNow => {
-                                 self.check_wal_size().await;
-                             }
-                             WalMonitorCommand::Checkpoint => {
-                                 self.run_checkpoint().await;
-                             }
-                             WalMonitorCommand::TruncateCheckpoint => {
-                                 self.run_truncate_checkpoint().await;
-                             }
-                              WalMonitorCommand::Shutdown(ack) => {
-                                  if let Some(ref mut g) = self.guard {
-                                      g.release_read_mark().await;
-                                  }
-                                  if self.refusal.is_some() {
-                                      fence_pooled_read_only(&self.pool).await;
-                                      self.refusal = None;
-                                  }
-                                 tracing::info!("WAL monitor shutting down");
-                                 let _ = ack.send(());
-                                 break;
-                             }
+                let should_exit = tokio::select! {
+                    cmd = rx.recv() => {
+                        match cmd {
+                            Some(cmd) => self.handle_command(cmd).await,
+                            // All handle senders dropped: run the same teardown
+                            // as an explicit Shutdown (minus the ack) so the
+                            // monitor task cannot leak holding the pool/guard.
+                            None => {
+                                if let Some(ref mut g) = self.guard {
+                                    g.release_read_mark().await;
+                                }
+                                if self.refusal.is_some() {
+                                    fence_pooled_read_only(&self.pool).await;
+                                    self.refusal = None;
+                                }
+                                tracing::info!("WAL monitor handle dropped; shutting down");
+                                true
+                            }
                         }
                     }
                     _ = check_interval.tick() => {
@@ -395,16 +525,11 @@ impl WalMonitor {
                                 tracing::info!("WAL inotify watch re-armed");
                             }
                         }
+                        false
                     }
                     _ = truncate_interval.tick(), if truncate_enabled => {
-                        if let Some(guard) = &mut self.guard {
-                            guard.release_read_mark().await;
-                        }
-                        self.run_truncate_checkpoint().await;
-                        if let Some(guard) = &mut self.guard
-                            && let Err(e) = guard.reacquire_read_mark().await {
-                            tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
-                        }
+                        self.truncate_checkpoint_tick().await;
+                        false
                     }
                     ev = async {
                         match watch.as_mut() {
@@ -427,30 +552,14 @@ impl WalMonitor {
                                 watch = None;
                             }
                         }
+                        false
                     }
+                };
+                if should_exit {
+                    break;
                 }
 
-                if let Some(guard) = &mut self.guard
-                    && !guard.is_alive().await
-                {
-                    match guard.reconnect().await {
-                        Ok(_) => {
-                            tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected")
-                        }
-                        Err(e) => {
-                            tracing::error!(error = ?e, "WAL guard reconnect failed");
-                            if !self.tripped {
-                                self.tripped = true;
-                                self.trip_events += 1;
-                                tracing::error!(
-                                    event = "wal_guard_unavailable",
-                                    "WAL guard unavailable; treating as durability trip"
-                                );
-                                self.handle_trip().await;
-                            }
-                        }
-                    }
-                }
+                self.guard_liveness_check().await;
             }
         }
 
@@ -461,68 +570,38 @@ impl WalMonitor {
             );
 
             loop {
-                tokio::select! {
-                     Some(cmd) = rx.recv() => {
-                         match cmd {
-                             WalMonitorCommand::CheckNow => {
-                                 self.check_wal_size().await;
-                             }
-                             WalMonitorCommand::Checkpoint => {
-                                 self.run_checkpoint().await;
-                             }
-                             WalMonitorCommand::TruncateCheckpoint => {
-                                 self.run_truncate_checkpoint().await;
-                             }
-                              WalMonitorCommand::Shutdown(ack) => {
-                                  if let Some(ref mut g) = self.guard {
-                                      g.release_read_mark().await;
-                                  }
-                                  if self.refusal.is_some() {
-                                      fence_pooled_read_only(&self.pool).await;
-                                      self.refusal = None;
-                                  }
-                                 tracing::info!("WAL monitor shutting down");
-                                 let _ = ack.send(());
-                                 break;
-                             }
+                let should_exit = tokio::select! {
+                    cmd = rx.recv() => {
+                        match cmd {
+                            Some(cmd) => self.handle_command(cmd).await,
+                            // See the Linux arm: handle-drop runs Shutdown teardown.
+                            None => {
+                                if let Some(ref mut g) = self.guard {
+                                    g.release_read_mark().await;
+                                }
+                                if self.refusal.is_some() {
+                                    fence_pooled_read_only(&self.pool).await;
+                                    self.refusal = None;
+                                }
+                                tracing::info!("WAL monitor handle dropped; shutting down");
+                                true
+                            }
                         }
                     }
                     _ = check_interval.tick() => {
                         self.check_wal_size().await;
+                        false
                     }
                     _ = truncate_interval.tick(), if truncate_enabled => {
-                        if let Some(guard) = &mut self.guard {
-                            guard.release_read_mark().await;
-                        }
-                        self.run_truncate_checkpoint().await;
-                        if let Some(guard) = &mut self.guard
-                            && let Err(e) = guard.reacquire_read_mark().await {
-                            tracing::error!(error = ?e, "failed to reacquire WAL guard read mark");
-                        }
+                        self.truncate_checkpoint_tick().await;
+                        false
                     }
+                };
+                if should_exit {
+                    break;
                 }
 
-                if let Some(guard) = &mut self.guard
-                    && !guard.is_alive().await
-                {
-                    match guard.reconnect().await {
-                        Ok(_) => {
-                            tracing::warn!(event = "wal_guard_reconnected", "WAL guard reconnected")
-                        }
-                        Err(e) => {
-                            tracing::error!(error = ?e, "WAL guard reconnect failed");
-                            if !self.tripped {
-                                self.tripped = true;
-                                self.trip_events += 1;
-                                tracing::error!(
-                                    event = "wal_guard_unavailable",
-                                    "WAL guard unavailable; treating as durability trip"
-                                );
-                                self.handle_trip().await;
-                            }
-                        }
-                    }
-                }
+                self.guard_liveness_check().await;
             }
         }
     }
@@ -550,123 +629,84 @@ impl WalMonitor {
 
         let transition = wal_transition(self.last_wal_state, current);
 
+        if matches!(current, WalState::Present(_)) {
+            // Present with a DIFFERENT identity than last observed: the WAL was
+            // unlinked and recreated — the same durability trip as a removal.
+            if transition == WalTransition::Replaced {
+                self.log_unlinked_and_trip(&wal_path, current).await;
+                return;
+            }
+            // WAL present: track size + thresholds. `Appeared` (Absent→Present)
+            // and `Unchanged` (Present→Present, same identity on unix) share
+            // this path; `Vanished` trips below.
+            if transition == WalTransition::Unchanged {
+                debug_assert!(
+                    wal_identity_eq(self.last_wal_state, current),
+                    "Present→Present must classify Unchanged only for identical identities"
+                );
+            }
+            self.wal_ever_present = true;
+            self.metrics.update_wal_size(wal_size);
+            let wal_size_mb = wal_size as f64 / (1024.0 * 1024.0);
+            if wal_size >= self.config.checkpoint_threshold_bytes {
+                tracing::warn!(
+                    wal_size_mb = format!("{:.2}", wal_size_mb),
+                    threshold_mb = self.config.checkpoint_threshold_bytes / (1024 * 1024),
+                    "WAL file exceeds checkpoint threshold"
+                );
+                if self.config.auto_checkpoint {
+                    self.run_checkpoint().await;
+                }
+            } else if wal_size >= self.config.warning_threshold_bytes {
+                tracing::warn!(
+                    wal_size_mb = format!("{:.2}", wal_size_mb),
+                    threshold_mb = self.config.warning_threshold_bytes / (1024 * 1024),
+                    "WAL file size exceeds warning threshold"
+                );
+            } else {
+                tracing::debug!(
+                    wal_size_mb = format!("{:.2}", wal_size_mb),
+                    "WAL file size check completed"
+                );
+            }
+            self.last_wal_state = current;
+            return;
+        }
+
         match transition {
-            WalTransition::Appeared => {
-                self.wal_ever_present = true;
-                self.last_wal_state = current;
-                self.metrics.update_wal_size(wal_size);
-                let wal_size_mb = wal_size as f64 / (1024.0 * 1024.0);
-                if wal_size >= self.config.checkpoint_threshold_bytes {
-                    tracing::warn!(
-                        wal_size_mb = format!("{:.2}", wal_size_mb),
-                        threshold_mb = self.config.checkpoint_threshold_bytes / (1024 * 1024),
-                        "WAL file exceeds checkpoint threshold"
-                    );
-                    if self.config.auto_checkpoint {
-                        self.run_checkpoint().await;
-                    }
-                } else if wal_size >= self.config.warning_threshold_bytes {
-                    tracing::warn!(
-                        wal_size_mb = format!("{:.2}", wal_size_mb),
-                        threshold_mb = self.config.warning_threshold_bytes / (1024 * 1024),
-                        "WAL file size exceeds warning threshold"
-                    );
-                } else {
-                    tracing::debug!(
-                        wal_size_mb = format!("{:.2}", wal_size_mb),
-                        "WAL file size check completed"
-                    );
-                }
-            }
-            WalTransition::Unchanged if matches!(current, WalState::Present(_)) => {
-                self.wal_ever_present = true;
-                self.metrics.update_wal_size(wal_size);
-                let wal_size_mb = wal_size as f64 / (1024.0 * 1024.0);
-                if wal_size >= self.config.checkpoint_threshold_bytes {
-                    tracing::warn!(
-                        wal_size_mb = format!("{:.2}", wal_size_mb),
-                        threshold_mb = self.config.checkpoint_threshold_bytes / (1024 * 1024),
-                        "WAL file exceeds checkpoint threshold"
-                    );
-                    if self.config.auto_checkpoint {
-                        self.run_checkpoint().await;
-                    }
-                } else if wal_size >= self.config.warning_threshold_bytes {
-                    tracing::warn!(
-                        wal_size_mb = format!("{:.2}", wal_size_mb),
-                        threshold_mb = self.config.warning_threshold_bytes / (1024 * 1024),
-                        "WAL file size exceeds warning threshold"
-                    );
-                } else {
-                    tracing::debug!(
-                        wal_size_mb = format!("{:.2}", wal_size_mb),
-                        "WAL file size check completed"
-                    );
-                }
-                self.last_wal_state = current;
-            }
             WalTransition::Replaced | WalTransition::Vanished => {
-                let last_inode = match self.last_wal_state {
-                    WalState::Present(Some(inode)) => Some(inode),
-                    _ => None,
-                };
-                let event = UnlinkedEvent {
-                    event: "wal_unlinked_externally",
-                    path: self.db_path.clone(),
-                    wal_path: wal_path.clone(),
-                    last_inode,
-                    remediation: "node will refuse writes; restart the node after investigating",
-                };
-                tracing::warn!(
-                    event = "wal_unlinked_externally",
-                    path = %event.path.display(),
-                    wal_path = %event.wal_path.display(),
-                    last_inode = ?event.last_inode,
-                    remediation = event.remediation,
-                    "WAL unlinked externally"
-                );
-                self.tripped = true;
-                self.trip_events += 1;
-                self.last_wal_state = current;
-                self.handle_trip().await;
+                self.log_unlinked_and_trip(&wal_path, current).await;
             }
-            WalTransition::Unchanged
-                if matches!(current, WalState::Absent) && self.wal_ever_present =>
-            {
-                let last_inode = match self.last_wal_state {
-                    WalState::Present(Some(inode)) => Some(inode),
-                    _ => None,
-                };
-                let event = UnlinkedEvent {
-                    event: "wal_unlinked_externally",
-                    path: self.db_path.clone(),
-                    wal_path: wal_path.clone(),
-                    last_inode,
-                    remediation: "node will refuse writes; restart the node after investigating",
-                };
-                tracing::warn!(
-                    event = "wal_unlinked_externally",
-                    path = %event.path.display(),
-                    wal_path = %event.wal_path.display(),
-                    last_inode = ?event.last_inode,
-                    remediation = event.remediation,
-                    "WAL unlinked externally"
-                );
-                self.tripped = true;
-                self.trip_events += 1;
-                self.last_wal_state = current;
-                self.handle_trip().await;
+            WalTransition::Unchanged if self.wal_ever_present => {
+                // Present→Absent with a previously observed WAL: external unlink.
+                self.log_unlinked_and_trip(&wal_path, current).await;
             }
-            WalTransition::Unchanged
-                if matches!(current, WalState::Absent) && !self.wal_ever_present =>
-            {
+            WalTransition::Unchanged | WalTransition::Appeared => {
+                // Absent→Absent, no WAL ever observed: benign (no WAL yet).
+                // `Appeared` is unreachable here (current is Absent).
                 tracing::debug!("WAL not yet present (benign)");
                 self.last_wal_state = current;
             }
-            _ => {
-                self.last_wal_state = current;
-            }
         }
+    }
+
+    async fn log_unlinked_and_trip(&mut self, wal_path: &Path, current: WalState) {
+        let last_inode = match self.last_wal_state {
+            WalState::Present(Some(inode)) => Some(inode),
+            _ => None,
+        };
+        tracing::warn!(
+            event = "wal_unlinked_externally",
+            path = %self.db_path.display(),
+            wal_path = %wal_path.display(),
+            last_inode = ?last_inode,
+            remediation = "node will refuse writes; restart the node after investigating",
+            "WAL unlinked externally"
+        );
+        self.tripped = true;
+        self.trip_events += 1;
+        self.last_wal_state = current;
+        self.handle_trip().await;
     }
 
     async fn run_salvage_checkpoint(&mut self) -> Result<(i32, i32, i32), sqlx::Error> {
@@ -720,7 +760,14 @@ impl WalMonitor {
                 }
                 Err(e) => {
                     tracing::error!(event = "wal_write_refusal_active", armed = false, error = ?e, "write-refusal latch could not be armed; closing the pool (D6 deviation: refuse-everything)");
-                    self.pool.close().await;
+                    // Spawn the close: `Pool::close` waits for checked-out
+                    // connections to be returned, and a long-held connection
+                    // would otherwise block the monitor loop past the 10s
+                    // shutdown ack timeout. The refusal flag is already set,
+                    // so connections returning to the pool are fenced while
+                    // the close completes.
+                    let pool = self.pool.clone();
+                    tokio::spawn(async move { pool.close().await });
                 }
             },
             None => {
@@ -730,7 +777,11 @@ impl WalMonitor {
                     error = "salvage connection unavailable",
                     "write-refusal latch could not be armed; closing the pool (D6 deviation: refuse-everything)"
                 );
-                self.pool.close().await;
+                // Spawn the close for the same reason as the arm-failure path
+                // above: an inline close can block the monitor loop past the
+                // 10s shutdown ack timeout.
+                let pool = self.pool.clone();
+                tokio::spawn(async move { pool.close().await });
             }
         }
     }
@@ -1050,6 +1101,9 @@ mod tests {
             tripped: false,
             trip_events: 0,
             guard: None,
+            guard_pending: false,
+            guard_mode: crate::wal_guard::Mode::MapOnly,
+            last_guard_attempt: None,
             salvage_conn: None,
             last_salvage: None,
             refusal: None,
@@ -1090,6 +1144,9 @@ mod tests {
             tripped: false,
             trip_events: 0,
             guard: None,
+            guard_pending: false,
+            guard_mode: crate::wal_guard::Mode::MapOnly,
+            last_guard_attempt: None,
             salvage_conn: None,
             last_salvage: None,
             refusal: None,
@@ -1120,6 +1177,9 @@ mod tests {
             tripped: false,
             trip_events: 0,
             guard: None,
+            guard_pending: false,
+            guard_mode: crate::wal_guard::Mode::MapOnly,
+            last_guard_attempt: None,
             salvage_conn: None,
             last_salvage: None,
             refusal: None,
@@ -1160,6 +1220,9 @@ mod tests {
             tripped: false,
             trip_events: 0,
             guard: None,
+            guard_pending: false,
+            guard_mode: crate::wal_guard::Mode::MapOnly,
+            last_guard_attempt: None,
             salvage_conn: None,
             last_salvage: None,
             refusal: None,
@@ -1215,6 +1278,9 @@ mod tests {
             tripped: false,
             trip_events: 0,
             guard: None,
+            guard_pending: false,
+            guard_mode: crate::wal_guard::Mode::MapOnly,
+            last_guard_attempt: None,
             salvage_conn: Some(salvage_conn),
             last_salvage: None,
             refusal: None,

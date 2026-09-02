@@ -1069,3 +1069,56 @@ no-cliff verdict rests on the same-machine main-vs-branch comparison recorded in
 absolute latencies are not comparable. `Final WAL checkpoint completed` present in the
 Leg B node log (`evidence/wal-040-resume-legb-node.log:41-42`) after the graceful stop,
 confirming the `vks_node_server` filter-directive fix (`5b860a4b2`) on this machine.
+
+## Post-review known issues
+
+Adjudicated non-actionable findings from the `/wai:close` pre-graduation `/dr:code-review`
+loop (high effort). Fed back as context every subsequent round so they do not resurface as
+fresh blockers (SC3a/SC3b). Full detail: `reviews/code-review-round-1.md` (`## Non-actionable`).
+
+- **N1 — swallowed pragma errors in `with_refusal_after_release`** (db/src/lib.rs:82,85): sqlx
+  `after_release` already warns on Err (sqlx-core-0.8.6 pool/connection.rs:298) then close_hard.
+  A per-site warn was implemented, caused a reproducible test flake
+  (`refusal_latch_fail_fast_under_production_busy_timeout`, ~1/5; mechanism: after_release
+  error → close_hard churn + warn burst against the armed latch on the max_connections(5) test
+  pool), and was reverted; baseline 8/8 green.
+- **N2 — guard not taken before pool creation/migrations** (local-deployment/src/lib.rs:453 vs
+  :689-697): structural — `options_for` uses `create_if_missing(false)`, so the DB file must
+  exist before the guard can connect. Startup window inherent to the design.
+- **N3 — `serve` Err skips `perform_cleanup_actions`** (server/src/main.rs:273-275):
+  pre-existing, predates this workstream → BACKLOG F-2026-09-02-01.
+- **N4 — migration pool not refusal-wrapped** (db/src/lib.rs:702-713): unreachable; the refusal
+  flag can only be set by a WalMonitor spawned after that pool is dropped.
+- **N5 — tracing + eprintln duplication on checkpoint outcomes** (server/src/main.rs:380-388):
+  deliberate — durability outcome must be visible even if the log config regresses again.
+- **N6 — after_release drain misses concurrently-acquired conns** (wal_monitor.rs:215-217):
+  inherent sqlx tradeoff, documented at wal_monitor.rs:208-211 and lib.rs:76-77.
+- **N7 — shutdown-window unfenced held conns** (wal_monitor.rs:380-383 + lib.rs:71-73): window is
+  during process shutdown; held conns cannot be fenced by construction; return path IS fenced.
+- **N8 — unbounded inotify channel** (wal_monitor.rs:875): event volume on one DB dir is tiny; a
+  bounded channel risks dropping the removal events the feature detects.
+- **N9 — blocking `std::fs::metadata` in async** (wal_monitor.rs:533,:283): microsecond syscall
+  on a 60s/event cadence; `spawn_blocking` adds complexity for no measurable benefit.
+- **N10 — `interval(u64::MAX secs)` when truncate disabled** (wal_monitor.rs:334-339): never
+  polled (guarded by `if truncate_enabled`); construction cannot panic.
+- **N11 — `sqlite://{path}` URL breaks on `?`/`%`** (wal_guard.rs:21): pre-existing pattern,
+  identical to `database_url` construction in lib.rs:366,:433; out of scope.
+- **N12 — stop_execution terminates process despite completion-write failure**
+  (container.rs:2007-2023): explicit task-040 remediation; callers surface/log the error.
+- **N13 — monitor stopped before final checkpoint** (local-deployment/src/lib.rs:894-898):
+  correct and documented; latch stays armed through writers' in-flight window; final checkpoint
+  runs after on fenced connections.
+- **N14 — `vks_node_server=` filter directive** (server/src/file_logging.rs:82): verified
+  correct against `[[bin]] name = "vks-node-server"`; root-causes the silently-dropped shutdown
+  logs.
+- **N15 — boxed token-error arm duplication** (remote/src/routes/relay.rs:192-218): pre-existing,
+  merely reformatted by the result_large_err boxing fix.
+- **N16 — `sort_by_cached_key` nits** (with_stats.rs:52, templates.rs:119): pre-existing, lists
+  small, impact nil.
+- **N17 — `mem::take` capacity churn** (plain_text_processor.rs:117): exactly what clippy
+  `drain_collect` prescribes.
+- **N18 — SCRATCH_ROOT never cleaned** (repro script): intentional forensics retention;
+  documented in `--help`.
+- **N19 — verified-safe repro-script items**: no secret echo path; EXIT trap runs on INT/TERM
+  and `$!` is the exec'd server PID; 17/16 check counts correct; STOP cannot produce a false
+  green; `[ -e ] && var=1` exempt from `set -e`; cannot touch production :9002.

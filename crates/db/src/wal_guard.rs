@@ -4,6 +4,14 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
+/// Guard connection mode.
+///
+/// NOTE: production wiring uses `MapOnly` only (local-deployment `from_parts`).
+/// `HoldRead`'s read-mark machinery (release/reacquire around checkpoints) is
+/// currently dormant outside tests — it exists to pin a read transaction so an
+/// external unlink cannot drop the WAL inode from under live readers, and is
+/// retained for deployments that enable it. Unsupported on Windows (no
+/// PowerShell environment bootstrap / WAL lock semantics untested there).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     MapOnly,
@@ -27,6 +35,11 @@ pub(crate) fn options_for(db_path: &Path) -> Result<SqliteConnectOptions, sqlx::
 }
 
 impl WalGuard {
+    /// The mode this guard was connected with.
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
     pub async fn connect(db_path: &Path, mode: Mode) -> Result<Self, sqlx::Error> {
         let options = options_for(db_path)?;
         let mut conn = options.clone().connect().await?;
@@ -62,12 +75,18 @@ impl WalGuard {
     }
 
     pub async fn reconnect(&mut self) -> Result<(), sqlx::Error> {
+        // The fresh connection inherits no transaction state, so the read-mark
+        // flag must be re-derived rather than preserved.
+        self.holding_read_mark = false;
         self.conn = self.options.clone().connect().await?;
         crate::apply_performance_pragmas(&mut self.conn).await?;
         sqlx::query("SELECT count(*) FROM sqlite_master")
             .fetch_one(&mut self.conn)
             .await?;
 
+        // HoldRead: the read-mark is the guard's prevention mechanism — always
+        // reacquire it on reconnect (matches the monitor's expectation that a
+        // live HoldRead guard holds its mark outside truncate windows).
         if self.mode == Mode::HoldRead {
             sqlx::query("BEGIN DEFERRED")
                 .execute(&mut self.conn)
