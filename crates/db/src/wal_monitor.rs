@@ -1569,10 +1569,17 @@ mod tests {
             .unwrap()
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(30));
+        // max_connections(1) is load-bearing, not arbitrary: sqlx PoolConnection::drop
+        // SPAWNS the return task (sqlx-core pool/connection.rs), so with max > 1 the
+        // acquire below can win the race against the spawned return, find the idle
+        // queue empty, and open a FRESH 30s-busy-timeout connection whose write then
+        // blocks past the 3s timeout (observed ~1/8 full-suite flake). With max 1 the
+        // acquire must wait for the returned busy_timeout=0 connection — the exact
+        // after_release behaviour this test pins.
         let pool = crate::with_refusal_after_release(
             SqlitePoolOptions::new()
                 .min_connections(1)
-                .max_connections(5)
+                .max_connections(1)
                 .acquire_timeout(Duration::from_secs(5)),
         )
         .connect_with(options)
