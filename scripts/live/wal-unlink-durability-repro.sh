@@ -20,11 +20,36 @@ declare -A LEG_TOTAL_COUNTS
 declare -A LEG_COMPLETION_SENTINELS
 RUN_NODE_PID=
 BOOT_PID=
+WRITE_SESSION_PGID=
 TRIP_FIRED=0
 WRITE_SESSION_SUCCEEDED=0
 STOP_REASON=
 
 unset VK_HIVE_URL VK_NODE_API_KEY VK_NODE_NAME VK_NODE_PUBLIC_URL VK_WAL_GUARD 2>/dev/null || true
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  cat <<'EOF'
+Usage: wal-unlink-durability-repro.sh
+
+Live two-leg WAL-unlink durability harness. Boots a scratch node on
+127.0.0.1:9012 (never the production port) with all VK_* dirs under a
+mktemp SCRATCH_ROOT, then exercises WAL-delete scenarios.
+
+Environment:
+  LEGS          legs to run (default: AB)
+  MODE          full | baseline (default: full)
+  BINARY        node binary (default: target/release/vks-node-server)
+  SCRATCH_ROOT  scratch dir (default: mktemp -d /tmp/wal-repro.XXXXXX;
+                retained after the run for forensics — clean manually)
+
+Exit: 0 when every check passes, 1 on check failure, 2 on usage/preflight error.
+EOF
+  exit 0
+fi
+if [ $# -gt 0 ]; then
+  echo "ERROR: unknown argument(s): $* (try --help)" >&2
+  exit 2
+fi
 
 log_info() { echo "[$(date +%H:%M:%S)] $*" >&2; }
 log_error() { echo "[$(date +%H:%M:%S)] ERROR: $*" >&2; }
@@ -45,14 +70,23 @@ check_status() {   # $1 label, $2 command, remaining arguments are command argum
   fi
 }
 
-trap 'for p in "${NODE_PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done' EXIT
+cleanup() {
+  # Kill the node(s) and any detached external-write session (its setsid
+  # process group) on every exit path.
+  if [ -n "$WRITE_SESSION_PGID" ]; then
+    kill -- "-$WRITE_SESSION_PGID" 2>/dev/null || true
+  fi
+  for p in "${NODE_PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done
+}
+trap cleanup EXIT
 
 remove_node_pid() {
   local target="$1" p kept=()
   for p in "${NODE_PIDS[@]:-}"; do
     [ "$p" = "$target" ] || kept+=("$p")
   done
-  NODE_PIDS=("${kept[@]}")
+  # Empty-array expansion is unsafe under `set -u` on bash < 4.4.
+  NODE_PIDS=(${kept[@]+"${kept[@]}"})
 }
 
 port_is_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$BACKEND_PORT") 2>/dev/null; }
@@ -90,7 +124,7 @@ run_node() {
   extra_env=("$@")
   mkdir -p "$legdir"/{backup,worktrees,logs}
   (
-    export HOST=0.0.0.0 BACKEND_PORT=$BACKEND_PORT
+    export HOST=127.0.0.1 BACKEND_PORT=$BACKEND_PORT
     export VK_ASSET_DIR="$legdir" VK_DATABASE_PATH="$legdir/db.sqlite"
     export VK_BACKUP_DIR="$legdir/backup" VK_WORKTREE_DIR="$legdir/worktrees" VK_LOG_DIR="$legdir/logs"
     for env_var in "${extra_env[@]}"; do export "$env_var"; done
@@ -259,26 +293,49 @@ create_project() {
   printf '%s' "$project_id" >"$legdir/.project_id"
 }
 
-trip_detector() {
-  local pid="$1" start_ns now_ns elapsed_ms evidence start_seconds
-  TRIP_FIRED=0
+# Bounded poll: run the probe command every 0.5s until it succeeds or the
+# budget expires. $1 label, $2 timeout seconds, $3.. probe command.
+poll_for_evidence() {
+  local label="$1" timeout_secs="$2"
+  shift 2
+  local start_ns now_ns elapsed_ms start_seconds
   start_ns=$(date +%s%N)
   start_seconds=$SECONDS
-  while (( SECONDS - start_seconds < 30 )); do
-    if [ ! -d "/proc/$pid/fd" ]; then return 1; fi
-    evidence=$(ls -l "/proc/$pid/fd" 2>/dev/null | grep 'db.sqlite-wal (deleted)' || true)
-    if [ -n "$evidence" ]; then
+  while (( SECONDS - start_seconds < timeout_secs )); do
+    if "$@"; then
       now_ns=$(date +%s%N)
       elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
-      TRIP_FIRED=1
-      log_info "WAL evidence after ${elapsed_ms}ms: $evidence"
+      log_info "$label evidence after ${elapsed_ms}ms"
       return 0
     fi
     sleep 0.5
   done
   now_ns=$(date +%s%N)
   elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
-  log_info "Trip detector timeout after ${elapsed_ms}ms"
+  log_info "$label detector timeout after ${elapsed_ms}ms"
+  return 1
+}
+
+# Probe: the node holds an fd against a deleted WAL inode.
+wal_deleted_fd_present() {
+  ls -l "/proc/$1/fd" 2>/dev/null | grep -q 'db.sqlite-wal (deleted)'
+}
+
+trip_detector() {
+  local pid="$1"
+  TRIP_FIRED=0
+  local start_seconds=$SECONDS
+  while (( SECONDS - start_seconds < 30 )); do
+    # Node death is NOT a clean timeout: callers must not record it as a PASS.
+    if [ ! -d "/proc/$pid/fd" ]; then return 2; fi
+    if wal_deleted_fd_present "$pid"; then
+      TRIP_FIRED=1
+      log_info "WAL evidence: $(ls -l "/proc/$pid/fd" 2>/dev/null | grep 'db.sqlite-wal (deleted)')"
+      return 0
+    fi
+    sleep 0.5
+  done
+  log_info 'Trip detector timeout'
   return 1
 }
 
@@ -286,41 +343,11 @@ trip_detector() {
 # its own monitor tick, while the fd-state trip detector fires in ~2ms, so an unpolled grep races
 # the monitor. Bounded 30s poll, same shape as the refusal poll; a timeout is still a FAIL.
 unlink_event_detector() {
-  local legdir="$1" start_ns now_ns elapsed_ms start_seconds
-  start_ns=$(date +%s%N)
-  start_seconds=$SECONDS
-  while (( SECONDS - start_seconds < 30 )); do
-    if grep -q 'wal_unlinked_externally' "$legdir/node.log"; then
-      now_ns=$(date +%s%N)
-      elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
-      log_info "Unlink event evidence after ${elapsed_ms}ms"
-      return 0
-    fi
-    sleep 0.5
-  done
-  now_ns=$(date +%s%N)
-  elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
-  log_info "Unlink event detector timeout after ${elapsed_ms}ms"
-  return 1
+  poll_for_evidence 'Unlink event' 30 grep -q 'wal_unlinked_externally' "$1/node.log"
 }
 
 refusal_latch_detector() {
-  local legdir="$1" start_ns now_ns elapsed_ms start_seconds
-  start_ns=$(date +%s%N)
-  start_seconds=$SECONDS
-  while (( SECONDS - start_seconds < 30 )); do
-    if grep -q 'wal_write_refusal_active' "$legdir/node.log"; then
-      now_ns=$(date +%s%N)
-      elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
-      log_info "Refusal latch evidence after ${elapsed_ms}ms"
-      return 0
-    fi
-    sleep 0.5
-  done
-  now_ns=$(date +%s%N)
-  elapsed_ms=$(( (now_ns - start_ns) / 1000000 ))
-  log_info "Refusal latch detector timeout after ${elapsed_ms}ms"
-  return 1
+  poll_for_evidence 'Refusal latch' 30 grep -q 'wal_write_refusal_active' "$1/node.log"
 }
 
 external_write_session() {
@@ -330,6 +357,9 @@ external_write_session() {
   rm -f "$success_sentinel"
   setsid sqlite3 "$legdir/db.sqlite" "PRAGMA user_version=$RANDOM;" >/dev/null 2>&1 &
   session_pid=$!
+  # Track the detached session so the EXIT trap can kill its process group
+  # even when the script is interrupted inside the wait loop below.
+  WRITE_SESSION_PGID=$session_pid
   start_seconds=$SECONDS
   while kill -0 "$session_pid" 2>/dev/null; do
     if (( SECONDS - start_seconds >= 30 )); then
@@ -338,11 +368,13 @@ external_write_session() {
       sleep 0.1
       if kill -0 "$session_pid" 2>/dev/null; then kill -KILL -- "-$session_pid" 2>/dev/null || true; fi
       wait "$session_pid" 2>/dev/null || true
+      WRITE_SESSION_PGID=
       return 1
     fi
     sleep 0.1
   done
   if wait "$session_pid" 2>/dev/null; then : >"$success_sentinel"; fi
+  WRITE_SESSION_PGID=
   [ -f "$success_sentinel" ] && WRITE_SESSION_SUCCEEDED=1
   [ "$WRITE_SESSION_SUCCEEDED" = 1 ]
 }
@@ -402,6 +434,9 @@ run_leg_a() {
     check_status 'Leg A external write session executed' external_write_session "$legdir"
     if trip_detector "$pid"; then
       check_status 'Leg A no external WAL unlink (detector timed out)' false
+    elif [ $? -eq 2 ]; then
+      log_error 'Leg A node died during the trip-detector window'
+      check_status 'Leg A no external WAL unlink (node died)' false
     else
       check_status 'Leg A no external WAL unlink (detector timed out)' true
     fi
@@ -434,7 +469,7 @@ run_leg_a() {
 }
 
 run_leg_b_attempt() {
-  local legdir="$1" attempt="$2" completion_sentinel="$3" pid project_id response http_code resp_body count journal_mode i setup_before completion_allowed=1 trip_detected=0 wal_existed=0 shm_existed=0 rm_succeeded=0
+  local legdir="$1" attempt="$2" completion_sentinel="$3" pid project_id response http_code resp_body count journal_mode i setup_before completion_allowed=1 trip_detected=0 node_died=0 wal_existed=0 shm_existed=0 rm_succeeded=0
   local before=$FAIL_COUNT
   mkdir -p "$legdir"
   # integrated-review amendment 2026-08-30: leg B boots with VK_WAL_CHECK_INTERVAL_SECS=5 — a
@@ -461,10 +496,16 @@ run_leg_b_attempt() {
     if rm -f "$legdir/db.sqlite-wal" "$legdir/db.sqlite-shm"; then rm_succeeded=1; fi
     if trip_detector "$pid"; then
       trip_detected=1
+    elif [ $? -eq 2 ]; then
+      node_died=1
+      log_error "Leg B attempt $attempt node died during the trip-detector window"
+      check_status "Leg B attempt $attempt node survived the fault-injection window" false
     fi
     check_status "Leg B attempt $attempt fault injection removed existing WAL and SHM" bash -c '[ "$1" = 1 ] && [ "$2" = 1 ] && [ "$3" = 1 ] && [ ! -e "$4" ] && [ ! -e "$5" ]' _ "$wal_existed" "$shm_existed" "$rm_succeeded" "$legdir/db.sqlite-wal" "$legdir/db.sqlite-shm"
     if [ "$trip_detected" -eq 1 ]; then
       check_status "Leg B attempt $attempt detected external WAL unlink" true
+    elif [ "$node_died" -eq 1 ]; then
+      check_status "Leg B attempt $attempt detected external WAL unlink (node died before detection)" false
     elif [ "$attempt" = 1 ]; then
       log_info 'Leg B attempt 1 detector timeout is provisional; retrying on fresh scratch database'
       check_status "Leg B attempt $attempt stopped after provisional detector timeout" stop_node "$pid"
@@ -523,6 +564,7 @@ run_leg_b() {
   if [ ! -f "$attempt_sentinel" ]; then return 1; fi
   if [ "$MODE" = full ] && [ "$TRIP_FIRED" -eq 0 ] && [ "$FAIL_COUNT" -eq "$before" ]; then
     log_info 'Leg B retry: full sequence on fresh scratch database'
+    log_info "Leg B retry: rewinding PASS_COUNT from $PASS_COUNT to $before_pass (attempt-1 passes are superseded; transcript lines are not re-counted)"
     PASS_COUNT=$before_pass
     retry_legdir=$(mktemp -d "$SCRATCH_ROOT/leg-b-retry.XXXXXX") || return 1
     attempt_sentinel="$retry_legdir/.attempt-2.completed"

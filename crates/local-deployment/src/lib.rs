@@ -97,7 +97,9 @@ pub struct LocalDeployment {
     #[allow(dead_code)]
     compaction_handle: services::services::event_compaction::EventCompactionHandle,
     /// Handle to the WAL monitor background service.
-    #[allow(dead_code)]
+    ///
+    /// Read by `shutdown_event_services` to stop the monitor before the final
+    /// TRUNCATE checkpoint runs.
     wal_monitor_handle: db::WalMonitorHandle,
 }
 
@@ -1070,6 +1072,31 @@ mod tests {
             delivered.seq, seq,
             "the deployment's bus must deliver the event that was journaled to its pool"
         );
+
+        deployment.event_bus().shutdown().await;
+    }
+
+    /// The WAL durability wiring (guard + monitor) is live on a constructed
+    /// deployment: the monitor accepts commands over its channel and acks an
+    /// explicit shutdown. A deployment whose `from_parts` WAL block was
+    /// silently removed fails here (the send/ack would error on a closed
+    /// channel).
+    #[tokio::test]
+    async fn wal_monitor_wired_and_shuts_down() {
+        let (pool, temp_dir) = create_test_pool_with_migrations().await;
+        let deployment =
+            LocalDeployment::for_test(pool.clone(), test_tuning(), temp_dir.path().join("test.db"))
+                .await
+                .expect("deployment constructs over the test pool");
+
+        deployment.wal_monitor_handle.check_now().await;
+
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            deployment.wal_monitor_handle.shutdown(),
+        )
+        .await
+        .expect("WAL monitor acks shutdown within the bounded wait");
 
         deployment.event_bus().shutdown().await;
     }
