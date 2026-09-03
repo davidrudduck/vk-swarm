@@ -57,6 +57,12 @@ pub async fn require_browser_session(
     next: Next,
 ) -> Result<Response, StatusCode> {
     let mut request = request;
+    // Standalone node (no hive configured): there is no Hive login to bind a browser to,
+    // so the gate is fully open. No BrowserSessionCtx exists in this mode; downstream
+    // handlers already treat it as optional.
+    if deployment.is_standalone() {
+        return Ok(next.run(request).await);
+    }
     match resolve_browser_session(&deployment.db().pool, request.headers()).await {
         Some(ctx) => {
             request.extensions_mut().insert(ctx);

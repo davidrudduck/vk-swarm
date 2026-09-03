@@ -92,6 +92,12 @@ pub async fn require_session_or_connection_token(
 ) -> Result<Response, StatusCode> {
     let mut request = request;
 
+    // Standalone node (no hive configured): no sessions or node tokens can exist, so the
+    // gate is fully open — same rule as the main browser-session layer.
+    if deployment.is_standalone() {
+        return Ok(next.run(request).await);
+    }
+
     // Browser branch first: independent of node-runner availability. Resolve, insert, and
     // return BEFORE touching node-runner state (compile-order contract).
     if let Some(ctx) = resolve_browser_session(&deployment.db().pool, request.headers()).await {
@@ -132,6 +138,12 @@ pub async fn require_session_or_proxy_token(
     next: Next,
 ) -> Result<Response, StatusCode> {
     let mut request = request;
+
+    // Standalone node (no hive configured): no sessions or node tokens can exist, so the
+    // gate is fully open — same rule as the main browser-session layer.
+    if deployment.is_standalone() {
+        return Ok(next.run(request).await);
+    }
 
     // Browser branch first: independent of node-runner availability. Resolve, insert, and
     // return BEFORE touching node-runner state (compile-order contract).

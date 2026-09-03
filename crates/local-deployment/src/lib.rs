@@ -785,6 +785,13 @@ impl LocalDeployment {
         self.remote_client.clone()
     }
 
+    /// True when this node has no hive configured (`VK_SHARED_API_BASE` unset). A standalone
+    /// node has no Hive identity to mediate, so the browser-auth gate must be fully open:
+    /// there is nothing for a browser to log in to.
+    pub fn is_standalone(&self) -> bool {
+        self.remote_client.is_err()
+    }
+
     pub async fn get_login_status(&self) -> LoginStatus {
         if self.auth_context.get_credentials().await.is_none() {
             self.auth_context.clear_profile().await;

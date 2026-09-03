@@ -24,12 +24,15 @@ async fn auth_state(
     State(deployment): State<DeploymentImpl>,
     headers: HeaderMap,
 ) -> ResponseJson<ApiResponse<BrowserAuthState>> {
-    let authorized = crate::auth::session::resolve_browser_session(&deployment.db().pool, &headers)
-        .await
-        .is_some();
+    // A standalone node (no hive configured) has no Hive login to bind a browser to, so
+    // every browser is authorized by default; OAuth is only offered when a hive exists.
+    let oauth_available = deployment.remote_client().is_ok();
+    let authorized = !oauth_available
+        || crate::auth::session::resolve_browser_session(&deployment.db().pool, &headers)
+            .await
+            .is_some();
     // `remote_client()` is Err only when the node has no hive configured; a hive OUTAGE does not
     // change this flag, and neither flag depends on hive reachability (SC9).
-    let oauth_available = deployment.remote_client().is_ok();
     ResponseJson(ApiResponse::success(BrowserAuthState {
         authorized,
         oauth_available,

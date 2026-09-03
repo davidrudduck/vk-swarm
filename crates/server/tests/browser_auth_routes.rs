@@ -78,6 +78,53 @@ async fn protected_api_is_denied_by_default() {
     }
 }
 
+/// Standalone node (no hive configured): the browser gate exists ONLY to bind LAN browsers
+/// to a Hive login. With no hive there is nothing to log in to, so every browser is
+/// authorized by default and the whole API surface answers without a session.
+#[tokio::test]
+#[serial_test::serial]
+async fn standalone_node_authorizes_browsers_without_a_session() {
+    let h = common::HiveHarness::hive_absent().await;
+
+    let state = h.get("/api/auth/state").await;
+    state.assert_registered();
+    assert_eq!(state.status, 200, "body: {}", state.body);
+    assert!(
+        state.body.contains("\"authorized\":true"),
+        "standalone node must report authorized without any session: {}",
+        state.body
+    );
+    assert!(
+        state.body.contains("\"oauth_available\":false"),
+        "no hive means there is no OAuth to offer: {}",
+        state.body
+    );
+
+    for path in ["/api/info", "/api/projects", "/api/tasks/all"] {
+        let res = h.get(path).await;
+        res.assert_registered();
+        assert_eq!(
+            res.status, 200,
+            "standalone node must serve {path} without a session; body: {}",
+            res.body
+        );
+    }
+
+    // Direct stream route: past the auth layer the unknown id cannot resolve, but the
+    // request must NOT die at the session gate.
+    let res = h
+        .get(&format!(
+            "/api/execution-processes/{}/raw-logs/ws",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    assert_ne!(
+        res.status, 401,
+        "standalone direct stream route must not demand a session; body: {}",
+        res.body
+    );
+}
+
 #[tokio::test]
 #[serial_test::serial]
 async fn unknown_api_paths_terminate_inside_the_api_boundary() {
