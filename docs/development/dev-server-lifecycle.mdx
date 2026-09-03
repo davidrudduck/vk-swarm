@@ -127,6 +127,36 @@ kill -9 <backend_PID>
 rm /tmp/vibe-kanban/instances/*.json
 ```
 
+### Build Failure: `fatal error: 'stdarg.h' file not found`
+
+If `pnpm run dev` fails while compiling `libsqlite3-sys` (pulled in by `rusqlite` with the `bundled` feature) with:
+
+```text
+sqlite3/sqlite3.h:35:10: fatal error: 'stdarg.h' file not found
+could not run bindgen on header sqlite3/sqlite3.h
+```
+
+**Root cause:** the crate's build script runs [bindgen](https://rust-lang.github.io/rust-bindgen/), which uses libclang to parse C headers. The libclang runtime is installed, but clang's **builtin header directory** (which ships `stdarg.h`, `stddef.h`, etc.) is missing. This is never an SQLite or Rust toolchain problem — it means the clang development/resource headers are not installed.
+
+**Fix by OS:**
+
+| OS / Distro | Fix |
+|---|---|
+| Ubuntu/Debian | `sudo apt install libclang-common-<N>-dev` (match the installed libclang version, e.g. `libclang-common-21-dev`); `sudo apt install clang` also works |
+| Fedora/RHEL | `sudo dnf install clang-devel` (on newer Fedora, ensure `clang-resource-filesystem` is installed) |
+| Arch/Manjaro | `sudo pacman -S clang` |
+| Alpine | `apk add clang-dev clang-libclang` |
+| macOS | `xcode-select --install` (Xcode CLT provides the resource dir); if using Homebrew LLVM: `brew install llvm` and `export LIBCLANG_PATH="$(brew --prefix llvm)/lib"` |
+| Nix/NixOS | Add `clang` and `llvmPackages.libclang.lib` to your dev shell; set `LIBCLANG_PATH` and `BINDGEN_EXTRA_CLANG_ARGS` accordingly |
+| No-root fallback (any Linux) | `export BINDGEN_EXTRA_CLANG_ARGS="-I$(gcc -print-file-name=include)"` — points bindgen at GCC's freestanding headers |
+
+After installing, force a rebuild of the affected crate:
+
+```bash
+cargo clean -p libsqlite3-sys
+cargo build -p libsqlite3-sys
+```
+
 ## Multiple Instances
 
 You can run multiple vibe-kanban instances simultaneously (different projects):

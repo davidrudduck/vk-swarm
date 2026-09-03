@@ -138,7 +138,7 @@ top of the existing auth shell. The node frontend is untouched (HA fallback).
   the node frontend is the HA fallback and is untouched. These are documented in `gap-analysis.md`
   for a future node-frontend restyle workstream.
 - **A-class bug fixes** (gap-analysis finding 21: fonts): none — fonts already match.
-- **Mobile/responsive beyond the design's spec:** the design specifies breakpoints (mobile <640,
+- **Mobile/responsive beyond the design's spec:** the design specifies breakpoints (mobile \<640,
   tablet 640-1023, desktop ≥1024) and hit targets (≥34px, 44px touch). This workstream implements
   those; no additional mobile work.
 - **Protocol / data-plane work:** owned by `vk-swarm-hive-redesign` (shipped). This workstream

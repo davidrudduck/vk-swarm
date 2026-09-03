@@ -32,7 +32,7 @@ product shape than WednesdayAI's lean chat/channel assistant, and vk-swarm alrea
 it. WednesdayAI integration is the **last, optional** phase — a thin adapter, never the host.
 
 The program runs in 8 phases: (1) deep analysis ✅ → (2) durable/offline-first/resumable foundations →
-{(3) AI task breakdown ⟂ (4) event bus} → (5) conflict/priority/dependency automation → (6) AI
+\{(3) AI task breakdown ⟂ (4) event bus\} → (5) conflict/priority/dependency automation → (6) AI
 management agent → (7) MCP/ACP connectivity (rides P3–P5) → (8) WednesdayAI adapter (optional).
 Dependency graph: P2 blocks everything; P3 ⟂ P4; P5 needs P3 (+rides P4); P6 consumes P4+P5; P8
 trails P7.

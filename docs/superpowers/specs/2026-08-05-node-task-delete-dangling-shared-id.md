@@ -71,6 +71,6 @@ Test seam: `crates/server/tests/` using `HiveHarness::configured()` -- wiremock 
 - ADR-0015 (dev-docs/adr/0015-idempotent-node-delete-on-hive-not-found.md) records the one irreversible decision above (local deletion on the 404 path). No further ADRs are required: no deletion of code paths, no wire-format or contract change; hive API untouched.
 
 ## Test strategy
-TS1: Integration (crates/server/tests, HiveHarness::configured): seed a task with shared_task_id, mock DELETE /v1/tasks/{id} -> 404 {"error":"shared task not found"}; assert node DELETE /api/tasks/:id returns 202 and Task::find_by_id returns None.
+TS1: Integration (crates/server/tests, HiveHarness::configured): seed a task with shared_task_id, mock `DELETE /v1/tasks/{id}` -> 404 `{"error":"shared task not found"}`; assert node DELETE /api/tasks/:id returns 202 and Task::find_by_id returns None.
 TS2: Integration: same seam, mock hive DELETE -> 409; assert node returns an error status (>=400) and the task row still exists.
 TS3: Integration: same seam, mock hive DELETE -> 200 with a SharedTaskResponse body; assert node returns 202 and the local row is RETAINED (WS-event delegation contract preserved).
