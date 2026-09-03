@@ -54,11 +54,34 @@
 | F-2026-08-28-02 | remote-frontend tailwind.config.js `theme.extend` is empty, so shadcn named-color utilities (`text-muted-foreground`, `text-destructive`, `bg-primary`, …) used across components/ui + components/swarm generate no CSS — muted/destructive text renders in inherited colors (visible on /nodes NodeApiKeySection). Pre-existing at `3dcdc24c^`; not a regression of the design-system squash | medium | open | remote-frontend/tailwind.config.js:8 | wai vk-swarm-design-system close review (round-1 N2) | 2026-08-28 | — | own remediation unit: map CSS custom-property tokens (colors.css) into theme.extend so utilities compile; verify against locked design-source values |
 | F-2026-08-31-01 | WAL write refusal maps to generic HTTP 500 | low | open | crates/server/src/error.rs:138-140 | wai wal-unlink-durability 040 panel review | 2026-08-31 | — | add a refusal-specific ApiError variant/error_data code keyed on the db error code; update harness leg B to assert it |
 | F-2026-08-31-02 | Residual write-refusal races span new and old WAL domains | low | open | crates/db/src/lib.rs:147-152, crates/db/src/wal_monitor.rs:709-717 | wai wal-unlink-durability 040 panel review | 2026-08-31 | — | central DB write gate consulted by every write path; closes the pre-flag new-domain race and in-flight checkout window |
-| F-2026-08-31-03 | remote-frontend vitest fails on Node 26: native experimental localStorage shadows jsdom's (38 tests, 7 files — `localStorage.setItem` undefined; `ExperimentalWarning: localStorage is not available because --localstorage-file was not provided`). Root `package.json` engines says `node >=22.13` but only Node 22 (CI `NODE_VERSION: 22`) actually runs the suite green | low | open | remote-frontend/src/lib/api/rest.test.ts:15 (+6 more files), package.json:49-52 | wai wal-unlink-durability cross-machine gate re-verify | 2026-08-31 | — | session workaround `NODE_OPTIONS=--no-experimental-webstorage npx vitest run` (54 files/413 tests green); real fix: pin engines `<26` or add the flag to the test script |
+| F-2026-08-31-03 | remote-frontend vitest fails on Node 26: native experimental localStorage shadows jsdom's (38 tests, 7 files — `localStorage.setItem` undefined; `ExperimentalWarning: localStorage is not available because --localstorage-file was not provided`). Root `package.json` engines says `node >=22.13` but only Node 22 (CI `NODE_VERSION: 22`) actually runs the suite green | low | fixed | remote-frontend/src/lib/api/rest.test.ts:15 (+6 more files), package.json:49-52 | wai wal-unlink-durability cross-machine gate re-verify | 2026-08-31 | — | fixed e6642894: setupTests.ts installs a per-file Map-backed Storage only when window.localStorage is undefined (no-op on Node <24/CI); 54 files/413 tests green on Node 26 with no env vars |
 | F-2026-09-02-01 | `axum::serve(...).with_graceful_shutdown(...)` returning Err propagates via `?` at main.rs:275 and skips `perform_cleanup_actions` entirely — no WalMonitor shutdown, no final TRUNCATE checkpoint, no pool close. Pre-existing (predates wal-unlink-durability); listener bind errors surface earlier at main.rs:224 so post-startup serve errors are rare, and SQLite replays the WAL on next open | low | open | crates/server/src/main.rs:273-275 | wai wal-unlink-durability /dr:code-review round 1 (finder B3) | 2026-09-02 | — | handle the serve Result before propagating so cleanup actions always run |
+| F-2026-09-03-01 | Standalone node (no Hive configured) soft-locked all browsers behind unmintable Hive OAuth — blank page, no login path | high | fixed | crates/server/src/auth/session.rs | session/2026-09-03 | 2026-09-03 | — | fixed e6642894: is_standalone() pass-through in browser/node-token guards, auth_state authorized when oauth unavailable; spec gap recorded against local-node-browser-oauth (never covered standalone) |
+| F-2026-09-03-02 | Hive configured but unreachable still locks browsers out of the node UI — handoff 503s, no offline grace or cached-session fallback | medium | open | crates/server/src/routes/browser_auth.rs | session/2026-09-03 | 2026-09-03 | — | surfaced while fixing F-2026-09-03-01; needs a design decision (grace window, cached sessions, or explicit offline mode) |
 <!-- WAI:BACKLOG:END -->
 
 ## Triage notes
+
+### 2026-09-03 — standalone-auth edge cases
+
+- **F-2026-09-03-01 → fixed at capture (e6642894, direct to main).** Recorded with status
+  `fixed` rather than `open` because the remediation shipped in the same session that
+  discovered it: PR #478's `require_browser_session` layer assumed a Hive is always
+  reachable, but sessions are minted only via Hive OAuth handoff, so a node with
+  `VK_SHARED_API_BASE`/`VK_HIVE_URL` unset could never authenticate a browser — the
+  frontend rendered an empty login shell. Fix gates the requirement on
+  `LocalDeployment::is_standalone()`. The spec gap is recorded against
+  `local-node-browser-oauth` for any future amendment of that workstream's docs.
+- **F-2026-09-03-02 → open.** The sibling edge case: Hive configured but unreachable.
+  `oauth_available` is computed from configuration, not reachability, so a Hive outage
+  re-creates the same lockout (handoff/init 503s, no session path). Deliberately not
+  bundled into e6642894 — the right remedy (grace window, cached sessions, explicit
+  offline mode) is a product/design decision.
+- **F-2026-08-31-03 → fixed (e6642894).** The Node ≥24 `localStorage` shadowing failure is
+  resolved at the source in `remote-frontend/src/setupTests.ts`; the session workarounds
+  (`--no-experimental-webstorage`, `--localstorage-file`) are no longer needed, and the
+  `--localstorage-file` variant was invalidated anyway (parallel workers share one storage
+  file → cross-file pollution).
 
 ### 2026-08-07 — frontend cleanup bundle (branch `fix/frontend-cleanup-bundle`)
 
