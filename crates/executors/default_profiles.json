@@ -68,13 +68,11 @@
     "CODEX": {
       "DEFAULT": {
         "CODEX": {
-          "model": "gpt-5.4",
           "sandbox": "danger-full-access"
         }
       },
       "PLAN": {
         "CODEX": {
-          "model": "gpt-5.4",
           "sandbox": "read-only",
           "model_reasoning_effort": "high",
           "developer_instructions": "Do not implement changes or modify files. Investigate the task, gather the relevant code context, identify risks and open questions, and produce a concrete implementation plan with affected areas and test coverage."
@@ -82,21 +80,18 @@
       },
       "HIGH": {
         "CODEX": {
-          "model": "gpt-5.4",
           "sandbox": "danger-full-access",
           "model_reasoning_effort": "high"
         }
       },
       "APPROVALS": {
         "CODEX": {
-          "model": "gpt-5.4",
           "sandbox": "workspace-write",
           "ask_for_approval": "unless-trusted"
         }
       },
       "MAX": {
         "CODEX": {
-          "model": "gpt-5.4",
           "sandbox": "danger-full-access",
           "model_reasoning_effort": "xhigh"
         }
@@ -104,7 +99,6 @@
       "NO_CONTEXT": {
         "CODEX": {
           "no_context": true,
-          "model": "gpt-5.4",
           "sandbox": "danger-full-access"
         }
       }
