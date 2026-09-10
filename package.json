@@ -50,7 +50,7 @@
     "node": ">=22.13",
     "pnpm": ">=8"
   },
-  "packageManager": "pnpm@10.25.0",
+  "packageManager": "pnpm@12.3.4",
   "pnpm": {
     "overrides": {
       "@tanstack/db": "^0.6.4",
