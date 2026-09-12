@@ -47,6 +47,26 @@ pub struct CursorAgent {
     pub cmd: CmdOverrides,
 }
 
+// MODEL PIN VALIDATION REQUIRED (backlog F-2026-09-12-02):
+// The CURSOR_AGENT variants in crates/executors/default_profiles.json pin
+// cursor-agent model IDs (auto, sonnet-4.5, sonnet-4.5-thinking, opus-4.1,
+// gpt-5, grok). These pins are UNVALIDATED: the cursor-agent CLI is not
+// installed on any maintainer host, so the live model catalog has never been
+// compared against them. A stale pin fails hard at session start — see the
+// codex gpt-5.4 incident (PR #482), where a model removed from the vendor
+// catalog produced "400 invalid_request_error: model is not supported".
+//
+// When cursor-agent becomes available on a host, validate BEFORE first real use:
+//   1. Install + authenticate the cursor-agent CLI; confirm `cursor-agent --version`.
+//   2. List the live model catalog (per `cursor-agent --help` / CLI docs).
+//   3. Compare every CURSOR_AGENT "model" pin in default_profiles.json against it.
+//   4. Probe each pinned variant directly (read-only; no --force, so no file
+//      modifications or auto-allowed commands), e.g.:
+//        cursor-agent -p --output-format=stream-json --model <pin> "Reply with OK"
+//   5. For any rejected pin, prefer REMOVING the "model" key (falls back to the
+//      account default and self-heals on catalog changes) over pinning a
+//      replacement — the PR #482 pattern.
+//   6. Close finding F-2026-09-12-02 in dev-docs/BACKLOG.md when done.
 impl CursorAgent {
     pub fn base_command() -> &'static str {
         "cursor-agent"
