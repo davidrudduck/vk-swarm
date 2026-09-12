@@ -86,6 +86,25 @@ pub struct Droid {
     pub cmd: crate::command::CmdOverrides,
 }
 
+// MODEL PIN VALIDATION REQUIRED (backlog F-2026-09-12-01):
+// The DROID variants in crates/executors/default_profiles.json pin Factory droid
+// model IDs (gpt-5.4, gpt-5.1, gemini-3-pro-preview, claude-*-2025*, glm-4.6, ...).
+// These pins are UNVALIDATED: the droid CLI is not installed on any maintainer
+// host, so the live model catalog has never been compared against them. A stale
+// pin fails hard at session start — see the codex gpt-5.4 incident (PR #482),
+// where a model removed from the vendor catalog produced
+// "400 invalid_request_error: model is not supported".
+//
+// When droid becomes available on a host, validate BEFORE first real use:
+//   1. Install + authenticate the droid CLI; confirm `droid --version`.
+//   2. List the live model catalog (per `droid exec --help` / CLI docs).
+//   3. Compare every DROID "model" pin in default_profiles.json against it.
+//   4. Probe each pinned variant directly, e.g.:
+//        droid exec --output-format stream-json --model <pin> "Reply with OK"
+//   5. For any rejected pin, prefer REMOVING the "model" key (falls back to the
+//      account default and self-heals on catalog changes) over pinning a
+//      replacement — the PR #482 pattern.
+//   6. Close finding F-2026-09-12-01 in dev-docs/BACKLOG.md when done.
 impl Droid {
     pub fn build_command_builder(&self) -> crate::command::CommandBuilder {
         use crate::command::{CommandBuilder, apply_overrides};
