@@ -60,8 +60,9 @@ pub struct CursorAgent {
 //   1. Install + authenticate the cursor-agent CLI; confirm `cursor-agent --version`.
 //   2. List the live model catalog (per `cursor-agent --help` / CLI docs).
 //   3. Compare every CURSOR_AGENT "model" pin in default_profiles.json against it.
-//   4. Probe each pinned variant directly, e.g.:
-//        cursor-agent -p --output-format=stream-json --force --model <pin> "Reply with OK"
+//   4. Probe each pinned variant directly (read-only; no --force, so no file
+//      modifications or auto-allowed commands), e.g.:
+//        cursor-agent -p --output-format=stream-json --model <pin> "Reply with OK"
 //   5. For any rejected pin, prefer REMOVING the "model" key (falls back to the
 //      account default and self-heals on catalog changes) over pinning a
 //      replacement — the PR #482 pattern.

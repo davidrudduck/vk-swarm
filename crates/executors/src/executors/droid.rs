@@ -101,10 +101,15 @@ pub struct Droid {
 //   3. Compare every DROID "model" pin in default_profiles.json against it.
 //   4. Probe each pinned variant directly, e.g.:
 //        droid exec --output-format stream-json --model <pin> "Reply with OK"
-//   5. For any rejected pin, prefer REMOVING the "model" key (falls back to the
-//      account default and self-heals on catalog changes) over pinning a
-//      replacement — the PR #482 pattern.
-//   6. Close finding F-2026-09-12-01 in dev-docs/BACKLOG.md when done.
+//   5. For any rejected pin, prefer REMOVING the "model" key over pinning a
+//      replacement — the PR #482 pattern. NOTE: with no profile pin, droid
+//      falls back to the `model` setting in ~/.factory/settings.json, which
+//      may ITSELF be an explicit (possibly stale) model ID. Check that file:
+//      the effective default only self-heals on catalog changes if the
+//      settings.json `model` key is unset or tracks a live catalog ID.
+//   6. Run the DEFAULT (no-model) variant once to confirm the effective
+//      default actually works, then close finding F-2026-09-12-01 in
+//      dev-docs/BACKLOG.md.
 impl Droid {
     pub fn build_command_builder(&self) -> crate::command::CommandBuilder {
         use crate::command::{CommandBuilder, apply_overrides};
