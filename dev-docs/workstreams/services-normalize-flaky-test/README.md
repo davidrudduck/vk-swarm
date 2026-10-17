@@ -1,11 +1,16 @@
 ---
 workstream: services-normalize-flaky-test
-status: active
+status: shipped
 created: 2026-08-04
 parent_session: vk-swarm-node-ui-localize /wai:close code-review gate
 ---
 
 # services-normalize-flaky-test
+
+Superseded by `normalize-fast-execution-lost-logs-flake` after sub-second reproductions proved a
+real product lost-log race rather than the test-only timing hypothesis recorded below. Remediation
+is owned by M2 `local-execution-lifecycle-correctness`; this historical tracker is closed to avoid
+two owners for F-2026-08-04-02.
 
 Fixes the intermittently-failing `test_fast_execution_no_lost_logs`
 (`crates/services/tests/normalize_sync_test.rs:365`), discovered during the `/dr:code-review`

@@ -5,8 +5,7 @@ status: draft
 title: "Dev loop never rebuilds or restarts vks-mcp-server"
 depends_on: []
 adrs: []
-staging_pointers:
-  - docs/plans/vk-swarm-task-breakdown/decisions-ledger.md
+staging_pointers: []
 ---
 
 # mcp-server-dev-loop-rebuild

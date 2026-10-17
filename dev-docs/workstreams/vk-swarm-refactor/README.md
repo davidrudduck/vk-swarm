@@ -19,27 +19,25 @@ SC1–SC7, dependency graph, constraints).
 Dependency graph: P2 blocks everything; P3 ⟂ P4; P5 needs P3 (+rides P4); P6 consumes P4+P5;
 P7 rides P3–P5; P8 trails P7 (optional).
 
-| Phase | Scope | Child workstream(s) | State (2026-08-07) |
+| Phase | Scope | Child workstream(s) | State (2026-09-14) |
 |---|---|---|---|
 | P1 | Deep analysis | — (spec: `docs/specs/2026-06-25-vk-swarm-phase1-analysis.md`) | ✅ done |
 | P2a | Node correct/durable/crash-resumable (SC1 local, SC2) | `vk-swarm-node-foundations` (+ `foundations-followup1`) | ✅ shipped |
 | P2b | Hub-and-spoke central hive (SC1 reconcile) | `vk-swarm-hive-redesign` | ✅ shipped |
 | P2c | Hive console UI + hardening | `vk-swarm-hive-ui`, `vk-swarm-hive-ui-polish`, `hive-node-api-key-ui`, `fix-nonloopback-signin`, `error-handling-and-dialog-a11y`, `remote-docker-build-fix`, `ui-overhaul` | ✅ shipped |
-| P2 tail | UI kit + node-UI cleanup + test-debt revival | `vk-swarm-design-system` (✅ PR #466), `vk-swarm-node-ui-localize` (✅ PR #467, verify PASS), `node-ui-localize-followups`, `hive-oauth-sw-bypass` (✅ PR #469; task 301 deploy evidence pending), `node-task-delete-dangling-shared-id` (✅ PR #468; deploy verify pending), `worktree-orphan-sweep-guard`, `remote-services-doctest-revival` (0/32), `terminal-session-pty-tests` (0/5) | 🔶 cleanup tail |
-| P3 | AI task breakdown harness (SC3) | `vk-swarm-task-breakdown` (PRD 2026-08-07 — needs `/wai:spec`) | 🔶 intent captured |
-| P4 | Task-lifecycle event bus (SC4) | `vk-swarm-event-bus` (PRD 2026-08-07 — needs `/wai:spec`) | 🔶 intent captured |
-| P5 | Conflict/priority/dependency automation (SC5; paperclip ref) | _unmapped — after P3_ | ⬜ not started |
-| P6 | AI management agent (SC6; consumes P4+P5) | _unmapped_ | ⬜ not started |
-| P7 | MCP/ACP connectivity (SC7; rides P3–P5) | _unmapped_ | ⬜ not started |
-| P8 | WednesdayAI adapter (optional, thin, never the host) | _unmapped_ | ⬜ not started |
+| P2 tail | UI kit + node-UI cleanup + test-debt revival | `vk-swarm-design-system`, `vk-swarm-node-ui-localize`, `node-ui-localize-followups`, `hive-oauth-sw-bypass`, `node-task-delete-dangling-shared-id`, `worktree-orphan-sweep-guard`; later test-debt drafts retained separately | 🔶 only hive-oauth task 301 live evidence remains |
+| P3 | AI task breakdown harness (SC3) | `vk-swarm-task-breakdown` | ✅ shipped (PR #475) |
+| P4 | Task-lifecycle event bus (SC4) | `vk-swarm-event-bus` | ✅ shipped (PR #477) |
+| P5 | Conflict/priority/dependency automation (SC5; paperclip ref) | future M7 child under `local-node-first-use` | ⏸ paused behind M7 |
+| P6 | AI management agent (SC6; consumes P4+P5) | future M7 child under `local-node-first-use` | ⏸ paused behind M7 |
+| P7 | MCP/ACP connectivity (SC7; rides P3–P5) | future M7 child under `local-node-first-use` | ⏸ paused behind M7 |
+| P8 | WednesdayAI adapter (optional, thin, never the host) | future M7 child under `local-node-first-use` | ⏸ paused behind M7 |
 
 ## Recommended order from here
 
-1. `/wai:spec vk-swarm-task-breakdown` → precheck → decompose → execute (P3; first
-   "use the board to manage work" capability, gates P5).
-2. `/wai:spec vk-swarm-event-bus` → precheck → decompose → execute (P4 ⟂ P3; gates P6/P7).
-3. Close the P2 cleanup tail: hive-oauth-sw-bypass task 301 deploy evidence,
-   node-task-delete deploy verify, backend/frontend hygiene bundles
-   (`worktree-orphan-sweep-guard`, `node-ui-localize-followups`).
-4. Burn down test-debt trackers (`remote-services-doctest-revival`,
-   `terminal-session-pty-tests`) opportunistically alongside.
+1. Complete M0 tracker truth and the remaining `hive-oauth-sw-bypass` task 301 live evidence.
+2. Complete `local-deployment-test-orphan-cleanup-safety` so deterministic M2 tests cannot touch
+   operator worktrees or a live Hive.
+3. Settle and execute M2 `local-execution-lifecycle-correctness`, then M3
+   `opencode-attached-server`, under the governing local-node-first-use roadmap.
+4. Certify the M0–M3 first-release gate; resume P5–P8 only through M7 afterward.

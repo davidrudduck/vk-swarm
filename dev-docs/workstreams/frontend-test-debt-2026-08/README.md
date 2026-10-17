@@ -1,6 +1,6 @@
 ---
 workstream: frontend-test-debt-2026-08
-status: active
+status: shipped
 created: 2026-08-01
 parent_session: vk-swarm-node-ui-localize execute run
 ---

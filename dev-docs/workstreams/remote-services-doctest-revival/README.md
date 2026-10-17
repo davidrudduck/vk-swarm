@@ -1,7 +1,7 @@
 ---
 workstream: remote-services-doctest-revival
 doc_type: readme
-status: active
+status: draft
 title: "Bring 32 rust,ignore'd doctests in remote + services crates back to live"
 originated_in: fix/preexisting-gate-failures
 originated_commit: 9e20efb4
@@ -90,6 +90,6 @@ This workstream tracks the debt so it is invisible to no future session.
 
 ## Status
 
-Active — created in the `fix/preexisting-gate-failures` session per the No-Deferred-Remediation
+Draft — created in the `fix/preexisting-gate-failures` session per the No-Deferred-Remediation
 rule. The debt was made visible (source-level `rust,ignore` + this workstream) rather than hidden
 (global `doctest = false`).

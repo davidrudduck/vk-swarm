@@ -321,6 +321,82 @@ must not resurface as fresh blockers in later rounds:
 - en/es timeoutError wording sub-nits (en predicates the "window", es "ha caducado" vs
   "se agotó el tiempo").
 
+### Deploy verification round 3 — task 301 live completion (2026-09-14)
+
+The current `main` Hive build was deployed locally behind Traefik at
+`vkswarm.tardis.raverx.net`, backed by the running node at
+`http://10.69.96.231:9001`. The first pass exposed an invalid deployment
+assumption: HTTP is not an acceptable OAuth origin for LAN users. The shared
+deployment was corrected to terminate trusted HTTPS using a Let's Encrypt
+certificate obtained through Cloudflare DNS-01; HTTP now redirects to HTTPS
+and the node connects to the Hive over WSS.
+
+```text
+$ curl -fsS https://vkswarm.tardis.raverx.net/v1/health
+{"status":"ok","version":"0.0.125","git_commit":"d41705e9","git_branch":"main","build_timestamp":"2026-09-14T11:38:58Z"}
+
+$ curl -sSI http://vkswarm.tardis.raverx.net/v1/health
+HTTP/1.1 308 Permanent Redirect
+Location: https://vkswarm.tardis.raverx.net/v1/health
+
+$ openssl s_client -connect 10.69.96.231:443 \
+    -servername vkswarm.tardis.raverx.net | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
+subject=CN=vkswarm.tardis.raverx.net
+issuer=C=US, O=Let's Encrypt, CN=YR1
+notBefore=Sep 14 10:58:46 2026 GMT
+notAfter=Dec 13 10:58:45 2026 GMT
+DNS:vkswarm.tardis.raverx.net
+
+$ curl -fsS https://vkswarm.tardis.raverx.net/sw.js | grep -c 'startsWith("/v1/oauth")'
+1
+```
+
+A fresh handoff initialization against the HTTPS deployment returned an
+`https://vkswarm.tardis.raverx.net/v1/oauth/github/start?...` authorize URL.
+Following that URL returned a `https://github.com/...` redirect whose
+`redirect_uri` scheme was HTTPS. The configured provider is the operator's
+real GitHub OAuth application (not the old dummy client). The node journal then
+showed a successful secure registration:
+
+```text
+Node runner config loaded from environment hive_url=wss://vkswarm.tardis.raverx.net
+connecting to hive url=wss://vkswarm.tardis.raverx.net/v1/nodes/ws
+connected to hive node_id=f995db18-4d77-4a43-a688-e413c170b52e organization_id=00000000-0000-0000-0000-000000000002
+```
+
+SC2/SC3 retain the round-2 operator evidence above: both node-initiated and
+Hive-initiated GitHub sign-in completed with the service worker registered and
+no `/v1/oauth/*` cache entries. The same fix is present in current `main`; the
+fresh checks above additionally establish that the current provider handoff is
+reachable over trusted HTTPS.
+
+SC4 was exercised against the running node in Chromium by starting GitHub
+sign-in and abandoning the popup. A temporary browser-session fixture was used
+only to cross the node's outer `AuthBoundary`; it was deleted after the run
+(`fixture_remaining=0`). The browser recorded:
+
+```text
+pageStartedAt=2026-09-14T11:37:47.248Z
+pollingStartedAt=2026-09-14T11:37:53.332Z
+timeoutRenderedAt=2026-09-14T11:39:52.399Z
+elapsedPollingMs=119067
+statusRequestCount=119
+firstStatusRequestAt=2026-09-14T11:37:52.264Z
+lastStatusRequestAt=2026-09-14T11:39:51.735Z
+postTimeoutObservationMs=6000
+postTimeoutStatusRequestCount=0
+timeoutVisible=true
+tryAgainVisible=true
+```
+
+Screenshot: `.agents/reports/2026-09-14-task-301-oauth-timeout.png`. It shows
+the localized “Sign-in timed out…” message plus the **Try Again** and **Close**
+actions. `window.open(..., noopener=yes)` leaves no opener-side popup reference,
+so popup closure is not independently assertable in a real browser; this is
+the pre-existing, adjudicated known issue recorded above and is not an SC4
+acceptance requirement. Request cessation and the rendered recovery action are
+both directly observed.
+
 ### task 401 — orchestrator normalization + gate/panel evidence
 
 - `allowed_change: create+edit` in the authored task file was INVALID per

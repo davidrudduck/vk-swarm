@@ -7,7 +7,7 @@ depends_on:
   - local-node-browser-oauth
 adrs: []
 staging_pointers:
-  - docs/plans/local-node-browser-oauth/decisions-ledger.md
+  - dev-docs/workstreams/local-node-browser-oauth/plans/local-node-browser-oauth/decisions-ledger.md
 ---
 
 # browser-auth-terminal-row-retention

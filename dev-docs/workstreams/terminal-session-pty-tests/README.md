@@ -1,7 +1,7 @@
 ---
 workstream: terminal-session-pty-tests
 doc_type: readme
-status: active
+status: draft
 title: "Bring 5 #[ignore]'d PTY-spawning tests in terminal_session back to live"
 originated_in: fix/preexisting-gate-failures
 originated_commit: 051cdeea
@@ -55,6 +55,6 @@ but only created a workstream for the 35 ignored doctests, not for the 5 PTY tes
 
 ## Status
 
-Active — created in the `fix/preexisting-gate-failures` session per the No-Deferred-Remediation
+Draft — created in the `fix/preexisting-gate-failures` session per the No-Deferred-Remediation
 rule. The debt was made visible (source-level `#[ignore]` + this workstream) rather than hidden
 (invocation-time `--skip`).

@@ -5,8 +5,7 @@ status: draft
 title: "Task-breakdown follow-ups deferred from PR #475 review"
 depends_on: []
 adrs: []
-staging_pointers:
-  - docs/plans/vk-swarm-task-breakdown/decisions-ledger.md
+staging_pointers: []
 ---
 
 # task-breakdown-followups

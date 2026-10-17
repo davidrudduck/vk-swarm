@@ -6,7 +6,7 @@ title: "Fast executions silently lose logs — CONFIRMED race, fires idle and un
 depends_on: []
 adrs: []
 staging_pointers:
-  - docs/plans/vk-swarm-event-bus/decisions-ledger.md
+  - dev-docs/workstreams/vk-swarm-event-bus/plans/vk-swarm-event-bus/decisions-ledger.md
 ---
 
 # normalize-fast-execution-lost-logs-flake
