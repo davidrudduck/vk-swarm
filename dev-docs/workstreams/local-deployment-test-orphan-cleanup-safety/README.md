@@ -6,7 +6,7 @@ title: "Prevent local-deployment tests from sweeping real clean worktrees"
 depends_on: []
 adrs: []
 staging_pointers:
-  - docs/plans/local-node-browser-oauth/decisions-ledger.md
+  - dev-docs/workstreams/local-node-browser-oauth/plans/local-node-browser-oauth/decisions-ledger.md
 ---
 
 # local-deployment-test-orphan-cleanup-safety
@@ -51,3 +51,8 @@ The task-022 challenger reproduced the behavior with throwaway git worktrees und
    can receive the policy directly.
 4. Verify focused container tests and the complete `cargo test -p local-deployment` suite without
    touching any pre-existing worktree.
+5. Make test and scratch construction ignore ambient `VK_HIVE_URL` and `VK_NODE_API_KEY`, so it
+   cannot connect a node runner to an operator's live Hive. Production construction must retain its
+   current environment-driven behavior.
+
+This workstream owns both backlog findings F-2026-08-19-01 and F-2026-08-19-02.

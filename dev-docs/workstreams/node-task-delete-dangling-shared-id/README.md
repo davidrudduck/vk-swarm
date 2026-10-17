@@ -1,10 +1,11 @@
 ---
 workstream: node-task-delete-dangling-shared-id
-status: active
+status: shipped
 created: 2026-08-05
 parent_session: vk-swarm-node-ui-localize post-close user report
 staging_pointers:
-  - docs/superpowers/specs/2026-08-05-node-task-delete-dangling-shared-id.md
+  - dev-docs/workstreams/node-task-delete-dangling-shared-id/plans/node-task-delete-dangling-shared-id
+  - dev-docs/workstreams/node-task-delete-dangling-shared-id/spec/2026-08-05-node-task-delete-dangling-shared-id.md
 ---
 
 # node-task-delete-dangling-shared-id

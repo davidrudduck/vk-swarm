@@ -8,6 +8,12 @@ Reviewed `main` @ `492e8e94` from the `cosmic-aardvark` worktree. Inputs: `dev-d
 An adversarial panel reviewed the draft (`dev-docs/2026-09-03-next-workstream-selection-reviews/`);
 this document is the post-review revision.
 
+**2026-09-14 refresh:** rebased onto `origin/main` at `d41705e9`. The intervening commits do not
+change the identified M2 lifecycle anchors. They do fix F-2026-08-31-03 and add the standalone-node
+auth correction. F-2026-09-03-02 is reconciled as the roadmap's explicit boundary: established
+sessions survive a Hive outage, while new OAuth requires Hive reachability. Current WAI is 0.32;
+its Zenith bridge replaces decomposition/execution only after a settled M2 spec and precheck.
+
 ## 1. Decision
 
 **Next workstream: M2 `local-execution-lifecycle-correctness`** (roadmap §7), preceded by two small

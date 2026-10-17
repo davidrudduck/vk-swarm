@@ -1,12 +1,12 @@
 ---
 workstream: sqlite-busy-snapshot-calibration-stability
 doc_type: readme
-status: active
+status: shipped
 title: "Make SQLite busy-snapshot calibration deterministic"
 depends_on: []
 adrs: []
 staging_pointers:
-  - docs/plans/local-node-browser-oauth/decisions-ledger.md
+  - dev-docs/workstreams/local-node-browser-oauth/plans/local-node-browser-oauth/decisions-ledger.md
 ---
 
 # sqlite-busy-snapshot-calibration-stability

@@ -5,8 +5,7 @@ status: draft
 title: "Claude executor initialize hooks payload hangs claude-code"
 depends_on: []
 adrs: []
-staging_pointers:
-  - docs/plans/vk-swarm-task-breakdown/decisions-ledger.md
+staging_pointers: []
 ---
 
 # claude-executor-hooks-hang
